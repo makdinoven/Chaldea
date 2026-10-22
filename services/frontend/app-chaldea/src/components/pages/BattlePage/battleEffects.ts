@@ -1,13 +1,12 @@
-// Shared, human-readable descriptions of battle effects (FEAT-143).
-// Works uniformly on the normalized effect shape used both by
-// `active_effects[pid]` (EffectCircle) and by the `apply_effects` log events
-// (backend normalizes them before emitting): { name, attribute, magnitude, duration }.
+// Shared, human-readable descriptions of effects (FEAT-143). The one place an
+// effect gets its Russian name: battle state and log events, items, and skills
+// and perks (skillLabels builds on it), so the same effect reads the same
+// everywhere. Works on the normalized shape { name, attribute, magnitude,
+// duration } — a skill or item row maps effect_name / attribute_key onto it.
 
 import {
   COMPLEX_EFFECTS,
   DAMAGE_TYPES,
-  STAT_MODIFIERS,
-  PRIMARY_ATTR_OPTIONS,
 } from "../../AdminSkillsPage/skillConstants";
 
 export interface EffectLike {
@@ -83,8 +82,28 @@ export const evaluateControl = (
   return { fullSkip, blocked: [...blocked] };
 };
 
-export const damageLabel = (value: string): string =>
-  DAMAGE_TYPES.find((d) => d.value === value)?.label ?? value;
+/** Older names for damage types, still found in some saved rows. */
+const DAMAGE_TYPE_ALIASES: Record<string, string> = {
+  slashing: "catting",
+  blunt: "crushing",
+  cold: "ice",
+  frost: "ice",
+  water: "watering",
+  lightning: "electricity",
+  electric: "electricity",
+  shock: "electricity",
+  air: "wind",
+  holy: "sainting",
+  light: "sainting",
+  dark: "damning",
+  shadow: "damning",
+  arcane: "magic",
+};
+
+export const damageLabel = (value: string): string => {
+  const key = DAMAGE_TYPE_ALIASES[value] ?? value;
+  return DAMAGE_TYPES.find((d) => d.value === key)?.label ?? value;
+};
 
 /**
  * FEAT-168 — cleanse rows (`effect_name === "Cleanse"`). `attribute_key` says
@@ -119,24 +138,43 @@ export const cleanseSelectorLabel = (
 const complexOption = (name: string) =>
   COMPLEX_EFFECTS.find((c) => c.value === name);
 
-// Battle state stores stats under the engine's names (battle-service
-// `_ATTRIBUTE_ALIASES`); the editor's option list knows the editor's names.
-const ENGINE_TO_EDITOR_STAT: Record<string, string> = {
-  dodge: "dodge_chance",
-  critical_damage: "crit_damage",
-  crit_chance: "critical_hit_chance",
+/**
+ * What a stat modifier changes, as a player reads it. Keys arrive under both
+ * the editor's names and the engine's (battle-service `_ATTRIBUTE_ALIASES`),
+ * and older rows carry `crit_chance` — all of them are listed. The editor's own
+ * option labels («HP(±)», «Крит.шанс(%)») are for admins, not for players.
+ */
+const STAT_LABELS: Record<string, string> = {
+  critical_hit_chance: "Шанс крита",
+  crit_chance: "Шанс крита",
+  crit_damage: "Урон крита",
+  critical_damage: "Урон крита",
+  dodge_chance: "Уклонение",
+  dodge: "Уклонение",
+  hp: "Здоровье",
+  health: "Здоровье",
+  max_health: "Здоровье",
+  mana: "Мана",
+  max_mana: "Мана",
+  energy: "Энергия",
+  max_energy: "Энергия",
+  stamina: "Выносливость",
+  max_stamina: "Выносливость",
+  strength: "Сила",
+  agility: "Ловкость",
+  intelligence: "Интеллект",
+  endurance: "Живучесть",
+  charisma: "Харизма",
+  luck: "Удача",
 };
 
-const statLabel = (rawKey: string): string => {
-  const key = ENGINE_TO_EDITOR_STAT[rawKey] ?? rawKey;
-  return (
-    STAT_MODIFIERS.find((m) => m.key === key)
-      ?.label.replace("(%)", "")
-      .trim() ??
-    PRIMARY_ATTR_OPTIONS.find((a) => a.value === key)?.label ??
-    rawKey
-  );
-};
+/** Stats changed by a flat amount rather than by percent. */
+export const FLAT_STAT_KEYS = new Set([
+  "hp", "health", "max_health", "mana", "max_mana", "energy", "max_energy", "stamina", "max_stamina",
+  "strength", "agility", "intelligence", "endurance", "charisma", "luck",
+]);
+
+export const statLabel = (rawKey: string): string => STAT_LABELS[rawKey] ?? rawKey;
 
 /**
  * Turn a raw effect into a readable Russian label + detail.
@@ -156,14 +194,14 @@ export const describeEffect = (e: EffectLike): EffectDescription => {
   if (
     attr === "percent_damage" ||
     attr.startsWith("percent_damage_") ||
-    /^buff\s*:/i.test(name)
+    /^(buff|debuff)\s*:/i.test(name)
   ) {
     const type =
       attr === "percent_damage"
         ? "all"
         : attr.startsWith("percent_damage_")
           ? attr.slice("percent_damage_".length)
-          : name.replace(/^buff\s*:\s*/i, "").toLowerCase();
+          : name.replace(/^(buff|debuff)\s*:\s*/i, "").toLowerCase();
     const dt = type === "all" ? "" : damageLabel(type);
     return {
       label: `Изменение урона${dt ? ` (${dt})` : ""}`,
@@ -176,14 +214,14 @@ export const describeEffect = (e: EffectLike): EffectDescription => {
   if (
     attr === "percent_resist" ||
     attr.startsWith("percent_resist_") ||
-    /^resist\s*:/i.test(name)
+    /^(resist|vulnerability)\s*:/i.test(name)
   ) {
     const type =
       attr === "percent_resist"
         ? "all"
         : attr.startsWith("percent_resist_")
           ? attr.slice("percent_resist_".length)
-          : name.replace(/^resist\s*:\s*/i, "").toLowerCase();
+          : name.replace(/^(resist|vulnerability)\s*:\s*/i, "").toLowerCase();
     const dt = type === "all" ? "" : damageLabel(type);
     const magPart = mag ? `${mag}%${mag < 0 ? " (уязвимость)" : ""}` : "";
     return {
@@ -234,7 +272,11 @@ export const describeEffect = (e: EffectLike): EffectDescription => {
       magPart = mag ? `${mag > 0 ? "+" : ""}${mag}` : "";
       positive = key === "holy" || mag > 0;
     }
-    return { label: complex.label, detail: join([turns, magPart]), positive };
+    // Effects that take a setting say which: «Сбитие с ног (атака)»,
+    // «Магическое воздействие (интеллект)», «Отравление (паралич)».
+    const setting = complex.attributeKeyOptions?.find((o) => o.value === attr)?.label;
+    const label = setting ? `${complex.label} (${setting.toLowerCase()})` : complex.label;
+    return { label, detail: join([turns, magPart]), positive };
   }
 
   // Stat modifier — attribute holds the stat key.

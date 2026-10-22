@@ -1,6 +1,10 @@
 // Russian label maps for skill stat display.
-// Used by PerkCard / SkillUpgradeModal to render damage_type / effect_name / target_side
-// in human-readable Russian instead of raw API codes.
+// Used by PerkCard / SkillUpgradeModal / the books to render damage_type /
+// effect_name / target_side in human-readable Russian instead of raw API codes.
+// Effect names themselves come from battleEffects' describeEffect, the one
+// place every surface — battle, items, skills — names an effect.
+
+import { describeEffect, FLAT_STAT_KEYS } from '../pages/BattlePage/battleEffects';
 
 // Canonical values: see AdminSkillsPage/skillConstants.ts DAMAGE_TYPES
 const DAMAGE_TYPE_RU: Record<string, string> = {
@@ -60,36 +64,6 @@ const SKILL_TYPE_RU: Record<string, string> = {
   support: 'Поддержки',
 };
 
-// StatModifier attribute_key → Russian label (see skillConstants STAT_MODIFIERS).
-const STAT_LABELS: Record<string, string> = {
-  critical_hit_chance: 'Шанс крита',
-  crit_damage: 'Урон крита',
-  dodge_chance: 'Уклонение',
-  hp: 'Здоровье',
-  mana: 'Мана',
-  energy: 'Энергия',
-};
-
-// Complex effect key → Russian label (see skillConstants COMPLEX_EFFECTS).
-const COMPLEX_EFFECT_LABELS: Record<string, string> = {
-  Bleeding: 'Кровотечение',
-  Burn: 'Возгорание',
-  Poison: 'Отравление',
-  Stun: 'Оглушение',
-  Freeze: 'Обледенение',
-  Knockdown: 'Сбитие с ног',
-  Daze: 'Ошеломление',
-  MagicImpact: 'Магическое воздействие',
-  Wet: 'Мокрый',
-  Electrify: 'Электролизация',
-  Windburn: 'Обветрение',
-  Holy: 'Святость',
-  Curse: 'Проклятие',
-  ArmorBreak: 'Раскол брони',
-};
-
-// Stats that are FLAT (not percent) when rendered.
-const FLAT_STAT_KEYS = new Set(['hp', 'mana', 'energy']);
 
 const TARGET_SIDE_RU: Record<string, string> = {
   self: 'себя',
@@ -102,70 +76,7 @@ const TARGET_SIDE_RU: Record<string, string> = {
   none: '—',
 };
 
-const ATTRIBUTE_KEY_RU: Record<string, string> = {
-  hp: 'здоровье',
-  health: 'здоровье',
-  mp: 'мана',
-  mana: 'мана',
-  energy: 'энергия',
-  stamina: 'выносливость',
-  strength: 'сила',
-  agility: 'ловкость',
-  dexterity: 'ловкость',
-  intelligence: 'интеллект',
-  wisdom: 'мудрость',
-  endurance: 'стойкость',
-  constitution: 'телосложение',
-  charisma: 'харизма',
-  luck: 'удача',
-  defense: 'защита',
-  armor: 'броня',
-  attack: 'атака',
-  speed: 'скорость',
-  crit: 'крит',
-  critical: 'крит',
-};
 
-const EFFECT_NAME_RU: Record<string, string> = {
-  bleeding: 'кровотечение',
-  bleed: 'кровотечение',
-  poison: 'отравление',
-  poisoned: 'отравление',
-  burn: 'горение',
-  burning: 'горение',
-  freeze: 'заморозка',
-  frozen: 'заморозка',
-  chill: 'охлаждение',
-  shock: 'оглушение разрядом',
-  stun: 'оглушение',
-  stunned: 'оглушение',
-  sleep: 'сон',
-  silence: 'немота',
-  blind: 'ослепление',
-  fear: 'страх',
-  charm: 'очарование',
-  root: 'корни',
-  slow: 'замедление',
-  haste: 'ускорение',
-  regen: 'регенерация',
-  regeneration: 'регенерация',
-  heal: 'лечение',
-  shield: 'щит',
-  barrier: 'барьер',
-  buff: 'усиление',
-  debuff: 'ослабление',
-  dot: 'периодический урон',
-  hot: 'периодическое лечение',
-  statmodifier: 'модификатор характеристики',
-  magicimpact: 'магический удар',
-  taunt: 'провокация',
-  invisible: 'невидимость',
-  stealth: 'скрытность',
-  reflect: 'отражение',
-  lifesteal: 'вампиризм',
-  vulnerability: 'уязвимость',
-  resist: 'сопротивление',
-};
 
 const lookup = (map: Record<string, string>, key: string | null | undefined): string | null => {
   if (!key) return null;
@@ -182,41 +93,13 @@ export const ruTargetSide = (key: string | null | undefined): string => {
   return lookup(TARGET_SIDE_RU, key) ?? key;
 };
 
-export const ruAttributeKey = (key: string | null | undefined): string => {
-  if (!key) return '';
-  return lookup(ATTRIBUTE_KEY_RU, key) ?? key;
-};
-
-/**
- * Translates an effect_name to Russian. Handles prefixed forms used by
- * the admin payload builder (`Buff: fire`, `Resist: cold`, `Vulnerability: holy`)
- * by translating the prefix and the damage-type suffix independently.
- */
+/** An effect_name (+ attribute_key) in Russian, as the battle names it. */
 export const ruEffectName = (
   name: string | null | undefined,
   attributeKey?: string | null
 ): string => {
   if (!name) return '';
-  const trimmed = name.trim();
-
-  // Prefixed forms: "Buff: fire", "Resist: cold", "Vulnerability: holy"
-  const colonIdx = trimmed.indexOf(':');
-  if (colonIdx > 0) {
-    const prefix = trimmed.slice(0, colonIdx).trim().toLowerCase();
-    const suffix = trimmed.slice(colonIdx + 1).trim();
-    const prefixRu = EFFECT_NAME_RU[prefix];
-    if (prefixRu) {
-      const suffixRu = ruDamageType(suffix);
-      return `${prefixRu}: ${suffixRu}`;
-    }
-  }
-
-  // StatModifier with attribute_key
-  if (trimmed.toLowerCase() === 'statmodifier' && attributeKey) {
-    return `${EFFECT_NAME_RU.statmodifier}: ${ruAttributeKey(attributeKey)}`;
-  }
-
-  return lookup(EFFECT_NAME_RU, trimmed) ?? trimmed;
+  return describeEffect({ name: name.trim(), attribute: attributeKey ?? undefined }).label;
 };
 
 // --- New exports for the player skill info card (FEAT-125) ---
@@ -251,38 +134,14 @@ export const parseEffectName = (
   attributeKey?: string | null
 ): ParsedEffect => {
   const name = (effectName ?? '').trim();
+  const key = (attributeKey ?? '').trim();
+  const friendlyName = describeEffect({ name, attribute: key || undefined }).label || 'Эффект';
+  const prefix = name.includes(':') ? name.slice(0, name.indexOf(':')).trim().toLowerCase() : '';
 
-  const colonIdx = name.indexOf(':');
-  if (colonIdx > 0) {
-    const prefix = name.slice(0, colonIdx).trim().toLowerCase();
-    const suffix = name.slice(colonIdx + 1).trim();
-    const dmgRu = ruDamageType(suffix);
-
-    if (prefix === 'buff' || prefix === 'debuff') {
-      return { category: 'buff', friendlyName: `Бафф ${dmgRu.toLowerCase()}`, isPercent: true };
-    }
-    if (prefix === 'resist' || prefix === 'vulnerability') {
-      const label = prefix === 'vulnerability' ? 'Уязвимость' : 'Резист';
-      return { category: 'resist', friendlyName: `${label} ${dmgRu.toLowerCase()}`, isPercent: true };
-    }
-  }
-
-  if (name === 'StatModifier') {
-    const key = (attributeKey ?? '').trim();
-    const friendly = STAT_LABELS[key] ?? key ?? 'Характеристика';
-    return {
-      category: 'stat',
-      friendlyName: friendly,
-      isPercent: !FLAT_STAT_KEYS.has(key),
-    };
-  }
-
-  const complex = COMPLEX_EFFECT_LABELS[name];
-  return {
-    category: 'complex',
-    friendlyName: complex ?? name ?? 'Эффект',
-    isPercent: false,
-  };
+  if (prefix === 'buff' || prefix === 'debuff') return { category: 'buff', friendlyName, isPercent: true };
+  if (prefix === 'resist' || prefix === 'vulnerability') return { category: 'resist', friendlyName, isPercent: true };
+  if (name === 'StatModifier') return { category: 'stat', friendlyName, isPercent: !FLAT_STAT_KEYS.has(key) };
+  return { category: 'complex', friendlyName, isPercent: false };
 };
 
 /** Russian turn-count pluralization: 1 ход / 2–4 хода / 5+ ходов. */

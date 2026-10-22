@@ -10,10 +10,8 @@ import {
 } from "react";
 import { SKILLS_KEYS } from "../../../../../../helpers/commonConstants";
 import { translateSkillSign } from "../../../../../../helpers/helpers";
-import {
-  DAMAGE_TYPES,
-  STAT_MODIFIERS,
-} from "../../../../../AdminSkillsPage/skillConstants";
+import { DAMAGE_TYPES } from "../../../../../AdminSkillsPage/skillConstants";
+import { describeEffect } from "../../../battleEffects";
 
 interface DamageEntry {
   damage_type?: string;
@@ -113,34 +111,16 @@ const InventoryItem = ({
             className="flex flex-col gap-px relative [&:not(:last-child)]:after:content-[''] [&:not(:last-child)]:after:absolute [&:not(:last-child)]:after:bottom-[-3px] [&:not(:last-child)]:after:left-0 [&:not(:last-child)]:after:right-0 [&:not(:last-child)]:after:h-px [&:not(:last-child)]:after:bg-gradient-to-r [&:not(:last-child)]:after:from-transparent [&:not(:last-child)]:after:via-[#999] [&:not(:last-child)]:after:to-transparent"
           >
             <div>
-              {isEffect ? "Тип эффекта" : "Тип урона"}:{" "}
+              {isEffect ? "Эффект" : "Тип урона"}:{" "}
               <span className="text-[#76A6BD]">
-                {effectEntry?.effect_name?.includes("StatModifier")
-                  ? "Модификатор"
-                  : getDamageLabel(
-                      isEffect
-                        ? effectEntry?.effect_name?.includes("Resist")
-                          ? effectEntry?.effect_name?.replace("Resist: ", "")
-                          : effectEntry?.effect_name?.replace("Buff: ", "")
-                        : damageEntry.damage_type,
-                    )}
+                {/* Named as the battle names it, never by its code. */}
+                {isEffect
+                  ? describeEffect({
+                      name: effectEntry?.effect_name,
+                      attribute: effectEntry?.attribute_key,
+                    }).label
+                  : getDamageLabel(damageEntry.damage_type)}
               </span>
-              {isEffect && (
-                <span className="text-gray-400">
-                  {" "}
-                  (
-                  {effectEntry?.effect_name?.includes("Resist")
-                    ? "Изменение защиты"
-                    : effectEntry?.effect_name?.includes("Buff")
-                      ? "Изменение урона"
-                      : effectEntry?.effect_name?.includes("StatModifier")
-                        ? STAT_MODIFIERS.find(
-                            (mod: { key: string; label: string }) => mod.key === effectEntry?.attribute_key,
-                          )?.label.replace("(%)", "")
-                        : effectEntry?.effect_name}
-                  )
-                </span>
-              )}
             </div>
             {!isEffect && <div>Урон: {damageEntry.amount}</div>}
             <div>Шанс: {(entry as EffectEntry).chance}%</div>
