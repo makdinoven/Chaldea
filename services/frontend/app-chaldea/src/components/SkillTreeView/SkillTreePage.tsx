@@ -34,12 +34,22 @@ type TreeViewMode = 'wheel' | 'books';
 /** Where the player's choice of view is remembered, per browser. */
 const VIEW_MODE_KEY = 'skillTree.viewMode';
 
+/** Screens at least this wide count as a computer: the same line the page draws for the whole wheel. */
+const WIDE_SCREEN_QUERY = '(min-width: 768px)';
+
+/**
+ * The player's own choice if they have made one; otherwise the books on a
+ * computer and the wheel on a phone.
+ */
 const readViewMode = (): TreeViewMode => {
+  let saved: string | null = null;
   try {
-    return localStorage.getItem(VIEW_MODE_KEY) === 'books' ? 'books' : 'wheel';
+    saved = localStorage.getItem(VIEW_MODE_KEY);
   } catch {
-    return 'wheel';
+    // Nothing remembered; fall through to the default for this screen.
   }
+  if (saved === 'books' || saved === 'wheel') return saved;
+  return window.matchMedia(WIDE_SCREEN_QUERY).matches ? 'books' : 'wheel';
 };
 
 /** DB class ids, in the order they are laid out around the combined wheel. */
@@ -68,7 +78,7 @@ const SkillTreePage = () => {
 
   // The combined wheel needs room to breathe; on a phone it would be unreadable,
   // so small screens keep the one-tree-at-a-time view plus a class switcher.
-  const isWideScreen = useMediaQuery('(min-width: 768px)');
+  const isWideScreen = useMediaQuery(WIDE_SCREEN_QUERY);
 
   const { tree: classTree, progress: classProgress, selectedNodeId, loading, error, subclassTrees } = useAppSelector(
     (state) => state.playerTree
