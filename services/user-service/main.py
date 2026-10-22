@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, Query
+from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, Query, Request
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import models
@@ -15,6 +15,12 @@ from crud import (
 )
 from auth import *
 from auth import SECRET_KEY, ALGORITHM, verify_internal_token
+from auth import (
+    AuthContext, authenticate_access_token, get_current_auth, issue_token_pair,
+    user_from_payload,
+)
+import sessions as session_store
+from crud import pwd_context
 from database import SessionLocal, engine, get_db
 from jose import JWTError, jwt
 import os
@@ -114,14 +120,11 @@ def get_optional_user(
     """Returns current user if valid token provided, None otherwise."""
     if token is None:
         return None
+    # Same checks as get_current_user (incl. revoked sessions): a token of a
+    # logged-out session must not keep identifying its owner here either.
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            return None
-        user = get_user_by_email(db, email=email)
-        return user
-    except JWTError:
+        return authenticate_access_token(db, token).user
+    except HTTPException:
         return None
 
 
@@ -375,8 +378,12 @@ async def _fetch_character_post_stats(character_ids: list) -> dict:
 
 # ==================== AUTH & REGISTRATION ====================
 
+def _user_agent(request: Request) -> Optional[str]:
+    return request.headers.get("user-agent")
+
+
 @router.post("/register")
-def register_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def register_user(user: UserCreate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user_email = get_user_by_email(db, email=user.email)
     if db_user_email:
         raise HTTPException(status_code=400, detail="Этот email уже зарегистрирован")
@@ -388,14 +395,13 @@ def register_user(user: UserCreate, background_tasks: BackgroundTasks, db: Sessi
     new_user = create_user(db=db, user=user)
     background_tasks.add_task(send_notification_event, new_user.id)
 
-    token_data = {"sub": new_user.email}
-    access_token = create_access_token(data=token_data, role=new_user.role)
-    refresh_token = create_refresh_token(data=token_data, role=new_user.role)
-    return {"access_token": access_token, "refresh_token": refresh_token}
+    session = session_store.create_session(db, new_user.id, _user_agent(request))
+    tokens = issue_token_pair(new_user, session.id)
+    return {"access_token": tokens["access_token"], "refresh_token": tokens["refresh_token"]}
 
 
 @router.post("/login")
-def login_user(data: Login, db: Session = Depends(get_db)):
+def login_user(data: Login, request: Request, db: Session = Depends(get_db)):
     user = authenticate_user(db, data.identifier, data.password)
     if not user:
         raise HTTPException(
@@ -403,17 +409,14 @@ def login_user(data: Login, db: Session = Depends(get_db)):
             detail="Неверный email или пароль"
         )
 
-    token_data = {"sub": user.email}
-    if user.current_character is not None:
-        token_data["current_character"] = user.current_character
-
-    access_token = create_access_token(data=token_data, role=user.role)
-    refresh_token = create_refresh_token(data=token_data, role=user.role)
-    return {"access_token": access_token, "refresh_token": refresh_token}
+    session_store.purge_stale_sessions(db, user.id)
+    session = session_store.create_session(db, user.id, _user_agent(request))
+    tokens = issue_token_pair(user, session.id)
+    return {"access_token": tokens["access_token"], "refresh_token": tokens["refresh_token"]}
 
 
 @router.post("/refresh", response_model=schemas.TokenResponse)
-def refresh_token(request: schemas.RefreshRequest, db: Session = Depends(get_db)):
+def refresh_token(body: schemas.RefreshRequest, request: Request, db: Session = Depends(get_db)):
     # One generic error for every failure mode (no oracle about why it failed)
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -421,33 +424,213 @@ def refresh_token(request: schemas.RefreshRequest, db: Session = Depends(get_db)
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(request.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
-        # Reject access tokens sent as refresh tokens.
-        # Tokens without a "type" claim are legacy and stay accepted.
-        if payload.get("type") == "access":
-            raise credentials_exception
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
+        payload = jwt.decode(body.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise credentials_exception
+    # Reject access tokens sent as refresh tokens.
+    # Tokens without a "type" claim are legacy and stay accepted.
+    if payload.get("type") == "access":
+        raise credentials_exception
+    if payload.get("sub") is None:
+        raise credentials_exception
 
-    user = get_user_by_email(db, email=email)
+    user = user_from_payload(db, payload)
     if user is None:
         raise credentials_exception
 
-    # Rebuild token_data the same way login does (current_character re-read from DB)
-    token_data = {"sub": user.email}
-    if user.current_character is not None:
-        token_data["current_character"] = user.current_character
+    session_id = payload.get("sid")
+    if session_id is not None:
+        # The pair keeps its session: the sid survives rotation.
+        session = session_store.get_live_session(db, str(session_id), user.id)
+        if session is None:
+            raise credentials_exception
+        session_store.touch_session(db, session, force=True)
+    else:
+        # Legacy refresh token (issued before sessions): migrate it to a new
+        # session so current players are not logged out — unless the account
+        # already dropped every legacy token.
+        if user.tokens_valid_after is not None:
+            raise credentials_exception
+        session = session_store.create_session(db, user.id, _user_agent(request))
 
-    new_access_token = create_access_token(data=token_data, role=user.role)
-    new_refresh_token = create_refresh_token(data=token_data, role=user.role)  # D2: stateless rotation
+    session_store.purge_stale_sessions(db, user.id)
+    # current_character is re-read from the DB (D2: stateless rotation of the pair)
+    return issue_token_pair(user, session.id)
+
+
+@router.post("/logout")
+def logout(body: schemas.LogoutRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """End the session the given token belongs to.
+
+    Takes the refresh token in the body (it outlives the access token, so
+    logout works even after the access token expired). The signature is
+    verified, expiry is not: logging out with a just-expired token is harmless.
+    Idempotent: an already-deleted session, or a legacy token without `sid`,
+    is still 200.
+    """
+    try:
+        payload = jwt.decode(
+            body.refresh_token, SECRET_KEY, algorithms=[ALGORITHM],
+            options={"verify_exp": False},
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Недействительный токен")
+
+    session_id = payload.get("sid")
+    if session_id is not None:
+        user = user_from_payload(db, payload)
+        if user is not None:
+            deleted = db.query(models.UserSession).filter(
+                models.UserSession.id == str(session_id),
+                models.UserSession.user_id == user.id,
+            ).delete(synchronize_session=False)
+            db.commit()
+            if deleted:
+                background_tasks.add_task(
+                    session_store.notify_sessions_revoked, user.id, session_ids=[str(session_id)]
+                )
+    return {"detail": "Вы вышли из аккаунта"}
+
+
+# ==================== ACCOUNT SECURITY ====================
+# Declared before every /{user_id}/... route so "me" is never parsed as an id.
+
+@router.get("/me/sessions", response_model=schemas.SessionListResponse)
+def list_my_sessions(auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
+    """The user's active sessions, most recently used first."""
+    session_store.purge_stale_sessions(db, auth.user.id)
+    rows = session_store.list_sessions(db, auth.user.id)
     return {
-        "access_token": new_access_token,
-        "refresh_token": new_refresh_token,
-        "token_type": "bearer",
+        "sessions": [
+            {
+                "id": row.id,
+                "created_at": row.created_at,
+                "last_used_at": row.last_used_at,
+                "user_agent": row.user_agent,
+                "current": row.id == auth.session_id,
+            }
+            for row in rows
+        ]
     }
+
+
+def _revoke_other_sessions(db: Session, auth: AuthContext) -> int:
+    """Delete all sessions but the current one and stamp tokens_valid_after.
+
+    Does not commit. The current session keeps working because its tokens
+    carry `sid`; tokens_valid_after only affects legacy tokens without one.
+    """
+    query = db.query(models.UserSession).filter(models.UserSession.user_id == auth.user.id)
+    if auth.session_id is not None:
+        query = query.filter(models.UserSession.id != auth.session_id)
+    revoked = query.delete(synchronize_session=False)
+    db.query(models.User).filter(models.User.id == auth.user.id).update(
+        {models.User.tokens_valid_after: datetime.utcnow()}, synchronize_session=False
+    )
+    return revoked
+
+
+@router.post("/me/sessions/revoke-others")
+def revoke_other_sessions(
+    background_tasks: BackgroundTasks,
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """End every session except the current one and kill all legacy tokens."""
+    revoked = _revoke_other_sessions(db, auth)
+    db.commit()
+    background_tasks.add_task(
+        session_store.notify_sessions_revoked, auth.user.id, all_except=auth.session_id
+    )
+    return {"detail": "Остальные сеансы завершены", "revoked": revoked}
+
+
+@router.delete("/me/sessions/{session_id}")
+def revoke_session(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """End one of the user's own sessions (the current one = log out)."""
+    deleted = db.query(models.UserSession).filter(
+        models.UserSession.id == session_id,
+        models.UserSession.user_id == auth.user.id,
+    ).delete(synchronize_session=False)
+    db.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    background_tasks.add_task(
+        session_store.notify_sessions_revoked, auth.user.id, session_ids=[session_id]
+    )
+    return {"detail": "Сессия завершена"}
+
+
+@router.put("/me/password")
+def change_password(
+    data: schemas.PasswordChangeRequest,
+    background_tasks: BackgroundTasks,
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """Change the password; every other session is logged out."""
+    user = db.query(models.User).filter(models.User.id == auth.user.id).first()
+    if not pwd_context.verify(data.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Неверный текущий пароль")
+    rule_error = schemas.password_rule_error(data.new_password)
+    if rule_error:
+        raise HTTPException(status_code=400, detail=rule_error)
+    if data.new_password == data.current_password:
+        raise HTTPException(status_code=400, detail="Новый пароль совпадает с текущим")
+
+    user.hashed_password = pwd_context.hash(data.new_password)
+    _revoke_other_sessions(db, auth)
+    db.commit()
+    background_tasks.add_task(
+        session_store.notify_sessions_revoked, auth.user.id, all_except=auth.session_id
+    )
+    return {"detail": "Пароль изменён"}
+
+
+@router.put("/me/email", response_model=schemas.TokenResponse)
+def change_email(
+    data: schemas.EmailChangeRequest,
+    request: Request,
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """Change the login email. Returns a fresh token pair for the current
+    session: the old tokens' `sub` still names the previous email.
+
+    No confirmation mail is sent: there is no mail stack yet (docs/ISSUES.md).
+    """
+    user = db.query(models.User).filter(models.User.id == auth.user.id).first()
+    if not pwd_context.verify(data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Неверный пароль")
+
+    new_email = data.new_email.strip()
+    if new_email.lower() == (user.email or "").lower():
+        raise HTTPException(status_code=400, detail="Это ваша текущая почта")
+    taken = db.query(models.User).filter(
+        func.lower(models.User.email) == new_email.lower(),
+        models.User.id != user.id,
+    ).first()
+    if taken:
+        raise HTTPException(status_code=409, detail="Эта почта уже занята")
+
+    user.email = new_email
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Эта почта уже занята")
+    db.refresh(user)
+
+    session_id = auth.session_id
+    if session_id is None:
+        # Legacy token: move the caller onto a real session.
+        session_id = session_store.create_session(db, user.id, _user_agent(request)).id
+    return issue_token_pair(user, session_id)
 
 
 # ==================== CURRENT USER ====================

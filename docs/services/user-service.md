@@ -30,6 +30,12 @@ user-service/
 | POST | `/users/register` | Регистрация нового пользователя | Нет |
 | POST | `/users/login` | Логин (JWT access + refresh токены) | Нет |
 | POST | `/users/refresh` | Обновление пары токенов: JSON body `{refresh_token}` -> `{access_token, refresh_token, token_type}` (stateless-ротация refresh-токена) | Нет (refresh-токен в body и есть credential) |
+| POST | `/users/logout` | Выход: body `{refresh_token}` → удаляет сессию (`sid`) этого токена, закрывает её сокеты. Подпись проверяется, срок — нет; идемпотентно (уже удалённая сессия / legacy-токен без `sid` → тоже 200 `{"detail": "Вы вышли из аккаунта"}`); битый токен → 401 | Токен в body |
+| GET | `/users/me/sessions` | `{"sessions": [{id, created_at, last_used_at, user_agent, current}]}`, сначала недавно использованные; `current` — сессия этого токена. Протухшие (>7 дней без использования) удаляются перед выдачей | Да |
+| DELETE | `/users/me/sessions/{id}` | Завершить свою сессию (текущую — тоже, это выход). Чужая/несуществующая → 404 «Сессия не найдена». 200 `{"detail": "Сессия завершена"}` | Да |
+| POST | `/users/me/sessions/revoke-others` | Завершить все сессии, кроме текущей, + `tokens_valid_after = now` (убивает legacy-токены). 200 `{"detail": "Остальные сеансы завершены", "revoked": N}` | Да |
+| PUT | `/users/me/password` | `{current_password, new_password}`. 400: «Неверный текущий пароль» / правило регистрации (6–128) / «Новый пароль совпадает с текущим». Успех: остальные сессии завершены, `tokens_valid_after = now`, 200 `{"detail": "Пароль изменён"}`; текущая сессия остаётся | Да |
+| PUT | `/users/me/email` | `{new_email, password}`. 400 «Неверный пароль» / «Это ваша текущая почта» (без учёта регистра); 409 «Эта почта уже занята» (без учёта регистра); 422 — невалидный адрес. Успех: `{access_token, refresh_token, token_type}` — новая пара **той же** сессии, клиент обязан заменить токены. Письмо не отправляется (почтового стека нет) | Да |
 | GET | `/users/me` | Текущий пользователь + данные персонажа и локации | Да |
 | POST | `/users/upload-avatar/` | Загрузка аватара пользователя | Да |
 | PUT | `/users/{user_id}/update_character` | Установка текущего персонажа | Нет |
@@ -74,6 +80,16 @@ user-service/
 | friend_request_privacy | String(10), default 'all' | Принимать ли заявки в друзья: all/nobody (0030) |
 | show_online | Boolean, default true | Показывать ли онлайн-статус и `last_active_at` другим (0030) |
 | site_background_url | String(512), NULL | Личный фон всего сайта (настройки аккаунта, 0030) |
+| tokens_valid_after | DateTime, NULL | Пока NULL — legacy-токены без `sid` принимаются; ставится при «завершить остальные сеансы» и смене пароля (0031) |
+
+### user_sessions (миграция 0031)
+| Поле | Тип | Описание |
+|------|-----|----------|
+| id | String(32), PK | uuid4 hex — уходит в claim `sid` обоих токенов |
+| user_id | Integer, FK users.id ON DELETE CASCADE, index | Владелец |
+| created_at | DateTime | Вход |
+| last_used_at | DateTime | Последнее использование (обновляется не чаще раза в 5 минут; refresh — всегда) |
+| user_agent | String(255), NULL | Заголовок User-Agent при входе (обрезается) |
 
 ## Приватность (миграция 0030)
 
@@ -101,9 +117,14 @@ user-service/
 - **Secret key:** только из переменной окружения `JWT_SECRET_KEY` (`auth.py`). **FEAT-169:** fail-fast на импорте — если переменная не задана **или пуста**, сервис падает с понятным `RuntimeError` и не поднимается. Проверяется именно «правдивость», а не наличие ключа: в compose незаданная переменная разворачивается в пустую строку, и старый `os.environ["JWT_SECRET_KEY"]` пропустил бы пустой секрет. Публичный fallback `your-secret-key` из compose убран; сгенерировать значение: `openssl rand -hex 32`
 - **Access token TTL:** 20 часов
 - **Refresh token TTL:** 7 дней
-- **Payload:** `{sub: email, role: string, current_character: int, type: "access"|"refresh", exp: timestamp}`
+- **Payload:** `{sub: email, uid: int, sid: str, role: string, current_character: int, type: "access"|"refresh", iat, exp}`. Пользователь ищется по `uid` (если есть), иначе по `sub` (legacy).
+- **Сессии (миграция 0031, `sessions.py`):** login/register создают строку `user_sessions`; её id — claim `sid` в обоих токенах пары. `get_current_user` (а значит `/users/me`, через который все сервисы проверяют токен) требует, чтобы сессия существовала, принадлежала пользователю и не простаивала дольше 7 дней — иначе **401 «Сессия завершена. Войдите снова.»**. `last_used_at` обновляется не чаще раза в 5 минут. `get_optional_user` применяет ту же проверку (отозванный токен = гость).
+- **Legacy-токены без `sid`** (выданы до 0031) принимаются, пока `users.tokens_valid_after` NULL. Legacy refresh-токен в `/users/refresh` создаёт новую сессию и выдаёт пару с `sid` — так действующие игроки мигрируют без разлогина. После «завершить остальные сеансы»/смены пароля legacy-токены отклоняются.
+- **Протухшие сессии** (>7 дней без использования) удаляются лениво — при логине, refresh и выдаче списка сессий (только для этого пользователя).
+- **Закрытие WebSocket-ов:** после отзыва сессий (DELETE сессии, revoke-others, смена пароля, logout) user-service фоновой задачей шлёт `POST notification-service /notifications/internal/sessions/revoked` с `X-Internal-Token` (`sessions.notify_sessions_revoked`, таймаут 3с). Best effort: недоступность notification-service только логируется. URL — `NOTIFICATION_SERVICE_URL` (по умолчанию `http://notification-service:8007`).
+- **Rate limit (nginx, оба конфига):** `/users/login`, `/users/register`, `/users/me/password`, `/users/me/email` — зона `auth_limit` 5 r/m, burst 4 (6-я быстрая попытка → 429); `/users/refresh` — `refresh_limit` 60 r/m, burst 30. 429 отдаётся JSON `{"detail":"Слишком много попыток. Подождите минуту и попробуйте снова."}`.
 - **Claim `type`:** access-токены с `type=refresh` отклоняются в `get_current_user`; refresh-токены с `type=access` отклоняются в `/users/refresh`. Токены без claim (выданные до FEAT-150) принимаются везде (legacy, самоустраняется за 7 дней).
-- **`/users/refresh`:** принимает `{refresh_token}` в JSON body (не query — токен не попадает в логи Nginx), возвращает новую пару access (20ч) + refresh (7д), `current_character` перечитывается из БД. Все ошибки — единый ответ 401 «Недействительный или истёкший refresh-токен».
+- **`/users/refresh`:** принимает `{refresh_token}` в JSON body (не query — токен не попадает в логи Nginx), возвращает новую пару access (20ч) + refresh (7д) с тем же `sid`, `current_character` перечитывается из БД. Отозванная сессия → 401. Все ошибки — единый ответ 401 «Недействительный или истёкший refresh-токен».
 - **Пароли:** bcrypt через passlib
 
 ## Коммуникация с другими сервисами

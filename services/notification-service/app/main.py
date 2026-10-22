@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from models import Notification
 from database import get_db
 from schemas import Notification as NotificationSchema
-from schemas import GeneralNotificationPayload, NotificationTargetType, NotificationPreferences
+from schemas import GeneralNotificationPayload, NotificationTargetType, NotificationPreferences, SessionsRevokedPayload
 from notification_categories import (
     CATEGORY_SYSTEM,
     INVALID_PREFERENCE_DETAIL,
@@ -20,7 +20,10 @@ from notification_categories import (
     save_preferences,
     validate_preferences_update,
 )
-from auth_http import get_current_user_via_http, require_permission, authenticate_websocket, UserRead
+from auth_http import (
+    get_current_user_via_http, require_permission, authenticate_websocket, UserRead,
+    verify_internal_token, unverified_session_id,
+)
 
 import ws_manager
 
@@ -75,7 +78,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
 
     user_id = user["id"]
     await websocket.accept()
-    await ws_manager.connect(user_id, websocket)
+    # The token was just validated by user-service, so reading its `sid`
+    # unverified is safe here: it only tags the socket for session revocation.
+    await ws_manager.connect(user_id, websocket, unverified_session_id(token))
 
     try:
         while True:
@@ -172,6 +177,25 @@ def create_admin_notification(
     background_tasks.add_task(_publish_admin_notification, payload)
 
     return {"detail": "Notification creation request sent to queue."}
+
+# Internal: user-service revoked login sessions (logout, "end other sessions",
+# password change) — close the WebSockets opened with those sessions' tokens.
+# Blocked from outside by nginx (/notifications/internal/) and gated by
+# X-Internal-Token here.
+@router.post("/internal/sessions/revoked", dependencies=[Depends(verify_internal_token)])
+async def internal_sessions_revoked(data: SessionsRevokedPayload):
+    # Neither field = close every socket of the user (the caller itself was
+    # on a legacy token without a session); both at once is ambiguous.
+    if data.session_ids is not None and data.all_except is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Укажите только одно из полей: session_ids или all_except",
+        )
+    closed = await ws_manager.close_revoked_sessions(
+        data.user_id, session_ids=data.session_ids, all_except=data.all_except
+    )
+    return {"closed": closed}
+
 
 # Per-user notification preferences. Declared before the /{user_id}/... routes
 # so the literal "me" segment is never parsed as a user id.

@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 class NotificationBase(BaseModel):
@@ -40,3 +40,13 @@ class GeneralNotificationPayload(BaseModel):
 class NotificationPreferences(BaseModel):
     """GET/PUT /notifications/me/preferences body and response."""
     preferences: Dict[str, str]
+
+
+class SessionsRevokedPayload(BaseModel):
+    """Internal call from user-service: close WebSockets of revoked sessions.
+
+    At most one of `session_ids` / `all_except`; neither = all of the user's sockets.
+    """
+    user_id: int
+    session_ids: Optional[List[str]] = None
+    all_except: Optional[str] = None

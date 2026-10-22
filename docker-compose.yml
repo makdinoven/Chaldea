@@ -252,6 +252,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       CHARACTER_SERVICE_URL: http://character-service:8005
       LOCATION_SERVICE_URL: http://locations-service:8006
+      # Закрытие WebSocket-ов отозванных сессий (/notifications/internal/...)
+      NOTIFICATION_SERVICE_URL: http://notification-service:8007
       # FEAT-169: user-service принимает internal-маршрут /users/internal/...
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     ports:

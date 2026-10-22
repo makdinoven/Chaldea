@@ -36,6 +36,7 @@ notification-service/app/
 | GET | `/notifications/me/preferences` | Настройки уведомлений текущего пользователя: `{"preferences": {"messages","social","trade","party","world","progress": "all"|"bell"|"off"}}`. Отсутствующие ключи → `all`, неизвестные сохранённые ключи игнорируются | Да |
 | PUT | `/notifications/me/preferences` | Частичное обновление: тело `{"preferences": {...}}`, ответ — полная форма. Неизвестная категория, недопустимый режим или обязательная категория (`battle`, `system`) → **422** «Недопустимое значение настройки уведомлений», ничего не сохраняется | Да |
 | GET | `/notifications/messenger/presence/{user_id}` | `{user_id, online}` — есть ли у пользователя активное WS-подключение. Если пользователь скрыл онлайн-статус (`show_online = false` в user-service), другим всегда отдаётся `online: false`; сам пользователь видит свой статус. Флаг читается из user-service `GET /users/{id}/presence-visibility` (`messenger_routes._get_show_online`); при ошибке или не-200 — `online: false` (fail closed) | Да |
+| POST | `/notifications/internal/sessions/revoked` | Вызывает user-service после отзыва сессий (logout, завершение сессии, «завершить остальные», смена пароля). Body `{user_id, session_ids?: [..], all_except?: sid}`: `session_ids` — закрыть сокеты этих сессий; `all_except` — все сокеты пользователя, кроме этой сессии (сокеты legacy-токенов без `sid` тоже); ни одного поля — все сокеты пользователя; оба сразу → 422. Сокеты закрываются кодом **4001**. Ответ `{"closed": N}`. Fail-closed `X-Internal-Token` (`auth_http.verify_internal_token`: пустой env → 503, нет/чужой токен → 401); nginx отдаёт 403 на `/notifications/internal/` снаружи | `X-Internal-Token` |
 | GET | `/notifications/chat/messages?channel=` | История канала чата, постранично. **FEAT-171 (N1):** закрыта от неавторизованных — гость получает **401** «Войдите в аккаунт, чтобы читать чат» (зависимость `chat_routes.require_chat_reader`: схема с `auto_error=False` + собственное русское сообщение, дальше обычная проверка токена через user-service). Тело ответа для вошедшего не изменилось. `POST` на том же роутере уже требовал JWT, `DELETE` — `chat:delete` | Да |
 
 ## Таблица БД
@@ -96,6 +97,7 @@ notification-service/app/
 **Через HTTP-вызов к user-service** (не локальная JWT-валидация):
 - OAuth2 Bearer -> HTTP GET `user-service:8000/users/me` с тем же токеном
 - Возвращает UserRead с id, username, role
+- **WebSocket** `/notifications/ws?token=` проверяет токен один раз на рукопожатии. После этого `sid` токена читается **без проверки подписи** (`auth_http.unverified_session_id` — только для сопоставления, токен уже проверен через `/users/me`) и хранится в `ws_manager.socket_sessions`. По сигналу из user-service (`/notifications/internal/sessions/revoked`) `ws_manager.close_revoked_sessions` закрывает сокеты отозванных сессий кодом 4001 — фронтенд пробует refresh, он не проходит, и пользователь разлогинивается.
 
 ## Коммуникация
 

@@ -88,6 +88,22 @@ class User(Base):
     show_online = Column(Boolean, nullable=False, default=True, server_default=true())
     # Personal site-wide background picture (account setting, migration 0030)
     site_background_url = Column(String(512), nullable=True)
+    # Account security (migration 0031): tokens WITHOUT a `sid` claim (issued
+    # before sessions existed) are accepted only while this is NULL. "Log out
+    # everywhere" and a password change set it, which kills every legacy token.
+    tokens_valid_after = Column(DateTime, nullable=True)
+
+
+class UserSession(Base):
+    """One login (device/browser). Its id travels as the `sid` claim in both
+    the access and the refresh token; deleting the row revokes both."""
+    __tablename__ = "user_sessions"
+
+    id = Column(String(32), primary_key=True)  # uuid4 hex
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    user_agent = Column(String(255), nullable=True)
 
 
 class CosmeticFrame(Base):

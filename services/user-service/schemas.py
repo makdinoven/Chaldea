@@ -16,16 +16,32 @@ class UserBase(BaseModel):
             raise ValueError('Никнейм не должен превышать 30 символов')
         return v
 
+PASSWORD_MIN_LENGTH = 6
+PASSWORD_MAX_LENGTH = 128
+
+
+def password_rule_error(v: str) -> Optional[str]:
+    """Russian error message if the password breaks the registration rule, else None.
+
+    Shared by registration (pydantic validator) and the password change
+    endpoint (which reports it as a 400 with this message).
+    """
+    if len(v) < PASSWORD_MIN_LENGTH:
+        return 'Пароль должен содержать минимум 6 символов'
+    if len(v) > PASSWORD_MAX_LENGTH:
+        return 'Пароль слишком длинный'
+    return None
+
+
 # Схема для создания пользователя (регистрация)
 class UserCreate(UserBase):
     password: str  # Пароль пользователя
 
     @validator('password')
     def validate_password(cls, v):
-        if len(v) < 6:
-            raise ValueError('Пароль должен содержать минимум 6 символов')
-        if len(v) > 128:
-            raise ValueError('Пароль слишком длинный')
+        error = password_rule_error(v)
+        if error:
+            raise ValueError(error)
         return v
 
 # Схема для входа пользователя (логин)
@@ -42,6 +58,34 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+# ── Account security: sessions, password and email change ──
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
+class SessionItem(BaseModel):
+    id: str
+    created_at: datetime
+    last_used_at: datetime
+    user_agent: Optional[str] = None
+    current: bool
+
+
+class SessionListResponse(BaseModel):
+    sessions: List[SessionItem]
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class EmailChangeRequest(BaseModel):
+    new_email: EmailStr
+    password: str
 
 class UserCharacterCreate(BaseModel):
     user_id: int
