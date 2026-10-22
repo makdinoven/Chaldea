@@ -48,10 +48,20 @@ const groupByColor = (list: ClickableZone[]): [string, ClickableZone[]][] => {
   return [...groups.entries()];
 };
 
+/** A mouse or similar: the card follows the pointer and a click goes straight there. */
+const HOVER_QUERY = '(hover: hover) and (pointer: fine)';
+
 const ClickableZoneOverlay = ({ zones, onZoneClick, countries }: ClickableZoneOverlayProps) => {
   const [hoveredTargetKey, setHoveredTargetKey] = useState<string | null>(null);
-  // Tap/click opens the target's card; navigation happens from the card
+  // Touch only: the first tap opens the target's card, a second tap (or «Перейти») goes there.
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
+  const [canHover, setCanHover] = useState(() => window.matchMedia(HOVER_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(HOVER_QUERY);
+    const update = () => setCanHover(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const containerRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ width: 0, height: 0 });
 
@@ -81,7 +91,9 @@ const ClickableZoneOverlay = ({ zones, onZoneClick, countries }: ClickableZoneOv
     return hoveredTargetKey === key || selectedTargetKey === key;
   };
 
-  const selectedZones = selectedTargetKey ? zones.filter((z) => getTargetKey(z) === selectedTargetKey) : [];
+  // With a mouse the card is the hovered target's; on touch, the tapped one's.
+  const cardKey = canHover ? hoveredTargetKey : selectedTargetKey;
+  const selectedZones = cardKey ? zones.filter((z) => getTargetKey(z) === cardKey) : [];
   const selectedZone = selectedZones.find((z) => z.label) ?? selectedZones[0] ?? null;
 
   // Card anchor: average of the centres of all shapes of the selected target
@@ -169,10 +181,18 @@ const ClickableZoneOverlay = ({ zones, onZoneClick, countries }: ClickableZoneOv
           </filter>
         </defs>
         {zones.map((zone) => {
+          const key = getTargetKey(zone);
           const hoverHandlers = {
-            onMouseEnter: () => setHoveredTargetKey(getTargetKey(zone)),
+            onMouseEnter: () => setHoveredTargetKey(key),
             onMouseLeave: () => setHoveredTargetKey(null),
-            onClick: () => setSelectedTargetKey(getTargetKey(zone)),
+            onClick: () => {
+              if (canHover || selectedTargetKey === key) {
+                setSelectedTargetKey(null);
+                onZoneClick(zone);
+              } else {
+                setSelectedTargetKey(key);
+              }
+            },
           };
 
           if (zone.precise_path) {
@@ -217,7 +237,8 @@ const ClickableZoneOverlay = ({ zones, onZoneClick, countries }: ClickableZoneOv
       <AnimatePresence>
         {selectedZone && cardAnchor && box.width > 0 && (
           <MapZoneCard
-            key={selectedTargetKey}
+            key={cardKey}
+            interactive={!canHover}
             anchor={cardAnchor}
             box={box}
             title={selectedZone.label ?? 'Без названия'}

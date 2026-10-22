@@ -32,7 +32,12 @@ const ICON_MAP: Record<string, typeof Sun> = {
 
 const REFRESH_INTERVAL_MS = 60_000;
 
-const GameTimeWidget = () => {
+interface GameTimeWidgetProps {
+  /** One line with no rule under it, for a toolbar; otherwise a block for a side panel. */
+  inline?: boolean;
+}
+
+const GameTimeWidget = ({ inline = false }: GameTimeWidgetProps) => {
   const dispatch = useAppDispatch();
   const { epoch, offsetDays, serverTime, loading, error } =
     useAppSelector(selectGameTimePublic);
@@ -71,6 +76,7 @@ const GameTimeWidget = () => {
   }, [epoch, offsetDays, serverTime]);
 
   if (loading) {
+    if (inline) return <div className="h-4 w-40 rounded bg-white/10 animate-pulse" />;
     return (
       <div className="border-b border-white/10 pb-3 mb-3">
         <div className="flex items-center gap-2">
@@ -88,6 +94,19 @@ const GameTimeWidget = () => {
 
   const Icon = ICON_MAP[gameTime.segmentName] || Sun;
   const label = SEGMENT_LABELS[gameTime.segmentName] || gameTime.segmentName;
+  const when = gameTime.isTransition
+    ? `${gameTime.year}-й год`
+    : `${gameTime.week}-я неделя, ${gameTime.year}-й год`;
+
+  if (inline) {
+    return (
+      <div className="flex items-center gap-2 min-w-0 text-sm">
+        <Icon size={16} className="text-gold shrink-0" />
+        <span className="gold-text font-medium shrink-0">{label}</span>
+        <span className="text-white/60 truncate">{when}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="border-b border-white/10 pb-3 mb-3">
@@ -95,11 +114,7 @@ const GameTimeWidget = () => {
         <Icon size={18} className="text-gold shrink-0" />
         <span className="gold-text text-base font-medium">{label}</span>
       </div>
-      <p className="text-white/60 text-sm mt-0.5 ml-[26px]">
-        {gameTime.isTransition
-          ? `${gameTime.year}-й год`
-          : `${gameTime.week}-я неделя, ${gameTime.year}-й год`}
-      </p>
+      <p className="text-white/60 text-sm mt-0.5 ml-[26px]">{when}</p>
     </div>
   );
 };

@@ -13,6 +13,12 @@ interface MapZoneCardProps {
   level: TargetLevel | null;
   onGo: () => void;
   onClose: () => void;
+  /**
+   * False for the card shown on hover: information only, no buttons, and it
+   * lets the pointer through so it never gets in the way of the map. A click
+   * on the zone itself goes there.
+   */
+  interactive?: boolean;
 }
 
 /** Below this map width the card is compact and docks to the top/bottom edge */
@@ -36,7 +42,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
  * to the zone. Positioned inside the map box: beside the anchor on wide maps,
  * docked to the top or bottom edge on narrow ones.
  */
-const MapZoneCard = ({ anchor, box, title, emblemUrl, level, onGo, onClose }: MapZoneCardProps) => {
+const MapZoneCard = ({ anchor, box, title, emblemUrl, level, onGo, onClose, interactive = true }: MapZoneCardProps) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
 
@@ -102,19 +108,23 @@ const MapZoneCard = ({ anchor, box, title, emblemUrl, level, onGo, onClose }: Ma
         exit={{ opacity: 0, scale: 0.94 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
         onClick={(e) => e.stopPropagation()}
-        className={`map-zone-card book-page absolute z-30 ${compact ? 'w-[190px] p-2.5' : 'w-[250px] p-3.5'}`}
+        className={`map-zone-card book-page absolute z-30 ${compact ? 'w-[190px] p-2.5' : 'w-[250px] p-3.5'} ${
+          interactive ? '' : 'pointer-events-none'
+        }`}
         style={{ left, top }}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Закрыть"
-          className="absolute top-1.5 right-1.5 text-ink-muted hover:text-ink transition-colors"
-        >
-          <X size={compact ? 14 : 16} />
-        </button>
+        {interactive && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Закрыть"
+            className="absolute top-1.5 right-1.5 text-ink-muted hover:text-ink transition-colors"
+          >
+            <X size={compact ? 14 : 16} />
+          </button>
+        )}
 
-        <div className="flex items-center gap-2.5 pr-4">
+        <div className={`flex items-center gap-2.5 ${interactive ? 'pr-4' : ''}`}>
           <div
             className={`shrink-0 rounded-full border border-[#8a6a3a]/60 bg-parchment-dark/60 flex items-center justify-center overflow-hidden ${
               compact ? 'w-8 h-8' : 'w-11 h-11'
@@ -140,15 +150,21 @@ const MapZoneCard = ({ anchor, box, title, emblemUrl, level, onGo, onClose }: Ma
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={onGo}
-          className={`w-full mt-2.5 rounded-card border border-[#7a4a22]/50 text-[#5a3414] font-medium hover:bg-[#7a4a22]/10 transition-colors ${
-            compact ? 'py-1 text-xs' : 'py-1.5 text-sm'
-          }`}
-        >
-          Перейти
-        </button>
+        {interactive ? (
+          <button
+            type="button"
+            onClick={onGo}
+            className={`w-full mt-2.5 rounded-card border border-[#7a4a22]/50 text-[#5a3414] font-medium hover:bg-[#7a4a22]/10 transition-colors ${
+              compact ? 'py-1 text-xs' : 'py-1.5 text-sm'
+            }`}
+          >
+            Перейти
+          </button>
+        ) : (
+          <p className={`text-center italic text-ink-muted ${compact ? 'mt-1.5 text-[10px]' : 'mt-2.5 text-xs'}`}>
+            Нажмите, чтобы перейти
+          </p>
+        )}
       </motion.div>
     </>
   );

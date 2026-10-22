@@ -30,10 +30,12 @@ import {
 } from '../../redux/actions/worldMapActions';
 import type { ClickableZone } from '../../redux/actions/worldMapActions';
 import HierarchyTree from './HierarchyTree/HierarchyTree';
+import GameTimeWidget from './GameTimeWidget';
 import InteractiveMap from './InteractiveMap/InteractiveMap';
 import RegionInteractiveMap from './RegionInteractiveMap/RegionInteractiveMap';
 import type { MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
 import { hasRecommendedLevel } from '../../utils/recommendedLevel';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 type ViewLevel = 'world' | 'area' | 'country' | 'region';
 
@@ -53,6 +55,8 @@ const WorldPage = () => {
 
   const areas = useAppSelector(selectAreas);
   const hierarchyTree = useAppSelector(selectHierarchyTree);
+  // The navigation tree slides in over the map, so the map can have the page's width.
+  const [navOpen, setNavOpen] = useState(false);
   const clickableZones = useAppSelector(selectClickableZones);
   const areaDetails = useAppSelector(selectAreaDetails);
   const countryDetails = useAppSelector(selectCountryDetails);
@@ -711,8 +715,20 @@ const WorldPage = () => {
 
   return (
     <div className="py-4">
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-2 mb-4 flex-wrap text-sm">
+      {/* Above the map: the navigation, where we are, and the season */}
+      <div className="flex items-center gap-x-4 gap-y-2 mb-4 flex-wrap">
+      <button
+        onClick={() => setNavOpen(true)}
+        className="flex items-center gap-2 shrink-0 px-3.5 py-2 rounded-card bg-site-bg border border-white/10
+                   text-white/70 hover:text-white hover:border-gold-dark/60 text-sm transition-all duration-200 ease-site"
+        aria-label="Открыть навигацию"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        Навигация
+      </button>
+      <nav className="flex items-center gap-2 flex-wrap text-sm min-w-0 flex-1">
         {breadcrumbs.map((crumb, index) => (
           <span key={crumb.path} className="flex items-center gap-2">
             {index > 0 && <span className="text-white/30">{'\u203A'}</span>}
@@ -729,10 +745,15 @@ const WorldPage = () => {
           </span>
         ))}
       </nav>
+      <div className="shrink-0 max-w-full px-3.5 py-2 rounded-card bg-site-bg border border-white/10">
+        <GameTimeWidget inline />
+      </div>
+      </div>
 
-      {/* Main layout: tree + map */}
-      <div className="flex gap-5 items-start">
-        <HierarchyTree currentLocationId={currentLocationId} />
+      <HierarchyTree currentLocationId={currentLocationId} open={navOpen} onClose={() => setNavOpen(false)} />
+
+      {/* The map, the page's whole width */}
+      <div>
 
         {/* Map area with transition animation */}
         <div
@@ -826,38 +847,26 @@ const WorldPage = () => {
         </div>
       </div>
 
-      {/* District contents modal */}
-      {selectedDistrict && (
-        <div
-          className="modal-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelectedDistrictId(null);
-          }}
-        >
-          <div className="modal-content max-w-lg w-full mx-4">
-            {/* Modal header */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 min-w-0">
-                {selectedDistrict.parent_district_id != null && (
-                  <button
-                    onClick={() => setSelectedDistrictId(selectedDistrict.parent_district_id!)}
-                    className="text-white/50 hover:text-white text-sm bg-transparent border-none cursor-pointer transition-colors shrink-0"
-                    title="Назад"
-                  >
-                    &#9664;
-                  </button>
-                )}
-                <h3 className="gold-text text-xl font-medium uppercase truncate">
-                  {selectedDistrict.name}
-                </h3>
-              </div>
-              <button
-                onClick={() => setSelectedDistrictId(null)}
-                className="text-white/50 hover:text-white text-xl bg-transparent border-none cursor-pointer transition-colors shrink-0"
-              >
-                &times;
-              </button>
-            </div>
+      {/* District contents modal — its list scrolls inside it, however long */}
+      <ModalShell
+        open={selectedDistrict != null}
+        onClose={() => setSelectedDistrictId(null)}
+        title={selectedDistrict?.name}
+        headerStart={
+          selectedDistrict?.parent_district_id != null ? (
+            <button
+              onClick={() => setSelectedDistrictId(selectedDistrict.parent_district_id!)}
+              className="text-white/50 hover:text-white text-sm bg-transparent border-none cursor-pointer transition-colors shrink-0"
+              title="Назад"
+              aria-label="Назад"
+            >
+              &#9664;
+            </button>
+          ) : null
+        }
+      >
+        {selectedDistrict && (
+          <>
 
             {/* Unified list: sub-zones + locations mixed, sorted by sort_order */}
             {(() => {
@@ -874,11 +883,11 @@ const WorldPage = () => {
               );
 
               if (allItems.length === 0) {
-                return <p className="text-white/40 text-sm mb-4">В этой зоне пока нет элементов</p>;
+                return <p className="text-white/40 text-sm">В этой зоне пока нет элементов</p>;
               }
 
               return (
-                <div className="space-y-2 mb-4">
+                <div className="space-y-2">
                   {allItems.map((item) =>
                     item._kind === 'zone' ? (
                       <button
@@ -956,9 +965,9 @@ const WorldPage = () => {
               // Sub-districts would need a parent_id field; for now this section is reserved
               return null;
             })()}
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </ModalShell>
     </div>
   );
 };
