@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { MessageCircle, MessageSquare, User } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe, logout } from '../../../redux/slices/userSlice';
-import { clearTokens } from '../../../api/authToken';
+import { clearTokens, getRefreshToken } from '../../../api/authToken';
+import { logoutSession } from '../../../api/account';
 import { fetchUnreadCount, selectTotalUnread } from '../../../redux/slices/messengerSlice';
 import { toggleChat } from '../../../redux/slices/chatSlice';
 import NavLinks from './NavLinks';
@@ -39,6 +40,10 @@ const Header = () => {
   }, [dispatch]);
 
   const handleLogout = () => {
+    // End the session on the server too, so a copied token stops working;
+    // best effort — leaving the site never waits on it.
+    const refreshToken = getRefreshToken();
+    if (refreshToken) void logoutSession(refreshToken).catch(() => {});
     // Explicit user logout: clear BOTH tokens (FEAT-150) — a leftover
     // refreshToken would let the refresh interceptor resurrect the session.
     clearTokens();

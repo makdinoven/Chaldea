@@ -25,6 +25,11 @@ const extractErrorMessage = (error: unknown): string => {
     return 'Ошибка соединения. Попробуйте позже.';
   }
 
+  // The gateway's limit on login attempts.
+  if (error.response?.status === 429 && typeof data.detail !== 'string') {
+    return 'Слишком много попыток. Подождите минуту и попробуйте снова.';
+  }
+
   // Plain text error response (e.g., "Internal Server Error")
   if (typeof data === 'string') {
     return data;

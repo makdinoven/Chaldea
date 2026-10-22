@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Bell, Lock, Monitor, User } from 'react-feather';
+import { Bell, Key, Lock, Monitor, User } from 'react-feather';
 import type { Icon } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -13,14 +13,16 @@ import ProfileAppearanceTab from './ProfileAppearanceTab';
 import PrivacyTab from './PrivacyTab';
 import NotificationsTab from './NotificationsTab';
 import InterfaceTab from './InterfaceTab';
+import AccountTab from './AccountTab';
 
-type TabKey = 'profile' | 'privacy' | 'notifications' | 'interface';
+type TabKey = 'profile' | 'privacy' | 'notifications' | 'interface' | 'account';
 
 const TABS: { key: TabKey; label: string; icon: Icon }[] = [
   { key: 'profile', label: 'Профиль и внешний вид', icon: User },
   { key: 'privacy', label: 'Приватность и общение', icon: Lock },
   { key: 'notifications', label: 'Уведомления', icon: Bell },
   { key: 'interface', label: 'Игра и интерфейс', icon: Monitor },
+  { key: 'account', label: 'Аккаунт', icon: Key },
 ];
 
 const isTabKey = (value: string | null): value is TabKey => TABS.some((tab) => tab.key === value);
@@ -55,7 +57,7 @@ const SettingsPage = () => {
       <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 items-start">
         {/* Sections: side by side on phones, a column beside the content from lg */}
         <nav
-          className="w-full lg:w-60 shrink-0 grid grid-cols-2 lg:flex lg:flex-col gap-1 lg:sticky lg:top-4"
+          className="gray-bg p-2 w-full lg:w-60 shrink-0 grid grid-cols-2 lg:flex lg:flex-col gap-1 lg:sticky lg:top-4"
           aria-label="Разделы настроек"
         >
           {TABS.map(({ key, label, icon: TabIcon }) => {
@@ -86,6 +88,8 @@ const SettingsPage = () => {
             <NotificationsTab />
           ) : activeTab === 'interface' ? (
             <InterfaceTab />
+          ) : activeTab === 'account' ? (
+            <AccountTab />
           ) : ownProfile ? (
             <ProfileAppearanceTab key={ownProfile.id} profile={ownProfile} />
           ) : profileError && !profileLoading ? (
