@@ -307,11 +307,6 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
       onClose={handleClose}
       title={item.name}
       size="md"
-      footer={
-        <button onClick={handleClose} className="btn-line w-full sm:w-auto">
-          Закрыть
-        </button>
-      }
     >
             {loading && !detail ? (
               <div className="flex items-center justify-center py-12">

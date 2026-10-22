@@ -217,11 +217,6 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
       onClose={onClose}
       title={item.name}
       size="md"
-      footer={!infoLoading && socketInfo ? (
-        <button type="button" onClick={onClose} className="btn-line w-full sm:w-auto">
-          Закрыть
-        </button>
-      ) : undefined}
     >
       {/* Item identity */}
       <div className="flex items-center gap-3 mb-5 min-w-0">

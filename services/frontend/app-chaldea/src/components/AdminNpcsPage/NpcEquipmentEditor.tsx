@@ -316,11 +316,6 @@ const NpcEquipmentEditor = ({ npcId, npcName, onClose }: NpcEquipmentEditorProps
         title={pickerSlot ? `${SLOT_LABELS[pickerSlot]} — выбор предмета` : ''}
         size="md"
         bodyClassName="flex flex-col"
-        footer={
-          <button onClick={closePicker} className="btn-line w-full sm:w-auto !px-6">
-            Закрыть
-          </button>
-        }
       >
         <input
           className="input-underline shrink-0 mb-4"

@@ -319,11 +319,6 @@ const PostVersionHistoryModal = ({ postId, onClose }: PostVersionHistoryModalPro
       size="xl"
       closeOnBackdrop={false}
       bodyClassName="flex flex-col gap-4"
-      footer={
-        <button type="button" onClick={onClose} className="btn-line w-full sm:w-auto text-xs px-4 py-1.5">
-          Закрыть
-        </button>
-      }
     >
       {loading && (
         <div className="flex items-center gap-2.5 text-white/50 text-xs py-6">

@@ -59,6 +59,21 @@ const SIZE_CLASSES: Record<ModalShellSize, string> = {
  */
 const openStack: symbol[] = [];
 
+/**
+ * While any modal is open the page behind it does not scroll. The scrollbar's
+ * gutter stays reserved, so the page does not jump sideways when it goes.
+ */
+const lockPageScroll = () => {
+  const root = document.documentElement;
+  root.style.scrollbarGutter = 'stable';
+  root.style.overflow = 'hidden';
+};
+const unlockPageScroll = () => {
+  const root = document.documentElement;
+  root.style.overflow = '';
+  root.style.scrollbarGutter = '';
+};
+
 const CLOSE_BUTTON_CLASSES =
   'flex items-center justify-center w-8 h-8 shrink-0 text-white/40 hover:text-white transition-colors duration-200 ease-site';
 
@@ -81,9 +96,11 @@ const ModalShell = ({
     if (!open) return undefined;
     const id = stackId.current;
     openStack.push(id);
+    if (openStack.length === 1) lockPageScroll();
     return () => {
       const at = openStack.lastIndexOf(id);
       if (at >= 0) openStack.splice(at, 1);
+      if (openStack.length === 0) unlockPageScroll();
     };
   }, [open]);
 
