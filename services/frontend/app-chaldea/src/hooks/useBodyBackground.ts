@@ -16,15 +16,16 @@ const SOFT_OVERLAY =
  * Because the inline style replaces the CSS default (which already carries
  * the soft overlay), the overlay is re-composed here so pages with a custom
  * background keep the same gentle darkening as the rest of the site
- * (FEAT-152 B14).
+ * (FEAT-152 B14). `dimmed = false` leaves it off, for looking at the picture
+ * itself with nothing over it.
  */
-export function useBodyBackground(imageUrl?: string | null): void {
+export function useBodyBackground(imageUrl?: string | null, dimmed = true): void {
   useEffect(() => {
     if (!imageUrl) return;
     const originalBackground = document.body.style.backgroundImage;
-    document.body.style.backgroundImage = `${SOFT_OVERLAY}, url(${imageUrl})`;
+    document.body.style.backgroundImage = dimmed ? `${SOFT_OVERLAY}, url(${imageUrl})` : `url(${imageUrl})`;
     return () => {
       document.body.style.backgroundImage = originalBackground;
     };
-  }, [imageUrl]);
+  }, [imageUrl, dimmed]);
 }

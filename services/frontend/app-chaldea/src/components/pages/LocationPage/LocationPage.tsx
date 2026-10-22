@@ -12,6 +12,7 @@ import { LocationData, Post } from './types';
 import type { PostGate } from './gateConstants';
 import LocationHeader from './LocationHeader';
 import LocationTopBar from './LocationTopBar';
+import LocationArtView from './LocationArtView';
 import PlayersSection from './PlayersSection';
 import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
@@ -108,7 +109,9 @@ const LocationPage = () => {
   const cooldownMinutes = Math.floor(cooldownRemaining / 60);
   const cooldownSeconds = cooldownRemaining % 60;
 
-  useBodyBackground(location?.image_url);
+  // The location art on its own: the page's interface put away and the background undimmed.
+  const [artOnly, setArtOnly] = useState(false);
+  useBodyBackground(location?.image_url, !artOnly);
 
   const fetchLocationData = useCallback(async () => {
     if (!locationId) return;
@@ -636,6 +639,9 @@ const LocationPage = () => {
   // Anything added back to the sidebar must be OR-ed into this flag.
   const hasSidebar = (location.loot ?? []).length > 0;
 
+  // Interface put away: only the location art, under the site header.
+  if (artOnly) return <LocationArtView onClose={() => setArtOnly(false)} />;
+
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
       {/* Top bar: back, breadcrumb, labeled favorite (FEAT-152 A1/A8) */}
@@ -644,7 +650,9 @@ const LocationPage = () => {
         isFavorited={location.is_favorited ?? false}
         onToggleFavorite={handleToggleFavorite}
         onBack={() => navigate(-1)}
+        onHideInterface={location.image_url ? () => setArtOnly(true) : undefined}
       />
+
 
       {/* Battle lock banner — full mock version (A4): opponent, round,
           whose turn, «Вернуться к бою»; degrades gracefully without preview */}

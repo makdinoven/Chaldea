@@ -6,6 +6,8 @@ interface LocationTopBarProps {
   isFavorited: boolean;
   onToggleFavorite: () => void;
   onBack: () => void;
+  /** Shows the location art alone, without any interface; absent when there is no art. */
+  onHideInterface?: () => void;
 }
 
 /**
@@ -18,7 +20,8 @@ type Crumb = { label: string; to: string | null };
 /**
  * Top bar of the location page: back button, breadcrumb
  * (Country / Region / District / Location — segments with no data are hidden)
- * and the labeled favorite toggle (A8).
+ * the «Скрыть интерфейс» button (when the location has art) and the labeled
+ * favorite toggle (A8).
  *
  * Breadcrumb navigation (FEAT-153 §3.8): the country and region segments link
  * into `WorldPage` via the pre-existing `world/country/:countryId` and
@@ -31,6 +34,7 @@ const LocationTopBar = ({
   isFavorited,
   onToggleFavorite,
   onBack,
+  onHideInterface,
 }: LocationTopBarProps) => {
   const crumbs: Crumb[] = [
     location.country_name
@@ -98,6 +102,34 @@ const LocationTopBar = ({
         </nav>
       </div>
 
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+      {/* Look at the location art without the interface over it */}
+      {onHideInterface && (
+        <button
+          type="button"
+          onClick={onHideInterface}
+          aria-label="Скрыть интерфейс"
+          title="Скрыть интерфейс"
+          className="flex items-center gap-2 shrink-0 px-3.5 py-2 rounded-card bg-site-bg border border-white/10 text-white/70 hover:text-white hover:border-gold-dark/60 text-sm transition-all duration-200 ease-site"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-4 h-4 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"
+            />
+          </svg>
+          <span className="hidden sm:inline">Скрыть интерфейс</span>
+        </button>
+      )}
+
       {/* Favorite — labeled button (A8) */}
       <button
         type="button"
@@ -126,6 +158,7 @@ const LocationTopBar = ({
         </svg>
         <span>{isFavorited ? 'В избранном' : 'В избранное'}</span>
       </button>
+      </div>
     </div>
   );
 };

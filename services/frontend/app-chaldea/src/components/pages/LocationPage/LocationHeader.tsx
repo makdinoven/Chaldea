@@ -23,15 +23,18 @@ const MARKER_COLORS: Record<MarkerType, string> = {
 };
 
 /**
- * Hero banner of the location page (FEAT-152): full-width location art with
- * soft overlays (toned down vs the mock per business rules 2–3), marker +
- * level badges, title, description and the meta row (players here / posts /
- * region — A6). Favorite toggle moved to LocationTopBar (A8).
+ * Head panel of the location page: marker + level badges, title, description
+ * and the meta row (players here / posts / region — A6). Favorite toggle and
+ * «Скрыть интерфейс» live in LocationTopBar (A8).
  *
- * FEAT-153 §3.2: the hero is now a fixed-height card (400px from `lg`) whose
- * body is a flex row ending at the bottom — free text on the left, the optional
- * `aside` panel («Соседние локации») as a full-body-height column on the right.
- * Below `lg` the body stacks and the card returns to natural height.
+ * A translucent panel like every other block on the page. It used to carry the
+ * location art as well, but the same art is already the page background, and
+ * two copies of one picture at two different sizes clashed.
+ *
+ * FEAT-153 §3.2: from `lg` the body is a flex row — free text on the left, the
+ * optional `aside` panel («Соседние локации») as a full-body-height column on
+ * the right. The card is as tall as its text, up to 400px; a longer neighbour
+ * list scrolls inside it. Below `lg` the body stacks.
  */
 const LocationHeader = ({ location, aside }: LocationHeaderProps) => {
   const markerType = (location.marker_type || 'safe') as MarkerType;
@@ -43,51 +46,7 @@ const LocationHeader = ({ location, aside }: LocationHeaderProps) => {
   const postsCount = location.posts.length;
 
   return (
-    <section className="relative min-h-[220px] h-auto lg:h-[400px] rounded-card-xl overflow-hidden border border-gold-dark/30 shadow-card bg-black/40 flex flex-col justify-end">
-      {/* Location art */}
-      {location.image_url ? (
-        <div
-          className="absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url(${location.image_url})` }}
-          role="img"
-          aria-label={location.name}
-        />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center text-white/15">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="w-16 h-16 sm:w-20 sm:h-20"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-            />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </div>
-      )}
-
-      {/* Toned-down overlays (FEAT-152 §3.5 — softer than the mock) */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'linear-gradient(180deg, rgba(5,6,10,.10) 0%, rgba(5,6,10,.05) 35%, rgba(5,6,10,.65) 100%)',
-        }}
-      />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'linear-gradient(90deg, rgba(5,6,10,.30) 0%, transparent 55%)',
-        }}
-      />
-
+    <section className="relative h-auto lg:max-h-[400px] rounded-card overflow-hidden bg-site-bg backdrop-blur-sm border border-gold-dark/20 shadow-card flex flex-col">
       {/* Badges — top left */}
       <div className="absolute top-4 left-4 sm:top-5 sm:left-6 flex items-center gap-2.5 flex-wrap">
         <span
@@ -117,7 +76,7 @@ const LocationHeader = ({ location, aside }: LocationHeaderProps) => {
       </div>
 
       {/* Body — free text (left) + optional inset panel (right) */}
-      <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row lg:items-end gap-4 lg:gap-6 px-4 pb-5 pt-16 sm:px-8 sm:pb-7">
+      <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row gap-4 lg:gap-6 px-4 pb-5 pt-16 sm:px-8 sm:pb-7">
         <div className="flex-1 min-w-0 flex flex-col gap-2.5 sm:gap-3">
           <h1
             className="text-white text-3xl sm:text-5xl font-medium uppercase leading-tight"
