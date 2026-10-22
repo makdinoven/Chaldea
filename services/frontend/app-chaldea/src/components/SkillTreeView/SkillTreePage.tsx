@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useCallback, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import axios from 'axios';
@@ -15,11 +15,32 @@ import {
 import useMediaQuery from '../../hooks/useMediaQuery';
 import PlayerTreeCanvas, { type TreeView } from './PlayerTreeCanvas';
 import NodeDetailPanel from './NodeDetailPanel';
+import useNodePage from './useNodePage';
+import useSkillPage from './useSkillPage';
+import useCharacterDossier from './useCharacterDossier';
+import type { ShelfBook } from './Books3D/BookTableScene';
 import type {
   FullClassTreeResponse,
   CharacterTreeProgressResponse,
 } from './types';
 import { ArrowLeft } from 'react-feather';
+import { isWebGLAvailable } from '../pages/BattlePage/Arena3D/webgl';
+
+// three.js is heavy and only the books need it, so it loads on demand.
+const BookTableScene = lazy(() => import('./Books3D/BookTableScene'));
+
+type TreeViewMode = 'wheel' | 'books';
+
+/** Where the player's choice of view is remembered, per browser. */
+const VIEW_MODE_KEY = 'skillTree.viewMode';
+
+const readViewMode = (): TreeViewMode => {
+  try {
+    return localStorage.getItem(VIEW_MODE_KEY) === 'books' ? 'books' : 'wheel';
+  } catch {
+    return 'wheel';
+  }
+};
 
 /** DB class ids, in the order they are laid out around the combined wheel. */
 const CLASS_IDS = [1, 2, 3] as const;
@@ -63,6 +84,36 @@ const SkillTreePage = () => {
   const [subclassProgress, setSubclassProgress] = useState<CharacterTreeProgressResponse | null>(null);
   const [viewingSubclass, setViewingSubclass] = useState(false);
   const [subclassLoading, setSubclassLoading] = useState(false);
+
+  // In the books, the chosen subclass is a later chapter of the class's book:
+  // its tree and the player's progress in it, loaded as soon as one is chosen
+  // so its ribbon is there to follow; and whether the book lies open at it.
+  const [bookChapter, setBookChapter] = useState<{
+    tree: FullClassTreeResponse;
+    progress: CharacterTreeProgressResponse | null;
+  } | null>(null);
+  const [atChapter, setAtChapter] = useState(false);
+
+  // The 3D books are a prototype next to the 2D wheel, and need WebGL. A
+  // subclass opens there as its own slim book; on the wheel, as a wheel.
+  const webglAvailable = useMemo(() => isWebGLAvailable(), []);
+  const [viewMode, setViewMode] = useState<TreeViewMode>(readViewMode);
+  const showsBooks = webglAvailable && viewMode === 'books';
+  const booksLoading = (
+    <div className="flex h-full items-center justify-center">
+      <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+  // The player's passport, laid on the table beside their book.
+  const dossier = useCharacterDossier(characterId, showsBooks);
+  const handleViewMode = useCallback((mode: TreeViewMode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // Not remembered across visits; the switch itself still works.
+    }
+  }, []);
 
   // Load class tree on mount
   useEffect(() => {
@@ -136,6 +187,20 @@ const SkillTreePage = () => {
     classProgress,
   ]);
 
+  // The books always hold every class's tree, whatever the screen size; only
+  // the player's own carries progress.
+  const shelf = useMemo(
+    () =>
+      allTrees.map((tree) => ({
+        classId: tree.class_id,
+        title: CLASS_LABELS[tree.class_id] ?? tree.name,
+        own: tree.class_id === classId,
+        tree,
+        progress: tree.class_id === classId ? classProgress : null,
+      })),
+    [allTrees, classId, classProgress],
+  );
+
   const handleNodeClick = useCallback(
     (nodeId: number) => {
       dispatch(setSelectedNodeId(nodeId));
@@ -147,7 +212,24 @@ const SkillTreePage = () => {
     dispatch(setSelectedNodeId(null));
   }, [dispatch]);
 
+  const refreshChapterProgress = useCallback(
+    (treeId: number) => {
+      if (!characterId) return;
+      axios
+        .get<CharacterTreeProgressResponse>(`/skills/class_trees/${treeId}/progress/${characterId}`)
+        .then((res) => setBookChapter((ch) => (ch && ch.tree.id === treeId ? { ...ch, progress: res.data } : ch)))
+        .catch(() => toast.error('Ошибка обновления прогресса подкласса'));
+    },
+    [characterId],
+  );
+
   const handleRefreshProgress = useCallback(() => {
+    if (showsBooks) {
+      // A choice in either chapter can change what the other shows.
+      if (classTree && characterId) dispatch(fetchTreeProgress({ treeId: classTree.id, characterId }));
+      if (bookChapter) refreshChapterProgress(bookChapter.tree.id);
+      return;
+    }
     if (viewingSubclass && subclassTree && characterId) {
       setSubclassLoading(true);
       axios
@@ -158,10 +240,15 @@ const SkillTreePage = () => {
     } else if (classTree && characterId) {
       dispatch(fetchTreeProgress({ treeId: classTree.id, characterId }));
     }
-  }, [dispatch, viewingSubclass, subclassTree, classTree, characterId]);
+  }, [dispatch, showsBooks, bookChapter, refreshChapterProgress, viewingSubclass, subclassTree, classTree, characterId]);
 
   const handleNavigateToSubclass = useCallback(
     async (subclassNodeId: number) => {
+      if (showsBooks && bookChapter) {
+        setAtChapter(true);
+        dispatch(setSelectedNodeId(null));
+        return;
+      }
       if (!classTree || !characterId || subclassTrees.length === 0) {
         toast.error('Деревья подклассов ещё не созданы');
         return;
@@ -194,7 +281,7 @@ const SkillTreePage = () => {
         setSubclassLoading(false);
       }
     },
-    [classTree, subclassTrees, characterId, dispatch]
+    [showsBooks, bookChapter, classTree, subclassTrees, characterId, dispatch]
   );
 
   const handleBackToClassTree = useCallback(() => {
@@ -211,6 +298,112 @@ const SkillTreePage = () => {
     },
     [dispatch]
   );
+
+  // In the books, the opened node is written onto the left-hand page of its book.
+  // The subclass chosen on the class's tree, if its own tree exists yet.
+  const chosenSubclassTreeId = useMemo(() => {
+    if (!classTree || !classProgress) return null;
+    const chosen = new Set(classProgress.chosen_nodes.map((c) => c.node_id));
+    const key = classTree.nodes.find((n) => n.node_type === 'subclass_choice' && chosen.has(n.id))?.subclass_key;
+    return key ? subclassTrees.find((st) => st.subclass_key === key)?.id ?? null : null;
+  }, [classTree, classProgress, subclassTrees]);
+
+  useEffect(() => {
+    if (!showsBooks || chosenSubclassTreeId === null || !characterId) {
+      setBookChapter(null);
+      setAtChapter(false);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      axios.get<FullClassTreeResponse>(`/skills/admin/class_trees/${chosenSubclassTreeId}/full`),
+      axios
+        .get<CharacterTreeProgressResponse>(`/skills/class_trees/${chosenSubclassTreeId}/progress/${characterId}`)
+        .catch(() => ({ data: null })),
+    ])
+      .then(([treeRes, progressRes]) => {
+        if (!cancelled) setBookChapter({ tree: treeRes.data, progress: progressRes.data });
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Ошибка загрузки дерева подкласса');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showsBooks, chosenSubclassTreeId, characterId]);
+
+  // Every book, the player's own carrying its subclass chapter once there is one.
+  const bookShelf = useMemo(
+    (): ShelfBook[] =>
+      shelf.map((b) => {
+        if (!b.own || !bookChapter) return b;
+        const title = bookChapter.tree.subclass_name ?? bookChapter.tree.name;
+        return {
+          ...b,
+          chapter: {
+            title,
+            tree: bookChapter.tree,
+            progress: bookChapter.progress,
+            intro: [
+              bookChapter.tree.description ||
+                `Здесь путь ${title} продолжается с того места, где кончилось древо класса.`,
+            ],
+          },
+        };
+      }),
+    [shelf, bookChapter],
+  );
+
+  const bookNode = useMemo(() => {
+    if (!showsBooks || selectedNodeId === null) return null;
+    const trees = bookShelf.flatMap((b) => [
+      { tree: b.tree, progress: b.progress, own: b.own },
+      ...(b.chapter ? [{ tree: b.chapter.tree, progress: b.chapter.progress, own: true }] : []),
+    ]);
+    for (const book of trees) {
+      const node = book.tree.nodes.find((n) => n.id === selectedNodeId);
+      if (node) return { node, book };
+    }
+    return null;
+  }, [showsBooks, selectedNodeId, bookShelf]);
+  // Upgrading a skill from its node's page turns the book to the skill's own spread.
+  const [skillPageId, setSkillPageId] = useState<number | null>(null);
+  const closeSkillPage = useCallback(() => setSkillPageId(null), []);
+  const skillPage = useSkillPage({
+    skillId: showsBooks ? skillPageId : null,
+    characterId,
+    onBack: closeSkillPage,
+    onRefresh: handleRefreshProgress,
+  });
+  /** Leaving a book, or shutting it, puts away whatever was open in it, and its place in it. */
+  const handleLeaveBook = useCallback(() => {
+    setSkillPageId(null);
+    setAtChapter(false);
+    handleClosePanel();
+  }, [handleClosePanel]);
+  /** The chapter ribbon: turn to the subclass chapter, or back to the class's. */
+  const handleToggleChapter = useCallback(() => {
+    setSkillPageId(null);
+    handleClosePanel();
+    setAtChapter((v) => !v);
+  }, [handleClosePanel]);
+  const handleLeaveSubclass = useCallback(() => {
+    setSkillPageId(null);
+    handleBackToClassTree();
+  }, [handleBackToClassTree]);
+
+  const nodePage = useNodePage({
+    node: bookNode?.node ?? null,
+    tree: bookNode?.book.tree ?? null,
+    progress: bookNode?.book.progress ?? null,
+    readOnly: bookNode ? !bookNode.book.own : true,
+    characterId,
+    onClose: handleClosePanel,
+    onRefresh: handleRefreshProgress,
+    onNavigateToSubclass:
+      bookNode?.book.own && bookNode.node.node_type === 'subclass_choice' ? handleNavigateToSubclass : undefined,
+    onUpgradeSkill: setSkillPageId,
+  });
 
   // Auth loading
   if (!authInitialized || user.status === 'loading') {
@@ -262,8 +455,11 @@ const SkillTreePage = () => {
 
   if (views.length === 0) return null;
 
+  const selectable: TreeView[] = showsBooks
+    ? shelf.map((b) => ({ tree: b.tree, progress: b.progress, readOnly: !b.own }))
+    : views;
   const selected = selectedNodeId
-    ? views
+    ? selectable
         .map((view) => {
           const node = view.tree.nodes.find((n) => n.id === selectedNodeId);
           return node ? { node, view } : null;
@@ -272,13 +468,16 @@ const SkillTreePage = () => {
     : null;
 
   const showsWholeWheel = isWideScreen && !viewingSubclass && views.length > 1;
+  // The books lie on a table, so they want a wide frame rather than a round one.
+  const roundFrame = showsWholeWheel && !showsBooks;
   const headerTree = viewingSubclass ? subclassTree : views[0]?.tree ?? null;
 
   return (
-    <div className="w-full px-2 md:px-6 py-4">
+    // On a phone the books take the full width: the page's container padding is given back to them.
+    <div className={`w-full py-4 ${showsBooks ? '-mx-5 w-[calc(100%+2.5rem)] sm:mx-0 sm:w-full sm:px-2 md:px-6' : 'px-2 md:px-6'}`}>
       <div className="w-full">
         {/* Class switcher — narrow screens only, where one tree is shown at a time */}
-        {!viewingSubclass && !isWideScreen && (
+        {!viewingSubclass && !isWideScreen && !showsBooks && (
           <div className="flex gap-2 mb-3">
             {allTrees.map((t) => {
               const active = t.class_id === (browsedClassId ?? classId);
@@ -311,24 +510,72 @@ const SkillTreePage = () => {
         */}
         <div
           className={`relative ${
-            showsWholeWheel
+            roundFrame
               ? 'w-full max-w-[80vh] aspect-square mx-auto'
-              : 'w-full h-[65vh] md:h-[80vh]'
+              : // On a phone the table takes the screen below the site's header, so its buttons stay in view.
+                `w-full ${showsBooks ? 'h-[max(26rem,calc(100dvh-15rem))]' : 'h-[65vh]'} md:h-[80vh]`
           }`}
         >
           <div
             className={`absolute inset-0 overflow-hidden bg-[#12121e] ${
-              showsWholeWheel ? 'rounded-full' : 'rounded-card'
+              roundFrame ? 'rounded-full' : 'rounded-card'
             }`}
           >
-            <PlayerTreeCanvas views={views} onNodeClick={handleNodeClick} />
+            {showsBooks ? (
+              <Suspense fallback={booksLoading}>
+                {/* The table is laid only once the player's own book is on it,
+                    so the view opens on their class rather than on whichever
+                    book happened to arrive first. */}
+                {!bookShelf.some((b) => b.own) ? booksLoading : (
+                <BookTableScene
+                  books={bookShelf}
+                  initialClassId={classId}
+                  onNodeClick={handleNodeClick}
+                  nodePage={nodePage.model}
+                  onNodeAction={nodePage.onAction}
+                  skillPage={skillPage.model}
+                  onSkillAction={skillPage.onAction}
+                  onLeaveBook={handleLeaveBook}
+                  atChapter={atChapter}
+                  onToggleChapter={handleToggleChapter}
+                  passport={dossier.passport}
+                  currentGameYear={dossier.currentGameYear}
+                />
+                )}
+              </Suspense>
+            ) : (
+              <PlayerTreeCanvas views={views} onNodeClick={handleNodeClick} />
+            )}
           </div>
+
+          {/* View switch: flat wheel or the 3D books */}
+          {webglAvailable && (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex rounded-lg bg-black/50 backdrop-blur-sm p-1 gap-1">
+              {(
+                [
+                  ['wheel', 'Схема'],
+                  ['books', 'Книги'],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  onClick={() => handleViewMode(mode)}
+                  className={`rounded-md px-3 py-1.5 text-xs uppercase tracking-wide transition-colors duration-200 ${
+                    viewMode === mode ? 'bg-white/10 text-gold' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Header */}
           <div className="absolute top-3 left-4 z-10 flex items-center gap-3">
-            {viewingSubclass && (
+            {/* The books have their own way back, at the foot of the table */}
+            {viewingSubclass && !showsBooks && (
               <button
-                onClick={handleBackToClassTree}
+                onClick={handleLeaveSubclass}
                 className="flex items-center gap-1.5 bg-black/50 backdrop-blur-sm rounded-lg px-3 py-1.5 text-white/70 hover:text-white transition-colors duration-200 text-sm"
               >
                 <ArrowLeft size={14} />
@@ -353,7 +600,7 @@ const SkillTreePage = () => {
           </div>
 
           {/* Sector legend — only meaningful when all three classes are on screen */}
-          {showsWholeWheel && (
+          {showsWholeWheel && !showsBooks && (
             <div className="absolute top-3 right-4 z-10 bg-black/40 backdrop-blur-sm rounded-lg px-3 py-2 flex flex-col gap-1">
               {views.map((view) => (
                 <div key={view.tree.class_id} className="flex items-center gap-2">
@@ -375,9 +622,12 @@ const SkillTreePage = () => {
             </div>
           )}
 
-          {/* Node detail modal */}
+          {/* Windows opened from a node's page in a book */}
+          {showsBooks && nodePage.modals}
+
+          {/* Node detail modal — the books write a node's page into the book instead */}
           <AnimatePresence>
-            {selected && (
+            {selected && !showsBooks && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
