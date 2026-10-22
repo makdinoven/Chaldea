@@ -160,7 +160,12 @@ const SkillTreePage = () => {
 
   /** Every class tree we have, ordered by class id so sectors stay stable. */
   const allTrees = useMemo(() => {
-    const trees = classTree ? [classTree, ...otherTrees] : otherTrees;
+    // Right after switching characters the store can still hold the previous
+    // character's class tree while the others are already the new set; never
+    // let one class appear twice.
+    const trees = classTree
+      ? [classTree, ...otherTrees.filter((t) => t.class_id !== classTree.class_id)]
+      : otherTrees;
     return [...trees].sort((a, b) => a.class_id - b.class_id);
   }, [classTree, otherTrees]);
 
