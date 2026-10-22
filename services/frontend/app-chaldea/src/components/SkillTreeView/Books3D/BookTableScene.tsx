@@ -94,8 +94,8 @@ const CAMERA_POLAR = 0.42;
  * overlay sits on it exactly (see Book's node page).
  */
 const READING_POLAR = 0.06;
-/** Looking down, the book is framed a little looser, so the controls under it stay off the pages. */
-const READING_FILL = 0.86;
+/** Looking down to read, the spread fills nearly the whole frame. */
+const READING_FILL = 0.95;
 /** Share of the frame the open spread may fill. */
 const FRAME_FILL = 0.97;
 /** Air around the spread taken into the framing, world units. */
@@ -196,6 +196,23 @@ const TABLE_POINTS_NARROW = [
   [-2.4, 0, 2.6],
   [2.4, 0, 2.6],
 ].map(([x, y, z]) => new THREE.Vector3(x, y, z));
+/**
+ * What reading a page frames: the spread alone — the chapter ribbon at its
+ * head is not wanted while a page is read — with room at its foot for the one
+ * button left over the book. Every pixel counts here: on a smaller screen the
+ * writing on the pages is only just large enough to read.
+ */
+const READING_POINTS = (() => {
+  const halfW = OPEN_WIDTH / 2 + SPREAD_MARGIN;
+  const halfD = OPEN_DEPTH / 2 + SPREAD_MARGIN;
+  const button = 0.4;
+  return [
+    [-halfW, 0, -halfD],
+    [halfW, 0, -halfD],
+    [-halfW, 0, halfD + button],
+    [halfW, 0, halfD + button],
+  ].map(([x, y, z]) => new THREE.Vector3(x, y, z));
+})();
 /** The table view: the candles and their flames, mirrored to the right so the book stays centred. */
 const TABLE_POINTS = (() => {
   const halfW = -CANDLE_SPOT.x + 1;
@@ -279,7 +296,7 @@ const CameraRig = ({ focusX, open, reading, paper, readingPaper, page, narrow }:
     [aspect, narrow],
   );
   const readingFit = useMemo(
-    () => fitView(aspect, READING_POLAR, narrow ? PAGE_POINTS : SPREAD_POINTS, READING_FILL),
+    () => fitView(aspect, READING_POLAR, narrow ? PAGE_POINTS : READING_POINTS, READING_FILL),
     [aspect, narrow],
   );
   /** How far the view has slid off the spine toward the page in view, eased. */
@@ -518,6 +535,10 @@ const BookTableScene = ({
   useEffect(() => setPageChoice(null), [pageContext]);
   const page: 'left' | 'right' | null =
     narrow && opened ? pageChoice ?? (skillPage || nodePage ? 'left' : 'right') : null;
+  /** A node's or a skill's page is open and the camera leans in to read it. */
+  const reading = opened && (nodePage !== null || skillPage !== null);
+  /** The HUD gives up its room to the pages: only the close button stays, low down. */
+  const compactHud = page !== null || reading;
 
   // Until the player turns to another book themselves, the one in front of
   // them is their own — even if the shelf filled in after the table was laid.
@@ -653,7 +674,7 @@ const BookTableScene = ({
         <CameraRig
           focusX={xOf(focus)}
           open={opened}
-          reading={opened && (nodePage !== null || skillPage !== null)}
+          reading={reading}
           paper={paperSpot}
           readingPaper={readingPaper}
           page={page}
@@ -685,8 +706,8 @@ const BookTableScene = ({
           setOpened(!opened);
         }}
         className={`absolute ${
-          // Reading a page, it takes the switcher's place, above the view toggle.
-          page ? 'bottom-14' : 'bottom-[6.75rem]'
+          // Reading, it takes the switcher's place, above the view toggle.
+          compactHud ? 'bottom-14' : 'bottom-[6.75rem]'
         } left-1/2 -translate-x-1/2 z-10 whitespace-nowrap rounded-lg bg-black/50 backdrop-blur-sm px-4 py-2 text-xs uppercase tracking-wide transition-colors duration-200 ${
           opened || readingPaper ? 'text-white/50 hover:text-white' : 'text-gold hover:text-white animate-pulse'
         }`}
@@ -694,10 +715,10 @@ const BookTableScene = ({
         {readingPaper ? 'Отложить паспорт' : opened ? 'Закрыть книгу' : 'Открыть книгу'}
       </button>
 
-      {/* Book switcher — put away while a narrow screen reads a page, which needs the room */}
+      {/* Book switcher — put away while a page is read, which needs the room */}
       <div
         className={`absolute bottom-14 left-1/2 -translate-x-1/2 z-10 items-center gap-1 rounded-lg bg-black/50 backdrop-blur-sm p-1 ${
-          page ? 'hidden' : 'flex'
+          compactHud ? 'hidden' : 'flex'
         }`}
       >
         <button

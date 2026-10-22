@@ -18,6 +18,9 @@ export interface SkillRegion {
   h: number;
 }
 
+/** Lines of a skill's description shown on its card before it is cut short. */
+const DESCRIPTION_LINES = 5;
+
 /** Text columns: the left page's gutter is on its right, the right page's on its left. */
 const CARD = { left: 100, right: 910 } as const;
 const PERKS = { left: 130, right: 930 } as const;
@@ -94,42 +97,46 @@ export const drawSkillCard = (
   }
   y += 50;
   if (model.freePerkPoints > 0) {
-    ink(ctx, 'italic bold 30px serif', classInk);
+    ink(ctx, 'italic bold 34px serif', classInk);
     ctx.fillText(`Свободных очков перка: ${model.freePerkPoints} — выберите перк справа`, left, y + 20);
     y += 50;
   }
   y = Math.max(y, 380);
 
   if (model.description) {
-    ink(ctx, 'italic 31px serif', stock.ink);
-    for (const line of wrap(ctx, model.description, column)) {
+    ink(ctx, 'italic 37px serif', stock.ink);
+    // A long description is cut short rather than run into the controls below.
+    const lines = wrap(ctx, model.description, column);
+    const shown = lines.slice(0, DESCRIPTION_LINES);
+    if (lines.length > shown.length) shown[shown.length - 1] = `${shown[shown.length - 1].replace(/[\s.,;:]+$/, '')}…`;
+    for (const line of shown) {
       ctx.fillText(line, left, y);
-      y += 42;
+      y += 48;
     }
     y += 18;
   }
 
   // Numbers: the skill's base, and what it comes to with its level and perks
-  ink(ctx, 'italic 26px serif', stock.faintInk);
-  ctx.fillText('база', left + 420, y);
-  ctx.fillText('итог', left + 560, y);
-  y += 44;
+  ink(ctx, 'italic 30px serif', stock.faintInk);
+  ctx.fillText('база', left + 440, y);
+  ctx.fillText('итог', left + 600, y);
+  y += 50;
   for (const s of model.stats) {
-    ink(ctx, 'italic 32px serif', stock.ink);
+    ink(ctx, 'italic 38px serif', stock.ink);
     ctx.fillText(s.label, left, y);
-    ink(ctx, '32px serif', stock.faintInk);
-    ctx.fillText(String(s.base), left + 420, y);
-    ctx.fillText('→', left + 490, y);
-    ink(ctx, 'bold 32px serif', s.total !== s.base ? classInk : stock.ink);
-    ctx.fillText(String(s.total), left + 560, y);
-    y += 44;
+    ink(ctx, '38px serif', stock.faintInk);
+    ctx.fillText(String(s.base), left + 440, y);
+    ctx.fillText('→', left + 520, y);
+    ink(ctx, 'bold 38px serif', s.total !== s.base ? classInk : stock.ink);
+    ctx.fillText(String(s.total), left + 600, y);
+    y += 50;
   }
   y += 10;
   for (const e of model.effects) {
-    ink(ctx, 'italic 30px serif', e.tone === 'damage' ? BLOOD : classInk);
+    ink(ctx, 'italic 36px serif', e.tone === 'damage' ? BLOOD : classInk);
     for (const line of wrap(ctx, e.text, column)) {
       ctx.fillText(line, left, y);
-      y += 40;
+      y += 46;
     }
   }
 
@@ -222,16 +229,18 @@ const waxSeal = (ctx: CanvasRenderingContext2D, x: number, y: number, r: number,
   ctx.restore();
 };
 
-const PERK_TOP = 270;
+const PERK_TOP = 280;
 const PERK_FOOT_ROOM = 170;
-const SEAL_R = 32;
+const SEAL_R = 38;
+/** A perk's description and its changes, and the height of each of their lines. */
+const PERK_TEXT = { font: 'italic 34px serif', line: 44 } as const;
 
 /** How tall a perk's entry is once written, in canvas pixels. */
 const entryHeight = (ctx: CanvasRenderingContext2D, perk: SkillPagePerk, textWidth: number) => {
-  ctx.font = 'italic 26px serif';
+  ctx.font = PERK_TEXT.font;
   const desc = perk.description ? Math.min(2, wrap(ctx, perk.description, textWidth).length) : 0;
   const changes = perk.changes.length ? wrap(ctx, perk.changes.join(' · '), textWidth).length : 0;
-  return 50 + (desc + changes) * 34 + 26;
+  return 60 + (desc + changes) * PERK_TEXT.line + 30;
 };
 
 /** Splits the perks into pages that each fit the right-hand page. */
@@ -273,11 +282,11 @@ export const drawPerks = (
     return regions;
   }
 
-  ink(ctx, 'bold 44px serif', stock.ink);
+  ink(ctx, 'bold 50px serif', stock.ink);
   ctx.fillText(`ПЕРКИ (${model.perks.length})`, left, 150);
   if (model.perkNote) {
-    ink(ctx, 'italic bold 30px serif', model.freePerkPoints > 0 ? classInk : stock.faintInk);
-    ctx.fillText(model.perkNote, left, 200);
+    ink(ctx, 'italic bold 34px serif', model.freePerkPoints > 0 ? classInk : stock.faintInk);
+    ctx.fillText(model.perkNote, left, 205);
   }
 
   if (model.perks.length === 0) {
@@ -295,7 +304,7 @@ export const drawPerks = (
     const pick: SkillPageAction = { kind: 'pick', perkId: perk.id };
     const hot = perk.state === 'available' && isHovered(pick);
     const sx = left + SEAL_R;
-    const sy = top + 30;
+    const sy = top + 34;
 
     if (perk.state === 'selected') waxSeal(ctx, sx, sy, SEAL_R, classInk);
     else {
@@ -315,20 +324,20 @@ export const drawPerks = (
     // A chosen perk is named in the colour its class lays its path in, as its seal is.
     const nameColour =
       perk.state === 'selected' ? pathInkFor(classInk).dark : perk.state === 'available' ? stock.ink : stock.faintInk;
-    ink(ctx, `bold ${hot ? 36 : 34}px serif`, nameColour);
-    ctx.fillText(perk.name, textX, top + 40);
-    let ly = top + 40;
+    ink(ctx, `bold ${hot ? 44 : 42}px serif`, nameColour);
+    ctx.fillText(perk.name, textX, top + 46);
+    let ly = top + 46;
     if (perk.description) {
-      ink(ctx, 'italic 26px serif', stock.faintInk);
+      ink(ctx, PERK_TEXT.font, stock.faintInk);
       for (const line of wrap(ctx, perk.description, textWidth).slice(0, 2)) {
-        ly += 34;
+        ly += PERK_TEXT.line;
         ctx.fillText(line, textX, ly);
       }
     }
     if (perk.changes.length) {
-      ink(ctx, 'italic 26px serif', perk.state === 'locked' ? stock.faintInk : classInk);
+      ink(ctx, PERK_TEXT.font, perk.state === 'locked' ? stock.faintInk : classInk);
       for (const line of wrap(ctx, perk.changes.join(' · '), textWidth)) {
-        ly += 34;
+        ly += PERK_TEXT.line;
         ctx.fillText(line, textX, ly);
       }
     }
