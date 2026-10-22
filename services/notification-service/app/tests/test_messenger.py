@@ -964,9 +964,71 @@ class TestTypingAndPresence:
         sentinel = object()
         ws_manager.active_connections[2] = {sentinel}
         try:
-            resp = messenger_client.get("/notifications/messenger/presence/2")
+            with patch("messenger_routes._get_show_online", return_value=True):
+                resp = messenger_client.get("/notifications/messenger/presence/2")
             assert resp.status_code == 200
             assert resp.json() == {"user_id": 2, "online": True}
+        finally:
+            ws_manager.active_connections.pop(2, None)
+
+    def test_presence_hidden_when_show_online_disabled(self, messenger_client):
+        """A connected user who hides their online status reads as offline."""
+        import ws_manager
+        ws_manager.active_connections[2] = {object()}
+        try:
+            with patch("messenger_routes._get_show_online", return_value=False) as m:
+                resp = messenger_client.get("/notifications/messenger/presence/2")
+            assert resp.status_code == 200
+            assert resp.json() == {"user_id": 2, "online": False}
+            m.assert_called_once_with(2)
+        finally:
+            ws_manager.active_connections.pop(2, None)
+
+    def test_presence_own_status_not_hidden(self, messenger_client):
+        """The user themself (id=1 in the fixture) still sees their own status."""
+        import ws_manager
+        ws_manager.active_connections[1] = {object()}
+        try:
+            with patch("messenger_routes._get_show_online", return_value=False):
+                resp = messenger_client.get("/notifications/messenger/presence/1")
+            assert resp.json()["online"] is True
+        finally:
+            ws_manager.active_connections.pop(1, None)
+
+    def test_presence_fails_closed_when_user_service_down(self, messenger_client):
+        """If user-service cannot be reached the presence reads as offline."""
+        import ws_manager
+        ws_manager.active_connections[2] = {object()}
+        try:
+            with patch("messenger_routes.requests.get", side_effect=Exception("down")):
+                resp = messenger_client.get("/notifications/messenger/presence/2")
+            assert resp.status_code == 200
+            assert resp.json()["online"] is False
+        finally:
+            ws_manager.active_connections.pop(2, None)
+
+    def test_presence_visible_reads_user_service_flag(self, messenger_client):
+        """_get_show_online calls user-service presence-visibility and trusts show_online."""
+        import ws_manager
+        ws_manager.active_connections[2] = {object()}
+        fake = MagicMock(status_code=200)
+        fake.json.return_value = {"show_online": True}
+        try:
+            with patch("messenger_routes.requests.get", return_value=fake) as g:
+                resp = messenger_client.get("/notifications/messenger/presence/2")
+            assert resp.json()["online"] is True
+            assert g.call_args[0][0].endswith("/users/2/presence-visibility")
+        finally:
+            ws_manager.active_connections.pop(2, None)
+
+    def test_presence_non_200_fails_closed(self, messenger_client):
+        import ws_manager
+        ws_manager.active_connections[2] = {object()}
+        fake = MagicMock(status_code=404)
+        try:
+            with patch("messenger_routes.requests.get", return_value=fake):
+                resp = messenger_client.get("/notifications/messenger/presence/2")
+            assert resp.json()["online"] is False
         finally:
             ws_manager.active_connections.pop(2, None)
 

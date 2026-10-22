@@ -456,6 +456,7 @@ def send_ticket_message(
                 "target_value": ticket.user_id,
                 "message": f"Администратор ответил на ваш тикет: {ticket.subject}",
                 "ws_type": "ticket_reply",
+                "category": "system",
                 "ws_data": {"ticket_id": ticket.id},
             },
         )
@@ -472,6 +473,7 @@ def send_ticket_message(
                 "target_value": None,
                 "message": f"Новое сообщение в тикете #{ticket.id}: {ticket.subject}",
                 "ws_type": "ticket_new_message",
+                "category": "system",
                 "ws_data": {"ticket_id": ticket.id},
             },
         )
@@ -533,6 +535,7 @@ def change_ticket_status(
             "target_value": ticket.user_id,
             "message": f"Статус вашего тикета #{ticket.id} изменён на: {status_label}",
             "ws_type": "ticket_status_changed",
+            "category": "system",
             "ws_data": {"ticket_id": ticket.id, "status": new_status},
         },
     )

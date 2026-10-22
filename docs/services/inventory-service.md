@@ -261,6 +261,9 @@ FEAT-171 §3.4 D9).
 
 ## Коммуникация
 
+### RabbitMQ (исходящие)
+- `rabbitmq_publisher` → очередь `general_notifications`: обмен (`publish_notification_sync`) и аукцион (`publish_auction_notification`) отправляют `category: "trade"` (настройки уведомлений notification-service).
+
 ### HTTP (исходящие)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip, заточке и вставке/извлечении у надетого предмета)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/recover` (при use_item)

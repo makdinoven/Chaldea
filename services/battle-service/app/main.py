@@ -31,7 +31,7 @@ from schemas import (
     IncomingPartyInvitesResponse, PartyStartResponse, PartyActionResponse,
 )
 from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus, BattleStatus, BattleJoinRequest, JoinRequestStatus, BattleParticipant, BattleParty, BattlePartyMember, BattlePartyStatus, PartyMemberStatus
-from rabbitmq_publisher import publish_notification
+from rabbitmq_publisher import publish_notification, CATEGORY_PARTY
 from auth_http import (
     get_current_user_via_http,
     UserRead,
@@ -6075,6 +6075,7 @@ async def _prune_party_by_location(db: AsyncSession, party: BattleParty) -> bool
                 target_user_id=m.user_id,
                 message="Вы покинули группу, сменив локацию.",
                 ws_type="party_left",
+                category=CATEGORY_PARTY,
                 ws_data={"party_id": party.id},
             )
 
@@ -6086,6 +6087,7 @@ async def _prune_party_by_location(db: AsyncSession, party: BattleParty) -> bool
                 target_user_id=m.user_id,
                 message="Группа распущена: лидер покинул локацию.",
                 ws_type="party_disbanded",
+                category=CATEGORY_PARTY,
                 ws_data={"party_id": party.id},
             )
         return False
@@ -6203,6 +6205,7 @@ async def invite_to_party(
         target_user_id=target["user_id"],
         message=f"{leader_name} приглашает вас в группу для боя!",
         ws_type="party_invitation",
+        category=CATEGORY_PARTY,
         ws_data={"party_id": party.id, "leader_name": leader_name, "team": req.team},
     )
     await db.refresh(party)
@@ -6259,6 +6262,7 @@ async def respond_to_party(
             target_user_id=leader["user_id"],
             message=f"{char_name} {verb} приглашение в группу.",
             ws_type="party_response",
+            category=CATEGORY_PARTY,
             ws_data={"party_id": party.id, "accepted": req.action == "accept"},
         )
     await db.refresh(party)
@@ -6309,6 +6313,7 @@ async def leave_party(
                     target_user_id=m.user_id,
                     message="Группа распущена лидером.",
                     ws_type="party_disbanded",
+                    category=CATEGORY_PARTY,
                     ws_data={"party_id": party.id},
                 )
         return PartyActionResponse(ok=True, party_id=party.id, message="Группа распущена")
@@ -6321,6 +6326,7 @@ async def leave_party(
             target_user_id=kicked_user,
             message="Вас убрали из группы.",
             ws_type="party_kicked",
+            category=CATEGORY_PARTY,
             ws_data={"party_id": party.id},
         )
     return PartyActionResponse(ok=True, party_id=party.id, message="Вы покинули группу")

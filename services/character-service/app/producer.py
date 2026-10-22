@@ -5,6 +5,9 @@ from config import settings
 
 logger = logging.getLogger("character-service.producer")
 
+# Notification category for notification-service preferences (general_notifications).
+CATEGORY_PROGRESS = "progress"
+
 
 async def send_character_approved_notification(user_id: int, character_name: str):
     """Publish notification to general_notifications queue when a character is approved.
@@ -23,7 +26,8 @@ async def send_character_approved_notification(user_id: int, character_name: str
             message_body = json.dumps({
                 "target_type": "user",
                 "target_value": user_id,
-                "message": f"Ваш персонаж «{character_name}» успешно создан!"
+                "message": f"Ваш персонаж «{character_name}» успешно создан!",
+                "category": CATEGORY_PROGRESS,
             })
             await channel.default_exchange.publish(
                 aio_pika.Message(
@@ -60,6 +64,7 @@ async def send_character_request_rejected_notification(user_id: int, request_id:
                 "target_value": user_id,
                 "message": message_text,
                 "ws_type": "character_request_rejected",
+                "category": CATEGORY_PROGRESS,
                 "ws_data": {
                     "request_id": request_id,
                     "reason": reason,
@@ -154,7 +159,8 @@ async def send_title_unlocked_notification(user_id: int, title_name: str):
             message_body = json.dumps({
                 "target_type": "user",
                 "target_value": user_id,
-                "message": f"Вы получили новый титул: {title_name}!"
+                "message": f"Вы получили новый титул: {title_name}!",
+                "category": CATEGORY_PROGRESS,
             })
             await channel.default_exchange.publish(
                 aio_pika.Message(

@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 QUEUE_NAME = "general_notifications"
 
+# Notification category for notification-service preferences.
+CATEGORY_WORLD = "world"
+
 
 def _publish_sync(payload: dict) -> None:
     """Blocking publish — must be called via run_in_executor."""
@@ -48,6 +51,7 @@ async def publish_notification(target_user_id: int, message: str) -> None:
         "target_type": "user",
         "target_value": target_user_id,
         "message": message,
+        "category": CATEGORY_WORLD,
     }
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _publish_sync, payload)
@@ -61,5 +65,6 @@ def publish_notification_sync(target_user_id: int, message: str) -> None:
         "target_type": "user",
         "target_value": target_user_id,
         "message": message,
+        "category": CATEGORY_WORLD,
     }
     _publish_sync(payload)

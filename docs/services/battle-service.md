@@ -265,6 +265,10 @@ battle-service/app/
 - Backend: Redis
 - **Подавляет исключения** через `contextlib.suppress(Exception)`
 
+## Уведомления (RabbitMQ `general_notifications`)
+
+`rabbitmq_publisher.publish_notification(..., category="battle")` — каждое сообщение несёт `category` для настроек уведомлений в notification-service. Бой — `battle` (обязательная, не отключается); события боевых групп `party_left`, `party_disbanded`, `party_invitation`, `party_response`, `party_kicked` передают `category=CATEGORY_PARTY` (`party`). `party_started` остаётся `battle`.
+
 ## Коммуникация (HTTP, исходящие)
 
 | Сервис | Endpoint | Назначение |

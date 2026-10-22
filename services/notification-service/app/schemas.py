@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Dict, Optional
 from datetime import datetime
 
 class NotificationBase(BaseModel):
@@ -9,7 +9,7 @@ class NotificationBase(BaseModel):
     message: str
 
 class NotificationCreate(NotificationBase):
-    pass
+    category: Optional[str] = None
 
 class Notification(BaseModel):
     id: int
@@ -17,6 +17,7 @@ class Notification(BaseModel):
     message: str
     status: str
     created_at: datetime
+    category: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -31,3 +32,11 @@ class GeneralNotificationPayload(BaseModel):
     target_type: NotificationTargetType
     target_value: Optional[int] = None  # когда target_type="user", это user_id
     message: str
+    # One of notification_categories.ALL_CATEGORIES; unknown/missing values are
+    # resolved by the consumer (ws_type fallback, then "system").
+    category: Optional[str] = None
+
+
+class NotificationPreferences(BaseModel):
+    """GET/PUT /notifications/me/preferences body and response."""
+    preferences: Dict[str, str]

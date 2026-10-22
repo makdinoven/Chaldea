@@ -94,6 +94,22 @@ def _get_message_privacy(user_id: int) -> str:
     return "all"
 
 
+def _get_show_online(user_id: int) -> bool:
+    """Whether the user lets others see their online status (user-service setting).
+
+    Fails closed: any lookup error or non-200 answer is treated as "hidden",
+    so a user-service outage never leaks a hidden user's presence.
+    """
+    try:
+        url = f"{AUTH_SERVICE_URL}/users/{user_id}/presence-visibility"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("show_online") is True
+    except Exception as e:
+        logger.warning("Failed to get presence visibility for user %d: %s", user_id, e)
+    return False
+
+
 def _check_friendship(token: str, friend_id: int) -> bool:
     """Check if current user is friends with friend_id via user-service."""
     try:
@@ -893,8 +909,15 @@ def get_presence(
     user_id: int,
     current_user: UserRead = Depends(get_current_user_via_http),
 ):
-    """Whether the given user currently has an active WebSocket connection."""
-    return {"user_id": user_id, "online": is_online(user_id)}
+    """Whether the given user currently has an active WebSocket connection.
+
+    Users who hide their online status (show_online=false in user-service)
+    always read as offline to others; they still see their own status.
+    """
+    online = is_online(user_id)
+    if online and user_id != current_user.id and not _get_show_online(user_id):
+        online = False
+    return {"user_id": user_id, "online": online}
 
 
 # ---------------------------------------------------------------------------

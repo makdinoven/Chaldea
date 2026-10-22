@@ -19,7 +19,7 @@ from database import SessionLocal, engine, get_db
 from jose import JWTError, jwt
 import os
 from fastapi.middleware.cors import CORSMiddleware
-from producer import send_notification_event
+from producer import send_notification_event, send_social_notification
 import httpx
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -144,6 +144,159 @@ def _is_privileged_viewer(db: Session, user, permission: str) -> bool:
     if not is_admin_or_moderator(db, user):
         return False
     return permission in get_effective_permissions(db, user)
+
+
+# ==================== PRIVACY / AUDIENCE RULES ====================
+# One audience rule for every privacy setting (wall view/post, friends list):
+#   owner        -> always allowed
+#   'all'        -> anyone, including anonymous viewers
+#   'friends'    -> viewer has an ACCEPTED friendship with the owner (either direction)
+#   'nobody'     -> owner only
+# There is deliberately no admin/moderator bypass.
+AUDIENCE_ALL = "all"
+AUDIENCE_FRIENDS = "friends"
+AUDIENCE_NOBODY = "nobody"
+AUDIENCE_VALUES = (AUDIENCE_ALL, AUDIENCE_FRIENDS, AUDIENCE_NOBODY)
+FRIEND_REQUEST_PRIVACY_VALUES = (AUDIENCE_ALL, AUDIENCE_NOBODY)
+PRIVACY_AUDIENCE_FIELDS = ("message_privacy", "wall_view_privacy", "wall_post_privacy", "friends_list_privacy")
+
+PRIVACY_INVALID_VALUE_DETAIL = "Недопустимое значение настройки приватности"
+WALL_HIDDEN_DETAIL = "Пользователь скрыл свою стену"
+WALL_POST_BLOCKED_DETAIL = "Вы не можете писать на стене этого пользователя"
+WALL_POST_RESTRICTED_DETAIL = "Пользователь ограничил записи на своей стене"
+FRIENDS_HIDDEN_DETAIL = "Пользователь скрыл список друзей"
+FRIEND_REQUEST_BLOCKED_DETAIL = "Нельзя отправить заявку этому пользователю"
+FRIEND_REQUEST_DISABLED_DETAIL = "Пользователь не принимает заявки в друзья"
+
+SITE_BACKGROUND_URL_MAX_LENGTH = 512
+SITE_BACKGROUND_URL_SCHEMES = ("http://", "https://")
+# Characters that could break out of a CSS `url(...)` / HTML attribute context.
+_SITE_BACKGROUND_URL_FORBIDDEN = re.compile(r"[\s\"'()<>\\]")
+
+
+def _are_friends(db: Session, user_a_id: int, user_b_id: int) -> bool:
+    """True if the two users have an accepted friendship (either direction)."""
+    return db.query(models.Friendship.id).filter(
+        models.Friendship.status == "accepted",
+        (
+            (models.Friendship.user_id == user_a_id) &
+            (models.Friendship.friend_id == user_b_id)
+        ) | (
+            (models.Friendship.user_id == user_b_id) &
+            (models.Friendship.friend_id == user_a_id)
+        ),
+    ).first() is not None
+
+
+def _has_block_between(db: Session, user_a_id: int, user_b_id: int) -> bool:
+    """True if either user has blocked the other."""
+    return db.query(models.UserBlock.id).filter(
+        (
+            (models.UserBlock.user_id == user_a_id) &
+            (models.UserBlock.blocked_user_id == user_b_id)
+        ) | (
+            (models.UserBlock.user_id == user_b_id) &
+            (models.UserBlock.blocked_user_id == user_a_id)
+        ),
+    ).first() is not None
+
+
+def _audience_allows(db: Session, owner, viewer, setting: Optional[str]) -> bool:
+    """Apply the audience rule of one privacy setting of `owner` to `viewer` (may be None)."""
+    if viewer is not None and viewer.id == owner.id:
+        return True
+    value = setting or AUDIENCE_ALL
+    if value == AUDIENCE_ALL:
+        return True
+    if value == AUDIENCE_FRIENDS:
+        return viewer is not None and _are_friends(db, owner.id, viewer.id)
+    # 'nobody' and any unexpected value: owner only (fail closed)
+    return False
+
+
+def _shows_online_to(user, viewer) -> bool:
+    """Whether `user`'s online status / last_active_at may be shown to `viewer`."""
+    if viewer is not None and viewer.id == user.id:
+        return True
+    return user.show_online is not False
+
+
+def _visible_last_active_at(user, viewer):
+    return user.last_active_at if _shows_online_to(user, viewer) else None
+
+
+def _can_post_on_wall(db: Session, owner, viewer) -> bool:
+    if viewer is None:
+        return False
+    if viewer.id == owner.id:
+        return True
+    if _has_block_between(db, owner.id, viewer.id):
+        return False
+    return _audience_allows(db, owner, viewer, owner.wall_post_privacy)
+
+
+def _can_send_friend_request(db: Session, owner, viewer) -> bool:
+    if viewer is None or viewer.id == owner.id:
+        return False
+    if (owner.friend_request_privacy or AUDIENCE_ALL) != AUDIENCE_ALL:
+        return False
+    if _has_block_between(db, owner.id, viewer.id):
+        return False
+    existing = db.query(models.Friendship.id).filter(
+        (
+            (models.Friendship.user_id == viewer.id) &
+            (models.Friendship.friend_id == owner.id)
+        ) | (
+            (models.Friendship.user_id == owner.id) &
+            (models.Friendship.friend_id == viewer.id)
+        )
+    ).first()
+    return existing is None
+
+
+def _viewer_permissions(db: Session, owner, viewer) -> schemas.ViewerPermissions:
+    return schemas.ViewerPermissions(
+        can_view_wall=_audience_allows(db, owner, viewer, owner.wall_view_privacy),
+        can_post_wall=_can_post_on_wall(db, owner, viewer),
+        can_view_friends=_audience_allows(db, owner, viewer, owner.friends_list_privacy),
+        can_send_friend_request=_can_send_friend_request(db, owner, viewer),
+    )
+
+
+def _privacy_settings_response(user) -> schemas.PrivacySettingsResponse:
+    return schemas.PrivacySettingsResponse(
+        message_privacy=user.message_privacy or AUDIENCE_ALL,
+        wall_view_privacy=user.wall_view_privacy or AUDIENCE_ALL,
+        wall_post_privacy=user.wall_post_privacy or AUDIENCE_ALL,
+        friends_list_privacy=user.friends_list_privacy or AUDIENCE_ALL,
+        friend_request_privacy=user.friend_request_privacy or AUDIENCE_ALL,
+        show_online=user.show_online is not False,
+    )
+
+
+def _normalize_site_background_url(value: Optional[str]) -> Optional[str]:
+    """Empty/None clears the background; otherwise require a plain http(s) URL."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if len(value) > SITE_BACKGROUND_URL_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Ссылка на фон сайта слишком длинная. Максимум {SITE_BACKGROUND_URL_MAX_LENGTH} символов",
+        )
+    if not value.lower().startswith(SITE_BACKGROUND_URL_SCHEMES):
+        raise HTTPException(
+            status_code=422,
+            detail="Ссылка на фон сайта должна начинаться с http:// или https://",
+        )
+    if _SITE_BACKGROUND_URL_FORBIDDEN.search(value):
+        raise HTTPException(
+            status_code=422,
+            detail="Ссылка на фон сайта содержит недопустимые символы",
+        )
+    return value
 
 
 async def _fetch_character_short(char_id: int):
@@ -333,7 +486,8 @@ async def read_users_me(current_user: models.User = Depends(get_current_user), d
         "role_display_name": current_user.role_display_name,
         "permissions": permissions,
         "current_character_id": current_user.current_character,
-        "character": None
+        "character": None,
+        "site_background_url": current_user.site_background_url,
     }
 
     if current_user.current_character:
@@ -539,6 +693,10 @@ def update_profile_settings(
     user = db.query(models.User).filter(models.User.id == current_user.id).first()
 
     update_fields = data.dict(exclude_unset=True)
+    if "site_background_url" in update_fields:
+        update_fields["site_background_url"] = _normalize_site_background_url(
+            update_fields["site_background_url"]
+        )
     for field_name, value in update_fields.items():
         if field_name == 'status_text' and value is not None:
             value = bleach.clean(value, tags=[], strip=True)
@@ -568,7 +726,49 @@ def update_profile_settings(
         post_color=user.post_color,
         profile_style_settings=style_settings,
         chat_background=user.chat_background,
+        site_background_url=user.site_background_url,
     )
+
+
+# ==================== PRIVACY SETTINGS ====================
+
+@router.get("/me/privacy", response_model=schemas.PrivacySettingsResponse)
+def get_my_privacy_settings(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Все настройки приватности текущего пользователя."""
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    return _privacy_settings_response(user)
+
+
+@router.put("/me/privacy", response_model=schemas.PrivacySettingsResponse)
+def update_my_privacy_settings(
+    data: schemas.PrivacySettingsUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Частичное обновление настроек приватности (передаются только меняемые поля)."""
+    update_fields = data.dict(exclude_unset=True)
+
+    for field_name, value in update_fields.items():
+        if field_name == "show_online":
+            if value is None:
+                raise HTTPException(status_code=422, detail=PRIVACY_INVALID_VALUE_DETAIL)
+            continue
+        allowed = (
+            FRIEND_REQUEST_PRIVACY_VALUES if field_name == "friend_request_privacy"
+            else AUDIENCE_VALUES
+        )
+        if value not in allowed:
+            raise HTTPException(status_code=422, detail=PRIVACY_INVALID_VALUE_DETAIL)
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    for field_name, value in update_fields.items():
+        setattr(user, field_name, value)
+    db.commit()
+    db.refresh(user)
+    return _privacy_settings_response(user)
 
 
 @router.put("/me/username", response_model=schemas.UsernameUpdateResponse)
@@ -705,7 +905,8 @@ def get_user_stats(db: Session = Depends(get_db)):
     try:
         threshold = datetime.utcnow() - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
         online_users = db.query(func.count(models.User.id)).filter(
-            models.User.last_active_at >= threshold
+            models.User.last_active_at >= threshold,
+            models.User.show_online == True,  # noqa: E712 — users hiding their online status are not counted
         ).scalar()
     except Exception:
         db.rollback()
@@ -722,7 +923,10 @@ def get_online_users(
     """Public endpoint: paginated list of online users (active in last 5 min)."""
     try:
         threshold = datetime.utcnow() - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
-        base_query = db.query(models.User).filter(models.User.last_active_at >= threshold)
+        base_query = db.query(models.User).filter(
+            models.User.last_active_at >= threshold,
+            models.User.show_online == True,  # noqa: E712 — hidden-online users are not listed
+        )
         total = base_query.count()
         users = (
             base_query
@@ -747,6 +951,7 @@ def get_online_users(
 def get_all_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    current_user: Optional[models.User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     """Public endpoint: paginated list of all registered users."""
@@ -758,8 +963,13 @@ def get_all_users(
         .limit(page_size)
         .all()
     )
+    items = []
+    for u in users:
+        item = schemas.UserPublicItem.from_orm(u)
+        item.last_active_at = _visible_last_active_at(u, current_user)
+        items.append(item)
     return schemas.UserListResponse(
-        items=[schemas.UserPublicItem.from_orm(u) for u in users],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
@@ -1207,6 +1417,7 @@ def set_role_permissions(
 def create_wall_post(
     user_id: int,
     post_data: schemas.PostCreate,
+    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1214,6 +1425,13 @@ def create_wall_post(
     wall_owner = db.query(models.User).filter(models.User.id == user_id).first()
     if not wall_owner:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Privacy: the owner may always post on their own wall.
+    if current_user.id != wall_owner.id:
+        if _has_block_between(db, wall_owner.id, current_user.id):
+            raise HTTPException(status_code=403, detail=WALL_POST_BLOCKED_DETAIL)
+        if not _audience_allows(db, wall_owner, current_user, wall_owner.wall_post_privacy):
+            raise HTTPException(status_code=403, detail=WALL_POST_RESTRICTED_DETAIL)
 
     if not post_data.content or not post_data.content.strip():
         raise HTTPException(status_code=400, detail="Содержимое поста не может быть пустым")
@@ -1231,6 +1449,20 @@ def create_wall_post(
     db.commit()
     db.refresh(new_post)
 
+    # Tell the wall owner someone else wrote on their wall (not for own posts).
+    if current_user.id != wall_owner.id:
+        background_tasks.add_task(
+            send_social_notification,
+            wall_owner.id,
+            f"Новая запись на вашей стене от {current_user.username}",
+            "wall_post",
+            {
+                "author_id": current_user.id,
+                "author_username": current_user.username,
+                "post_id": new_post.id,
+            },
+        )
+
     return schemas.PostResponse(
         id=new_post.id,
         author_id=new_post.author_id,
@@ -1247,12 +1479,16 @@ def get_wall_posts(
     user_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current_user: Optional[models.User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     """Получить посты на стене пользователя с пагинацией."""
     wall_owner = db.query(models.User).filter(models.User.id == user_id).first()
     if not wall_owner:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    if not _audience_allows(db, wall_owner, current_user, wall_owner.wall_view_privacy):
+        raise HTTPException(status_code=403, detail=WALL_HIDDEN_DETAIL)
 
     posts = (
         db.query(models.UserPost, models.User)
@@ -1337,6 +1573,7 @@ def delete_wall_post(
 @router.post("/friends/request", response_model=schemas.FriendshipResponse)
 def send_friend_request(
     body: schemas.FriendshipRequest,
+    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1347,6 +1584,11 @@ def send_friend_request(
     friend = db.query(models.User).filter(models.User.id == body.friend_id).first()
     if not friend:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    if _has_block_between(db, current_user.id, friend.id):
+        raise HTTPException(status_code=403, detail=FRIEND_REQUEST_BLOCKED_DETAIL)
+    if (friend.friend_request_privacy or AUDIENCE_ALL) == AUDIENCE_NOBODY:
+        raise HTTPException(status_code=403, detail=FRIEND_REQUEST_DISABLED_DETAIL)
 
     existing = db.query(models.Friendship).filter(
         (
@@ -1372,12 +1614,25 @@ def send_friend_request(
     db.add(friendship)
     db.commit()
     db.refresh(friendship)
+
+    background_tasks.add_task(
+        send_social_notification,
+        friend.id,
+        f"{current_user.username} хочет добавить вас в друзья",
+        "friend_request",
+        {
+            "from_user_id": current_user.id,
+            "from_username": current_user.username,
+            "friendship_id": friendship.id,
+        },
+    )
     return friendship
 
 
 @router.put("/friends/request/{friendship_id}/accept", response_model=schemas.FriendshipResponse)
 def accept_friend_request(
     friendship_id: int,
+    background_tasks: BackgroundTasks,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1395,6 +1650,15 @@ def accept_friend_request(
     friendship.status = "accepted"
     db.commit()
     db.refresh(friendship)
+
+    # Notify the original requester that the request was accepted.
+    background_tasks.add_task(
+        send_social_notification,
+        friendship.user_id,
+        f"{current_user.username} теперь у вас в друзьях",
+        "friend_accepted",
+        {"user_id": current_user.id, "username": current_user.username},
+    )
     return friendship
 
 
@@ -1482,12 +1746,16 @@ def get_outgoing_friend_requests(
 @router.get("/{user_id}/friends", response_model=List[schemas.FriendResponse])
 def get_user_friends(
     user_id: int,
+    current_user: Optional[models.User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     """Получить список друзей пользователя."""
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    if not _audience_allows(db, user, current_user, user.friends_list_privacy):
+        raise HTTPException(status_code=403, detail=FRIENDS_HIDDEN_DETAIL)
 
     friends_as_sender = (
         db.query(models.User)
@@ -1515,7 +1783,7 @@ def get_user_friends(
             id=u.id,
             username=u.username,
             avatar=u.avatar,
-            last_active_at=u.last_active_at,
+            last_active_at=_visible_last_active_at(u, current_user),
         )
         for u in all_friends.values()
     ]
@@ -1626,19 +1894,23 @@ async def get_user_profile(
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    # Post stats
-    total_posts = db.query(func.count(models.UserPost.id)).filter(
-        models.UserPost.wall_owner_id == user_id
-    ).scalar()
+    viewer_permissions = _viewer_permissions(db, user, current_user)
 
-    last_post_date = db.query(func.max(models.UserPost.created_at)).filter(
-        models.UserPost.wall_owner_id == user_id
-    ).scalar()
+    # Post stats — they reveal wall activity, so only for viewers allowed to see the wall
+    post_stats = None
+    if viewer_permissions.can_view_wall:
+        total_posts = db.query(func.count(models.UserPost.id)).filter(
+            models.UserPost.wall_owner_id == user_id
+        ).scalar()
 
-    post_stats = schemas.PostStatsResponse(
-        total_posts=total_posts or 0,
-        last_post_date=last_post_date,
-    )
+        last_post_date = db.query(func.max(models.UserPost.created_at)).filter(
+            models.UserPost.wall_owner_id == user_id
+        ).scalar()
+
+        post_stats = schemas.PostStatsResponse(
+            total_posts=total_posts or 0,
+            last_post_date=last_post_date,
+        )
 
     # Character info
     character_data = None
@@ -1724,8 +1996,9 @@ async def get_user_profile(
         post_color=user.post_color,
         profile_style_settings=style_settings,
         chat_background=user.chat_background,
-        last_active_at=user.last_active_at,
+        last_active_at=_visible_last_active_at(user, current_user),
         activity_points=user.activity_points or 0,
+        viewer_permissions=viewer_permissions,
     )
 
 
@@ -1998,6 +2271,18 @@ def check_friendship(
         )
     ).first()
     return schemas.FriendCheckResponse(is_friend=friendship is not None)
+
+
+@router.get("/{user_id}/presence-visibility", response_model=schemas.PresenceVisibilityResponse)
+def get_user_presence_visibility(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Показывает ли пользователь свой онлайн-статус. Используется notification-service."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return schemas.PresenceVisibilityResponse(show_online=user.show_online is not False)
 
 
 @router.get("/{user_id}/message-privacy", response_model=schemas.MessagePrivacyResponse)

@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, EmailStr, StrictBool, validator
 from datetime import datetime
 
 # Базовая схема пользователя
@@ -120,6 +120,9 @@ class MeResponse(BaseModel):
     current_character_id: Optional[int] = None
     character: Optional[CharacterShort] = None
 
+    # Account-level personal site background (null when unset)
+    site_background_url: Optional[str] = None
+
 
 class PostCreate(BaseModel):
     content: str
@@ -174,6 +177,15 @@ class FriendRequestResponse(BaseModel):
     created_at: datetime
 
 
+class ViewerPermissions(BaseModel):
+    """What the current (optional) viewer may do on a profile — privacy settings."""
+
+    can_view_wall: bool
+    can_post_wall: bool
+    can_view_friends: bool
+    can_send_friend_request: bool
+
+
 class UserProfileStrangerResponse(BaseModel):
     """Профиль пользователя без золота персонажа (FEAT-171 §3.4 U1).
 
@@ -191,7 +203,8 @@ class UserProfileStrangerResponse(BaseModel):
     avatar: Optional[str] = None
     registered_at: Optional[datetime] = None
     character: Optional[CharacterShortPublic] = None
-    post_stats: PostStatsResponse
+    # null when the wall is hidden from this viewer (wall_view_privacy)
+    post_stats: Optional[PostStatsResponse] = None
     is_friend: Optional[bool] = None
     friendship_status: Optional[str] = None
     friendship_id: Optional[int] = None
@@ -207,6 +220,9 @@ class UserProfileStrangerResponse(BaseModel):
     chat_background: Optional[str] = None
     last_active_at: Optional[datetime] = None
     activity_points: int = 0
+    # Always filled by GET /users/{id}/profile; Optional only so the schema
+    # can still be built standalone.
+    viewer_permissions: Optional[ViewerPermissions] = None
 
 
 class UserProfileResponse(UserProfileStrangerResponse):
@@ -252,6 +268,8 @@ class ProfileSettingsUpdate(BaseModel):
     post_color: Optional[str] = None
     profile_style_settings: Optional[dict] = None
     chat_background: Optional[str] = None
+    # "" or null clears it; otherwise an http(s) URL, max 512 chars
+    site_background_url: Optional[str] = None
 
 
 class ProfileSettingsResponse(BaseModel):
@@ -264,6 +282,7 @@ class ProfileSettingsResponse(BaseModel):
     post_color: Optional[str] = None
     profile_style_settings: Optional[dict] = None
     chat_background: Optional[str] = None
+    site_background_url: Optional[str] = None
 
 
 class UsernameUpdate(BaseModel):
@@ -435,6 +454,34 @@ class MessagePrivacyUpdate(BaseModel):
 
 class MessagePrivacyResponse(BaseModel):
     message_privacy: str
+
+
+class PrivacySettingsUpdate(BaseModel):
+    """Partial update of privacy settings (send only the fields to change).
+
+    Values are checked in the handler so that a bad value yields a single
+    Russian `detail` string instead of Pydantic's error list.
+    """
+
+    message_privacy: Optional[str] = None
+    wall_view_privacy: Optional[str] = None
+    wall_post_privacy: Optional[str] = None
+    friends_list_privacy: Optional[str] = None
+    friend_request_privacy: Optional[str] = None
+    show_online: Optional[StrictBool] = None
+
+
+class PrivacySettingsResponse(BaseModel):
+    message_privacy: str
+    wall_view_privacy: str
+    wall_post_privacy: str
+    friends_list_privacy: str
+    friend_request_privacy: str
+    show_online: bool
+
+
+class PresenceVisibilityResponse(BaseModel):
+    show_online: bool
 
 
 class FriendCheckResponse(BaseModel):

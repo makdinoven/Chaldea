@@ -28,7 +28,7 @@ def consume():
         message = "Welcome to our platform!"
 
         db: Session = next(get_db())
-        notification_data = NotificationCreate(user_id=user_id, message=message)
+        notification_data = NotificationCreate(user_id=user_id, message=message, category="system")
         db_notification = Notification(**notification_data.dict())
         db.add(db_notification)
         db.commit()
@@ -40,7 +40,9 @@ def consume():
             "user_id": db_notification.user_id,
             "message": db_notification.message,
             "status": db_notification.status,
-            "created_at": str(db_notification.created_at)
+            "created_at": str(db_notification.created_at),
+            "category": db_notification.category,
+            "silent": False,
         }
         send_to_user(user_id, {"type": "notification", "data": notification_data})
 

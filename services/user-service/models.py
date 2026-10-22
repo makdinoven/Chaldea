@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, UniqueConstraint, Enum as SAEnum
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, true
 from datetime import datetime
 from database import Base
 
@@ -79,6 +79,15 @@ class User(Base):
         server_default="all",
     )
     chat_background = Column(String(50), nullable=True)
+    # Privacy settings (migration 0030). Audience values: all | friends | nobody;
+    # friend_request_privacy accepts only all | nobody.
+    wall_view_privacy = Column(String(10), nullable=False, default="all", server_default="all")
+    wall_post_privacy = Column(String(10), nullable=False, default="all", server_default="all")
+    friends_list_privacy = Column(String(10), nullable=False, default="all", server_default="all")
+    friend_request_privacy = Column(String(10), nullable=False, default="all", server_default="all")
+    show_online = Column(Boolean, nullable=False, default=True, server_default=true())
+    # Personal site-wide background picture (account setting, migration 0030)
+    site_background_url = Column(String(512), nullable=True)
 
 
 class CosmeticFrame(Base):

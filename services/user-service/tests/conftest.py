@@ -67,6 +67,20 @@ _test_engine = create_engine(
 _TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
 
 
+@pytest.fixture(autouse=True)
+def social_notify_mock():
+    """Stub social bell notifications (friend requests, wall posts).
+
+    TestClient runs BackgroundTasks inline; without this every friends/wall
+    test would try to reach RabbitMQ (and, inside the dev container, really
+    publish to the shared `general_notifications` queue). Tests that care
+    about the call inspect this mock.
+    """
+    from unittest.mock import patch
+    with patch("main.send_social_notification") as mock_send:
+        yield mock_send
+
+
 @pytest.fixture()
 def test_engine():
     """Expose the in-memory SQLite engine for tests that need it directly."""

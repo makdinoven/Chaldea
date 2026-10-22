@@ -12,7 +12,14 @@ from sqlalchemy.orm import Session
 from models import Notification
 from database import get_db
 from schemas import Notification as NotificationSchema
-from schemas import GeneralNotificationPayload, NotificationTargetType
+from schemas import GeneralNotificationPayload, NotificationTargetType, NotificationPreferences
+from notification_categories import (
+    CATEGORY_SYSTEM,
+    INVALID_PREFERENCE_DETAIL,
+    get_preferences,
+    save_preferences,
+    validate_preferences_update,
+)
 from auth_http import get_current_user_via_http, require_permission, authenticate_websocket, UserRead
 
 import ws_manager
@@ -158,11 +165,37 @@ def create_admin_notification(
     payload = {
         "target_type": data.target_type.value,
         "target_value": data.target_value,
-        "message": data.message
+        "message": data.message,
+        # Admin broadcasts are mandatory: never muted by user preferences.
+        "category": CATEGORY_SYSTEM,
     }
     background_tasks.add_task(_publish_admin_notification, payload)
 
     return {"detail": "Notification creation request sent to queue."}
+
+# Per-user notification preferences. Declared before the /{user_id}/... routes
+# so the literal "me" segment is never parsed as a user id.
+@router.get("/me/preferences", response_model=NotificationPreferences)
+def get_my_notification_preferences(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    return {"preferences": get_preferences(db, current_user.id)}
+
+
+@router.put("/me/preferences", response_model=NotificationPreferences)
+def update_my_notification_preferences(
+    data: NotificationPreferences,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    if not validate_preferences_update(data.preferences):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=INVALID_PREFERENCE_DETAIL,
+        )
+    return {"preferences": save_preferences(db, current_user.id, data.preferences)}
+
 
 # Остальные эндпоинты: get_unread_notifications, get_all_notifications, mark-as-read...
 @router.get("/{user_id}/unread")

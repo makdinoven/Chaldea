@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 QUEUE_NAME = "general_notifications"
 
+# Notification category for notification-service preferences: trades and
+# auction events are both "trade".
+CATEGORY_TRADE = "trade"
+
 
 def publish_notification_sync(target_user_id: int, message: str) -> None:
     """
@@ -26,6 +30,7 @@ def publish_notification_sync(target_user_id: int, message: str) -> None:
         "target_type": "user",
         "target_value": target_user_id,
         "message": message,
+        "category": CATEGORY_TRADE,
     }
     try:
         connection = pika.BlockingConnection(
@@ -62,6 +67,7 @@ def publish_auction_notification(
         "message": message,
         "ws_type": ws_type,
         "ws_data": ws_data,
+        "category": CATEGORY_TRADE,
     }
     try:
         connection = pika.BlockingConnection(

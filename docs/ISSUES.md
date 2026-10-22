@@ -775,6 +775,14 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 
 ## LOW
 
+### Тесты: `test_feat171_predicate_parity.py` в locations-service не запускается — 36 падений
+**Сервис:** locations-service
+**Файлы:** `services/locations-service/app/tests/test_feat171_predicate_parity.py`
+**Обнаружено:** прогон тестов при работе над категориями уведомлений (2026-10-22)
+**Приоритет:** LOW
+**Описание:** все 36 тестов файла падают с «async def functions are not natively supported»: в контейнере стоит pytest-asyncio 1.4.0, но async-тесты этого файла им не подхватываются (нет маркера / режима `asyncio_mode`). Остальные 1463 теста сервиса проходят. Падения были и до правок уведомлений — правка затрагивала только `rabbitmq_publisher.py`.
+**Возможное решение:** добавить `pytestmark = pytest.mark.asyncio` в файл или `asyncio_mode = auto` в конфиг pytest сервиса и проверить, что тесты проходят по существу.
+
 ### Баг: в части админок `endurance` подписан как «Выносливость», хотя это «Живучесть»
 **Сервис:** frontend
 **Файлы:** `components/Admin/CharactersPage/tabs/AttributesTab.tsx:52`, `components/Admin/DungeonsPage/editor/PropertyPanel.tsx:32`, `components/Admin/MobsPage/AdminMobTemplateForm.tsx:22`, `components/Admin/PerksPage/PerkForm.tsx:89`, `components/Admin/TitlesPage/TitleForm.tsx:58`, `components/AdminNpcsPage/NpcEquipmentEditor.tsx:211`

@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 QUEUE_NAME = "general_notifications"
 
+# Notification categories understood by notification-service.
+CATEGORY_BATTLE = "battle"
+CATEGORY_PARTY = "party"
+
 
 def _publish_sync(payload: dict) -> None:
     """Blocking publish — must be called via run_in_executor."""
@@ -46,6 +50,7 @@ async def publish_notification(
     message: str,
     ws_type: Optional[str] = None,
     ws_data: Optional[dict] = None,
+    category: str = CATEGORY_BATTLE,
 ) -> None:
     """
     Publish a notification for a single user.
@@ -53,11 +58,16 @@ async def publish_notification(
 
     If ws_type is provided, notification-service will send a structured
     WebSocket message with that type and ws_data payload.
+
+    `category` drives the recipient's notification preferences in
+    notification-service: battle events are mandatory ("battle"); battle-group
+    events pass "party" so players can mute them.
     """
     payload = {
         "target_type": "user",
         "target_value": target_user_id,
         "message": message,
+        "category": category,
     }
     if ws_type:
         payload["ws_type"] = ws_type
