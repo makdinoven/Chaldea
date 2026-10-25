@@ -276,11 +276,31 @@ class TestEveryInternalCallSiteSendsHeaders:
     #: item grant, battles state poll, characters deduct-gold.
     MIN_CHECKED = 6
 
+    @staticmethod
+    def _segmenter(source):
+        """`ast.get_source_segment` with the file split into lines once: the
+        stdlib re-splits the whole file on every call, which made the sweep
+        quadratic in the size of `gameplay.py`."""
+        lines = source.splitlines(keepends=True)
+
+        def seg(node):
+            if getattr(node, "end_lineno", None) is None:
+                return None
+            first, last = node.lineno - 1, node.end_lineno - 1
+            if first == last:
+                return lines[first].encode()[node.col_offset:node.end_col_offset].decode()
+            head = lines[first].encode()[node.col_offset:].decode()
+            tail = lines[last].encode()[:node.end_col_offset].decode()
+            return head + "".join(lines[first + 1:last]) + tail
+
+        return seg
+
     def _resolve(self, source, tree):
         """{(start, end) of a function: {variable: assigned source}}."""
         import ast
 
         env = {}
+        seg = self._seg
 
         class _V(ast.NodeVisitor):
             def _scope(self, node):
@@ -289,7 +309,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                     if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
                             and isinstance(sub.targets[0], ast.Name):
                         local[sub.targets[0].id] = \
-                            ast.get_source_segment(source, sub.value) or ""
+                            seg(sub.value) or ""
                 env[(node.lineno, node.end_lineno)] = local
                 self.generic_visit(node)
 
@@ -302,7 +322,7 @@ class TestEveryInternalCallSiteSendsHeaders:
     def _url_of(self, source, tree, env, node):
         import ast
 
-        raw = ast.get_source_segment(source, node.args[0]) if node.args else ""
+        raw = self._seg(node.args[0]) if node.args else ""
         raw = raw or ""
         if "/" in raw:
             return raw
@@ -315,7 +335,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                         and sub.name == builder:
                     for inner in ast.walk(sub):
                         if isinstance(inner, ast.Return) and inner.value is not None:
-                            return ast.get_source_segment(source, inner.value) or raw
+                            return self._seg(inner.value) or raw
         # a bare name — look it up in the innermost enclosing function
         scopes = [(end - start, local) for (start, end), local in env.items()
                   if start <= node.lineno <= end]
@@ -335,6 +355,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                 continue
             source = open(path, encoding="utf-8").read()
             tree = ast.parse(source)
+            self._seg = self._segmenter(source)
             env = self._resolve(source, tree)
 
             # `@app.post("/dungeons/internal/…")` is a route *declaration*, not
@@ -355,7 +376,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                 url = self._url_of(source, tree, env, node)
                 if "/internal/" not in url:
                     continue
-                base = ast.get_source_segment(source, node.func.value)
+                base = self._seg(node.func.value)
                 where = f"{filename}:{node.lineno} {base}.{node.func.attr}"
                 checked.append(where)
                 if "headers" not in {kw.arg for kw in node.keywords}:
