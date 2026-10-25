@@ -23,8 +23,12 @@ import CraftTab from './CraftTab/CraftTab';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import EmptyState from './shared/EmptyState';
 import LoadingState from './shared/LoadingState';
+import useActivityLock from '../../hooks/useActivityLock';
 
 const ProfilePage = () => {
+  // The page tucks itself up under the header; the dungeon / knocked-out strip above it
+  // (Layout) takes that room, so then it stays put instead of sliding under the strip.
+  const lockStrip = useActivityLock().locked;
   const dispatch = useAppDispatch();
   const character = useAppSelector((state) => state.user.character);
   const loading = useAppSelector(selectProfileLoading);
@@ -103,7 +107,7 @@ const ProfilePage = () => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="-mt-12"
+      className={lockStrip ? '' : '-mt-12'}
     >
       <ProfileTabs activeTab={activeTab} onTabChange={setActiveTab} />
       {renderTabContent()}
