@@ -277,15 +277,28 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 | DELETE | `/dungeons/admin/dungeons/{id}` (409, если внутри группа) | `dungeons:delete` |
 | POST/PUT/DELETE | комнаты, коридоры, `rooms/positions` | `dungeons:edit` |
 | POST | `/dungeons/admin/dungeons/{id}/validate` | `dungeons:view` |
+| POST | `/dungeons/admin/dungeons/{id}/generate` (FEAT-177; 409 без `replace` при наличии комнат и если внутри группа) | `dungeons:edit` |
 | GET | `/dungeons/admin/sessions` (по умолчанию — незакрытые) | `dungeons:view` |
 | DELETE | `/dungeons/admin/sessions/{id}` (любой статус, снимает блокировки) | `dungeons:edit` |
-| DELETE | `/dungeons/admin/dungeons/{id}/cooldown` | `dungeons:edit` |
+| GET | `/dungeons/admin/dungeons/{id}/status` (откат после зачистки, группа внутри) | `dungeons:view` |
+| DELETE | `/dungeons/admin/dungeons/{id}/cooldown` (восстановить сразу: Redis + `cooldown_until` в БД) | `dungeons:edit` |
 
 Валидация: `location_id` должен существовать в `Locations`; `room_config` проверяется и при
 обновлении (против итогового типа комнаты); цели телепорта (комната и исходы событий) — комнаты
 того же подземелья; `grid_w`/`grid_d` — 2..8 (`422 «Размер комнаты должен быть от 2 до 8 клеток»`).
 `validate` дополнительно ругается на боевые комнаты без мобов и телепорты в никуда. Комната ядра маны без коридоров
 не считается недостижимой (в неё ведёт путь, открытый после босса).
+
+**Генератор (FEAT-177, `generator.py`, тексты — `generator_texts.py`).** `generate` строит черновик: этажи
+(1–5), комнат на этаже (4–20), уровень, размер группы, сложность (`easy`/`normal`/`hard`), оформление, ключи и
+замки, тайники/испытания, свои списки мобов/боссов/предметов, `seed` (тот же seed — та же карта). Чистая функция
+`generate(params, catalog)` → план; `crud.generate_dungeon` удаляет старые комнаты и коридоры, пишет новые и
+выключает подземелье (`is_active=false`). Каталог мобов и предметов читается напрямую из `mob_templates` и `items`
+(только чтение, как `Locations`). Гарантии: главный путь (вход → лестницы → босс) не заперт и не скрыт, на нём на
+каждом этаже есть бой; замки и тайные ходы закрывают только ответвления (и, иногда, дверь босса); ключ лежит вне
+закрытых ответвлений на этаже двери или выше; решётки и печати — только на необязательных ответвлениях без ключей
+(отряду без воина/мага они не мешают); комнаты — соседние клетки сетки 180 px. Сложность проверок
+`(8 + 3.5·уровень)·k`, урон `(8 + 2·уровень)·k`.
 
 ### Игрок (JWT)
 | Метод | Путь | Ответ |
@@ -299,6 +312,7 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 | POST | `/dungeons/sessions/{id}/interact` `{character_id, action, ...}` | `InteractResponse` |
 | POST | `/dungeons/sessions/{id}/pick-lock` `{character_id, corridor_id}` | `PickLockResponse` |
 | POST | `/dungeons/sessions/{id}/flee` | `FleeResponse` |
+| POST | `/dungeons/sessions/{id}/give` `{character_id, target_character_id, item_id, quantity}` | FEAT-178: лидер во время забега отдаёт найденный расходник в походный рюкзак живого участника (inventory-service `backpack/add`); 409 — нет рюкзака/места, предмет остаётся у отряда |
 | POST | `/dungeons/sessions/{id}/distribute-loot` | `DistributeLootResponse` (+ `failed`); получатели — только живые участники (иначе 400) |
 | POST | `/dungeons/sessions/{id}/finalize` `{character_id, force}` | `FinalizeResponse` (+ `items_lost`) |
 | GET | `/dungeons/my-session/{character_id}` | только свой персонаж (или admin/moderator): `{in_dungeon, session_id, pending_loot_session_id}` |
@@ -340,6 +354,7 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 | `chat_message` | строка чата/журнала (`ChatEntry`) |
 | `room_lit` | `character_id`, `name`, `how` (`spell`/`torch`), `room_id`, `message` |
 | `loot_distributed` | `distributions`, `failed`, `remaining_count` |
+| `item_given` | `target_character_id`, `target_name`, `item_id`, `item_name`, `quantity` (FEAT-178) |
 
 ## Фазы (`SessionStateResponse.phase`)
 

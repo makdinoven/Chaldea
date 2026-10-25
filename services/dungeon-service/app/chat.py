@@ -137,7 +137,7 @@ async def from_event(session_id: int, event: dict) -> None:
             await log(session_id, _msg(data), TONE_GOOD if data.get("passed") else TONE_BAD)
         elif kind == "rest_completed":
             await log(session_id, _msg(data), TONE_BAD if data.get("raided") else TONE_GOOD)
-        elif kind in ("loot_added", "key_found", "loot_distributed"):
+        elif kind in ("loot_added", "key_found", "loot_distributed", "item_given"):
             await log(session_id, _msg(data), TONE_GOOD)
         elif kind in ("teleport_failed", "battle_error"):
             await log(session_id, _msg(data), TONE_BAD)

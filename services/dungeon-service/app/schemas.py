@@ -305,6 +305,14 @@ class DungeonListResponse(BaseModel):
         orm_mode = True
 
 
+class DungeonAdminStatusResponse(BaseModel):
+    """What keeps players out of a dungeon right now (admin view)."""
+    is_on_cooldown: bool
+    cooldown_remaining_seconds: int = 0
+    # The run inside, if any (one group at a time).
+    occupied_session_id: Optional[int] = None
+
+
 class DungeonAtLocationResponse(BaseModel):
     id: int
     name: str
@@ -738,6 +746,91 @@ class DungeonValidationResponse(BaseModel):
     valid: bool
     errors: List[str] = []
     warnings: List[str] = []
+
+
+# ---------- Dungeon Generator (FEAT-177) ----------
+
+GEN_MAX_FLOORS = 5
+GEN_ROOMS_MIN, GEN_ROOMS_MAX = 4, 20
+GEN_LEVEL_MAX = 200
+GEN_PARTY_MAX = 4
+GEN_POOL_MAX = 50
+GEN_DIFFICULTIES = ("easy", "normal", "hard")
+
+
+def _id_pool(v):
+    if v is None:
+        return v
+    if len(v) > GEN_POOL_MAX:
+        raise ValueError(f"Не больше {GEN_POOL_MAX} ID в списке")
+    if not all(isinstance(i, int) and not isinstance(i, bool) and i > 0 for i in v):
+        raise ValueError("Список должен состоять из положительных ID")
+    return list(dict.fromkeys(v)) or None
+
+
+class DungeonGenerateRequest(BaseModel):
+    floors: int = 1
+    rooms_per_floor: int = 8
+    level: Optional[int] = None          # the dungeon's recommended level if not given
+    party_size: Optional[int] = None     # the dungeon's recommended party size if not given
+    difficulty: str = "normal"
+    theme: Optional[str] = None          # the dungeon's theme if not given
+    locks: bool = True
+    secrets: bool = True
+    seed: Optional[int] = None           # random if not given; the same seed, the same dungeon
+    mob_pool: Optional[List[int]] = None
+    boss_pool: Optional[List[int]] = None
+    loot_pool: Optional[List[int]] = None
+    # The dungeon already has rooms: they are deleted only when this is set.
+    replace: bool = False
+
+    _theme = validator("theme", allow_reuse=True)(validate_theme)
+    _pools = validator("mob_pool", "boss_pool", "loot_pool", allow_reuse=True)(_id_pool)
+
+    @validator("floors")
+    def validate_floors(cls, v):
+        if not 1 <= v <= GEN_MAX_FLOORS:
+            raise ValueError(f"Этажей — от 1 до {GEN_MAX_FLOORS}")
+        return v
+
+    @validator("rooms_per_floor")
+    def validate_rooms(cls, v):
+        if not GEN_ROOMS_MIN <= v <= GEN_ROOMS_MAX:
+            raise ValueError(f"Комнат на этаже — от {GEN_ROOMS_MIN} до {GEN_ROOMS_MAX}")
+        return v
+
+    @validator("level")
+    def validate_level(cls, v):
+        if v is not None and not 1 <= v <= GEN_LEVEL_MAX:
+            raise ValueError(f"Уровень — от 1 до {GEN_LEVEL_MAX}")
+        return v
+
+    @validator("party_size")
+    def validate_party(cls, v):
+        if v is not None and not 1 <= v <= GEN_PARTY_MAX:
+            raise ValueError(f"Размер группы — от 1 до {GEN_PARTY_MAX}")
+        return v
+
+    @validator("difficulty")
+    def validate_difficulty(cls, v):
+        if v not in GEN_DIFFICULTIES:
+            raise ValueError("Сложность: easy, normal или hard")
+        return v
+
+    @validator("seed")
+    def validate_seed(cls, v):
+        if v is not None and not 0 <= v < 2 ** 31:
+            raise ValueError("seed — число от 0 до 2147483647")
+        return v
+
+
+class DungeonGenerateResponse(BaseModel):
+    seed: int
+    rooms: int
+    corridors: int
+    # What the generator could not do (no mobs of the level, no room for a key…).
+    warnings: List[str] = []
+    validation: DungeonValidationResponse
 
 
 # ---------- Session / Party ----------
@@ -1277,6 +1370,25 @@ class LootDistributionItem(BaseModel):
     item_id: int
     quantity: int
     to_character_id: int
+
+
+class GiveItemRequest(BaseModel):
+    """FEAT-178: the leader hands a found consumable to a member's camp backpack mid-run."""
+    character_id: int
+    target_character_id: int
+    item_id: int
+    quantity: int = 1
+
+    @validator("quantity")
+    def _positive(cls, v):
+        if not 1 <= v <= 999:
+            raise ValueError("Количество — от 1 до 999")
+        return v
+
+
+class GiveItemResponse(BaseModel):
+    message: str
+    group_inventory: List[GroupInventoryItemResponse] = []
 
 
 class DistributeLootRequest(BaseModel):

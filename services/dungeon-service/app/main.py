@@ -27,7 +27,7 @@ from schemas import (
     DungeonDetailResponse, DungeonAtLocationResponse,
     DungeonRoomCreate, DungeonRoomUpdate, DungeonRoomResponse,
     DungeonCorridorCreate, DungeonCorridorUpdate, DungeonCorridorResponse,
-    DungeonValidationResponse,
+    DungeonValidationResponse, DungeonGenerateRequest, DungeonGenerateResponse, DungeonAdminStatusResponse,
     BulkRoomPositionUpdate, BulkPositionUpdateResponse,
     SessionCreateRequest,
     SessionEnterRequest, SessionResponse, SessionStateResponse,
@@ -38,7 +38,7 @@ from schemas import (
     BattleCallbackRequest,
     InteractRequest, InteractResponse,
     FleeRequest, FleeResponse,
-    DistributeLootRequest, DistributeLootResponse,
+    DistributeLootRequest, DistributeLootResponse, GiveItemRequest, GiveItemResponse,
     FinalizeRequest, FinalizeResponse,
     AdminSessionResponse,
 )
@@ -264,6 +264,23 @@ async def admin_validate_dungeon(
     return await crud.validate_dungeon(db, dungeon_id)
 
 
+@app.post("/dungeons/admin/dungeons/{dungeon_id}/generate", response_model=DungeonGenerateResponse)
+async def admin_generate_dungeon(
+    dungeon_id: int,
+    data: DungeonGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(can_edit),
+):
+    """FEAT-177: replace the dungeon's map with a generated draft (the dungeon is switched off)."""
+    # Rebuilding the rooms under a running group would cascade its session away.
+    if await gameplay.get_occupying_session(db, dungeon_id) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="В подземелье находится группа — сначала завершите её сессию",
+        )
+    return await crud.generate_dungeon(db, dungeon_id, data)
+
+
 # ===========================
 #  Admin: Session Management
 # ===========================
@@ -315,6 +332,22 @@ async def admin_force_cleanup_session(
 ):
     """Admin force-cleanup: end any session regardless of state. Frees all characters."""
     return await gameplay.admin_force_cleanup_session(db, session_id)
+
+
+@app.get("/dungeons/admin/dungeons/{dungeon_id}/status", response_model=DungeonAdminStatusResponse)
+async def admin_dungeon_status(
+    dungeon_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(can_view),
+):
+    """Admin: the cooldown after a clear and the group inside, if any."""
+    await crud.get_dungeon(db, dungeon_id)
+    on_cooldown, remaining = await gameplay.check_cooldown(db, dungeon_id)
+    occupying = await gameplay.get_occupying_session(db, dungeon_id)
+    return DungeonAdminStatusResponse(
+        is_on_cooldown=on_cooldown, cooldown_remaining_seconds=remaining,
+        occupied_session_id=occupying.id if occupying else None,
+    )
 
 
 @app.delete("/dungeons/admin/dungeons/{dungeon_id}/cooldown")
@@ -565,6 +598,19 @@ async def interact_with_room_endpoint(
         choice_index=data.choice_index, target_character_id=data.target_character_id,
         item_id=data.item_id, quantity=data.quantity, auth_token=_bearer(request),
     )
+
+
+@app.post("/dungeons/sessions/{session_id}/give", response_model=GiveItemResponse)
+async def give_item(
+    session_id: int,
+    data: GiveItemRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_current_user_via_http),
+):
+    """FEAT-178: the leader hands a found consumable to a member's camp backpack."""
+    await _require_own_character(data.character_id, user)
+    return await gameplay.give_item(db, session_id, data.character_id, data.target_character_id,
+                                    data.item_id, data.quantity)
 
 
 @app.post("/dungeons/sessions/{session_id}/flee", response_model=FleeResponse)

@@ -1,4 +1,5 @@
 import logging
+import random
 from collections import defaultdict, deque
 from typing import List, Optional, Dict, Tuple
 
@@ -8,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
+import generator
 from models import Dungeon, DungeonRoom, DungeonCorridor
 from schemas import (
     DungeonCreate, DungeonUpdate,
     DungeonRoomCreate, DungeonRoomUpdate,
     DungeonCorridorCreate, DungeonCorridorUpdate,
     DungeonValidationResponse,
+    DungeonGenerateRequest, DungeonGenerateResponse,
     RoomPositionItem,
     validate_room_config,
     _parse_outcome_data,
@@ -554,3 +557,103 @@ async def validate_dungeon(
 
     valid = len(errors) == 0
     return DungeonValidationResponse(valid=valid, errors=errors, warnings=warnings)
+
+
+# ===========================
+#  Dungeon Generator (FEAT-177)
+# ===========================
+
+# Read-only peeks at tables owned by character-service and inventory-service (like
+# `Locations` above): the generator only needs ids, tiers and levels.
+_GEN_MOBS_SQL = "SELECT id, tier, level FROM mob_templates"
+_GEN_ITEMS_SQL = (
+    "SELECT id, item_type, item_rarity, item_level, price, max_stack_size FROM items "
+    "WHERE is_unique = 0 AND blueprint_recipe_id IS NULL AND item_type <> 'recipe'"
+)
+
+
+async def load_generator_catalog(session: AsyncSession) -> generator.Catalog:
+    mobs = (await session.execute(text(_GEN_MOBS_SQL))).mappings().all()
+    items = (await session.execute(text(_GEN_ITEMS_SQL))).mappings().all()
+    return generator.Catalog(
+        mobs=[{"id": int(m["id"]), "tier": m["tier"], "level": int(m["level"] or 0)} for m in mobs],
+        items=[{
+            "id": int(i["id"]), "item_type": i["item_type"], "item_rarity": i["item_rarity"],
+            "item_level": int(i["item_level"] or 0), "price": int(i["price"] or 0),
+            "max_stack_size": int(i["max_stack_size"] or 1),
+        } for i in items],
+    )
+
+
+async def generate_dungeon(
+    session: AsyncSession, dungeon_id: int, data: DungeonGenerateRequest,
+) -> DungeonGenerateResponse:
+    """Replace the dungeon's rooms and corridors with a generated draft and switch
+    the dungeon off until the admin has looked it over."""
+    dungeon = await get_dungeon(session, dungeon_id)
+    has_rooms = (await session.execute(
+        select(DungeonRoom.id).where(DungeonRoom.dungeon_id == dungeon_id).limit(1)
+    )).first() is not None
+    if has_rooms and not data.replace:
+        raise HTTPException(
+            status_code=409,
+            detail="В подземелье уже есть комнаты — подтвердите, что их нужно заменить",
+        )
+    seed = data.seed if data.seed is not None else random.randrange(2 ** 31)
+    params = generator.GenParams(
+        floors=data.floors,
+        rooms_per_floor=data.rooms_per_floor,
+        level=data.level or dungeon.recommended_level or 1,
+        party_size=data.party_size or dungeon.recommended_party_size or 1,
+        difficulty=data.difficulty,
+        theme=data.theme or dungeon.theme or "stone",
+        locks=data.locks,
+        secrets=data.secrets,
+        disable_rest_rooms=bool(dungeon.disable_rest_rooms),
+        disable_merchants=bool(dungeon.disable_merchants),
+        seed=seed,
+        mob_pool=data.mob_pool,
+        boss_pool=data.boss_pool,
+        loot_pool=data.loot_pool,
+    )
+    plan = generator.generate(params, await load_generator_catalog(session))
+
+    # Corridors go with their rooms (ON DELETE CASCADE), and so do past runs' room states.
+    await session.execute(delete(DungeonCorridor).where(DungeonCorridor.dungeon_id == dungeon_id))
+    await session.execute(delete(DungeonRoom).where(DungeonRoom.dungeon_id == dungeon_id))
+
+    rooms: List[DungeonRoom] = []
+    for r in plan.rooms:
+        x, y = generator.position(r)
+        validate_room_config(r.room_type, r.config)
+        room = DungeonRoom(
+            dungeon_id=dungeon_id, room_type=r.room_type, name=r.name, description=r.description,
+            sort_order=r.idx, floor=r.floor, is_entrance=r.role == "entrance", is_boss_room=r.room_type == "boss",
+            room_config=r.config or None, position_x=x, position_y=y,
+        )
+        session.add(room)
+        rooms.append(room)
+    await session.flush()
+    for idx, target in plan.portals.items():
+        rooms[idx].room_config = {**(rooms[idx].room_config or {}), "target_room_id": rooms[target].id}
+    for c in plan.corridors:
+        session.add(DungeonCorridor(
+            dungeon_id=dungeon_id, from_room_id=rooms[c.a].id, to_room_id=rooms[c.b].id,
+            stamina_cost=c.stamina_cost, is_bidirectional=c.is_bidirectional,
+            random_battle_chance=c.random_battle_chance, random_battle_mob_ids=c.random_battle_mob_ids,
+            trap_chance=c.trap_chance, trap_config=c.trap_config, lock_config=c.lock_config,
+            passage_type=c.passage_type, passage_config=c.passage_config,
+            source_handle=c.source_handle, target_handle=c.target_handle,
+        ))
+    dungeon.theme = params.theme
+    dungeon.recommended_level = params.level
+    dungeon.recommended_party_size = params.party_size
+    dungeon.is_active = False
+    await session.commit()
+    session.expire_all()
+
+    validation = await validate_dungeon(session, dungeon_id)
+    return DungeonGenerateResponse(
+        seed=seed, rooms=len(plan.rooms), corridors=len(plan.corridors),
+        warnings=plan.warnings, validation=validation,
+    )

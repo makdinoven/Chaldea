@@ -286,6 +286,34 @@ async def add_item_to_character(character_id: int, item_id: int, quantity: int) 
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
 
 
+async def add_to_backpack(character_id: int, item_id: int, quantity: int) -> dict:
+    """
+    POST /inventory/internal/characters/{character_id}/backpack/add (FEAT-178)
+    Puts a found consumable straight into the member's camp backpack.
+    409 (no backpack, no room) and 400 (not a consumable) come back with
+    inventory-service's own message — the leader is told why.
+    """
+    url = f"{settings.INVENTORY_SERVICE_URL}/inventory/internal/characters/{character_id}/backpack/add"
+    try:
+        async with _client() as client:
+            resp = await client.post(url, json={"item_id": item_id, "quantity": quantity},
+                                     headers=_internal_token_headers())
+    except httpx.RequestError as e:
+        logger.error("Ошибка соединения с inventory-service (backpack add, character %d): %s", character_id, e)
+        raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
+    if resp.status_code in (400, 404, 409):
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        raise HTTPException(status_code=resp.status_code,
+                            detail=detail if isinstance(detail, str) else "Не удалось положить предмет в рюкзак")
+    if resp.status_code != 200:
+        logger.error("backpack add: inventory-service ответил %d для персонажа %d", resp.status_code, character_id)
+        raise HTTPException(status_code=502, detail="Ошибка при передаче предмета")
+    return resp.json()
+
+
 async def get_character_items(character_id: int) -> list:
     """
     GET /inventory/internal/characters/{character_id}/items (FEAT-171 I1i)

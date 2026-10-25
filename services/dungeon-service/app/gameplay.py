@@ -48,6 +48,7 @@ from models import (
 from schemas import (
     CorridorEventResponse,
     DistributeLootResponse,
+    GiveItemResponse,
     ExploredCorridorInfo,
     SeenDoorInfo,
     ExploredRoomInfo,
@@ -4191,6 +4192,73 @@ async def flee_dungeon(db: AsyncSession, session_id: int, character_id: int) -> 
         message = (f"Группа сбежала из подземелья! Потеряно предметов: {len(items_lost)}, "
                    f"сохранено: {len(items_remaining)}.")
     return FleeResponse(status="escaped", items_lost=items_lost, items_remaining=items_remaining, message=message)
+
+
+CONSUMABLE_TYPE = "consumable"
+
+
+async def give_item(
+    db: AsyncSession, session_id: int, character_id: int, target_character_id: int, item_id: int, quantity: int,
+) -> GiveItemResponse:
+    """FEAT-178: mid-run the leader hands a found consumable to a living member — it goes into
+    their camp backpack (no backpack, no room: refused, the item stays with the party).
+    The group's rows stay locked while inventory-service takes it, so a double click
+    cannot give one potion twice."""
+    session_obj = await _get_session(db, session_id, lock=True)
+    if session_obj.status != STATUS_ACTIVE:
+        raise HTTPException(status_code=400, detail="Передавать находки можно только во время забега")
+    await _require_leader(db, session_obj, character_id, "передавать находки")
+    target = _require_member(session_obj, target_character_id)
+    if target.status != "alive":
+        raise HTTPException(status_code=400, detail="Передать можно только живому участнику")
+    rows = [r for r in await _inventory_rows(db, session_id, lock=True) if r.item_id == item_id]
+    if sum(r.quantity for r in rows) < quantity:
+        raise HTTPException(status_code=409, detail="Столько этого предмета у отряда нет")
+    info = await http_clients.get_item_info(item_id)
+    if info.get("item_type") != CONSUMABLE_TYPE:
+        raise HTTPException(status_code=400, detail="Во время забега передаются только расходники")
+    target_name = await _character_name(target_character_id)
+    try:
+        await http_clients.add_to_backpack(target_character_id, item_id, quantity)
+    except HTTPException as e:
+        # inventory-service speaks to the backpack's owner; the leader is told about them.
+        if e.status_code == 409 and "Наденьте" in str(e.detail):
+            raise HTTPException(status_code=409, detail=f"{target_name}: нет походного рюкзака")
+        if e.status_code == 409 and "нет места" in str(e.detail):
+            raise HTTPException(status_code=409, detail=f"{target_name}: в рюкзаке нет места")
+        raise
+
+    left = quantity
+    for row in rows:
+        if left <= 0:
+            break
+        take = min(row.quantity, left)
+        row.quantity -= take
+        left -= take
+        if row.quantity <= 0:
+            await db.delete(row)
+    _touch(session_obj)
+    await db.commit()
+
+    remaining = await _sync_inventory_cache(db, session_id)
+    name = info.get("name") or f"Предмет #{item_id}"
+    count = f" ×{quantity}" if quantity > 1 else ""
+    await ws_manager.broadcast_to_session(session_id, {
+        "type": "item_given",
+        "data": {"target_character_id": target_character_id, "target_name": target_name, "item_id": item_id,
+                 "item_name": name, "quantity": quantity,
+                 # The run's log picks the message up from the broadcast.
+                 "message": f"{target_name} получает от лидера: {name}{count} — в рюкзак"},
+    })
+    cache: Dict[int, Optional[str]] = {}
+    return GiveItemResponse(
+        message=f"{target_name}: {name}{count} — в рюкзаке",
+        group_inventory=[
+            GroupInventoryItemResponse(item_id=i.item_id, item_name=await _item_name(i.item_id, cache),
+                                       quantity=i.quantity, source_description=i.source_description)
+            for i in remaining
+        ],
+    )
 
 
 async def _require_distributor(db: AsyncSession, session_obj: DungeonSession, character_id: int, action_text: str):
