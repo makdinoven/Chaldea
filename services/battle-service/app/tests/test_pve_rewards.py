@@ -3,7 +3,7 @@ Tests for PvE reward distribution and mob AI auto-registration (Tasks #19, #21).
 
 Covers:
 1. _distribute_pve_rewards:
-   - XP and gold awarded to winner via character-service
+   - XP awarded to winner via character-service; mobs give no gold (gold_reward ignored)
    - Loot table rolled correctly (mocked random for deterministic tests)
    - Items added to winner's inventory
    - Active mob status updated to 'dead'
@@ -201,8 +201,8 @@ class TestDistributePveRewards:
 
     @pytest.mark.asyncio
     @patch("main.httpx.AsyncClient")
-    async def test_xp_and_gold_awarded_to_winner(self, mock_client_cls):
-        """XP and gold from defeated mob are sent to character-service."""
+    async def test_xp_awarded_and_no_gold_from_mobs(self, mock_client_cls):
+        """XP from the defeated mob is sent to character-service; its gold_reward is not paid out."""
         battle_state = _make_battle_state()
         turn_events = []
 
@@ -225,7 +225,7 @@ class TestDistributePveRewards:
 
         assert rewards is not None
         assert rewards.xp == 50
-        assert rewards.gold == 10
+        assert rewards.gold == 0
 
         # Verify add_rewards was called
         post_calls = mock_client.post.call_args_list
@@ -233,6 +233,7 @@ class TestDistributePveRewards:
         # First post call should be add_rewards
         first_post = post_calls[0]
         assert "/add_rewards" in str(first_post)
+        assert first_post.kwargs["json"] == {"xp": 50, "gold": 0}
 
     @pytest.mark.asyncio
     @patch("main.httpx.AsyncClient")
@@ -283,7 +284,7 @@ class TestDistributePveRewards:
 
         assert rewards is not None
         assert rewards.xp == 50
-        assert rewards.gold == 10
+        assert rewards.gold == 0
         assert len(rewards.items) == 0
 
     @pytest.mark.asyncio
@@ -360,7 +361,7 @@ class TestDistributePveRewards:
         reward_events = [e for e in turn_events if e.get("event") == "pve_rewards"]
         assert len(reward_events) == 1
         assert reward_events[0]["xp"] == 50
-        assert reward_events[0]["gold"] == 10
+        assert reward_events[0]["gold"] == 0
 
     @pytest.mark.asyncio
     @patch("main.httpx.AsyncClient")
@@ -426,7 +427,7 @@ class TestDistributePveRewards:
 
         assert rewards is not None
         assert rewards.xp == 150  # 50 + 100
-        assert rewards.gold == 40  # 10 + 30
+        assert rewards.gold == 0  # mobs give no gold
 
     @pytest.mark.asyncio
     @patch("main.httpx.AsyncClient")

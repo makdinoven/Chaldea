@@ -403,7 +403,8 @@ async def _distribute_pve_rewards(
 
     for mob_char_id, reward_data in defeated_mob_char_ids:
         total_xp += reward_data.get("xp_reward", 0)
-        total_gold += reward_data.get("gold_reward", 0)
+        # Mobs give no gold (2026-10-25, game design): gold comes from events, chests and trade.
+        # The template's `gold_reward` is kept in the DB but no longer paid out.
 
         # Roll loot table
         for loot_entry in reward_data.get("loot_table", []):

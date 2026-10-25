@@ -1571,6 +1571,29 @@ async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
 # Mob Template CRUD
 # ============================================================
 
+# Default XP of a mob by level and tier (2026-10-25): a normal mob of level L gives
+# MOB_XP_BASE + MOB_XP_PER_LEVEL x L, an elite three times that, a boss ten times.
+# Fitted to the first hand-filled templates; only fills templates still at 0.
+MOB_XP_BASE = 20
+MOB_XP_PER_LEVEL = 6
+MOB_XP_TIER_FACTOR = {"normal": 1, "elite": 3, "boss": 10}
+
+
+def default_mob_xp(level: int, tier: str) -> int:
+    tier = getattr(tier, "value", tier)
+    return (MOB_XP_BASE + MOB_XP_PER_LEVEL * max(1, level or 1)) * MOB_XP_TIER_FACTOR.get(tier, 1)
+
+
+def fill_mob_xp(db: Session, dry_run: bool = False) -> int:
+    """Give every template with no XP the default for its level and tier. Returns how many."""
+    empty = db.query(MobTemplate).filter((MobTemplate.xp_reward == 0) | (MobTemplate.xp_reward.is_(None))).all()
+    if not dry_run:
+        for template in empty:
+            template.xp_reward = default_mob_xp(template.level, template.tier)
+        db.commit()
+    return len(empty)
+
+
 def get_mob_templates(
     db: Session,
     q: str = "",

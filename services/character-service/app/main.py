@@ -3087,6 +3087,23 @@ def admin_list_mob_templates(
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
+@router.post("/admin/mob-templates/fill-xp")
+def admin_fill_mob_xp(
+    dry_run: bool = Query(False, description="Только посчитать, сколько шаблонов будет заполнено"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Опыт по формуле всем шаблонам, у которых он 0: обычный моб 20 + 6 x уровень,
+    элитный x3, босс x10. Заполненные вручную не трогаются."""
+    try:
+        count = crud.fill_mob_xp(db, dry_run=dry_run)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при заполнении опыта мобов: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось заполнить опыт мобов")
+    return {"count": count, "dry_run": dry_run}
+
+
 @router.post("/admin/mob-templates", status_code=201)
 def admin_create_mob_template(
     data: schemas.MobTemplateCreate,

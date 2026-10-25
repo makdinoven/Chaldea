@@ -453,7 +453,7 @@ class TestPveRewardDistribution:
             "character-service answers 401 and the PvE XP/gold is lost with "
             "only a log line"
         )
-        assert kwargs["json"] == {"xp": 50, "gold": 10}
+        assert kwargs["json"] == {"xp": 50, "gold": 0}  # mobs give no gold
 
     @pytest.mark.asyncio
     async def test_party_xp_bonus_sends_the_internal_token(

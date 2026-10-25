@@ -769,3 +769,53 @@ class TestMobTemplateSQLInjection:
             params={"tier": "normal' OR '1'='1"},
         )
         assert resp.status_code in (200, 400)
+
+
+# ============================================================
+# Fill XP by the formula (2026-10-25)
+# ============================================================
+
+
+class TestFillMobXp:
+    """POST /characters/admin/mob-templates/fill-xp — XP for templates still at 0."""
+
+    def test_formula(self):
+        import crud
+        assert crud.default_mob_xp(5, "normal") == 50
+        assert crud.default_mob_xp(20, "normal") == 140
+        assert crud.default_mob_xp(20, "elite") == 420
+        assert crud.default_mob_xp(20, "boss") == 1400
+        assert crud.default_mob_xp(0, "normal") == 26  # a level below 1 counts as 1
+
+    def test_dry_run_counts_without_writing(self, mob_client, _create_template, db_session):
+        empty = _create_template(name="Пустой", level=10)
+        _create_template(name="Ручной", level=10, xp_reward=77)
+        resp = mob_client.post("/characters/admin/mob-templates/fill-xp", params={"dry_run": True})
+        assert resp.status_code == 200
+        assert resp.json() == {"count": 1, "dry_run": True}
+        db_session.refresh(empty)
+        assert empty.xp_reward == 0
+
+    def test_fills_only_empty_templates(self, mob_client, _create_template, db_session):
+        normal = _create_template(name="Волк", level=5)
+        elite = _create_template(name="Вожак", level=10, tier="elite")
+        boss = _create_template(name="Владыка", level=20, tier="boss")
+        manual = _create_template(name="Ручной", level=30, xp_reward=77)
+        resp = mob_client.post("/characters/admin/mob-templates/fill-xp")
+        assert resp.status_code == 200
+        assert resp.json() == {"count": 3, "dry_run": False}
+        for t in (normal, elite, boss, manual):
+            db_session.refresh(t)
+        assert (normal.xp_reward, elite.xp_reward, boss.xp_reward, manual.xp_reward) == (50, 240, 1400, 77)
+        # A second press finds nothing left to fill.
+        assert mob_client.post("/characters/admin/mob-templates/fill-xp").json()["count"] == 0
+
+    def test_needs_the_mobs_permission(self, db_session):
+        def override_get_db():
+            yield db_session
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            resp = TestClient(app).post("/characters/admin/mob-templates/fill-xp")
+            assert resp.status_code in (401, 403)
+        finally:
+            app.dependency_overrides.clear()
