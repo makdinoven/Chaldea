@@ -142,6 +142,8 @@ export interface CharacterProfile {
     next_level?: number | null;
     /** No threshold above: the table's last level is reached. */
     max_level?: boolean;
+    /** All the experience ever earned. */
+    total_exp?: number;
   };
   attributes?: {
     current_health: number;

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useAppSelector } from '../../../redux/store';
 import {
   selectAttributes,
@@ -32,6 +33,7 @@ const getRarityColorClass = (rarity?: string | null): string => {
  * fast slots 5×2.
  */
 const CharacterPanel = () => {
+  const [showTotalXp, setShowTotalXp] = useState(false);
   const profile = useAppSelector(selectProfile);
   const raceInfo = useAppSelector(selectRaceInfo);
   const raceNamesMap = useAppSelector(selectRaceNamesMap);
@@ -88,11 +90,19 @@ const CharacterPanel = () => {
                 <span className="gold-text text-xs font-medium uppercase tracking-[0.06em]">
                   Опыт
                 </span>
-                <span className="text-white/85 text-sm">
-                  {profile.level_progress?.max_level
-                    ? 'Последний уровень'
-                    : `${fmtXp(profile.level_progress?.current_exp_in_level)} / ${fmtXp(profile.level_progress?.exp_for_level)}`}
-                </span>
+                {/* What is left to the next level; a click shows all the experience ever earned. */}
+                <button
+                  type="button"
+                  onClick={() => setShowTotalXp((v) => !v)}
+                  title={showTotalXp ? 'Показать, сколько до уровня' : 'Показать весь заработанный опыт'}
+                  className="text-white/85 text-sm hover:text-white transition-colors"
+                >
+                  {showTotalXp
+                    ? `Всего: ${fmtXp(profile.level_progress?.total_exp)}`
+                    : profile.level_progress?.max_level
+                      ? 'Последний уровень'
+                      : `до ${profile.level_progress?.next_level}-го — ${fmtXp(profile.level_progress?.exp_to_next_level)}`}
+                </button>
               </div>
               <div className="stat-bar">
                 <div
@@ -103,11 +113,6 @@ const CharacterPanel = () => {
                   }}
                 />
               </div>
-              {profile.level_progress?.next_level && !profile.level_progress.max_level && (
-                <span className="text-white/45 text-[11px] text-right -mt-1.5">
-                  до {profile.level_progress.next_level}-го уровня — {fmtXp(profile.level_progress.exp_to_next_level)}
-                </span>
-              )}
               <div className="flex items-center justify-center gap-2 mt-0.5">
                 <span className="gold-text text-xs font-medium uppercase tracking-[0.05em]">
                   Очки прокачки
