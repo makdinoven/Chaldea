@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type {
   ChallengeResult,
@@ -100,13 +100,31 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
   const [sending, setSending] = useState(false);
   const sent = useRef(false);
   const latestPresses = useRef<number[]>([]);
+  const key = challenge?.challenge_id ?? '';
+  // The game the window is showing now. A closed game stays mounted while the window fades out
+  // (much longer in a background tab or on a slow device) and its timer may still run out:
+  // whatever it reports then belongs to no one and must not reach the next game's window.
+  const shownKey = useRef('');
 
+  useEffect(() => {
+    if (!key) return;
+    shownKey.current = key;
+    sent.current = false;
+    latestPresses.current = [];
+    setResult(null);
+    setSending(false);
+  }, [key]);
+
+  /** A one-go game over. `game` is the game that reports it: a closed game's late report (its
+   * ending holds the verdict back a moment) is someone else's business and is dropped. */
   const settle = useCallback(
-    async (presses: number[], outcome?: string) => {
-      if (sent.current) return;
+    async (presses: number[], outcome: string | undefined, game: string) => {
+      if (sent.current || game !== shownKey.current) return;
       sent.current = true;
+      const playing = game;
       setSending(true);
       const verdict = await onFinish(presses, outcome);
+      if (shownKey.current !== playing) return; // closed while the verdict was on its way
       setSending(false);
       if (!verdict) {
         // The server could not settle it (the error is already shown): nothing left to play.
@@ -123,11 +141,14 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
   const step = useCallback(
     async (move: { x?: number; y?: number; index?: number }) => {
       if (!onStep) return null;
+      const playing = shownKey.current;
       const answer = await onStep(move);
-      if (answer?.result) {
+      if (answer?.result && shownKey.current === playing) {
         sent.current = true;
         // Let the last stone show (in 3D, the end play out) before the outcome covers the game.
-        setTimeout(() => setResult(answer.result ?? null), shows3D ? OUTCOME_HOLD_MS : STEP_HOLD_MS);
+        setTimeout(() => {
+          if (shownKey.current === playing) setResult(answer.result ?? null);
+        }, shows3D ? OUTCOME_HOLD_MS : STEP_HOLD_MS);
       }
       return answer;
     },
@@ -137,7 +158,9 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
   const close = () => {
     // Walking away mid-game: give up with what has been done (the window is gone; nothing to show).
     if (!sent.current) void onFinish(latestPresses.current);
-    sent.current = false;
+    // The game is over for good: its late timer must not settle it a second time.
+    sent.current = true;
+    shownKey.current = '';
     latestPresses.current = [];
     setResult(null);
     setSending(false);
@@ -145,7 +168,6 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
   };
 
   const params = challenge?.params;
-  const key = challenge?.challenge_id ?? '';
   const remember = (presses: number[]) => {
     latestPresses.current = presses;
   };
@@ -160,7 +182,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
               key={key}
               params={params as LockpickParams}
               offClass={challenge.off_class}
-              onDone={(presses, outcome) => void settle(presses, outcome)}
+              onDone={(presses, outcome) => void settle(presses, outcome, key)}
               onPress={remember}
             />
           </Suspense>
@@ -169,7 +191,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
             key={key}
             params={params as LockpickParams}
             offClass={challenge.off_class}
-            onDone={(presses, outcome) => void settle(presses, outcome)}
+            onDone={(presses, outcome) => void settle(presses, outcome, key)}
             onPress={remember}
           />
         );
@@ -180,7 +202,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
               key={key}
               params={params as RunesParams}
               offClass={challenge.off_class}
-              onDone={(inputs, outcome) => void settle(inputs, outcome)}
+              onDone={(inputs, outcome) => void settle(inputs, outcome, key)}
               onPress={remember}
             />
           </Suspense>
@@ -189,7 +211,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
             key={key}
             params={params as RunesParams}
             offClass={challenge.off_class}
-            onDone={(inputs, outcome) => void settle(inputs, outcome)}
+            onDone={(inputs, outcome) => void settle(inputs, outcome, key)}
             onPress={remember}
           />
         );
@@ -200,7 +222,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
               key={key}
               params={params as ShieldParams}
               offClass={challenge.off_class}
-              onDone={(presses, outcome) => void settle(presses, outcome)}
+              onDone={(presses, outcome) => void settle(presses, outcome, key)}
               onPress={remember}
             />
           </Suspense>
@@ -209,7 +231,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
             key={key}
             params={params as ShieldParams}
             offClass={challenge.off_class}
-            onDone={(presses, outcome) => void settle(presses, outcome)}
+            onDone={(presses, outcome) => void settle(presses, outcome, key)}
             onPress={remember}
           />
         );
@@ -220,7 +242,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
               key={key}
               params={params as GateParams}
               offClass={challenge.off_class}
-              onDone={(toggles, outcome) => void settle(toggles, outcome)}
+              onDone={(toggles, outcome) => void settle(toggles, outcome, key)}
               onPress={remember}
             />
           </Suspense>
@@ -229,7 +251,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
             key={key}
             params={params as GateParams}
             offClass={challenge.off_class}
-            onDone={(toggles, outcome) => void settle(toggles, outcome)}
+            onDone={(toggles, outcome) => void settle(toggles, outcome, key)}
             onPress={remember}
           />
         );
@@ -256,7 +278,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
               key={key}
               params={params as ShadowParams}
               offClass={challenge.off_class}
-              onDone={(steps, outcome) => void settle(steps, outcome)}
+              onDone={(steps, outcome) => void settle(steps, outcome, key)}
               onPress={remember}
             />
           </Suspense>
@@ -265,7 +287,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
             key={key}
             params={params as ShadowParams}
             offClass={challenge.off_class}
-            onDone={(steps, outcome) => void settle(steps, outcome)}
+            onDone={(steps, outcome) => void settle(steps, outcome, key)}
             onPress={remember}
           />
         );
@@ -284,7 +306,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
               key={key}
               params={params as StarsParams}
               offClass={challenge.off_class}
-              onDone={(turns, outcome) => void settle(turns, outcome)}
+              onDone={(turns, outcome) => void settle(turns, outcome, key)}
               onPress={remember}
             />
           </Suspense>
@@ -293,7 +315,7 @@ const ChallengeModal = ({ challenge, onFinish, onStep, onClose, use3D = false }:
             key={key}
             params={params as StarsParams}
             offClass={challenge.off_class}
-            onDone={(turns, outcome) => void settle(turns, outcome)}
+            onDone={(turns, outcome) => void settle(turns, outcome, key)}
             onPress={remember}
           />
         );
