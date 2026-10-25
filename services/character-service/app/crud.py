@@ -1585,6 +1585,24 @@ def default_mob_xp(level: int, tier: str) -> int:
     return (MOB_XP_BASE + MOB_XP_PER_LEVEL * max(1, level or 1)) * MOB_XP_TIER_FACTOR.get(tier, 1)
 
 
+def raise_xp_to_level_thresholds(db: Session) -> int:
+    """Every player whose experience is below the threshold of the level they hold (a level set
+    by hand, or a table made steeper) gets exactly that threshold, so their bar starts at 0 of the
+    level instead of far below it. `character_attributes` belongs to attributes-service; it is
+    written here directly, as add_rewards already does. Does not commit. Returns how many."""
+    from sqlalchemy import text as sa_text
+    threshold = (
+        "(SELECT lt.required_experience FROM characters c "
+        "JOIN level_thresholds lt ON lt.level_number = c.level "
+        "WHERE c.id = character_attributes.character_id AND c.is_npc = 0)"
+    )
+    result = db.execute(sa_text(
+        f"UPDATE character_attributes SET passive_experience = {threshold} "
+        f"WHERE passive_experience < {threshold}"
+    ))
+    return result.rowcount or 0
+
+
 def fill_mob_xp(db: Session, dry_run: bool = False) -> int:
     """Give every template with no XP the default for its level and tier. Returns how many."""
     empty = db.query(MobTemplate).filter((MobTemplate.xp_reward == 0) | (MobTemplate.xp_reward.is_(None))).all()

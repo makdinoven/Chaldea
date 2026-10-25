@@ -1997,32 +1997,12 @@ async def _build_full_profile(character_id: int, db: Session) -> schemas.FullPro
     current_threshold = db.query(models.LevelThreshold).filter(models.LevelThreshold.level_number == current_level).first()
     next_level = current_level + 1
     next_threshold = db.query(models.LevelThreshold).filter(models.LevelThreshold.level_number == next_level).first()
-
-    if current_threshold:
-        prev_required_exp = current_threshold.required_experience
-    else:
-        # Если это первый уровень, порог предыдущего уровня можно считать 0
-        prev_required_exp = 0
-
-    if next_threshold:
-        required_exp_for_next = next_threshold.required_experience
-    else:
-        # Если уровень макс. или не задан, считаем очень большое число, чтобы шкала была почти пустой
-        required_exp_for_next = passive_experience + 999999
-
-    # Текущий прогресс для шкалы уровня
-    # Опыт, набранный после предыдущего уровня:
-    current_level_exp = passive_experience - prev_required_exp
-    # Сколько осталось до следующего уровня
-    experience_to_next = required_exp_for_next - passive_experience
-    if experience_to_next < 0:
-        experience_to_next = 0
-
-    # Рассчитываем заполненность шкалы уровня (0.0 до 1.0)
-    if (required_exp_for_next - prev_required_exp) > 0:
-        level_progress_fraction = current_level_exp / (required_exp_for_next - prev_required_exp)
-    else:
-        level_progress_fraction = 1.0
+    progress = level_progress(
+        passive_experience,
+        current_threshold.required_experience if current_threshold else 0,
+        next_threshold.required_experience if next_threshold else None,
+        next_level,
+    )
 
     # Получаем текущий активный титул (если есть)
     active_title_name = character.current_title.name if character.current_title else None
@@ -2034,11 +2014,7 @@ async def _build_full_profile(character_id: int, db: Session) -> schemas.FullPro
         currency_balance=character.currency_balance,
         level=current_level,
         stat_points=character.stat_points,
-        level_progress=schemas.LevelProgress(
-            current_exp_in_level=current_level_exp,
-            exp_to_next_level=experience_to_next,
-            progress_fraction=min(level_progress_fraction, 1.0)  # ограничиваем до 1.0
-        ),
+        level_progress=progress,
         attributes={
             "health": {
                 "current": attr_data["current_health"],
@@ -2060,6 +2036,24 @@ async def _build_full_profile(character_id: int, db: Session) -> schemas.FullPro
         active_title=active_title_name,
         active_title_rarity=active_title_rarity,
         avatar=character.avatar
+    )
+
+
+def level_progress(total_xp: int, level_xp: int, next_xp: Optional[int], next_level: int) -> schemas.LevelProgress:
+    """The profile's experience bar. Thresholds are TOTAL experience: `level_xp` for the current
+    level, `next_xp` for the next (None past the table's last level). Earned-in-level never goes
+    below 0 — a level set by hand may sit above the character's experience."""
+    if next_xp is None:
+        return schemas.LevelProgress(current_exp_in_level=0, exp_to_next_level=0, progress_fraction=1.0,
+                                     exp_for_level=0, next_level=None, max_level=True)
+    step = max(1, next_xp - level_xp)
+    earned = min(max(0, total_xp - level_xp), step)
+    return schemas.LevelProgress(
+        current_exp_in_level=earned,
+        exp_to_next_level=max(0, next_xp - total_xp),
+        progress_fraction=round(earned / step, 4),
+        exp_for_level=step,
+        next_level=next_level,
     )
 
 
@@ -3096,23 +3090,29 @@ def admin_list_level_thresholds(
     return db.query(models.LevelThreshold).order_by(models.LevelThreshold.level_number).all()
 
 
-@router.put("/admin/levels/thresholds", response_model=List[schemas.LevelThresholdItem])
+@router.put("/admin/levels/thresholds", response_model=schemas.LevelThresholdsSaved)
 def admin_save_level_thresholds(
     data: schemas.LevelThresholdsUpdate,
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("characters:update")),
 ):
-    """Заменить таблицу уровней целиком. Уже набранные уровни у персонажей не отнимаются."""
+    """Заменить таблицу уровней целиком. Уже набранные уровни у персонажей не отнимаются, а их опыт,
+    если он ниже порога их уровня, подтягивается до этого порога."""
     try:
         db.query(models.LevelThreshold).delete(synchronize_session=False)
         for t in data.thresholds:
             db.add(models.LevelThreshold(level_number=t.level_number, required_experience=t.required_experience))
+        db.flush()
+        raised = crud.raise_xp_to_level_thresholds(db)
         db.commit()
     except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Ошибка при сохранении таблицы уровней: {e}")
         raise HTTPException(status_code=500, detail="Не удалось сохранить таблицу уровней")
-    return db.query(models.LevelThreshold).order_by(models.LevelThreshold.level_number).all()
+    return schemas.LevelThresholdsSaved(
+        thresholds=db.query(models.LevelThreshold).order_by(models.LevelThreshold.level_number).all(),
+        raised=raised,
+    )
 
 
 @router.post("/admin/mob-templates/fill-xp")

@@ -372,9 +372,15 @@ class TitleGrantRequest(BaseModel):
 
 
 class LevelProgress(BaseModel):
+    # Earned within the current level (never below 0) and the experience left to the next one.
     current_exp_in_level: int
     exp_to_next_level: int
     progress_fraction: float
+    # The whole step from this level to the next (the bar's 100%); 0 past the table's last level.
+    exp_for_level: int = 0
+    next_level: Optional[int] = None
+    # No threshold above this level: the table's last level is reached.
+    max_level: bool = False
 
 class Attribute(BaseModel):
     current: int
@@ -1543,6 +1549,12 @@ class LevelThresholdItem(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class LevelThresholdsSaved(BaseModel):
+    thresholds: List[LevelThresholdItem]
+    # Players whose experience was raised to the threshold of the level they hold.
+    raised: int = 0
 
 
 class LevelThresholdsUpdate(BaseModel):

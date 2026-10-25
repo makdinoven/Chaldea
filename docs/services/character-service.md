@@ -34,7 +34,10 @@ character-service/app/
 **Уровни (2026-10-25).** `level_thresholds.required_experience` — опыт ВСЕГО для уровня (со 2-го); подъём уровня
 (`crud.check_and_update_level`) сравнивает с ним суммарный пассивный опыт, несколько уровней за раз. Админка
 «Уровни и опыт» (`/admin/levels`): `GET/PUT /characters/admin/levels/thresholds` (`characters:read` / `characters:update`),
-PUT заменяет таблицу целиком (уровни подряд со 2-го, опыт строго растёт). Набранные уровни не отнимаются.
+PUT заменяет таблицу целиком (уровни подряд со 2-го, опыт строго растёт). Набранные уровни не отнимаются; игрокам, у
+кого опыт ниже порога их уровня, он подтягивается до порога (`crud.raise_xp_to_level_thresholds`, пишет в
+`character_attributes`). Полоска профиля (`main.level_progress`): набрано в уровне (не меньше 0) / шаг уровня,
+`exp_to_next_level` — осталось, `max_level` — выше таблицы.
 
 **Награды мобов (2026-10-25).** Мобы дают только опыт: `gold_reward` в `mob_templates` остаётся, но battle-service его
 больше не выплачивает, а из админки поле убрано. `POST /characters/admin/mob-templates/fill-xp[?dry_run=true]`

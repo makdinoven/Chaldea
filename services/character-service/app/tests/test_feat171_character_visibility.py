@@ -267,7 +267,8 @@ class TestFullProfile:
         assert body["currency_balance"] == 777
         assert body["stat_points"] == 5
         assert set(body["level_progress"]) == {
-            "current_exp_in_level", "exp_to_next_level", "progress_fraction"
+            "current_exp_in_level", "exp_to_next_level", "progress_fraction",
+            "exp_for_level", "next_level", "max_level",  # the bar's whole step (2026-10-25)
         }
         assert set(body["attributes"]) == {"health", "mana", "energy", "stamina"}
         assert body["attributes"]["health"] == {"current": 80, "max": 100}
