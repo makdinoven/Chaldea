@@ -76,6 +76,8 @@ import AdminDungeonForm from "../Admin/DungeonsPage/AdminDungeonForm";
 import AdminDungeonDetail from "../Admin/DungeonsPage/AdminDungeonDetail";
 
 import AdminDungeonSessions from "../Admin/DungeonsPage/AdminDungeonSessions";
+import DungeonBoardSketchPage from "../DungeonBoard3D/DungeonBoardSketchPage";
+import AdminMinigamesPage from "../Admin/DungeonsPage/AdminMinigamesPage";
 import DungeonSessionPage from "../DungeonPage/DungeonSessionPage";
 
 const App = () => {
@@ -323,6 +325,16 @@ const App = () => {
               </ProtectedRoute>
             } />
 
+            <Route path="admin/dungeons/minigames" element={
+              <ProtectedRoute requiredPermission="dungeons:view">
+                <AdminMinigamesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/dungeons/board-sketch" element={
+              <ProtectedRoute requiredPermission="dungeons:view">
+                <DungeonBoardSketchPage />
+              </ProtectedRoute>
+            } />
             <Route path="admin/dungeons/sessions" element={
               <ProtectedRoute requiredPermission="dungeons:view">
                 <AdminDungeonSessions />

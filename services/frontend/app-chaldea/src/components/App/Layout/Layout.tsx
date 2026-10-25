@@ -9,6 +9,7 @@ import { selectSiteBackgroundUrl } from '../../../redux/slices/userSlice';
 import { fetchNotificationPreferences } from '../../../redux/slices/notificationSlice';
 import ChatWidget from '../../Chat/ChatWidget';
 import ConnectionStatus from '../../common/ConnectionStatus';
+import ActivityLockBanner from '../../CommonComponents/ActivityLockBanner';
 
 const Layout = () => {
   const { connected } = useWebSocket();
@@ -51,6 +52,7 @@ const Layout = () => {
     <>
       <Header />
       <div className="relative z-0 max-w-container mx-auto px-5 mb-[100px]">
+        {userId !== null && <ActivityLockBanner />}
         <Outlet />
       </div>
       <Footer />

@@ -6,29 +6,20 @@ import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   fetchDungeonsAtLocation,
   createSession,
-  inviteMember,
-  leaveSession,
-  enterDungeon,
+  partyRunThunk,
   clearDungeonsAtLocation,
   selectDungeonsAtLocation,
   selectDungeonsLoading,
-  selectCurrentSession,
+  selectDungeonsError,
   selectSessionLoading,
-  updateSessionFromWs,
-  updateSessionMembers,
 } from '../../redux/slices/dungeonSlice';
-import type { DungeonAtLocation, SessionState, SessionCreateResponse } from '../../api/dungeons';
-import { checkActiveSession, partyRunDungeon } from '../../api/dungeons';
+import type { DungeonAtLocation } from '../../api/dungeons';
+import { checkActiveSession } from '../../api/dungeons';
 import { getMyParty, type Party } from '../../api/squads';
-import type { Player } from '../pages/LocationPage/types';
-import type { DungeonWsMessage } from '../../hooks/useDungeonWebSocket';
-import useDungeonWebSocket from '../../hooks/useDungeonWebSocket';
-import DungeonPartyPanel from './DungeonPartyPanel';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 interface DungeonEntranceProps {
   locationId: number;
-  players: Player[];
   currentCharacterId: number | null;
 }
 
@@ -60,78 +51,65 @@ const formatCooldown = (seconds: number): string => {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 };
 
-const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEntranceProps) => {
+interface MyRun {
+  sessionId: number | null;
+  pendingLootSessionId: number | null;
+}
+
+const DungeonEntrance = ({ locationId, currentCharacterId }: DungeonEntranceProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
 
   const dungeons = useAppSelector(selectDungeonsAtLocation);
   const loading = useAppSelector(selectDungeonsLoading);
-  const currentSession = useAppSelector(selectCurrentSession);
+  const listError = useAppSelector(selectDungeonsError);
   const sessionLoading = useAppSelector(selectSessionLoading);
 
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [activeDungeonId, setActiveDungeonId] = useState<number | null>(null);
+  // The character's own run: in progress, or finished with loot to share.
+  const [myRun, setMyRun] = useState<MyRun>({ sessionId: null, pendingLootSessionId: null });
+  const [myRunError, setMyRunError] = useState<string | null>(null);
 
-  // Active session check (for "Return to dungeon" button)
-  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
-
-  // Confirmation modals state
-  const [soloConfirmDungeonId, setSoloConfirmDungeonId] = useState<number | null>(null);
-  const [groupConfirmDungeonId, setGroupConfirmDungeonId] = useState<number | null>(null);
-  const [enterConfirm, setEnterConfirm] = useState(false);
+  // Entry modal + the last entry error per dungeon (shown inline on the card)
+  const [entryDungeonId, setEntryDungeonId] = useState<number | null>(null);
+  const [entryErrors, setEntryErrors] = useState<Record<number, string>>({});
 
   // Cooldown timers
   const [cooldowns, setCooldowns] = useState<Record<number, number>>({});
   const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // WebSocket
-  const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
-  const { lastMessage } = useDungeonWebSocket(
-    currentSession?.session_id ?? null,
-    token,
-  );
+  // Squad (party-service): the leader enters with squadmates on this location
+  const [party, setParty] = useState<Party | null>(null);
 
-  // Handle WS messages
-  useEffect(() => {
-    if (!lastMessage) return;
-
-    const msg = lastMessage as DungeonWsMessage;
-
-    switch (msg.type) {
-      case 'session_update':
-        if (msg.data && typeof msg.data === 'object' && 'session_id' in msg.data) {
-          dispatch(updateSessionMembers(msg.data as unknown as SessionCreateResponse));
-        }
-        break;
-      case 'session_status':
-        if (msg.data && 'status' in msg.data) {
-          const status = msg.data.status as string;
-          if (status === 'active' && 'session_state' in msg.data) {
-            dispatch(updateSessionFromWs(msg.data.session_state as SessionState));
-          }
-        }
-        break;
-      case 'leader_changed':
-        toast('Лидер группы изменён');
-        break;
-      default:
-        break;
-    }
-  }, [lastMessage, dispatch]);
-
-  // Check if character has an active dungeon session
   useEffect(() => {
     if (!currentCharacterId) return;
+    let cancelled = false;
     checkActiveSession(currentCharacterId)
       .then((result) => {
-        if (result.in_dungeon && result.session_id) {
-          setActiveSessionId(result.session_id);
-        } else {
-          setActiveSessionId(null);
-        }
+        if (cancelled) return;
+        setMyRunError(null);
+        setMyRun({
+          sessionId: result.in_dungeon ? result.session_id : null,
+          pendingLootSessionId: result.pending_loot_session_id ?? null,
+        });
       })
       .catch(() => {
-        setActiveSessionId(null);
+        if (!cancelled) setMyRunError('Не удалось проверить, есть ли у персонажа незавершённый забег');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentCharacterId]);
+
+  useEffect(() => {
+    if (!currentCharacterId) {
+      setParty(null);
+      return;
+    }
+    getMyParty(currentCharacterId)
+      .then(setParty)
+      .catch(() => {
+        setParty(null);
+        toast.error('Не удалось загрузить данные отряда');
       });
   }, [currentCharacterId]);
 
@@ -188,17 +166,22 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
     };
   }, [cooldowns]);
 
-  // Handlers
-  const handleCreateSession = useCallback(
-    (dungeonId: number) => {
-      if (!currentCharacterId) {
-        toast.error('Выберите персонажа');
-        return;
-      }
-      setActiveDungeonId(dungeonId);
-      dispatch(createSession({ dungeonId, characterId: currentCharacterId }));
+  const coLocatedMates = (party?.members ?? []).filter(
+    (m) =>
+      m.status === 'accepted' &&
+      m.character_id !== currentCharacterId &&
+      m.current_location_id === locationId,
+  );
+  const isSquadLeader = !!party && party.leader_character_id === currentCharacterId;
+  const canPartyRun = isSquadLeader && coLocatedMates.length >= 1;
+
+  const onEntryFailed = useCallback(
+    (dungeonId: number, message: string) => {
+      setEntryErrors((prev) => ({ ...prev, [dungeonId]: message }));
+      // Occupancy / cooldown may have changed under us.
+      dispatch(fetchDungeonsAtLocation(locationId));
     },
-    [dispatch, currentCharacterId],
+    [dispatch, locationId],
   );
 
   const handleSoloEntry = useCallback(
@@ -207,43 +190,14 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
         toast.error('Выберите персонажа');
         return;
       }
+      setEntryErrors((prev) => ({ ...prev, [dungeonId]: '' }));
       dispatch(createSession({ dungeonId, characterId: currentCharacterId }))
         .unwrap()
-        .then((session) => {
-          return dispatch(enterDungeon({ sessionId: session.session_id, characterId: currentCharacterId }))
-            .unwrap()
-            .then(() => {
-              navigate(`/dungeon-session/${session.session_id}`);
-            });
-        })
-        .catch(() => {
-          // Errors already shown via toast in thunks
-        });
+        .then((session) => navigate(`/dungeon-session/${session.session_id}`))
+        .catch((message: string) => onEntryFailed(dungeonId, message));
     },
-    [dispatch, currentCharacterId, navigate],
+    [dispatch, currentCharacterId, navigate, onEntryFailed],
   );
-
-  // Dungeon-from-party (FEAT-144 Ф3-3): a leader with co-located squadmates
-  // starts the run with the whole squad in one step (no invite phase).
-  const [party, setParty] = useState<Party | null>(null);
-  const [partyRunLoading, setPartyRunLoading] = useState(false);
-
-  useEffect(() => {
-    if (!currentCharacterId) {
-      setParty(null);
-      return;
-    }
-    getMyParty(currentCharacterId).then(setParty).catch(() => setParty(null));
-  }, [currentCharacterId]);
-
-  const coLocatedMates = (party?.members ?? []).filter(
-    (m) =>
-      m.status === 'accepted' &&
-      m.character_id !== currentCharacterId &&
-      m.current_location_id === locationId,
-  );
-  const canPartyRun =
-    !!party && party.leader_character_id === currentCharacterId && coLocatedMates.length >= 1;
 
   const handlePartyRun = useCallback(
     (dungeonId: number) => {
@@ -251,61 +205,16 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
         toast.error('Выберите персонажа');
         return;
       }
-      setPartyRunLoading(true);
-      partyRunDungeon(dungeonId, currentCharacterId)
-        .then((res) => navigate(`/dungeon-session/${res.session_id}`))
-        .catch((e) =>
-          toast.error(e instanceof Error ? e.message : 'Не удалось зайти отрядом'),
-        )
-        .finally(() => setPartyRunLoading(false));
+      setEntryErrors((prev) => ({ ...prev, [dungeonId]: '' }));
+      dispatch(partyRunThunk({ dungeonId, characterId: currentCharacterId }))
+        .unwrap()
+        .then((state) => navigate(`/dungeon-session/${state.session_id}`))
+        .catch((message: string) => onEntryFailed(dungeonId, message));
     },
-    [currentCharacterId, navigate],
+    [dispatch, currentCharacterId, navigate, onEntryFailed],
   );
 
-  const handleInvite = useCallback(
-    (targetCharacterId: number) => {
-      if (!currentSession) return;
-      dispatch(inviteMember({ sessionId: currentSession.session_id, characterId: targetCharacterId }));
-      setShowInviteModal(false);
-    },
-    [dispatch, currentSession],
-  );
-
-  const handleLeave = useCallback(() => {
-    if (!currentSession || !currentCharacterId) return;
-    dispatch(leaveSession({ sessionId: currentSession.session_id, characterId: currentCharacterId }));
-  }, [dispatch, currentSession, currentCharacterId]);
-
-  const handleEnter = useCallback(() => {
-    if (!currentSession || !currentCharacterId) return;
-    setEnterConfirm(true);
-  }, [currentSession, currentCharacterId]);
-
-  const handleEnterConfirmed = useCallback(() => {
-    if (!currentSession || !currentCharacterId) return;
-    setEnterConfirm(false);
-    dispatch(enterDungeon({ sessionId: currentSession.session_id, characterId: currentCharacterId }))
-      .unwrap()
-      .then(() => {
-        navigate(`/dungeon-session/${currentSession.session_id}`);
-      })
-      .catch(() => {
-        // Error already shown via toast in thunk
-      });
-  }, [dispatch, currentSession, currentCharacterId, navigate]);
-
-  // Characters available for invite (at this location, not in party)
-  const invitablePlayers = players.filter(
-    (p) =>
-      p.id !== currentCharacterId &&
-      !currentSession?.members.some((m) => m.character_id === p.id),
-  );
-
-  const isLeader = currentSession?.members.some(
-    (m) => m.character_id === currentCharacterId && m.is_leader,
-  ) ?? false;
-
-  if (loading) {
+  if (loading && dungeons.length === 0) {
     return (
       <div className="flex items-center justify-center py-6">
         <div className="w-6 h-6 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
@@ -313,9 +222,25 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
     );
   }
 
+  if (listError && dungeons.length === 0) {
+    return (
+      <div className="bg-site-bg backdrop-blur-sm rounded-card border border-site-red/30 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+        <p className="text-site-red text-sm flex-1">{listError}</p>
+        <button
+          onClick={() => dispatch(fetchDungeonsAtLocation(locationId))}
+          className="btn-line text-sm px-4 py-1.5 self-start sm:self-auto"
+        >
+          Повторить
+        </button>
+      </div>
+    );
+  }
+
   if (dungeons.length === 0) {
     return null;
   }
+
+  const entryDungeon = dungeons.find((d) => d.id === entryDungeonId) ?? null;
 
   return (
     <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden">
@@ -335,184 +260,102 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
       </div>
 
       <div className="flex flex-col gap-3 px-3 sm:px-4 py-4">
+        {myRunError && (
+          <p className="text-site-red text-xs">{myRunError}</p>
+        )}
+
+        {/* An ended run with undivided loot (completed or escaped) */}
+        {myRun.pendingLootSessionId && !myRun.sessionId && (
+          <div className="rounded-card border border-gold-dark/30 bg-gold/5 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2">
+            <p className="text-white/80 text-sm flex-1">
+              Забег окончен, но добыча ещё не поделена.
+            </p>
+            <button
+              onClick={() => navigate(`/dungeon-session/${myRun.pendingLootSessionId}`)}
+              className="btn-blue text-xs sm:text-sm px-4 py-1.5 self-start sm:self-auto"
+            >
+              К дележу добычи
+            </button>
+          </div>
+        )}
+
         {dungeons.map((dungeon) => (
           <DungeonCard
             key={dungeon.id}
             dungeon={dungeon}
             cooldownSeconds={cooldowns[dungeon.id] ?? 0}
-            isActive={activeDungeonId === dungeon.id && !!currentSession}
-            currentSession={activeDungeonId === dungeon.id ? currentSession : null}
             currentCharacterId={currentCharacterId}
-            isLeader={isLeader}
             sessionLoading={sessionLoading}
-            activeSessionId={activeSessionId}
+            activeSessionId={myRun.sessionId}
+            entryError={entryErrors[dungeon.id] || null}
             onReturnToDungeon={(sessionId) => navigate(`/dungeon-session/${sessionId}`)}
-            onSoloClick={(id) => setSoloConfirmDungeonId(id)}
-            onGroupClick={(id) => setGroupConfirmDungeonId(id)}
-            onEnter={handleEnter}
-            onLeave={handleLeave}
-            onInviteClick={() => setShowInviteModal(true)}
+            onEnterClick={(id) => setEntryDungeonId(id)}
           />
         ))}
       </div>
 
-      {/* Solo Confirm Modal */}
+      {/* Entry modal: solo or with the squad */}
       <ModalShell
-        open={soloConfirmDungeonId !== null}
-        onClose={() => setSoloConfirmDungeonId(null)}
-        title="Подтверждение"
+        open={entryDungeon !== null}
+        onClose={() => setEntryDungeonId(null)}
+        title={entryDungeon ? `Войти: ${entryDungeon.name}` : 'Войти в подземелье'}
         size="sm"
         footer={
           <>
             <button
-              onClick={() => setSoloConfirmDungeonId(null)}
+              onClick={() => setEntryDungeonId(null)}
               className="btn-line text-sm w-full sm:w-auto"
             >
               Отмена
             </button>
             <button
               onClick={() => {
-                const id = soloConfirmDungeonId;
-                setSoloConfirmDungeonId(null);
+                const id = entryDungeonId;
+                setEntryDungeonId(null);
                 if (id !== null) handleSoloEntry(id);
               }}
               disabled={sessionLoading}
               className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
             >
-              {sessionLoading ? 'Вход...' : 'Да, войти'}
-            </button>
-          </>
-        }
-      >
-        <p className="text-white/80 text-sm">
-          Вы уверены, что хотите войти в подземелье в одиночку?
-        </p>
-      </ModalShell>
-
-      {/* Group Confirm Modal */}
-      <ModalShell
-        open={groupConfirmDungeonId !== null}
-        onClose={() => setGroupConfirmDungeonId(null)}
-        title="Войти в подземелье"
-        size="sm"
-        footer={
-          <>
-            <button
-              onClick={() => setGroupConfirmDungeonId(null)}
-              className="btn-line text-sm w-full sm:w-auto"
-            >
-              Отмена
-            </button>
-            <button
-              onClick={() => {
-                const id = groupConfirmDungeonId;
-                setGroupConfirmDungeonId(null);
-                if (id !== null) handleSoloEntry(id);
-              }}
-              disabled={sessionLoading}
-              className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
-            >
-              {sessionLoading ? 'Вход...' : 'В соло'}
+              {sessionLoading ? 'Вход...' : 'В одиночку'}
             </button>
             {canPartyRun && (
               <button
                 onClick={() => {
-                  const id = groupConfirmDungeonId;
-                  setGroupConfirmDungeonId(null);
+                  const id = entryDungeonId;
+                  setEntryDungeonId(null);
                   if (id !== null) handlePartyRun(id);
                 }}
-                disabled={partyRunLoading}
+                disabled={sessionLoading}
                 className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
               >
-                {partyRunLoading
-                  ? 'Заходим...'
-                  : `Отрядом (${coLocatedMates.length + 1})`}
+                {sessionLoading ? 'Вход...' : `Отрядом (${coLocatedMates.length + 1})`}
               </button>
             )}
           </>
         }
       >
-        <p className="text-white/80 text-sm">
-          Как войти в подземелье?
-        </p>
-      </ModalShell>
-
-      {/* Enter Dungeon Confirm Modal */}
-      <ModalShell
-        open={enterConfirm}
-        onClose={() => setEnterConfirm(false)}
-        title="Подтверждение"
-        size="sm"
-        footer={
-          <>
-            <button
-              onClick={() => setEnterConfirm(false)}
-              className="btn-line text-sm w-full sm:w-auto"
-            >
-              Отмена
-            </button>
-            <button
-              onClick={handleEnterConfirmed}
-              disabled={sessionLoading}
-              className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
-            >
-              {sessionLoading ? 'Вход...' : 'Да, войти'}
-            </button>
-          </>
-        }
-      >
-        <p className="text-white/80 text-sm">
-          Войти в подземелье с текущей группой?
-        </p>
-      </ModalShell>
-
-      {/* Invite Modal */}
-      <ModalShell
-        open={showInviteModal}
-        onClose={() => setShowInviteModal(false)}
-        title="Пригласить в группу"
-        size="sm"
-        footer={
-          <button
-            onClick={() => setShowInviteModal(false)}
-            className="btn-line text-sm w-full sm:w-auto"
-          >
-            Закрыть
-          </button>
-        }
-      >
-        {invitablePlayers.length === 0 ? (
-          <p className="text-white/60 text-sm">
-            Нет доступных персонажей для приглашения на этой локации
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="text-white/80">
+            Пока вы внутри, персонаж не сможет перемещаться, писать посты и сражаться снаружи.
+            Другие группы не смогут войти, пока вы не выйдете.
           </p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {invitablePlayers.map((player) => (
-              <button
-                key={player.id}
-                onClick={() => handleInvite(player.id)}
-                disabled={sessionLoading}
-                className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-left disabled:opacity-50"
-              >
-                <div className="gold-outline relative w-8 h-8 rounded-full overflow-hidden bg-black/40 shrink-0">
-                  {player.avatar ? (
-                    <img src={player.avatar} alt={player.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-white/20">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className="text-white text-sm truncate block">{player.name}</span>
-                  <span className="text-white/40 text-xs">Ур. {player.level}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
+          <p className="text-white/50 text-xs">
+            Для входа нужен свежий пост с намерением «Вход в подземелье» на этой локации.
+          </p>
+          {canPartyRun ? (
+            <p className="text-white/50 text-xs">
+              Отрядом пойдут сопартийцы на этой локации. Кто не сможет войти (без сознания, в бою, в другом
+              подземелье), останется снаружи — вы увидите, кто и почему.
+            </p>
+          ) : party && !isSquadLeader ? (
+            <p className="text-white/50 text-xs">Войти отрядом может только лидер отряда.</p>
+          ) : party ? (
+            <p className="text-white/50 text-xs">
+              Чтобы войти отрядом, сопартийцы должны стоять на этой же локации.
+            </p>
+          ) : null}
+        </div>
       </ModalShell>
     </section>
   );
@@ -523,40 +366,27 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
 interface DungeonCardProps {
   dungeon: DungeonAtLocation;
   cooldownSeconds: number;
-  isActive: boolean;
-  currentSession: {
-    session_id: number;
-    members: { character_id: number; name: string; user_id: number; status: 'alive' | 'dead' | 'disconnected'; is_leader: boolean }[];
-  } | null;
   currentCharacterId: number | null;
-  isLeader: boolean;
   sessionLoading: boolean;
   activeSessionId: number | null;
+  entryError: string | null;
   onReturnToDungeon: (sessionId: number) => void;
-  onSoloClick: (dungeonId: number) => void;
-  onGroupClick: (dungeonId: number) => void;
-  onEnter: () => void;
-  onLeave: () => void;
-  onInviteClick: () => void;
+  onEnterClick: (dungeonId: number) => void;
 }
 
 const DungeonCard = ({
   dungeon,
   cooldownSeconds,
-  isActive,
-  currentSession,
   currentCharacterId,
-  isLeader,
   sessionLoading,
   activeSessionId,
+  entryError,
   onReturnToDungeon,
-  onSoloClick,
-  onGroupClick,
-  onEnter,
-  onLeave,
-  onInviteClick,
+  onEnterClick,
 }: DungeonCardProps) => {
   const isOnCooldown = cooldownSeconds > 0;
+  const isOccupied = dungeon.is_occupied;
+  const entryBlocked = isOnCooldown || isOccupied;
 
   return (
     <motion.div
@@ -602,62 +432,48 @@ const DungeonCard = ({
         )}
       </div>
 
+      {/* Occupied by another group */}
+      {isOccupied && !activeSessionId && (
+        <div className="text-gold text-sm font-medium flex items-center gap-2">
+          <span aria-hidden>🔒</span>
+          Внутри уже группа — дождитесь, пока она выйдет
+        </div>
+      )}
+
       {/* Cooldown message */}
       {isOnCooldown && (
         <div className="text-site-red text-sm font-medium flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          Недоступно. Восстановится через {formatCooldown(cooldownSeconds)}
+          Подземелье зачищено. Восстановится через {formatCooldown(cooldownSeconds)}
         </div>
       )}
 
-      {/* Party panel (when session is active for this dungeon) */}
-      {isActive && currentSession && (
-        <DungeonPartyPanel
-          members={currentSession.members}
-          maxSize={dungeon.recommended_party_size ?? 4}
-          currentCharacterId={currentCharacterId}
-          isLeader={isLeader}
-          isForming
-          onLeave={onLeave}
-          onInviteClick={onInviteClick}
-          leaveLoading={sessionLoading}
-        />
+      {/* Last entry error */}
+      {entryError && (
+        <p className="text-site-red text-sm" role="alert">{entryError}</p>
       )}
 
       {/* Actions */}
       <div className="flex flex-col sm:flex-row gap-2">
-        {/* Return to dungeon button — shown when character has active session */}
-        {activeSessionId && !isActive && (
+        {activeSessionId ? (
           <button
             onClick={() => onReturnToDungeon(activeSessionId)}
             className="btn-blue text-sm px-5 py-2"
           >
-            Вернуться в данж
+            Вернуться к забегу
           </button>
-        )}
-
-        {/* Single "Войти" button → solo / party choice (FEAT-144 fix) */}
-        {!activeSessionId && !isActive && !isOnCooldown && currentCharacterId && (
-          <button
-            onClick={() => onGroupClick(dungeon.id)}
-            disabled={sessionLoading}
-            className="btn-blue text-sm px-5 py-2 disabled:opacity-50"
-          >
-            {sessionLoading ? 'Вход...' : 'Войти'}
-          </button>
-        )}
-
-        {/* Enter dungeon button — shown when party is forming and user is leader */}
-        {isActive && isLeader && (
-          <button
-            onClick={onEnter}
-            disabled={sessionLoading}
-            className="btn-blue text-sm px-5 py-2 disabled:opacity-50"
-          >
-            {sessionLoading ? 'Вход...' : 'Войти в подземелье'}
-          </button>
+        ) : (
+          currentCharacterId && (
+            <button
+              onClick={() => onEnterClick(dungeon.id)}
+              disabled={sessionLoading || entryBlocked}
+              className="btn-blue text-sm px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {sessionLoading ? 'Вход...' : 'Войти'}
+            </button>
+          )
         )}
       </div>
     </motion.div>

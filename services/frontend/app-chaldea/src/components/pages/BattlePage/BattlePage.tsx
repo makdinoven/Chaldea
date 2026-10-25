@@ -21,6 +21,7 @@ import BattleRewardsModal from "./BattleRewardsModal";
 import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
 import { checkActiveSession } from "../../../api/dungeons";
+import { DUNGEON_BATTLE_RETURN_KEY } from "../../DungeonPage/dungeonConstants";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
 import { describeEffect, evaluateControl, periodicDamageKind, type EffectLike } from "./battleEffects";
 import { parseServerDate } from "../../../utils/serverDate";
@@ -210,10 +211,23 @@ const BattlePage = () => {
   const [pveRewards, setPveRewards] = useState<BattleRewards | null>(null);
   const [showRewardsModal, setShowRewardsModal] = useState(false);
 
-  // Navigate back: to dungeon session if in dungeon, otherwise to location
+  // Navigate back: to the dungeon run this battle belongs to (it shows the
+  // outcome — next room, loot sharing or the wipe screen), otherwise to the
+  // character's run in progress, otherwise to the location.
   const navigateAfterBattle = useCallback(() => {
     const charId = character?.id;
     const goToLocation = () => navigate(`/location/${locationId}`);
+    try {
+      const raw = sessionStorage.getItem(DUNGEON_BATTLE_RETURN_KEY);
+      const ret = raw ? (JSON.parse(raw) as { battleId?: number; sessionId?: number }) : null;
+      if (ret?.sessionId && String(ret.battleId) === String(battleId)) {
+        sessionStorage.removeItem(DUNGEON_BATTLE_RETURN_KEY);
+        navigate(`/dungeon-session/${ret.sessionId}`);
+        return;
+      }
+    } catch {
+      // sessionStorage unavailable / malformed — fall through to my-session
+    }
     if (!charId) {
       goToLocation();
       return;
@@ -227,7 +241,7 @@ const BattlePage = () => {
         }
       })
       .catch(goToLocation);
-  }, [character?.id, locationId, navigate]);
+  }, [character?.id, locationId, battleId, navigate]);
   const battleResultSetRef = useRef(false);
 
   // Pause state

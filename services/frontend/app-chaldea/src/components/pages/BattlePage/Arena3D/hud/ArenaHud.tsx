@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBattleBar, type BattlePageBarProps } from "../../BattlePageBar/useBattleBar";
 import TurnBanner from "./TurnBanner";
 import ActionBar, { AutobattleControls } from "./ActionBar";
@@ -6,6 +6,7 @@ import Chronicle from "./Chronicle";
 import SkillHand from "./SkillHand";
 import type { BlockedSkill, TurnOutcome } from "../arenaTypes";
 import { periodicDamageKind } from "../../battleEffects";
+import { HeaderToggle, useFullscreenPage } from "../../../../CommonComponents/Fullscreen/fullscreen";
 
 interface ArenaHudProps extends BattlePageBarProps {
   isSpectate: boolean;
@@ -16,29 +17,8 @@ interface ArenaHudProps extends BattlePageBarProps {
   notices: ReactNode;
 }
 
-// The table runs edge to edge under the HUD and stays solid top and bottom; at both ends
-// it sinks into the same near-black, which then spills out past the arena and thins
-// into the page — up behind the site header and down toward the footer, symmetrically.
+// The near-black the table sinks into at both ends, and the screen's backdrop around it.
 const SHADOW_RGB = "5,4,7";
-// Eased fall-off so the shadow never reads as a band with an edge on a bright background.
-const SHADOW_STOPS = [
-  [0.96, 0],
-  [0.952, 10],
-  [0.904, 20],
-  [0.803, 30],
-  [0.655, 40],
-  [0.48, 50],
-  [0.305, 60],
-  [0.157, 70],
-  [0.056, 80],
-  [0.008, 90],
-  [0.0, 100],
-]
-  .map(([a, at]) => `rgba(${SHADOW_RGB},${a}) ${at}%`)
-  .join(", ");
-const shadowSpill = (direction: "to top" | "to bottom"): CSSProperties => ({
-  background: `linear-gradient(${direction}, ${SHADOW_STOPS})`,
-});
 
 /**
  * What each new turn's log says beyond HP — direct hits, damage-over-time ticks, crits
@@ -115,19 +95,8 @@ const useTurnOutcome = (bar: ReturnType<typeof useBattleBar>) => {
 
 // The full-bleed arena is exactly 100vw wide, which includes the scrollbar — clip
 // the overflow on <html> while it is mounted so the page never scrolls sideways.
-const useClipHorizontalOverflow = () => {
-  useEffect(() => {
-    const root = document.documentElement;
-    const previous = root.style.overflowX;
-    root.style.overflowX = "clip";
-    return () => {
-      root.style.overflowX = previous;
-    };
-  }, []);
-};
-
 const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }: ArenaHudProps) => {
-  useClipHorizontalOverflow();
+  const { top: headerTop, headerHidden, toggleHeader } = useFullscreenPage();
   const bar = useBattleBar(barProps);
   const [chronicleOpen, setChronicleOpen] = useState(false);
   const outcome = useTurnOutcome(bar);
@@ -156,12 +125,12 @@ const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }:
   };
 
   return (
-    <div className="relative ml-[calc(50%-50vw)] w-screen text-white">
-      <div className="relative h-[62vh] min-h-[400px] lg:h-[calc(100vh-190px)] lg:min-h-[560px]">
-        {/* The table of fates sits in a pool of darkness that thins out into the page. */}
+    // Full screen under the site header (which can be tucked away); on a phone the controls take the bottom.
+    <div className="fixed inset-0 z-0 text-white" style={{ background: `rgb(${SHADOW_RGB})` }}>
+      <HeaderToggle top={headerTop} hidden={headerHidden} onToggle={toggleHeader} />
+      <div className="absolute inset-x-0 bottom-[170px] lg:bottom-0" style={{ top: headerTop }}>
+        {/* The table of fates sits in a pool of darkness. */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_72%_78%_at_50%_42%,rgba(4,4,7,0.94)_0%,rgba(4,4,7,0.8)_50%,transparent_85%)] " />
-        {/* Shadow spilling up past the arena, behind the site header */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-full h-48" style={shadowSpill("to top")} />
         <div className="absolute inset-0">{renderArena(outcome)}</div>
         {/* Both ends of the table sink into shadow instead of turning see-through */}
         <div
@@ -202,11 +171,7 @@ const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }:
 
       </div>
 
-      {/* The table's shadow spills below the arena and thins out into the page and footer */}
-      <div className="pointer-events-none h-24 lg:h-48" style={shadowSpill("to bottom")} />
-
       {/* Phone / tablet: controls pinned to the bottom of the screen */}
-      <div className="h-[170px] lg:hidden" />
       <div className="fixed inset-x-0 bottom-0 z-40 border-t border-gold-dark/30 bg-[linear-gradient(180deg,rgba(20,16,12,0.92),rgba(8,8,10,0.97))] px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 lg:hidden">
         {!isSpectate && (
           <ActionBar bar={bar} turnData={barProps.turnData} onPassTurn={barProps.setTurn} layout="compact" {...autoProps} />

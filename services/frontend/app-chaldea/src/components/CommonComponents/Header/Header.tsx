@@ -16,6 +16,7 @@ import CharacterChip from './CharacterChip';
 import MobileHeader from './MobileHeader';
 import { DropdownLink } from './types';
 import logo from '../../../assets/logo_fog.png';
+import { useHeaderHidden } from '../Fullscreen/fullscreen';
 
 const Header = () => {
   const location = useLocation();
@@ -24,6 +25,7 @@ const Header = () => {
   const dispatch = useAppDispatch();
   const { username, avatar, role } = useAppSelector((state) => state.user);
   const totalUnread = useAppSelector(selectTotalUnread);
+  const headerHidden = useHeaderHidden();
 
   const isInitialMount = useRef(true);
 
@@ -60,6 +62,9 @@ const Header = () => {
   ];
 
   const userAvatar = avatar ?? '';
+
+  // Tucked away on a full-screen 3D page (its tab at the top of the screen brings it back).
+  if (headerHidden) return null;
 
   return (
     <>

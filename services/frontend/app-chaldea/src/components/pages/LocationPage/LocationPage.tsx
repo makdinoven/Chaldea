@@ -33,6 +33,7 @@ import useBattlePreview from '../../../hooks/useBattlePreview';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
 import DungeonEntrance from '../../DungeonPage/DungeonEntrance';
 import useGatheringLock from '../../../hooks/useGatheringLock';
+import useActivityLock from '../../../hooks/useActivityLock';
 import GatheringLockBanner from '../../CommonComponents/GatheringLockBanner';
 import GatheringSection from './GatheringSection/GatheringSection';
 
@@ -69,7 +70,9 @@ const LocationPage = () => {
   // Combined "the character cannot take voluntary actions" flag — used to
   // gate the post form, quick-move button and neighbor links so that
   // gathering players can't bypass the lock by pressing UI shortcuts.
-  const actionsLocked = inBattle || isGathering;
+  // FEAT-175: in a dungeon run / knocked out after a wipe (banner lives in Layout).
+  const activityLock = useActivityLock();
+  const actionsLocked = inBattle || isGathering || activityLock.locked;
 
   // --- Travel cooldown timer ---
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
@@ -765,7 +768,6 @@ const LocationPage = () => {
       {isCharacterHere && !actionsLocked && (
         <DungeonEntrance
           locationId={location.id}
-          players={location.players}
           currentCharacterId={character?.id ?? null}
         />
       )}
@@ -889,6 +891,20 @@ const LocationPage = () => {
                   <span className="text-stat-energy text-sm font-medium">Идёт добыча</span>
                   <span className="text-white/55 text-xs">
                     Написание постов будет доступно после завершения добычи.
+                  </span>
+                </div>
+              </div>
+            ) : activityLock.locked ? (
+              <div className="bg-site-bg backdrop-blur-sm rounded-card border border-rarity-epic/30 flex items-center gap-3.5 p-4 sm:px-5">
+                <span className="w-11 h-11 shrink-0 flex items-center justify-center rounded-[11px] bg-rarity-epic/15 border border-rarity-epic/35 text-xl" aria-hidden>
+                  {activityLock.reason === 'dungeon' ? '🏰' : '💫'}
+                </span>
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <span className="text-white text-sm font-medium">{activityLock.message}</span>
+                  <span className="text-white/55 text-xs">
+                    {activityLock.reason === 'dungeon'
+                      ? 'Написание постов будет доступно после выхода из подземелья.'
+                      : 'Написание постов будет доступно, когда персонаж очнётся.'}
                   </span>
                 </div>
               </div>

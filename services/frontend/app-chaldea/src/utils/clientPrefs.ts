@@ -9,6 +9,8 @@ import { useSyncExternalStore } from 'react';
 
 export type SkillTreeViewPref = 'auto' | 'wheel' | 'books';
 export type BattleViewPref = '2d' | '3d';
+/** 'auto' = 3D when the device can draw it and graphics are not lowered. */
+export type DungeonViewPref = 'auto' | '2d' | '3d';
 export type GraphicsPref = 'normal' | 'low';
 export type TextSizePref = 'normal' | 'large' | 'xlarge';
 
@@ -18,6 +20,7 @@ export interface ClientPrefs {
   soundVolume: number;
   browserNotifications: boolean;
   battleView: BattleViewPref;
+  dungeonView: DungeonViewPref;
   graphics: GraphicsPref;
   textSize: TextSizePref;
   /** Ask before selling, dropping or destroying items and buying out lots. */
@@ -33,6 +36,7 @@ export const DEFAULT_CLIENT_PREFS: ClientPrefs = {
   soundVolume: 0.5,
   browserNotifications: false,
   battleView: '2d',
+  dungeonView: 'auto',
   graphics: 'normal',
   textSize: 'normal',
   confirmDangerous: true,
@@ -50,6 +54,7 @@ const sanitize = (raw: Partial<Record<keyof ClientPrefs, unknown>>): ClientPrefs
     browserNotifications:
       typeof raw.browserNotifications === 'boolean' ? raw.browserNotifications : d.browserNotifications,
     battleView: oneOf(raw.battleView, ['2d', '3d'] as const, d.battleView),
+    dungeonView: oneOf(raw.dungeonView, ['auto', '2d', '3d'] as const, d.dungeonView),
     graphics: oneOf(raw.graphics, ['normal', 'low'] as const, d.graphics),
     textSize: oneOf(raw.textSize, ['normal', 'large', 'xlarge'] as const, d.textSize),
     confirmDangerous: typeof raw.confirmDangerous === 'boolean' ? raw.confirmDangerous : d.confirmDangerous,

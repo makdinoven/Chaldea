@@ -68,6 +68,9 @@ const AdminDungeonList = () => {
         >
           Активные сессии
         </button>
+        <button className="btn-line !text-base !px-6 !py-2" onClick={() => navigate('/admin/dungeons/minigames')}>
+          Мини-игры
+        </button>
         <button
           className="btn-blue !text-base !px-6 !py-2 sm:ml-auto"
           onClick={() => navigate('/admin/dungeons/create')}

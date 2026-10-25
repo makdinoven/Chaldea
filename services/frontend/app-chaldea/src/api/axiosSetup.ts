@@ -33,6 +33,13 @@ interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retried?: boolean;
 }
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** The caller shows the 403's own message (a game rule, not missing rights). */
+    skipForbiddenToast?: boolean;
+  }
+}
+
 /** Endpoints whose 401 means "bad credentials", never "expired session". */
 const AUTH_ENDPOINTS = ['/users/login', '/users/register', '/users/refresh'];
 
@@ -68,7 +75,9 @@ export const attachAuthInterceptors = (instance: AxiosInstance): void => {
       const config = error.config as RetriableRequestConfig | undefined;
 
       if (status === 403) {
-        toast.error('Недостаточно прав для выполнения этого действия.');
+        if (!config?.skipForbiddenToast) {
+          toast.error('Недостаточно прав для выполнения этого действия.');
+        }
         return Promise.reject(error);
       }
 

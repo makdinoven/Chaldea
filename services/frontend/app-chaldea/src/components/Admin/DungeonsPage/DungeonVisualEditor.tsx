@@ -19,9 +19,13 @@ import 'reactflow/dist/style.css';
 import toast from 'react-hot-toast';
 
 import type { DungeonRoom, DungeonCorridor } from '../../../api/dungeons';
-import { validateDungeon } from '../../../api/dungeons';
+import { updateDungeon, validateDungeon } from '../../../api/dungeons';
+import { DUNGEON_THEMES, THEME_INFO, floorTheme, isTheme, type DungeonTheme } from '../../DungeonBoard3D/dungeonThemes';
 import type { RoomNodeData, RoomFlowNode } from './editor/types';
-import { GRID_SIZE, ROOM_TYPE_LABELS } from './editor/constants';
+import { ROOM_TYPE_LABELS } from './editor/constants';
+import { ROOM_CELL_PX, editorToBoard } from '../../DungeonBoard3D/editorToBoard';
+import { buildDioramaLayout } from '../../DungeonBoard3D/dioramaLayout';
+import DungeonPreview3D from '../../DungeonBoard3D/DungeonPreview3D';
 import RoomNode from './editor/RoomNode';
 import RoomPalette from './editor/RoomPalette';
 import PropertyPanel from './editor/PropertyPanel';
@@ -31,25 +35,36 @@ import useEditorSave from './editor/useEditorSave';
 
 interface DungeonVisualEditorProps {
   dungeonId: number;
+  /** Shown over the 3D preview. */
+  dungeonName?: string;
   rooms: DungeonRoom[];
   corridors: DungeonCorridor[];
   onUpdate: () => void;
+  /** The dungeon's look and each floor's own (FEAT-176). */
+  theme?: string;
+  floorThemes?: Record<string, string> | null;
 }
 
 const nodeTypes = { room: RoomNode };
 
-const snapToGrid = (value: number): number => Math.round(value / GRID_SIZE) * GRID_SIZE;
+/** One grid cell is one room slot on the 3D miniature (see editorToBoard). */
+const snapToGrid = (value: number): number => Math.round(value / ROOM_CELL_PX) * ROOM_CELL_PX;
 
 // --- Conversion helpers ---
+
+const floorOf = (room: DungeonRoom | undefined) => room?.floor ?? 1;
 
 const roomToNode = (
   room: DungeonRoom,
   serverRoomIds: Set<number>,
   dirtyRoomIds: Set<number>,
   onSelect: (room: DungeonRoom) => void,
+  floor: number,
 ): RoomFlowNode => ({
   id: String(room.id),
   type: 'room',
+  // One floor at a time: the others wait on their own tabs.
+  hidden: floorOf(room) !== floor,
   position: { x: room.position_x ?? 0, y: room.position_y ?? 0 },
   data: {
     room,
@@ -84,7 +99,15 @@ const corridorFromEdge = (edge: Edge): DungeonCorridor | null =>
 
 // --- Inner editor (needs ReactFlowProvider above) ---
 
-const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors, onUpdate }: DungeonVisualEditorProps) => {
+const EditorInner = ({
+  dungeonId,
+  dungeonName = 'Подземелье',
+  rooms: serverRooms,
+  corridors: serverCorridors,
+  onUpdate,
+  theme,
+  floorThemes: savedFloorThemes,
+}: DungeonVisualEditorProps) => {
   const { fitView, zoomIn, zoomOut, screenToFlowPosition } = useReactFlow();
 
   // Temp ID counter
@@ -97,6 +120,29 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
 
   // Room domain state
   const [currentRooms, setCurrentRooms] = useState<DungeonRoom[]>([]);
+  // The floor being edited, and floors added but still empty.
+  const [floor, setFloor] = useState(1);
+  // Each floor's own look, saved as soon as it is picked (the rest of the editor saves with its button).
+  const [floorThemes, setFloorThemes] = useState<Record<string, string>>(savedFloorThemes ?? {});
+  const [themeSaving, setThemeSaving] = useState(false);
+  const pickFloorTheme = async (value: string) => {
+    const next = { ...floorThemes };
+    if (value) next[String(floor)] = value;
+    else delete next[String(floor)];
+    setThemeSaving(true);
+    try {
+      await updateDungeon(dungeonId, { floor_themes: next });
+      setFloorThemes(next);
+      toast.success(value ? `Оформление этажа ${floor}: ${THEME_INFO[value as DungeonTheme].name}` : `Этаж ${floor} — как у подземелья`);
+    } catch {
+      toast.error('Не удалось сохранить оформление этажа');
+    } finally {
+      setThemeSaving(false);
+    }
+  };
+  const dungeonTheme = isTheme(theme) ? theme : 'stone';
+  const [addedFloors, setAddedFloors] = useState(1);
+  const floorsCount = Math.max(addedFloors, ...currentRooms.map((r) => floorOf(r)));
 
   // Selection state
   const [selectedRoom, setSelectedRoom] = useState<DungeonRoom | null>(null);
@@ -135,9 +181,19 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
       });
     }
 
+    // Rooms placed before the editor had room slots move to the nearest slot; saving keeps it.
+    let snappedAny = false;
+    layoutRooms = layoutRooms.map((room) => {
+      const x = snapToGrid(room.position_x ?? 0);
+      const y = snapToGrid(room.position_y ?? 0);
+      if (x === room.position_x && y === room.position_y) return room;
+      snappedAny = true;
+      return { ...room, position_x: x, position_y: y };
+    });
+
     setCurrentRooms(layoutRooms);
     setDirtyRoomIds(new Set());
-    setIsDirty(needsLayout);
+    setIsDirty(needsLayout || snappedAny);
     setSelectedRoom(null);
     setSelectedCorridor(null);
     tempIdRef.current = -1;
@@ -180,8 +236,8 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
   }, []);
 
   const nodes: RoomFlowNode[] = useMemo(
-    () => currentRooms.map((r) => roomToNode(r, serverRoomIds, dirtyRoomIds, onSelectRoom)),
-    [currentRooms, serverRoomIds, dirtyRoomIds, onSelectRoom],
+    () => currentRooms.map((r) => roomToNode(r, serverRoomIds, dirtyRoomIds, onSelectRoom, floor)),
+    [currentRooms, serverRoomIds, dirtyRoomIds, onSelectRoom, floor],
   );
 
   useEffect(() => {
@@ -302,6 +358,9 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
         random_battle_mob_ids: null,
         trap_chance: 0,
         trap_config: null,
+        lock_config: null,
+        passage_type: 'corridor',
+        passage_config: null,
         description: null,
         source_handle: connection.sourceHandle ?? null,
         target_handle: connection.targetHandle ?? null,
@@ -362,6 +421,7 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
         room_config: {},
         position_x: snappedX,
         position_y: snappedY,
+        floor,
       };
 
       setCurrentRooms((prev) => [...prev, newRoom]);
@@ -369,7 +429,7 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
       setSelectedRoom(newRoom);
       setSelectedCorridor(null);
     },
-    [screenToFlowPosition, dungeonId, currentRooms.length],
+    [screenToFlowPosition, dungeonId, currentRooms.length, floor],
   );
 
   // --- Property panel callbacks ---
@@ -415,6 +475,31 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
     [selectedRoom, setRfEdges],
   );
 
+  /** Stairs, a drop or a lift to a room of another floor: a corridor the canvas never draws. */
+  const handleAddCorridor = useCallback(
+    (corridor: Omit<DungeonCorridor, 'id'>) => {
+      setRfEdges((prev) => [...prev, corridorToEdge({ ...corridor, id: nextTempId() })]);
+      setIsDirty(true);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setRfEdges],
+  );
+
+  // Only this floor's corridors are drawn; passages between floors live in the room panel.
+  const roomFloors = useMemo(() => new Map(currentRooms.map((r) => [r.id, floorOf(r)])), [currentRooms]);
+  const shownEdges = useMemo(
+    () =>
+      rfEdges.map((e) => {
+        const c = corridorFromEdge(e);
+        const hidden =
+          (c?.passage_type ?? 'corridor') !== 'corridor' ||
+          roomFloors.get(Number(e.source)) !== floor ||
+          roomFloors.get(Number(e.target)) !== floor;
+        return e.hidden === hidden ? e : { ...e, hidden };
+      }),
+    [rfEdges, roomFloors, floor],
+  );
+
   const handleDeleteCorridor = useCallback(
     (corridorId: number) => {
       setRfEdges((prev) => prev.filter((e) => e.id !== String(corridorId)));
@@ -426,10 +511,31 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
 
   // --- Toolbar callbacks ---
 
+  // How the miniature would be built from the editor as it stands, saved or not.
+  const board = useMemo(
+    () =>
+      editorToBoard(
+        dungeonName,
+        currentRooms.filter((r) => floorOf(r) === floor),
+        currentCorridors.filter(
+          (c) =>
+            (c.passage_type ?? 'corridor') === 'corridor' &&
+            roomFloors.get(c.from_room_id) === floor &&
+            roomFloors.get(c.to_room_id) === floor,
+        ),
+        floorTheme(dungeonTheme, floorThemes, floor),
+      ),
+    [dungeonName, currentRooms, currentCorridors, floor, roomFloors, dungeonTheme, floorThemes],
+  );
+  const [previewOpen, setPreviewOpen] = useState(false);
+
   const handleValidate = useCallback(async () => {
+    // The miniature's own checks need no server: rooms overlapping, corridors cutting through rooms.
+    const layoutWarnings = buildDioramaLayout(board).warnings;
+    layoutWarnings.forEach((warn) => toast(warn, { icon: '🧱', duration: 7000 }));
     try {
       const result = await validateDungeon(dungeonId);
-      if (result.valid) {
+      if (result.valid && layoutWarnings.length === 0) {
         toast.success('Валидация пройдена успешно');
       } else {
         result.errors.forEach((err) => toast.error(`Ошибка: ${err}`));
@@ -438,7 +544,7 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
     } catch {
       toast.error('Не удалось выполнить валидацию');
     }
-  }, [dungeonId]);
+  }, [dungeonId, board]);
 
   const handleAutoLayout = useCallback(() => {
     const positions = autoLayoutRooms(currentRooms, currentCorridors);
@@ -464,6 +570,7 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
         isSaving={isSaving}
         onSave={save}
         onValidate={handleValidate}
+        onPreview3D={() => setPreviewOpen(true)}
         onAutoLayout={handleAutoLayout}
         onFitView={handleFitView}
         onZoomIn={handleZoomIn}
@@ -476,11 +583,62 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
           <RoomPalette />
         </div>
 
-        {/* Center: React Flow canvas */}
+        {/* Center: floor tabs over the React Flow canvas */}
+        <div className="flex-1 flex flex-col min-w-0 gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {Array.from({ length: floorsCount }, (_, i) => i + 1).map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => {
+                setFloor(f);
+                setSelectedRoom(null);
+                setSelectedCorridor(null);
+                setTimeout(() => fitView({ duration: 300 }), 50);
+              }}
+              className={`text-xs px-3 py-1.5 rounded-card border transition-colors ${
+                f === floor ? 'border-gold/60 text-gold bg-gold/10' : 'border-white/15 text-white/60 hover:text-white'
+              }`}
+            >
+              Этаж {f}
+              <span className="text-white/30 ml-1">({currentRooms.filter((r) => floorOf(r) === f).length})</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              setAddedFloors(floorsCount + 1);
+              setFloor(floorsCount + 1);
+              setSelectedRoom(null);
+              setSelectedCorridor(null);
+            }}
+            className="text-xs px-3 py-1.5 rounded-card border border-dashed border-white/20 text-white/50 hover:text-white transition-colors"
+          >
+            + Этаж
+          </button>
+          <label className="ml-auto flex items-center gap-2 text-xs text-white/50">
+            Оформление этажа {floor}:
+            <select
+              value={floorThemes[String(floor)] ?? ''}
+              disabled={themeSaving}
+              onChange={(e) => void pickFloorTheme(e.target.value)}
+              className="bg-transparent border-b border-white/20 text-white py-1 outline-none disabled:opacity-50"
+            >
+              <option value="" className="bg-site-bg">
+                Как у подземелья ({THEME_INFO[dungeonTheme].name})
+              </option>
+              {DUNGEON_THEMES.map((t) => (
+                <option key={t} value={t} className="bg-site-bg">
+                  {THEME_INFO[t].name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="flex-1 rounded-lg overflow-hidden border border-white/10">
           <ReactFlow
             nodes={rfNodes}
-            edges={rfEdges}
+            edges={shownEdges}
             nodeTypes={nodeTypes}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
@@ -488,13 +646,13 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             snapToGrid={true}
-            snapGrid={[GRID_SIZE, GRID_SIZE]}
+            snapGrid={[ROOM_CELL_PX, ROOM_CELL_PX]}
             connectionMode={ConnectionMode.Loose}
             fitView
             deleteKeyCode="Delete"
             className="bg-[#0d0d1a]"
           >
-            <Background gap={GRID_SIZE} color="rgba(255,255,255,0.04)" />
+            <Background gap={ROOM_CELL_PX} size={2} color="rgba(255,255,255,0.12)" />
             <Controls
               showInteractive={false}
               className="!bg-[#1e1e2e] !border-white/10 !shadow-lg [&>button]:!bg-[#1e1e2e] [&>button]:!border-white/10 [&>button]:!fill-white/60 [&>button:hover]:!fill-white"
@@ -506,6 +664,7 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
             />
           </ReactFlow>
         </div>
+        </div>
 
         {/* Right: Property panel */}
         <div className="w-72 shrink-0">
@@ -513,6 +672,9 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
             selectedRoom={selectedRoom}
             selectedCorridor={selectedCorridor}
             rooms={currentRooms}
+            corridors={currentCorridors}
+            floorsCount={floorsCount}
+            onAddCorridor={handleAddCorridor}
             onRoomChange={handleRoomChange}
             onCorridorChange={handleCorridorChange}
             onDeleteRoom={handleDeleteRoom}
@@ -520,6 +682,8 @@ const EditorInner = ({ dungeonId, rooms: serverRooms, corridors: serverCorridors
           />
         </div>
       </div>
+
+      {previewOpen && <DungeonPreview3D dungeon={board} onClose={() => setPreviewOpen(false)} />}
     </div>
   );
 };

@@ -2,6 +2,56 @@ import { useState } from 'react';
 import type { DungeonRoom, DungeonCorridor } from '../../../../api/dungeons';
 import { ROOM_TYPE_LABELS, ROOM_TYPE_ICONS, ROOM_COLORS } from './constants';
 import type { RoomType } from './types';
+import { FOOTPRINT } from '../../../DungeonBoard3D/dioramaLayout';
+import { boardTypeOf } from '../../../DungeonBoard3D/editorToBoard';
+import {
+  DUNGEON_KEYS,
+  DUNGEON_KEY_KINDS,
+} from '../../../DungeonPage/dungeonConstants';
+
+const GRID_MIN = 2;
+const GRID_MAX = 8;
+
+const GRID_KEYS = ['grid_w', 'grid_d'] as const;
+
+/** One side of a room's footprint on the 3D miniature; empty falls back to its kind's size. */
+const SizeInput = ({
+  room,
+  axis,
+  onChange,
+}: {
+  room: DungeonRoom;
+  axis: 0 | 1;
+  onChange: (partial: Partial<DungeonRoom>) => void;
+}) => {
+  const key = GRID_KEYS[axis];
+  const otherKey = GRID_KEYS[1 - axis];
+  const defaults = FOOTPRINT[boardTypeOf(room)];
+  return (
+    <input
+      type="number"
+      min={GRID_MIN}
+      max={GRID_MAX}
+      className="input-underline !text-sm !w-16"
+      placeholder={String(defaults[axis])}
+      title={axis === 0 ? 'Ширина' : 'Глубина'}
+      value={room[key] ?? ''}
+      onChange={(e) => {
+        const raw = e.target.value;
+        const value =
+          raw === ''
+            ? null
+            : Math.min(GRID_MAX, Math.max(GRID_MIN, Math.round(Number(raw))));
+        // Both sides or neither: a half-set size would fall back to the default anyway.
+        onChange({
+          [key]: value,
+          [otherKey]:
+            value === null ? null : (room[otherKey] ?? defaults[1 - axis]),
+        });
+      }}
+    />
+  );
+};
 
 // --- Local types for room_config fields ---
 
@@ -34,6 +84,54 @@ const STAT_CHECK_OPTIONS = [
   { value: 'luck', label: 'Удача' },
 ];
 
+/** Pick a key kind, or none. */
+const KeySelect = ({
+  value,
+  onChange,
+  empty = '— Нет —',
+}: {
+  value: string | null | undefined;
+  onChange: (kind: string | null) => void;
+  empty?: string;
+}) => (
+  <select
+    className="input-underline !text-sm"
+    value={value ?? ''}
+    onChange={(e) => onChange(e.target.value || null)}
+  >
+    <option value="" className="bg-site-dark text-white">
+      {empty}
+    </option>
+    {DUNGEON_KEY_KINDS.map((k) => (
+      <option key={k} value={k} className="bg-site-dark text-white">
+        {DUNGEON_KEYS[k].name}
+      </option>
+    ))}
+  </select>
+);
+
+/** A room that hands the party a key (chest opened / battle won). */
+const KeyRewardField = ({
+  config,
+  onChange,
+  label,
+}: {
+  config: Record<string, unknown>;
+  onChange: (c: Record<string, unknown>) => void;
+  label: string;
+}) => (
+  <div className="flex flex-col gap-1">
+    <FieldLabel>{label}</FieldLabel>
+    <KeySelect
+      value={config.key_reward as string | undefined}
+      onChange={(kind) => {
+        const { key_reward: _old, ...rest } = config;
+        onChange(kind ? { ...rest, key_reward: kind } : rest);
+      }}
+    />
+  </div>
+);
+
 const OUTCOME_TYPES = [
   { value: 'nothing', label: 'Ничего' },
   { value: 'damage', label: 'Урон' },
@@ -41,6 +139,7 @@ const OUTCOME_TYPES = [
   { value: 'heal', label: 'Лечение' },
   { value: 'teleport', label: 'Телепорт' },
   { value: 'battle', label: 'Бой' },
+  { value: 'key', label: 'Ключ' },
 ];
 
 const ROOM_TYPE_OPTIONS: { value: RoomType; label: string }[] = [
@@ -62,6 +161,10 @@ interface PropertyPanelProps {
   selectedRoom: DungeonRoom | null;
   selectedCorridor: DungeonCorridor | null;
   rooms: DungeonRoom[];
+  /** Every corridor, the passages between floors included. */
+  corridors: DungeonCorridor[];
+  floorsCount: number;
+  onAddCorridor: (corridor: Omit<DungeonCorridor, 'id'>) => void;
   onRoomChange: (room: DungeonRoom) => void;
   onCorridorChange: (corridor: DungeonCorridor) => void;
   onDeleteRoom: (roomId: number) => void;
@@ -110,10 +213,15 @@ const BattleConfig = ({
         onChange({ ...config, mob_template_ids: parseMobIds(e.target.value) })
       }
     />
+    <KeyRewardField
+      config={config}
+      onChange={onChange}
+      label="Ключ за победу"
+    />
   </div>
 );
 
-const LootTable = ({
+export const LootTable = ({
   items,
   label,
   onChange,
@@ -224,11 +332,18 @@ const TreasureConfig = ({
   config: Record<string, unknown>;
   onChange: (c: Record<string, unknown>) => void;
 }) => (
-  <LootTable
-    items={(config.loot_table as LootEntry[]) || []}
-    label="Таблица лута"
-    onChange={(loot_table) => onChange({ ...config, loot_table })}
-  />
+  <div className="flex flex-col gap-3">
+    <LootTable
+      items={(config.loot_table as LootEntry[]) || []}
+      label="Таблица лута"
+      onChange={(loot_table) => onChange({ ...config, loot_table })}
+    />
+    <KeyRewardField
+      config={config}
+      onChange={onChange}
+      label="Ключ в сундуке"
+    />
+  </div>
 );
 
 const TrapConfig = ({
@@ -337,6 +452,19 @@ const OutcomeDataFields = ({
           placeholder="30"
           value={(data.heal_percent as number) ?? ''}
           onChange={(e) => set('heal_percent', Number(e.target.value) || 0)}
+        />
+      </div>
+    );
+  }
+
+  if (outcomeType === 'key') {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[9px] text-white/40">Ключ</span>
+        <KeySelect
+          value={data.key as string | undefined}
+          onChange={(kind) => set('key', kind)}
+          empty="— Выберите ключ —"
         />
       </div>
     );
@@ -560,8 +688,87 @@ const RestConfig = ({
         onChange={(e) => onChange({ ...config, gold_cost: Number(e.target.value) })}
       />
     </div>
+    <div className="flex flex-col gap-1">
+      <FieldLabel>Шанс ночной вылазки</FieldLabel>
+      <input
+        type="number"
+        className="input-underline !text-sm"
+        value={(config.ambush_chance as number) ?? 0}
+        min={0}
+        max={1}
+        step={0.05}
+        onChange={(e) =>
+          onChange({ ...config, ambush_chance: Math.min(1, Math.max(0, Number(e.target.value) || 0)) })
+        }
+      />
+    </div>
+    <div className="flex flex-col gap-1">
+      <FieldLabel>Мобы вылазки (ID)</FieldLabel>
+      <input
+        className="input-underline !text-sm"
+        placeholder="1, 2"
+        value={mobIdsToString(config.ambush_mob_ids as number[])}
+        onChange={(e) => onChange({ ...config, ambush_mob_ids: parseMobIds(e.target.value) })}
+      />
+    </div>
+    <p className="col-span-2 text-white/40 text-[10px]">
+      Во время отдыха на привал могут напасть. Дозорный, если не задремлет, поднимет тревогу; иначе начнётся бой, а
+      отдых сорвётся. Шанс 0 — привал безопасен.
+    </p>
   </div>
 );
+
+/** Any room (FEAT-176): darkness, and a stash to be found by searching. */
+const DarkAndStashFields = ({
+  config,
+  onChange,
+}: {
+  config: Record<string, unknown>;
+  onChange: (c: Record<string, unknown>) => void;
+}) => {
+  const stash = (config.stash ?? null) as { items?: LootEntry[]; difficulty?: number } | null;
+  const setStash = (next: { items?: LootEntry[]; difficulty?: number } | null) => {
+    const { stash: _old, ...rest } = config;
+    void _old;
+    onChange(next && (next.items?.length || next.difficulty !== undefined) ? { ...rest, stash: next } : rest);
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      <label className="flex items-center gap-2 text-sm text-white/80 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={config.dark === true}
+          onChange={(e) => {
+            const { dark: _old, ...rest } = config;
+            void _old;
+            onChange(e.target.checked ? { ...rest, dark: true } : rest);
+          }}
+        />
+        Тёмная комната
+      </label>
+      <p className="text-white/40 text-[10px] -mt-2">
+        Пока не зажгут свет, выходы скрыты, ловушки бьют на 50% больнее, а обыск невозможен.
+      </p>
+      <LootTable
+        items={stash?.items ?? []}
+        label="Тайник (найдут при обыске)"
+        onChange={(items) => setStash({ ...(stash ?? {}), items })}
+      />
+      {stash?.items?.length ? (
+        <div className="flex flex-col gap-1">
+          <FieldLabel>Сложность обыска</FieldLabel>
+          <input
+            type="number"
+            min={0}
+            className="input-underline !text-sm !w-24"
+            value={stash.difficulty ?? 12}
+            onChange={(e) => setStash({ ...stash, difficulty: Math.max(0, Number(e.target.value) || 0) })}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+};
 
 const MerchantConfig = ({
   config,
@@ -654,32 +861,133 @@ const TeleportConfig = ({
   rooms: DungeonRoom[];
   currentRoomId: number;
   onChange: (c: Record<string, unknown>) => void;
-}) => (
-  <div className="flex flex-col gap-1">
-    <FieldLabel>Целевая комната</FieldLabel>
-    <select
-      className="input-underline !text-sm"
-      value={(config.target_room_id as number) ?? ''}
-      onChange={(e) =>
-        onChange({
-          ...config,
-          target_room_id: e.target.value ? Number(e.target.value) : null,
-        })
-      }
-    >
-      <option value="" className="bg-site-dark text-white">
-        — Выберите комнату —
-      </option>
-      {rooms
-        .filter((r) => r.id !== currentRoomId)
-        .map((r) => (
-          <option key={r.id} value={r.id} className="bg-site-dark text-white">
-            {r.name} ({ROOM_TYPE_LABELS[r.room_type] || r.room_type})
-          </option>
+}) => {
+  const red = config.portal === 'red';
+  const others = rooms.filter((r) => r.id !== currentRoomId);
+  const redTargets = Array.isArray(config.target_room_ids)
+    ? (config.target_room_ids as number[])
+    : [];
+  const toggleTarget = (id: number) =>
+    onChange({
+      ...config,
+      target_room_ids: redTargets.includes(id)
+        ? redTargets.filter((t) => t !== id)
+        : [...redTargets, id],
+    });
+  return (
+    <div className="flex flex-col gap-2">
+      <FieldLabel>Портал</FieldLabel>
+      <div className="flex flex-wrap gap-2">
+        {(
+          [
+            ['blue', 'Синий — по желанию'],
+            ['red', 'Красный — ловушка'],
+          ] as const
+        ).map(([kind, label]) => (
+          <button
+            key={kind}
+            type="button"
+            onClick={() => onChange({ ...config, portal: kind })}
+            className={`text-xs px-3 py-1.5 rounded-card border transition-colors ${
+              (config.portal ?? 'blue') === kind
+                ? kind === 'red'
+                  ? 'border-red-500/60 bg-red-600/20 text-red-200'
+                  : 'border-cyan-500/60 bg-cyan-600/20 text-cyan-100'
+                : 'border-white/15 text-white/50 hover:text-white/80'
+            }`}
+          >
+            {label}
+          </button>
         ))}
-    </select>
-  </div>
-);
+      </div>
+      {red ? (
+        <>
+          <p className="text-white/40 text-xs">
+            При входе группа делает проверку. Успех — портал раскрыт и больше не
+            опасен. Провал — группу выбрасывает в случайную комнату из
+            отмеченных.
+          </p>
+          <FieldLabel>Проверяемая характеристика</FieldLabel>
+          <select
+            className="input-underline !text-sm"
+            value={(config.stat_check as string) || 'intelligence'}
+            onChange={(e) =>
+              onChange({ ...config, stat_check: e.target.value })
+            }
+          >
+            {STAT_CHECK_OPTIONS.map((s) => (
+              <option
+                key={s.value}
+                value={s.value}
+                className="bg-site-dark text-white"
+              >
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <FieldLabel>Сложность</FieldLabel>
+          <input
+            type="number"
+            min={0}
+            className="input-underline !text-sm"
+            value={(config.difficulty as number) ?? 10}
+            onChange={(e) =>
+              onChange({
+                ...config,
+                difficulty: Math.max(0, Number(e.target.value) || 0),
+              })
+            }
+          />
+          <FieldLabel>Куда может выбросить</FieldLabel>
+          <div className="flex flex-col gap-1 max-h-48 overflow-y-auto pr-1">
+            {others.map((r) => (
+              <label
+                key={r.id}
+                className="flex items-center gap-2 text-sm text-white/80 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={redTargets.includes(r.id)}
+                  onChange={() => toggleTarget(r.id)}
+                />
+                <span className="break-words">
+                  {r.name} ({ROOM_TYPE_LABELS[r.room_type] || r.room_type})
+                </span>
+              </label>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <FieldLabel>Целевая комната</FieldLabel>
+          <select
+            className="input-underline !text-sm"
+            value={(config.target_room_id as number) ?? ''}
+            onChange={(e) =>
+              onChange({
+                ...config,
+                target_room_id: e.target.value ? Number(e.target.value) : null,
+              })
+            }
+          >
+            <option value="" className="bg-site-dark text-white">
+              — Выберите комнату —
+            </option>
+            {others.map((r) => (
+              <option
+                key={r.id}
+                value={r.id}
+                className="bg-site-dark text-white"
+              >
+                {r.name} ({ROOM_TYPE_LABELS[r.room_type] || r.room_type})
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+    </div>
+  );
+};
 
 // --- Room Config Renderer ---
 
@@ -737,11 +1045,21 @@ const RoomConfigEditor = ({
 const RoomPanel = ({
   room,
   rooms,
+  corridors,
+  floorsCount,
+  onAddCorridor,
+  onCorridorChange,
+  onDeleteCorridor,
   onRoomChange,
   onDeleteRoom,
 }: {
   room: DungeonRoom;
   rooms: DungeonRoom[];
+  corridors: DungeonCorridor[];
+  floorsCount: number;
+  onAddCorridor: (corridor: Omit<DungeonCorridor, 'id'>) => void;
+  onCorridorChange: (corridor: DungeonCorridor) => void;
+  onDeleteCorridor: (corridorId: number) => void;
   onRoomChange: (room: DungeonRoom) => void;
   onDeleteRoom: (roomId: number) => void;
 }) => {
@@ -839,6 +1157,19 @@ const RoomPanel = ({
         />
       </div>
 
+      {/* Footprint on the 3D miniature; empty = the usual size for the room's kind */}
+      <div className="flex flex-col gap-1">
+        <FieldLabel>Размер на макете (клетки)</FieldLabel>
+        <div className="flex items-center gap-2">
+          <SizeInput room={room} axis={0} onChange={update} />
+          <span className="text-white/40 text-xs">×</span>
+          <SizeInput room={room} axis={1} onChange={update} />
+        </div>
+        <p className="text-[10px] text-white/40">
+          Пусто — обычный размер для типа комнаты.
+        </p>
+      </div>
+
       {/* Flags */}
       <div className="flex flex-col gap-2 mt-1">
         <label className="flex items-center gap-2 text-xs text-white cursor-pointer">
@@ -880,6 +1211,43 @@ const RoomPanel = ({
         config={room.room_config || {}}
         rooms={rooms}
         currentRoomId={room.id}
+        onChange={(room_config) => update({ room_config })}
+      />
+
+      <SectionHeader>Этаж</SectionHeader>
+      <select
+        className="input-underline !text-sm !w-32"
+        value={room.floor ?? 1}
+        onChange={(e) => update({ floor: Number(e.target.value) })}
+      >
+        {Array.from({ length: floorsCount + 1 }, (_, i) => i + 1).map((f) => (
+          <option key={f} value={f} className="bg-site-dark text-white">
+            Этаж {f}
+          </option>
+        ))}
+      </select>
+
+      <SectionHeader>Переходы между этажами</SectionHeader>
+      <PassagesEditor
+        room={room}
+        rooms={rooms}
+        corridors={corridors}
+        onAdd={onAddCorridor}
+        onChange={onCorridorChange}
+        onDelete={onDeleteCorridor}
+      />
+
+      <SectionHeader>Рычаг</SectionHeader>
+      <LeverField
+        config={room.room_config || {}}
+        rooms={rooms}
+        corridors={corridors}
+        onChange={(room_config) => update({ room_config })}
+      />
+
+      <SectionHeader>Темнота и тайник</SectionHeader>
+      <DarkAndStashFields
+        config={room.room_config || {}}
         onChange={(room_config) => update({ room_config })}
       />
 
@@ -925,7 +1293,328 @@ const RoomPanel = ({
   );
 };
 
+// --- Passages between floors ---
+
+const PASSAGE_OPTIONS = [
+  { value: 'stairs', label: 'Лестница' },
+  { value: 'drop', label: 'Провал (только вниз)' },
+  { value: 'lift', label: 'Подъёмник' },
+] as const;
+
+const PassagesEditor = ({
+  room,
+  rooms,
+  corridors,
+  onAdd,
+  onChange,
+  onDelete,
+}: {
+  room: DungeonRoom;
+  rooms: DungeonRoom[];
+  corridors: DungeonCorridor[];
+  onAdd: (corridor: Omit<DungeonCorridor, 'id'>) => void;
+  onChange: (corridor: DungeonCorridor) => void;
+  onDelete: (corridorId: number) => void;
+}) => {
+  const floor = room.floor ?? 1;
+  const [kind, setKind] = useState<'stairs' | 'drop' | 'lift'>('stairs');
+  const [target, setTarget] = useState<number | ''>('');
+  const nameOf = (id: number) =>
+    rooms.find((r) => r.id === id)?.name ?? `#${id}`;
+  const floorOfId = (id: number) => rooms.find((r) => r.id === id)?.floor ?? 1;
+  const mine = corridors.filter(
+    (c) =>
+      (c.passage_type ?? 'corridor') !== 'corridor' &&
+      (c.from_room_id === room.id || c.to_room_id === room.id),
+  );
+  // A drop only goes down; stairs and lifts go one floor either way.
+  const targets = rooms.filter((r) => {
+    const f = r.floor ?? 1;
+    return kind === 'drop' ? f === floor + 1 : Math.abs(f - floor) === 1;
+  });
+
+  return (
+    <div className="flex flex-col gap-2">
+      {mine.length === 0 && (
+        <p className="text-white/40 text-xs">
+          Отсюда нет переходов на другие этажи.
+        </p>
+      )}
+      {mine.map((c) => {
+        const other =
+          c.from_room_id === room.id ? c.to_room_id : c.from_room_id;
+        const cfg = (c.passage_config ?? {}) as Record<string, unknown>;
+        const hidden = !!cfg.hidden;
+        const setCfg = (partial: Record<string, unknown>) =>
+          onChange({ ...c, passage_config: { ...cfg, ...partial } });
+        return (
+          <div
+            key={c.id}
+            className="flex flex-col gap-1.5 rounded border border-white/10 p-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-white/80 break-words">
+                {c.passage_type === 'drop' && c.to_room_id === room.id
+                  ? `Сюда падают из «${nameOf(other)}» (этаж ${floorOfId(other)})`
+                  : `${PASSAGE_OPTIONS.find((o) => o.value === c.passage_type)?.label} → ${nameOf(other)} (этаж ${floorOfId(other)})`}
+              </span>
+              <button
+                type="button"
+                onClick={() => onDelete(c.id)}
+                className="text-site-red/80 hover:text-site-red text-xs shrink-0"
+              >
+                Удалить
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-white/40">Стамина</span>
+              <input
+                type="number"
+                min={0}
+                className="input-underline !text-sm !w-16"
+                value={c.stamina_cost}
+                onChange={(e) =>
+                  onChange({
+                    ...c,
+                    stamina_cost: Math.max(0, Number(e.target.value) || 0),
+                  })
+                }
+              />
+            </div>
+            {c.passage_type === 'drop' && (
+              <>
+                <label className="flex items-center gap-2 text-xs text-white cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hidden}
+                    onChange={(e) => setCfg({ hidden: e.target.checked })}
+                    className="accent-gold w-3.5 h-3.5"
+                  />
+                  Скрытый: ловушка при входе в комнату
+                </label>
+                {hidden && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <select
+                      className="input-underline !text-xs"
+                      value={(cfg.stat_check as string) || 'intelligence'}
+                      onChange={(e) => setCfg({ stat_check: e.target.value })}
+                    >
+                      {STAT_CHECK_OPTIONS.map((s) => (
+                        <option
+                          key={s.value}
+                          value={s.value}
+                          className="bg-site-dark text-white"
+                        >
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={0}
+                      title="Сложность"
+                      className="input-underline !text-xs"
+                      value={(cfg.difficulty as number) ?? 12}
+                      onChange={(e) =>
+                        setCfg({
+                          difficulty: Math.max(0, Number(e.target.value) || 0),
+                        })
+                      }
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      title="Урон при падении"
+                      className="input-underline !text-xs"
+                      value={(cfg.fail_damage as number) ?? 15}
+                      onChange={(e) =>
+                        setCfg({
+                          fail_damage: Math.max(0, Number(e.target.value) || 0),
+                        })
+                      }
+                    />
+                  </div>
+                )}
+              </>
+            )}
+            {c.passage_type === 'lift' && (
+              <>
+                <KeySelect
+                  value={c.lock_config?.key}
+                  empty={
+                    c.lock_config?.lever ? '— Без ключа —' : '— Не заперт —'
+                  }
+                  onChange={(k) =>
+                    onChange({
+                      ...c,
+                      lock_config: k
+                        ? { pickable: false, ...c.lock_config, key: k }
+                        : c.lock_config?.lever
+                          ? { ...c.lock_config, key: null }
+                          : null,
+                    })
+                  }
+                />
+                <label className="flex items-center gap-2 text-xs text-white cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!c.lock_config?.lever}
+                    onChange={(e) =>
+                      onChange({
+                        ...c,
+                        lock_config: e.target.checked
+                          ? { pickable: false, ...c.lock_config, lever: true }
+                          : c.lock_config?.key
+                            ? { ...c.lock_config, lever: false }
+                            : null,
+                      })
+                    }
+                    className="accent-gold w-3.5 h-3.5"
+                  />
+                  Включается рычагом
+                </label>
+              </>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="flex flex-col gap-1.5 rounded border border-dashed border-white/15 p-2">
+        <span className="text-[10px] text-white/40">Новый переход</span>
+        <select
+          className="input-underline !text-sm"
+          value={kind}
+          onChange={(e) => {
+            setKind(e.target.value as typeof kind);
+            setTarget('');
+          }}
+        >
+          {PASSAGE_OPTIONS.map((o) => (
+            <option
+              key={o.value}
+              value={o.value}
+              className="bg-site-dark text-white"
+            >
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input-underline !text-sm"
+          value={target}
+          onChange={(e) =>
+            setTarget(e.target.value ? Number(e.target.value) : '')
+          }
+        >
+          <option value="" className="bg-site-dark text-white">
+            {targets.length ? '— Куда —' : 'На соседнем этаже нет комнат'}
+          </option>
+          {targets.map((r) => (
+            <option key={r.id} value={r.id} className="bg-site-dark text-white">
+              {r.name} (этаж {r.floor ?? 1})
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={target === ''}
+          onClick={() => {
+            if (target === '') return;
+            onAdd({
+              dungeon_id: room.dungeon_id,
+              from_room_id: room.id,
+              to_room_id: target,
+              stamina_cost: 1,
+              is_bidirectional: kind !== 'drop',
+              random_battle_chance: 0,
+              random_battle_mob_ids: null,
+              trap_chance: 0,
+              trap_config: null,
+              lock_config: null,
+              passage_type: kind,
+              passage_config: null,
+              description: null,
+              source_handle: null,
+              target_handle: null,
+            });
+            setTarget('');
+          }}
+          className="text-xs px-3 py-1.5 rounded border border-white/20 text-white/80 hover:text-white disabled:opacity-40"
+        >
+          Добавить переход
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/** A lever in this room: which locked door or lift it opens. */
+const LeverField = ({
+  config,
+  rooms,
+  corridors,
+  onChange,
+}: {
+  config: Record<string, unknown>;
+  rooms: DungeonRoom[];
+  corridors: DungeonCorridor[];
+  onChange: (c: Record<string, unknown>) => void;
+}) => {
+  const nameOf = (id: number) =>
+    rooms.find((r) => r.id === id)?.name ?? `#${id}`;
+  // Only saved corridors: the server checks the lever's target exists.
+  const lockable = corridors.filter((c) => c.id > 0 && c.lock_config?.lever);
+  const value = (config.lever_corridor_id as number | undefined) ?? '';
+  return (
+    <div className="flex flex-col gap-1">
+      <select
+        className="input-underline !text-sm"
+        value={value}
+        onChange={(e) => {
+          const { lever_corridor_id: _old, ...rest } = config;
+          onChange(
+            e.target.value
+              ? { ...rest, lever_corridor_id: Number(e.target.value) }
+              : rest,
+          );
+        }}
+      >
+        <option value="" className="bg-site-dark text-white">
+          — Нет рычага —
+        </option>
+        {lockable.map((c) => (
+          <option key={c.id} value={c.id} className="bg-site-dark text-white">
+            {nameOf(c.from_room_id)} — {nameOf(c.to_room_id)}
+          </option>
+        ))}
+      </select>
+      <p className="text-white/40 text-[10px]">
+        Список — сохранённые двери и подъёмники с галочкой «рычагом». Новый
+        коридор сначала сохраните.
+      </p>
+    </div>
+  );
+};
+
 // --- Corridor Panel ---
+
+/** Secret ways out (FEAT-176): each opened by one class's craft, by anyone at a cost. */
+const SECRET_OPTIONS = [
+  { value: 'mechanism', label: 'Скрытый механизм (плут, ловкость)' },
+  { value: 'illusion', label: 'Иллюзорная стена (маг, интеллект)' },
+  { value: 'rubble', label: 'Завал (воин, сила)' },
+];
+const SECRET_HINT_PLACEHOLDERS: Record<string, string> = {
+  mechanism: 'Плиты пола у одной из стен стёрты сильнее, чем везде…',
+  illusion: 'Одна из стен будто чуть дрожит…',
+  rubble: 'У стены громоздится завал, из-за камней тянет сквозняком…',
+};
+const SECRET_HINT_MAX = 300;
+/** A gate down across the corridor (FEAT-176): held up and propped by someone strong. */
+const GATE_OPTIONS = [
+  { value: 'grate', label: 'Решётка' },
+  { value: 'slab', label: 'Каменная плита' },
+];
 
 const CorridorPanel = ({
   corridor,
@@ -947,6 +1636,38 @@ const CorridorPanel = ({
   const fromRoom = rooms.find((r) => r.id === corridor.from_room_id);
   const toRoom = rooms.find((r) => r.id === corridor.to_room_id);
   const trapConfig = (corridor.trap_config || {}) as Record<string, unknown>;
+  const lock = corridor.lock_config ?? null;
+  const setLock = (
+    partial: Partial<NonNullable<DungeonCorridor['lock_config']>>,
+  ) => update({ lock_config: lock ? { ...lock, ...partial } : null });
+  const passageConfig = (corridor.passage_config ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const secret = (passageConfig.secret ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  const setSecret = (next: Record<string, unknown> | null) => {
+    const { secret: _old, ...rest } = passageConfig;
+    void _old;
+    const config = next ? { ...rest, secret: next } : rest;
+    update({ passage_config: Object.keys(config).length ? config : null });
+  };
+  const gate = (passageConfig.gate ?? null) as Record<string, unknown> | null;
+  const seal = (passageConfig.seal ?? null) as Record<string, unknown> | null;
+  const setSeal = (next: Record<string, unknown> | null) => {
+    const { seal: _old, ...rest } = passageConfig;
+    void _old;
+    const config = next ? { ...rest, seal: next } : rest;
+    update({ passage_config: Object.keys(config).length ? config : null });
+  };
+  const setGate = (next: Record<string, unknown> | null) => {
+    const { gate: _old, ...rest } = passageConfig;
+    void _old;
+    const config = next ? { ...rest, gate: next } : rest;
+    update({ passage_config: Object.keys(config).length ? config : null });
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -1095,6 +1816,347 @@ const CorridorPanel = ({
         </div>
       )}
 
+      {!gate && (
+        <>
+          {/* Secret way */}
+          <SectionHeader>Тайный проход</SectionHeader>
+
+          <div className="flex flex-col gap-1">
+            <FieldLabel>Вид</FieldLabel>
+            <select
+              className="input-underline !text-sm"
+              value={(secret?.kind as string) ?? ''}
+              onChange={(e) =>
+                setSecret(
+                  e.target.value ? { ...secret, kind: e.target.value } : null,
+                )
+              }
+            >
+              <option value="" className="bg-site-dark text-white">
+                — Обычный коридор —
+              </option>
+              {SECRET_OPTIONS.map((o) => (
+                <option
+                  key={o.value}
+                  value={o.value}
+                  className="bg-site-dark text-white"
+                >
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {secret && (
+            <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Сложность</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={(secret.difficulty as number) ?? 12}
+                    onChange={(e) =>
+                      setSecret({
+                        ...secret,
+                        difficulty: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Стамина за попытку</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={(secret.cost as number) ?? 2}
+                    onChange={(e) =>
+                      setSecret({
+                        ...secret,
+                        cost: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              {secret.kind === 'rubble' && (
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Урон при обвале</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm !w-24"
+                    value={(secret.fail_damage as number) ?? 10}
+                    onChange={(e) =>
+                      setSecret({
+                        ...secret,
+                        fail_damage: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+              )}
+              <div className="flex flex-col gap-1">
+                <FieldLabel>Подсказка игрокам (пусто — стандартная)</FieldLabel>
+                <textarea
+                  className="input-underline !text-sm resize-none"
+                  rows={2}
+                  maxLength={SECRET_HINT_MAX}
+                  placeholder={SECRET_HINT_PLACEHOLDERS[secret.kind as string]}
+                  value={(secret.hint as string) ?? ''}
+                  onChange={(e) =>
+                    setSecret({ ...secret, hint: e.target.value || undefined })
+                  }
+                />
+              </div>
+              <p className="text-white/40 text-[10px]">
+                Проход не виден, пока его не откроют из комнаты «
+                {fromRoom?.name || `#${corridor.from_room_id}`}»: там игроки
+                видят подсказку. Открыть может любой, но своему классу легче.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Gate */}
+      {!secret && (
+        <>
+          <SectionHeader>Решётка</SectionHeader>
+          <div className="flex flex-col gap-1">
+            <FieldLabel>Перекрыт</FieldLabel>
+            <select
+              className="input-underline !text-sm"
+              value={(gate?.look as string) ?? ''}
+              onChange={(e) =>
+                setGate(
+                  e.target.value ? { ...gate, look: e.target.value } : null,
+                )
+              }
+            >
+              <option value="" className="bg-site-dark text-white">
+                — Нет —
+              </option>
+              {GATE_OPTIONS.map((o) => (
+                <option
+                  key={o.value}
+                  value={o.value}
+                  className="bg-site-dark text-white"
+                >
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {gate && (
+            <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Сложность</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={(gate.difficulty as number) ?? 12}
+                    onChange={(e) =>
+                      setGate({
+                        ...gate,
+                        difficulty: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Стамина</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={(gate.cost as number) ?? 2}
+                    onChange={(e) =>
+                      setGate({
+                        ...gate,
+                        cost: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Урон</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={(gate.fail_damage as number) ?? 10}
+                    onChange={(e) =>
+                      setGate({
+                        ...gate,
+                        fail_damage: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <p className="text-white/40 text-[10px]">
+                Пройти нельзя, пока кто-то не поднимет и не подопрёт её (с обеих
+                сторон коридора); дальше проход открыт до конца забега. Сорвётся
+                — урон тому, кто держал. Лучше не совмещать с замком: открытие
+                одного откроет и другое.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Seal */}
+      {!secret && !gate && (
+        <>
+          <SectionHeader>Магическая печать</SectionHeader>
+          <label className="flex items-center gap-2 text-sm text-white/80 cursor-pointer">
+            <input type="checkbox" checked={!!seal} onChange={(e) => setSeal(e.target.checked ? {} : null)} />
+            Проход запечатан
+          </label>
+          {seal && (
+            <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    ['difficulty', 'Сложность', 12],
+                    ['cost', 'Стамина', 2],
+                    ['fail_damage', 'Урон', 12],
+                  ] as const
+                ).map(([field, label, fallback]) => (
+                  <div key={field} className="flex flex-col gap-1">
+                    <FieldLabel>{label}</FieldLabel>
+                    <input
+                      type="number"
+                      min={0}
+                      className="input-underline !text-sm"
+                      value={(seal[field] as number) ?? fallback}
+                      onChange={(e) => setSeal({ ...seal, [field]: Math.max(0, Number(e.target.value) || 0) })}
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="text-white/40 text-[10px]">
+                Пройти нельзя (с обеих сторон), пока печать не снимут — это ремесло мага, мини-игра или бросок
+                интеллекта. Сорвётся — урон тому, кто снимал. Не совмещайте с замком.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Lock */}
+      <SectionHeader>Замок</SectionHeader>
+
+      <div className="flex flex-col gap-1">
+        <FieldLabel>Дверь открывает</FieldLabel>
+        <KeySelect
+          value={lock?.key}
+          empty={lock?.lever ? '— Без ключа —' : '— Не заперта —'}
+          onChange={(kind) =>
+            update({
+              lock_config: kind
+                ? { pickable: true, ...lock, key: kind }
+                : lock?.lever
+                  ? { ...lock, key: null }
+                  : null,
+            })
+          }
+        />
+      </div>
+
+      <label className="flex items-center gap-2 text-xs text-white cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!lock?.lever}
+          onChange={(e) =>
+            update({
+              lock_config: e.target.checked
+                ? { pickable: false, ...lock, lever: true }
+                : lock?.key
+                  ? { ...lock, lever: false }
+                  : null,
+            })
+          }
+          className="accent-gold w-3.5 h-3.5"
+        />
+        Открывается рычагом (рычаг ставится в комнате)
+      </label>
+
+      {lock && (
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 text-xs text-white cursor-pointer">
+            <input
+              type="checkbox"
+              checked={lock.pickable !== false}
+              onChange={(e) => setLock({ pickable: e.target.checked })}
+              className="accent-gold w-3.5 h-3.5"
+            />
+            Можно взломать без ключа
+          </label>
+          {lock.pickable !== false && (
+            <>
+              <div className="flex flex-col gap-1">
+                <FieldLabel>Характеристика взлома</FieldLabel>
+                <select
+                  className="input-underline !text-sm"
+                  value={lock.stat_check || 'agility'}
+                  onChange={(e) => setLock({ stat_check: e.target.value })}
+                >
+                  {STAT_CHECK_OPTIONS.map((s) => (
+                    <option
+                      key={s.value}
+                      value={s.value}
+                      className="bg-site-dark text-white"
+                    >
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Сложность</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={lock.difficulty ?? 12}
+                    onChange={(e) =>
+                      setLock({
+                        difficulty: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Стамина за попытку</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    className="input-underline !text-sm"
+                    value={lock.pick_cost ?? 2}
+                    onChange={(e) =>
+                      setLock({
+                        pick_cost: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            </>
+          )}
+          <p className="text-white/40 text-[10px]">
+            Ключ выдаётся в сундуке сокровищницы, за победу в боевой комнате или
+            исходом события и открывает все двери своего цвета до конца забега.
+          </p>
+        </div>
+      )}
+
       {/* Delete button */}
       <div className="mt-4 pt-3 border-t border-white/10">
         {!showDeleteConfirm ? (
@@ -1141,6 +2203,9 @@ const PropertyPanel = ({
   selectedRoom,
   selectedCorridor,
   rooms,
+  corridors,
+  floorsCount,
+  onAddCorridor,
   onRoomChange,
   onCorridorChange,
   onDeleteRoom,
@@ -1156,6 +2221,11 @@ const PropertyPanel = ({
         <RoomPanel
           room={selectedRoom}
           rooms={rooms}
+          corridors={corridors}
+          floorsCount={floorsCount}
+          onAddCorridor={onAddCorridor}
+          onCorridorChange={onCorridorChange}
+          onDeleteCorridor={onDeleteCorridor}
           onRoomChange={onRoomChange}
           onDeleteRoom={onDeleteRoom}
         />

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { motion } from 'motion/react';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
@@ -8,14 +8,9 @@ import {
   selectDistributeLoading,
   selectLastDistributeResponse,
   selectFinalizeLoading,
-  selectLastFinalizeResponse,
 } from '../../redux/slices/dungeonSlice';
-import type {
-  GroupInventoryItem,
-  SessionMember,
-  LootDistribution,
-  DistributeLootResponse,
-} from '../../api/dungeons';
+import { itemLabel } from '../../api/dungeons';
+import type { GroupInventoryItem, SessionMember, LootDistribution } from '../../api/dungeons';
 
 // --- Types ---
 
@@ -25,436 +20,288 @@ interface DungeonLootDistributionProps {
   groupInventory: GroupInventoryItem[];
   members: SessionMember[];
   isLeader: boolean;
-  onFinalized: () => void;
 }
 
-interface AllocationEntry {
+interface AggregatedItem {
   item_id: number;
-  character_id: number;
+  name: string;
   quantity: number;
 }
 
+/** key = `${item_id}:${character_id}` → quantity */
+type Allocations = Record<string, number>;
+
+const allocKey = (itemId: number, characterId: number) => `${itemId}:${characterId}`;
+
 // --- Component ---
 
+/**
+ * Sharing the loot of an ended run (completed or escaped). The leader hands
+ * items out (partially if wanted); the run is then closed with «Завершить
+ * забег». Undivided leftovers are lost only after an explicit confirm
+ * (finalize with force=true).
+ */
 const DungeonLootDistribution = ({
   sessionId,
   characterId,
   groupInventory,
   members,
   isLeader,
-  onFinalized,
 }: DungeonLootDistributionProps) => {
   const dispatch = useAppDispatch();
   const distributeLoading = useAppSelector(selectDistributeLoading);
   const lastDistributeResponse = useAppSelector(selectLastDistributeResponse);
   const finalizeLoading = useAppSelector(selectFinalizeLoading);
-  const lastFinalizeResponse = useAppSelector(selectLastFinalizeResponse);
 
-  const [allocations, setAllocations] = useState<AllocationEntry[]>([]);
-  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [allocations, setAllocations] = useState<Allocations>({});
+  const [showForceConfirm, setShowForceConfirm] = useState(false);
+  // Loot goes to the living only (the backend refuses the fallen).
+  const recipients = useMemo(() => members.filter((m) => m.status !== 'dead'), [members]);
 
-  // Only alive members can receive loot
-  const aliveMembers = useMemo(
-    () => members.filter((m) => m.status === 'alive'),
-    [members],
-  );
-
-  // Calculate how much of each item is already allocated
-  const allocatedByItem = useMemo(() => {
-    const map: Record<number, number> = {};
-    for (const a of allocations) {
-      map[a.item_id] = (map[a.item_id] ?? 0) + a.quantity;
+  // The same item can sit in several rows (different sources) — share by item.
+  const items = useMemo<AggregatedItem[]>(() => {
+    const map = new Map<number, AggregatedItem>();
+    for (const row of groupInventory) {
+      const existing = map.get(row.item_id);
+      if (existing) {
+        existing.quantity += row.quantity;
+      } else {
+        map.set(row.item_id, { item_id: row.item_id, name: itemLabel(row), quantity: row.quantity });
+      }
     }
-    return map;
-  }, [allocations]);
+    return Array.from(map.values());
+  }, [groupInventory]);
 
-  // Get remaining quantity for an item
-  const getRemainingQty = useCallback(
-    (item: GroupInventoryItem) => {
-      return item.quantity - (allocatedByItem[item.item_id] ?? 0);
-    },
-    [allocatedByItem],
+  const allocatedFor = useCallback(
+    (itemId: number) =>
+      recipients.reduce((sum, m) => sum + (allocations[allocKey(itemId, m.character_id)] ?? 0), 0),
+    [allocations, recipients],
   );
 
-  // Get allocation for a specific item + member
-  const getAllocation = useCallback(
-    (itemId: number, charId: number) => {
-      return allocations.find(
-        (a) => a.item_id === itemId && a.character_id === charId,
-      )?.quantity ?? 0;
-    },
-    [allocations],
-  );
+  const setQty = useCallback((itemId: number, charId: number, qty: number) => {
+    setAllocations((prev) => {
+      const next = { ...prev };
+      if (qty <= 0) delete next[allocKey(itemId, charId)];
+      else next[allocKey(itemId, charId)] = qty;
+      return next;
+    });
+  }, []);
 
-  // Set allocation for a specific item + member
-  const setAllocation = useCallback(
-    (itemId: number, charId: number, qty: number) => {
-      setAllocations((prev) => {
-        const without = prev.filter(
-          (a) => !(a.item_id === itemId && a.character_id === charId),
-        );
-        if (qty <= 0) return without;
-        return [...without, { item_id: itemId, character_id: charId, quantity: qty }];
+  /** Everything still unassigned goes to one member. */
+  const giveAllTo = useCallback(
+    (charId: number) => {
+      setAllocations(() => {
+        const next: Allocations = {};
+        for (const item of items) next[allocKey(item.item_id, charId)] = item.quantity;
+        return next;
       });
     },
-    [],
+    [items],
   );
 
-  // Increment/decrement helpers
-  const incrementAllocation = useCallback(
-    (item: GroupInventoryItem, charId: number) => {
-      const current = getAllocation(item.item_id, charId);
-      const remaining = getRemainingQty(item);
-      if (remaining > 0) {
-        setAllocation(item.item_id, charId, current + 1);
-      }
-    },
-    [getAllocation, getRemainingQty, setAllocation],
-  );
-
-  const decrementAllocation = useCallback(
-    (itemId: number, charId: number) => {
-      const current = getAllocation(itemId, charId);
-      if (current > 0) {
-        setAllocation(itemId, charId, current - 1);
-      }
-    },
-    [getAllocation, setAllocation],
-  );
-
-  // Build distributions for API
-  const buildDistributions = useCallback((): LootDistribution[] => {
-    return allocations
-      .filter((a) => a.quantity > 0)
-      .map((a) => ({ item_id: a.item_id, to_character_id: a.character_id, quantity: a.quantity }));
-  }, [allocations]);
-
-  // Total allocated items count
-  const totalAllocated = useMemo(
-    () => allocations.reduce((sum, a) => sum + a.quantity, 0),
+  const distributions = useMemo<LootDistribution[]>(
+    () =>
+      Object.entries(allocations)
+        .filter(([, qty]) => qty > 0)
+        .map(([key, qty]) => {
+          const [itemId, charId] = key.split(':').map(Number);
+          return { item_id: itemId, to_character_id: charId, quantity: qty };
+        }),
     [allocations],
   );
 
-  const totalAvailable = useMemo(
-    () => groupInventory.reduce((sum, item) => sum + item.quantity, 0),
-    [groupInventory],
-  );
+  const totalAllocated = distributions.reduce((s, d) => s + d.quantity, 0);
+  const totalAvailable = items.reduce((s, i) => s + i.quantity, 0);
+  const failedNames = (lastDistributeResponse?.failed ?? []).map((f) => {
+    const item = items.find((i) => i.item_id === f.item_id);
+    const member = members.find((m) => m.character_id === f.to_character_id);
+    return `${item?.name ?? `Предмет #${f.item_id}`} ×${f.quantity} → ${member?.name ?? `#${f.to_character_id}`}`;
+  });
 
-  const hasUnallocated = totalAllocated < totalAvailable;
+  const handleDistribute = () => {
+    if (distributions.length === 0) return;
+    dispatch(distributeLootThunk({ sessionId, characterId, distributions }))
+      .unwrap()
+      .then(() => setAllocations({}))
+      .catch(() => {
+        // Error toast + state refresh happen in the thunk.
+      });
+  };
 
-  // Handlers
-  const handleDistribute = useCallback(() => {
-    const distributions = buildDistributions();
-    if (distributions.length === 0 && groupInventory.length > 0) {
-      setShowDiscardConfirm(true);
-      return;
-    }
-    dispatch(distributeLootThunk({ sessionId, characterId, distributions }));
-  }, [dispatch, sessionId, characterId, buildDistributions, groupInventory.length]);
+  const handleFinalize = (force: boolean) => {
+    setShowForceConfirm(false);
+    dispatch(finalizeSessionThunk({ sessionId, characterId, force }));
+  };
 
-  const handleDiscardAndDistribute = useCallback(() => {
-    const distributions = buildDistributions();
-    dispatch(distributeLootThunk({ sessionId, characterId, distributions }));
-    setShowDiscardConfirm(false);
-  }, [dispatch, sessionId, characterId, buildDistributions]);
-
-  const handleFinalize = useCallback(() => {
-    dispatch(finalizeSessionThunk({ sessionId, characterId }));
-  }, [dispatch, sessionId, characterId]);
-
-  // After finalize success — redirect to location
-  useEffect(() => {
-    if (lastFinalizeResponse) {
-      onFinalized();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastFinalizeResponse]);
-
-  // After distribution: show summary
-  if (lastDistributeResponse) {
-    return (
-      <DistributionSummary
-        response={lastDistributeResponse}
-        isLeader={isLeader}
-        finalizeLoading={finalizeLoading}
-        onFinalize={handleFinalize}
-      />
-    );
-  }
-
-  // No items to distribute
-  if (groupInventory.length === 0) {
-    return (
-      <div className="bg-black/60 rounded-card p-6 sm:p-8 backdrop-blur-sm flex flex-col items-center gap-4 text-center">
-        <div className="w-16 h-16 flex items-center justify-center text-4xl">
-          {'\uD83D\uDCE6'}
-        </div>
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase">
-          Распределение добычи
-        </h2>
-        <p className="text-white/60 text-sm">
-          Групповой инвентарь пуст. Нечего распределять.
-        </p>
-        {isLeader && (
-          <button
-            onClick={handleFinalize}
-            disabled={finalizeLoading}
-            className="btn-blue text-sm sm:text-base px-8 py-3 disabled:opacity-50"
-          >
-            {finalizeLoading ? 'Завершение...' : 'Завершить подземелье'}
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // Main distribution UI
   return (
-    <div className="flex flex-col gap-4">
-      <div className="bg-black/60 rounded-card p-4 sm:p-6 backdrop-blur-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            Распределение добычи
-          </h2>
-          <span className="text-white/40 text-xs">
-            Распределено: {totalAllocated} / {totalAvailable}
-          </span>
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="flex flex-col gap-4"
+    >
+      <div className="bg-black/50 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">Дележ добычи</h2>
+          {items.length > 0 && (
+            <span className="text-white/40 text-xs">
+              Назначено: {totalAllocated} / {totalAvailable}
+            </span>
+          )}
         </div>
 
         {!isLeader && (
-          <div className="bg-white/5 rounded-card p-3 mb-4">
-            <p className="text-white/50 text-sm">
-              Лидер группы распределяет добычу. Ожидайте.
+          <p className="text-white/60 text-sm bg-white/5 rounded-card p-3">
+            Добычу делит лидер группы. Предметы придут в инвентарь, как только он их раздаст.
+          </p>
+        )}
+
+        {failedNames.length > 0 && (
+          <div className="bg-site-red/10 border border-site-red/30 rounded-card p-3" role="alert">
+            <p className="text-site-red text-sm font-medium mb-1">
+              Не удалось выдать — предметы вернулись в общий инвентарь:
             </p>
+            {failedNames.map((line, i) => (
+              <p key={i} className="text-site-red/80 text-xs">{line}</p>
+            ))}
           </div>
         )}
 
-        {/* Item list */}
-        <div className="flex flex-col gap-3">
-          {groupInventory.map((item) => {
-            const remaining = getRemainingQty(item);
-            return (
-              <div
-                key={item.item_id}
-                className="bg-white/5 rounded-card p-3 sm:p-4"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-white text-sm font-medium truncate mr-2">
-                    {item.item_name}
-                  </span>
-                  <span className={`text-xs shrink-0 ${remaining > 0 ? 'text-gold' : 'text-white/30'}`}>
-                    Осталось: {remaining}
-                  </span>
-                </div>
-
-                {/* Per-member allocation */}
-                {isLeader && (
-                  <div className="flex flex-col gap-2">
-                    {aliveMembers.map((member) => {
-                      const qty = getAllocation(item.item_id, member.character_id);
-                      return (
-                        <div
-                          key={member.character_id}
-                          className="flex items-center justify-between gap-2"
-                        >
-                          <span className="text-white/60 text-xs truncate min-w-0 flex-1">
-                            {member.name}
-                          </span>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => decrementAllocation(item.item_id, member.character_id)}
-                              disabled={qty === 0}
-                              className="w-7 h-7 flex items-center justify-center rounded bg-white/10 text-white/60 hover:bg-white/20 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm"
-                              aria-label="Уменьшить"
-                            >
-                              -
-                            </button>
-                            <span className="w-8 text-center text-white text-xs font-medium">
-                              {qty}
-                            </span>
-                            <button
-                              onClick={() => incrementAllocation(item, member.character_id)}
-                              disabled={remaining === 0}
-                              className="w-7 h-7 flex items-center justify-center rounded bg-white/10 text-white/60 hover:bg-white/20 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm"
-                              aria-label="Увеличить"
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+        {items.length === 0 ? (
+          <p className="text-white/60 text-sm">Общий инвентарь пуст — делить нечего.</p>
+        ) : (
+          <>
+            {isLeader && recipients.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-white/40 text-xs">Отдать всё:</span>
+                {recipients.map((m) => (
+                  <button
+                    key={m.character_id}
+                    onClick={() => giveAllTo(m.character_id)}
+                    className="chip-outline rounded-full px-3 py-1 text-xs"
+                  >
+                    {m.name}
+                  </button>
+                ))}
               </div>
-            );
-          })}
-        </div>
+            )}
+
+            <div className="flex flex-col gap-3">
+              {items.map((item) => {
+                const remaining = item.quantity - allocatedFor(item.item_id);
+                return (
+                  <div key={item.item_id} className="bg-white/5 rounded-card p-3 sm:p-4">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-white text-sm font-medium truncate">{item.name}</span>
+                      <span className={`text-xs shrink-0 ${remaining > 0 ? 'text-gold' : 'text-white/30'}`}>
+                        {isLeader ? `Свободно: ${remaining}` : `×${item.quantity}`}
+                      </span>
+                    </div>
+
+                    {isLeader && (
+                      <div className="flex flex-col gap-2">
+                        {recipients.map((member) => {
+                          const qty = allocations[allocKey(item.item_id, member.character_id)] ?? 0;
+                          return (
+                            <div key={member.character_id} className="flex items-center justify-between gap-2">
+                              <span className="text-white/60 text-xs truncate min-w-0 flex-1">
+                                {member.name}
+                              </span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={() => setQty(item.item_id, member.character_id, qty - 1)}
+                                  disabled={qty === 0}
+                                  className="w-8 h-8 flex items-center justify-center rounded-card bg-white/10 text-white/60 hover:bg-white/20 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm"
+                                  aria-label="Уменьшить"
+                                >
+                                  −
+                                </button>
+                                <span className="w-8 text-center text-white text-xs font-medium">{qty}</span>
+                                <button
+                                  onClick={() => setQty(item.item_id, member.character_id, qty + 1)}
+                                  disabled={remaining <= 0}
+                                  className="w-8 h-8 flex items-center justify-center rounded-card bg-white/10 text-white/60 hover:bg-white/20 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm"
+                                  aria-label="Увеличить"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {isLeader && (
+          <div className="flex flex-col sm:flex-row gap-3">
+            {items.length > 0 && (
+              <button
+                onClick={handleDistribute}
+                disabled={distributeLoading || distributions.length === 0}
+                className="btn-blue text-sm px-6 py-2.5 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {distributeLoading ? 'Раздаём...' : 'Раздать назначенное'}
+              </button>
+            )}
+            {items.length === 0 ? (
+              <button
+                onClick={() => handleFinalize(false)}
+                disabled={finalizeLoading}
+                className="btn-blue text-sm px-6 py-2.5 flex-1 disabled:opacity-50"
+              >
+                {finalizeLoading ? 'Завершение...' : 'Завершить забег'}
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowForceConfirm(true)}
+                disabled={finalizeLoading || distributeLoading}
+                className="text-sm px-6 py-2.5 flex-1 rounded-card border border-site-red/40 text-site-red hover:bg-site-red/10 transition-colors disabled:opacity-50"
+              >
+                Закрыть забег, остаток пропадёт
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Member summary cards */}
-      {isLeader && totalAllocated > 0 && (
-        <div className="bg-black/40 rounded-card p-4 backdrop-blur-sm">
-          <h3 className="gold-text text-sm font-medium uppercase mb-3">
-            Итог распределения
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {aliveMembers.map((member) => {
-              const memberItems = allocations.filter(
-                (a) => a.character_id === member.character_id && a.quantity > 0,
-              );
-              if (memberItems.length === 0) return null;
-              return (
-                <div
-                  key={member.character_id}
-                  className="bg-white/5 rounded-card p-3"
-                >
-                  <p className="text-white text-xs font-medium mb-1.5 truncate">
-                    {member.name}
-                  </p>
-                  {memberItems.map((a) => {
-                    const item = groupInventory.find((i) => i.item_id === a.item_id);
-                    return (
-                      <p key={a.item_id} className="text-white/50 text-xs">
-                        {item?.item_name ?? `#${a.item_id}`} x{a.quantity}
-                      </p>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Actions */}
-      {isLeader && (
-        <div className="flex flex-col sm:flex-row gap-3">
-          <button
-            onClick={handleDistribute}
-            disabled={distributeLoading}
-            className="btn-blue text-sm px-6 py-2.5 flex-1 disabled:opacity-50"
-          >
-            {distributeLoading
-              ? 'Распределение...'
-              : hasUnallocated
-                ? 'Распределить (остаток будет выброшен)'
-                : 'Распределить'}
-          </button>
-        </div>
-      )}
-
-      {/* Discard confirmation modal */}
       <ModalShell
-        open={showDiscardConfirm}
-        onClose={() => setShowDiscardConfirm(false)}
-        title="Выбросить всю добычу?"
+        open={showForceConfirm}
+        onClose={() => setShowForceConfirm(false)}
+        title="Закрыть забег?"
         size="sm"
         footer={
           <>
-            <button
-              onClick={() => setShowDiscardConfirm(false)}
-              className="btn-line text-sm w-full sm:w-auto"
-            >
+            <button onClick={() => setShowForceConfirm(false)} className="btn-line text-sm w-full sm:w-auto">
               Назад
             </button>
             <button
-              onClick={handleDiscardAndDistribute}
-              disabled={distributeLoading}
+              onClick={() => handleFinalize(true)}
+              disabled={finalizeLoading}
               className="text-sm px-5 py-2 w-full sm:w-auto rounded-card bg-site-red/20 border border-site-red/40 text-site-red hover:bg-site-red/30 transition-colors disabled:opacity-50"
             >
-              {distributeLoading ? 'Выполнение...' : 'Выбросить всё'}
+              {finalizeLoading ? 'Закрываем...' : 'Закрыть, остаток пропадёт'}
             </button>
           </>
         }
       >
-        <p className="text-white/70 text-sm">
-          Вы не назначили ни одного предмета. Все предметы будут потеряны.
+        <p className="text-white/70 text-sm mb-2">
+          В общем инвентаре ещё {totalAvailable} шт. нерозданной добычи. Если закрыть забег сейчас, она
+          пропадёт навсегда.
         </p>
-      </ModalShell>
-    </div>
-  );
-};
-
-// --- Distribution Summary ---
-
-interface DistributionSummaryProps {
-  response: DistributeLootResponse;
-  isLeader: boolean;
-  finalizeLoading: boolean;
-  onFinalize: () => void;
-}
-
-const DistributionSummary = ({
-  response,
-  isLeader,
-  finalizeLoading,
-  onFinalize,
-}: DistributionSummaryProps) => (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    transition={{ duration: 0.3, ease: 'easeOut' }}
-    className="bg-black/60 rounded-card p-6 sm:p-8 backdrop-blur-sm flex flex-col items-center gap-5"
-  >
-    <div className="w-14 h-14 flex items-center justify-center text-3xl">
-      {'\u2705'}
-    </div>
-    <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase text-center">
-      Добыча распределена
-    </h2>
-
-    {(response.distributed ?? []).length > 0 && (
-      <div className="w-full max-w-lg">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {response.distributed.map((entry) => (
-            <div
-              key={entry.character_id}
-              className="bg-white/5 rounded-card p-3"
-            >
-              <p className="text-white text-sm font-medium mb-1 truncate">
-                {entry.character_name}
-              </p>
-              {entry.items.map((item) => (
-                <p key={item.item_id} className="text-white/50 text-xs">
-                  {item.item_name} x{item.quantity}
-                </p>
-              ))}
-            </div>
+        <div className="text-white/50 text-xs flex flex-wrap gap-x-3">
+          {items.map((i) => (
+            <span key={i.item_id}>{i.name} ×{i.quantity}</span>
           ))}
         </div>
-      </div>
-    )}
-
-    {(response.remaining_inventory ?? []).length > 0 && (
-      <div className="w-full max-w-lg bg-white/5 rounded-card p-3">
-        <p className="text-white/40 text-xs font-medium uppercase mb-1">
-          Выброшено
-        </p>
-        {response.remaining_inventory.map((item) => (
-          <p key={item.item_id} className="text-white/30 text-xs">
-            {item.item_name} x{item.quantity}
-          </p>
-        ))}
-      </div>
-    )}
-
-    {isLeader && (
-      <button
-        onClick={onFinalize}
-        disabled={finalizeLoading}
-        className="btn-blue text-sm sm:text-base px-8 py-3 disabled:opacity-50"
-      >
-        {finalizeLoading ? 'Завершение...' : 'Завершить подземелье'}
-      </button>
-    )}
-
-    {!isLeader && (
-      <p className="text-white/40 text-sm italic">
-        Ожидание завершения лидером...
-      </p>
-    )}
-  </motion.div>
-);
+      </ModalShell>
+    </motion.div>
+  );
+};
 
 export default DungeonLootDistribution;

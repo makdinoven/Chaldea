@@ -3,14 +3,14 @@ import * as THREE from "three";
 // Avatars live on a cross-origin S3 bucket without CORS headers, so nothing in
 // the scene samples remote images: every texture here is drawn on a canvas.
 
-const mulberry32 = (seed: number) => () => {
+export const mulberry32 = (seed: number) => () => {
   let t = (seed += 0x6d2b79f5);
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-const makeCanvas = (size: number) => {
+export const makeCanvas = (size: number) => {
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
@@ -19,7 +19,7 @@ const makeCanvas = (size: number) => {
   return { canvas, ctx };
 };
 
-const speckle = (
+export const speckle = (
   ctx: CanvasRenderingContext2D,
   size: number,
   rand: () => number,
@@ -37,7 +37,7 @@ const speckle = (
   }
 };
 
-const makeRectCanvas = (width: number, height: number) => {
+export const makeRectCanvas = (width: number, height: number) => {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -46,7 +46,7 @@ const makeRectCanvas = (width: number, height: number) => {
   return { canvas, ctx };
 };
 
-const toTexture = (canvas: HTMLCanvasElement, srgb = true) => {
+export const toTexture = (canvas: HTMLCanvasElement, srgb = true) => {
   const tex = new THREE.CanvasTexture(canvas);
   if (srgb) tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;

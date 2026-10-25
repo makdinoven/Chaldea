@@ -11,7 +11,10 @@ import {
   selectDungeonSaving,
   clearCurrentDungeon,
 } from '../../../redux/slices/dungeonAdminSlice';
-import type { DungeonCreate } from '../../../api/dungeons';
+import type { DungeonCreate, LootEntryDto } from '../../../api/dungeons';
+import { LootTable } from './editor/PropertyPanel';
+import ThemePicker from './ThemePicker';
+import { isTheme, type DungeonTheme } from '../../DungeonBoard3D/dungeonThemes';
 
 interface FormData {
   name: string;
@@ -32,6 +35,11 @@ interface FormData {
   mana_core_chance: number;
   mana_core_item_id: number | null;
   image_url: string;
+  floor_mob_step: number;
+  floor_loot_step: number;
+  floor_flee_step: number;
+  search_loot: LootEntryDto[];
+  theme: DungeonTheme;
 }
 
 const INITIAL_FORM: FormData = {
@@ -53,6 +61,11 @@ const INITIAL_FORM: FormData = {
   mana_core_chance: 0.0,
   mana_core_item_id: null,
   image_url: '',
+  floor_mob_step: 0.2,
+  floor_loot_step: 0.15,
+  floor_flee_step: 0.1,
+  search_loot: [],
+  theme: 'stone',
 };
 
 const STABILITY_OPTIONS = [
@@ -108,6 +121,11 @@ const AdminDungeonForm = () => {
         mana_core_chance: currentDungeon.mana_core_chance ?? 0.0,
         mana_core_item_id: currentDungeon.mana_core_item_id,
         image_url: currentDungeon.image_url || '',
+        floor_mob_step: currentDungeon.floor_mob_step ?? 0.2,
+        floor_loot_step: currentDungeon.floor_loot_step ?? 0.15,
+        floor_flee_step: currentDungeon.floor_flee_step ?? 0.1,
+        search_loot: currentDungeon.search_loot ?? [],
+        theme: isTheme(currentDungeon.theme) ? currentDungeon.theme : 'stone',
       });
     }
   }, [editingId, currentDungeon]);
@@ -169,6 +187,11 @@ const AdminDungeonForm = () => {
       mana_core_chance: form.mana_core_chance,
       mana_core_item_id: form.mana_core_item_id,
       image_url: form.image_url || null,
+      floor_mob_step: form.floor_mob_step,
+      floor_loot_step: form.floor_loot_step,
+      floor_flee_step: form.floor_flee_step,
+      search_loot: form.search_loot.length ? form.search_loot : null,
+      theme: form.theme,
     };
 
     try {
@@ -367,6 +390,61 @@ const AdminDungeonForm = () => {
               />
             </label>
           </div>
+        </div>
+
+        {/* The look of the 3D miniature (FEAT-176) */}
+        <div>
+          <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-1">Оформление</h3>
+          <p className="text-white/40 text-xs mb-3">
+            Стены, пол и свет подземелья на 3D-столе. Отдельному этажу можно задать своё оформление в визуальном
+            редакторе, над вкладками этажей.
+          </p>
+          <ThemePicker value={form.theme} onChange={(theme) => setForm((prev) => ({ ...prev, theme }))} />
+        </div>
+
+        {/* Floors: what each floor below the first adds */}
+        <div>
+          <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-1">Глубина</h3>
+          <p className="text-white/40 text-xs mb-3">
+            Прибавка за каждый этаж ниже первого: 0.2 — это +20% на втором этаже, +40% на третьем и так далее.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            {(
+              [
+                ['floor_mob_step', 'Сила мобов за этаж'],
+                ['floor_loot_step', 'Шанс добычи за этаж'],
+                ['floor_flee_step', 'Потеря при побеге за этаж'],
+              ] as const
+            ).map(([name, label]) => (
+              <label key={name} className="flex flex-col gap-1">
+                <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">{label}</span>
+                <input
+                  type="number"
+                  name={name}
+                  value={form[name]}
+                  onChange={handleChange}
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  className="input-underline"
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Random finds when a room is searched (FEAT-176) */}
+        <div>
+          <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-1">Случайный лут при обыске</h3>
+          <p className="text-white/40 text-xs mb-3">
+            Обыскивая любую комнату, отряд с небольшим шансом (5%) находит одну случайную вещь из этого списка — даже
+            там, где нет тайника. Шанс строки срабатывает уже после выбора.
+          </p>
+          <LootTable
+            items={form.search_loot}
+            label="Предметы"
+            onChange={(search_loot) => setForm((prev) => ({ ...prev, search_loot }))}
+          />
         </div>
 
         {/* Toggles */}

@@ -35,6 +35,9 @@ const roomFieldsChanged = (a: DungeonRoom, b: DungeonRoom): boolean => {
     a.is_entrance !== b.is_entrance ||
     a.is_boss_room !== b.is_boss_room ||
     a.is_mana_core_room !== b.is_mana_core_room ||
+    (a.grid_w ?? null) !== (b.grid_w ?? null) ||
+    (a.grid_d ?? null) !== (b.grid_d ?? null) ||
+    (a.floor ?? 1) !== (b.floor ?? 1) ||
     JSON.stringify(a.room_config) !== JSON.stringify(b.room_config)
   );
 };
@@ -47,6 +50,9 @@ const corridorFieldsChanged = (a: DungeonCorridor, b: DungeonCorridor): boolean 
     JSON.stringify(a.random_battle_mob_ids) !== JSON.stringify(b.random_battle_mob_ids) ||
     a.trap_chance !== b.trap_chance ||
     JSON.stringify(a.trap_config) !== JSON.stringify(b.trap_config) ||
+    JSON.stringify(a.lock_config ?? null) !== JSON.stringify(b.lock_config ?? null) ||
+    (a.passage_type ?? 'corridor') !== (b.passage_type ?? 'corridor') ||
+    JSON.stringify(a.passage_config ?? null) !== JSON.stringify(b.passage_config ?? null) ||
     a.description !== b.description ||
     a.source_handle !== b.source_handle ||
     a.target_handle !== b.target_handle

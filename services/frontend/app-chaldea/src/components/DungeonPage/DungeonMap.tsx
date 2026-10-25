@@ -1,6 +1,6 @@
-import { useMemo, useState, useRef, useCallback, useEffect } from 'react';
+import { useMemo, useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import type { RoomExit, RoomView, SessionState, ExploredRoomInfo } from '../../api/dungeons';
-import { ROOM_COLORS, ROOM_TYPE_ICONS, ROOM_TYPE_LABELS } from './dungeonConstants';
+import { ROOM_COLORS, ROOM_TYPE_ICONS, ROOM_TYPE_LABELS, keyInfo } from './dungeonConstants';
 
 // --- Types ---
 
@@ -10,6 +10,8 @@ interface DungeonMapProps {
   onMoveToRoom?: (corridorId: number) => void;
   isMoving?: boolean;
   movingToRoomId?: number | null;
+  /** false for non-leaders / outside the exploring phase: exits are not clickable. */
+  canMove?: boolean;
 }
 
 interface MapRoom {
@@ -35,7 +37,42 @@ interface MapCorridor {
   targetHandle: string | null;
   staminaCost: number;
   isExitPath: boolean;
+  /** A locked door still shut in this run: the kind of key it wants. */
+  lockKey?: string;
 }
+
+/** A padlock in the key's colour, hung halfway along a corridor's path. */
+const PathPadlock = ({ d, color, title }: { d: string; color: string; title: string }) => {
+  const probe = useRef<SVGPathElement>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const path = probe.current;
+    if (!path) return;
+    const p = path.getPointAtLength(path.getTotalLength() / 2);
+    setAt({ x: p.x, y: p.y });
+  }, [d]);
+  return (
+    <>
+      <path ref={probe} d={d} fill="none" stroke="none" />
+      {at && (
+        <g transform={`translate(${at.x} ${at.y})`} style={{ pointerEvents: 'none' }}>
+          <title>{title}</title>
+          <circle r={10} fill="rgba(10,10,18,0.92)" stroke={color} strokeWidth={1} />
+          <path d="M -3.5 -1 V -4 A 3.5 3.5 0 0 1 3.5 -4 V -1" fill="none" stroke="#a1a1aa" strokeWidth={1.6} />
+          <rect x={-5} y={-1.5} width={10} height={7.5} rx={1.5} fill={color} />
+          <rect x={-0.7} y={1} width={1.4} height={2.8} fill="#111" />
+        </g>
+      )}
+    </>
+  );
+};
+
+/** Stairs / drop / lift going down and up. */
+const PASSAGE_LABELS: Record<string, [string, string]> = {
+  stairs: ['Лестница вниз', 'Лестница наверх'],
+  drop: ['Провал', 'Провал'],
+  lift: ['Подъёмник вниз', 'Подъёмник наверх'],
+};
 
 // --- Constants ---
 
@@ -224,13 +261,21 @@ const bfsLayout = (
 
 // --- Build map data ---
 
+/** Only the floor the party is on: passages to other floors are listed under the map. */
+const onFloor = (room: RoomView): RoomView => ({
+  ...room,
+  exits: room.exits.filter((e) => (e.passage ?? 'corridor') === 'corridor'),
+});
+
 const buildMapData = (
   sessionState: SessionState,
 ): { rooms: MapRoom[]; corridors: MapCorridor[] } => {
-  const currentRoom = sessionState.current_room;
-  if (!currentRoom) return { rooms: [], corridors: [] };
+  const shownRoom = sessionState.current_room;
+  if (!shownRoom) return { rooms: [], corridors: [] };
+  const currentRoom = onFloor(shownRoom);
+  const floor = currentRoom.floor ?? 1;
 
-  const exploredRooms = sessionState.explored_rooms ?? [];
+  const exploredRooms = (sessionState.explored_rooms ?? []).filter((r) => (r.floor ?? 1) === floor);
   const exitRoomIds = new Set(currentRoom.exits.map((e) => e.to_room_id));
 
   // Check if we have server-side positions
@@ -320,6 +365,7 @@ const buildMapData = (
       targetHandle: exit.target_handle,
       staminaCost: exit.stamina_cost,
       isExitPath: true,
+      lockKey: exit.locked && exit.lock_key ? exit.lock_key : undefined,
     });
   }
 
@@ -327,6 +373,7 @@ const buildMapData = (
   const exitCorridorIds = new Set(corridors.map((c) => c.corridorId));
   for (const ec of sessionState.explored_corridors ?? []) {
     if (exitCorridorIds.has(ec.corridor_id)) continue; // already added as exit path
+    if ((ec.passage ?? 'corridor') !== 'corridor') continue; // stairs and the like: listed under the map
     const fromRoom = rooms.find((r) => r.id === ec.from_room_id);
     const toRoom = rooms.find((r) => r.id === ec.to_room_id);
     if (!fromRoom || !toRoom) continue;
@@ -342,6 +389,7 @@ const buildMapData = (
       targetHandle: ec.target_handle,
       staminaCost: 0,
       isExitPath: false,
+      lockKey: ec.locked && ec.lock_key ? ec.lock_key : undefined,
     });
   }
 
@@ -471,6 +519,7 @@ const DungeonMap = ({
   onMoveToRoom,
   isMoving = false,
   movingToRoomId = null,
+  canMove = true,
 }: DungeonMapProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -483,6 +532,7 @@ const DungeonMap = ({
   const pinchScaleStartRef = useRef<number>(1);
 
   const currentRoom = sessionState.current_room;
+  const passages = (currentRoom?.exits ?? []).filter((e) => (e.passage ?? 'corridor') !== 'corridor');
   const currentRoomId = currentRoom?.id ?? 0;
 
   // Determine if mobile
@@ -512,15 +562,27 @@ const DungeonMap = ({
     }
     return m;
   }, [currentRoom]);
+  // Held up by enemies: only back into explored rooms (the server refuses the rest).
+  const heldUp = sessionState.phase === 'battle_pending';
+  const walkable = useCallback(
+    (roomId: number) => {
+      const exit = exitMap.get(roomId);
+      return !!exit && (!heldUp || exit.explored);
+    },
+    [exitMap, heldUp],
+  );
 
   // SVG viewBox dimensions
-  const { svgW, svgH } = useMemo(() => {
-    if (rooms.length === 0) return { svgW: 400, svgH: 300 };
-    const maxX = Math.max(...rooms.map((r) => r.x + roomW));
-    const maxY = Math.max(...rooms.map((r) => r.y + roomH));
+  // Map bounds in room coordinates (editor positions can be negative). The SVG
+  // has no viewBox: one user unit = one CSS pixel, so `pan` (pixels, from the
+  // container size and mouse deltas) and the room coordinates share one space.
+  const bounds = useMemo(() => {
+    if (rooms.length === 0) return { minX: 0, minY: 0, maxX: 400, maxY: 300 };
     return {
-      svgW: maxX + PADDING * 2,
-      svgH: maxY + PADDING * 2,
+      minX: Math.min(...rooms.map((r) => r.x)),
+      minY: Math.min(...rooms.map((r) => r.y)),
+      maxX: Math.max(...rooms.map((r) => r.x + roomW)),
+      maxY: Math.max(...rooms.map((r) => r.y + roomH)),
     };
   }, [rooms, roomW, roomH]);
 
@@ -610,12 +672,12 @@ const DungeonMap = ({
   // --- Room click ---
   const handleRoomClick = useCallback(
     (roomId: number) => {
-      if (isMoving || !onMoveToRoom) return;
+      if (isMoving || !onMoveToRoom || !canMove || !walkable(roomId)) return;
       const exit = exitMap.get(roomId);
       if (!exit) return;
       onMoveToRoom(exit.corridor_id);
     },
-    [isMoving, onMoveToRoom, exitMap],
+    [isMoving, onMoveToRoom, exitMap, canMove, walkable],
   );
 
   // --- Get stamina cost for tooltip ---
@@ -674,13 +736,8 @@ const DungeonMap = ({
         onTouchEnd={handleTouchEnd}
         onWheel={handleWheel}
       >
-        <svg
-          width="100%"
-          height="100%"
-          viewBox={`0 0 ${svgW} ${svgH}`}
-          preserveAspectRatio="xMidYMid meet"
-          style={{ position: 'absolute', left: 0, top: 0 }}
-        >
+        {/* Sized by CSS: without a viewBox the height="100%" attribute falls back to 150px. */}
+        <svg className="absolute inset-0 w-full h-full">
           <defs>
             {/* Background gradient */}
             <radialGradient id="dm-bg-grad" cx="50%" cy="50%" r="70%">
@@ -753,10 +810,10 @@ const DungeonMap = ({
           <g transform={`translate(${pan.x / 1} ${pan.y / 1}) scale(${scale})`}>
             {/* Background rect */}
             <rect
-              x={-PADDING}
-              y={-PADDING}
-              width={svgW + PADDING * 2}
-              height={svgH + PADDING * 2}
+              x={bounds.minX - PADDING}
+              y={bounds.minY - PADDING}
+              width={bounds.maxX - bounds.minX + PADDING * 2}
+              height={bounds.maxY - bounds.minY + PADDING * 2}
               fill="url(#dm-bg-grad)"
               rx={8}
             />
@@ -806,11 +863,28 @@ const DungeonMap = ({
               );
             })}
 
+            {/* Locked doors: a padlock on the corridor, above the corridors and below the rooms */}
+            {corridors
+              .filter((c) => c.lockKey)
+              .map((c) => {
+                const key = keyInfo(c.lockKey);
+                return (
+                  <PathPadlock
+                    key={`lock-${c.corridorId}`}
+                    d={buildCorridorPath(c.fromX, c.fromY, c.toX, c.toY, c.sourceHandle, c.targetHandle, roomW, roomH)}
+                    color={key.color}
+                    title={`Заперто: нужен ${key.name.toLowerCase()}`}
+                  />
+                );
+              })}
+
             {/* Rooms */}
             {rooms.map((room) => {
-              const isClickable = exitMap.has(room.id) && !isMoving;
+              const isClickable = canMove && walkable(room.id) && !isMoving;
               const isHovered = hoveredRoomId === room.id;
               const staminaCost = getStaminaCost(room.id);
+              const lockedExit = exitMap.get(room.id)?.locked ? exitMap.get(room.id) : undefined;
+              const lockLabel = lockedExit ? `🔒 ${keyInfo(lockedExit.lock_key).name}` : null;
               const roomColor = ROOM_COLORS[room.room_type] ?? '#6b7280';
               const roomIcon = ROOM_TYPE_ICONS[room.room_type] ?? '';
               const roomLabel = ROOM_TYPE_LABELS[room.room_type] ?? '';
@@ -964,9 +1038,9 @@ const DungeonMap = ({
                   {isHovered && staminaCost !== null && (
                     <g>
                       <rect
-                        x={room.x + roomW / 2 - 36}
+                        x={room.x + roomW / 2 - (lockLabel ? 60 : 36)}
                         y={room.y - 28}
-                        width={72}
+                        width={lockLabel ? 120 : 72}
                         height={22}
                         rx={4}
                         fill="rgba(0,0,0,0.85)"
@@ -982,14 +1056,18 @@ const DungeonMap = ({
                         fill="#f0d95c"
                         style={{ pointerEvents: 'none' }}
                       >
-                        {`\u26A1 ${staminaCost} стамины`}
+                        {lockLabel ?? `\u26A1 ${staminaCost} стамины`}
                       </text>
                     </g>
                   )}
 
                   {/* SVG title for native tooltip fallback */}
                   {isClickable && staminaCost !== null && (
-                    <title>{`Перейти (${staminaCost} стамины)`}</title>
+                    <title>
+                      {lockedExit
+                        ? `Заперто: нужен ${keyInfo(lockedExit.lock_key).name.toLowerCase()}`
+                        : `Перейти (${staminaCost} стамины)`}
+                    </title>
                   )}
                 </g>
               );
@@ -1009,6 +1087,32 @@ const DungeonMap = ({
           </g>
         </svg>
       </div>
+
+      {/* Ways to other floors: stairs, drops, lifts */}
+      {passages.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-t border-white/5">
+          <span className="text-white/40 text-xs">
+            Этаж {currentRoom?.floor ?? 1}
+            {(sessionState.floors ?? 1) > 1 ? ` из ${sessionState.floors}` : ''}:
+          </span>
+          {passages.map((e) => {
+            const down = (e.to_floor ?? 1) > (currentRoom?.floor ?? 1);
+            const label = PASSAGE_LABELS[e.passage ?? 'stairs']?.[down ? 0 : 1] ?? 'Переход';
+            return (
+              <button
+                key={e.corridor_id}
+                type="button"
+                disabled={!canMove || isMoving}
+                onClick={() => onMoveToRoom?.(e.corridor_id)}
+                className="text-xs px-3 py-1.5 rounded-card border border-white/15 text-white/80 hover:text-site-blue hover:border-site-blue/50 transition-colors duration-200 ease-site disabled:opacity-40 disabled:hover:text-white/80 disabled:hover:border-white/15"
+              >
+                {down ? '↓' : '↑'} {label} · этаж {e.to_floor ?? '?'} · ⚡{e.stamina_cost}
+                {e.locked ? ' · 🔒' : ''}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Legend */}
       <div className="flex flex-wrap gap-x-3 gap-y-1 px-4 py-2 border-t border-white/5">

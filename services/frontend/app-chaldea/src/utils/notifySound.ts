@@ -16,6 +16,9 @@ const MIN_REPEAT_MS = 400;
 let context: AudioContext | null = null;
 const lastPlayed: Partial<Record<SoundKind, number>> = {};
 
+/** The one audio context of the page (the dungeon's sounds share it). */
+export const getAudioContext = (): AudioContext | null => getContext();
+
 const getContext = (): AudioContext | null => {
   if (context) return context;
   const Ctor =

@@ -138,7 +138,7 @@ const Flame = ({ texture, position, seed }: { texture: THREE.Texture; position: 
 };
 
 /** A brass dish of half-melted candles with one shared flickering light. */
-const CandleCluster = ({
+export const CandleCluster = ({
   position,
   seed,
   flame,
@@ -231,7 +231,7 @@ const RIM_BARS: { side: "far" | "near" | "left" | "right"; tilt: number; sag: nu
 ];
 
 /** The board's brass rim: tarnished, scratched, dented and rubbed bright in places. */
-const BrassRim = ({ width, depth }: { width: number; depth: number }) => {
+export const BrassRim = ({ width, depth }: { width: number; depth: number }) => {
   const worn = useMemo(createWornBrassTextures, []);
   const material = useMemo(
     () =>

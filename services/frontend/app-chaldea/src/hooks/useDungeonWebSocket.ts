@@ -7,24 +7,39 @@ const MAX_RECONNECT_DELAY = 30000;
 const INITIAL_RECONNECT_DELAY = 1000;
 const WS_CLOSE_NORMAL = 1000;
 const WS_CLOSE_UNAUTHORIZED = 4001;
+const WS_CLOSE_FORBIDDEN = 4003;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const HEARTBEAT_INTERVAL = 30000;
 
 // --- WS Message Types ---
 
+// Event list and payloads: docs/services/dungeon-service.md, «WebSocket».
+export type DungeonWsEventType =
+  | 'session_status'
+  | 'room_entered'
+  | 'battle_started'
+  | 'battle_ended'
+  | 'member_status_changed'
+  | 'trap_triggered'
+  | 'loot_added'
+  | 'event_result'
+  | 'rest_started'
+  | 'rest_completed'
+  | 'mana_core_revealed'
+  | 'mana_core_result'
+  | 'leader_changed'
+  | 'loot_distributed'
+  | 'party_vote'
+  | 'party_ping'
+  | 'challenge_started'
+  | 'challenge_finished'
+  | 'chat_message'
+  | 'room_lit'
+  | 'heartbeat_ack'
+  | 'ping';
+
 export interface DungeonWsMessage {
-  type:
-    | 'room_entered'
-    | 'battle_started'
-    | 'battle_ended'
-    | 'member_status_changed'
-    | 'loot_added'
-    | 'trap_triggered'
-    | 'event_result'
-    | 'session_status'
-    | 'leader_changed'
-    | 'session_update'
-    | 'ping';
+  type: DungeonWsEventType;
   data: Record<string, unknown>;
 }
 
@@ -33,18 +48,28 @@ export interface DungeonWsMessage {
 interface UseDungeonWebSocketReturn {
   connected: boolean;
   reconnecting: boolean;
-  lastMessage: DungeonWsMessage | null;
+  /** Start over after the hook gave up reconnecting (the player's own "try again"). */
+  reconnect: () => void;
 }
 
 // --- Hook ---
 
+/**
+ * Live events of a dungeon run. Every message is handed to `onMessage`
+ * (a queue-free callback — several events arriving in one tick must not
+ * overwrite each other the way a `lastMessage` state would).
+ */
 const useDungeonWebSocket = (
   sessionId: number | null,
   token: string | null,
+  onMessage: (message: DungeonWsMessage) => void,
 ): UseDungeonWebSocketReturn => {
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
-  const [lastMessage, setLastMessage] = useState<DungeonWsMessage | null>(null);
+  // Bumped by reconnect(): a fresh round of connection attempts.
+  const [round, setRound] = useState(0);
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY);
@@ -111,11 +136,11 @@ const useDungeonWebSocket = (
         try {
           const parsed = JSON.parse(event.data as string) as DungeonWsMessage;
 
-          if (parsed.type === 'ping') {
+          if (parsed.type === 'ping' || parsed.type === 'heartbeat_ack') {
             return;
           }
 
-          setLastMessage(parsed);
+          onMessageRef.current({ type: parsed.type, data: parsed.data ?? {} });
         } catch {
           // Non-JSON or malformed message — ignore
         }
@@ -130,7 +155,9 @@ const useDungeonWebSocket = (
           heartbeatRef.current = null;
         }
 
-        if (event.code === WS_CLOSE_NORMAL) {
+        // Normal close (the run ended) or not a member: do not retry.
+        if (event.code === WS_CLOSE_NORMAL || event.code === WS_CLOSE_FORBIDDEN) {
+          setReconnecting(false);
           return;
         }
 
@@ -194,9 +221,16 @@ const useDungeonWebSocket = (
       closeExistingConnection();
       setConnected(false);
     };
-  }, [sessionId, token, closeExistingConnection]);
+  }, [sessionId, token, closeExistingConnection, round]);
 
-  return { connected, reconnecting, lastMessage };
+  const reconnect = useCallback(() => {
+    reconnectAttemptsRef.current = 0;
+    reconnectDelayRef.current = INITIAL_RECONNECT_DELAY;
+    setReconnecting(true);
+    setRound((r) => r + 1);
+  }, []);
+
+  return { connected, reconnecting, reconnect };
 };
 
 export default useDungeonWebSocket;

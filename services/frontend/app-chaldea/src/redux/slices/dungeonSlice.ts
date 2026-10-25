@@ -2,24 +2,29 @@ import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import toast from 'react-hot-toast';
 import type { RootState } from '../store';
 import * as api from '../../api/dungeons';
+import { getMe } from './userSlice';
+import { playDungeonSound } from '../../utils/dungeonSounds';
 import type {
   DungeonAtLocation,
   SessionCreateResponse,
   SessionState,
   MoveResponse,
   FleeResponse,
+  InteractAction,
   InteractResponse,
   LootDistribution,
   DistributeLootResponse,
   FinalizeResponse,
+  SkippedMember,
 } from '../../api/dungeons';
 
 // --- State ---
 
 interface DungeonPlayerState {
   dungeonsAtLocation: DungeonAtLocation[];
-  currentSession: SessionCreateResponse | null;
   sessionState: SessionState | null;
+  /** Squadmates left outside by the last party-run (who and why). */
+  lastSkippedMembers: SkippedMember[];
   lastMoveResponse: MoveResponse | null;
   lastFleeResponse: FleeResponse | null;
   lastInteractResponse: InteractResponse | null;
@@ -27,6 +32,11 @@ interface DungeonPlayerState {
   lastFinalizeResponse: FinalizeResponse | null;
   loading: boolean;
   error: string | null;
+  /** Error of the last session-state load (shown on the session page). */
+  stateError: string | null;
+  /** The latest state load asked for, and when the last move landed: older loads are thrown away. */
+  stateRequestId: string | null;
+  freshAfter: number;
   sessionLoading: boolean;
   stateLoading: boolean;
   moveLoading: boolean;
@@ -38,8 +48,8 @@ interface DungeonPlayerState {
 
 const initialState: DungeonPlayerState = {
   dungeonsAtLocation: [],
-  currentSession: null,
   sessionState: null,
+  lastSkippedMembers: [],
   lastMoveResponse: null,
   lastFleeResponse: null,
   lastInteractResponse: null,
@@ -47,6 +57,9 @@ const initialState: DungeonPlayerState = {
   lastFinalizeResponse: null,
   loading: false,
   error: null,
+  stateError: null,
+  stateRequestId: null,
+  freshAfter: 0,
   sessionLoading: false,
   stateLoading: false,
   moveLoading: false,
@@ -55,6 +68,50 @@ const initialState: DungeonPlayerState = {
   distributeLoading: false,
   finalizeLoading: false,
 };
+
+// --- Helpers ---
+
+const STATUS_FALLBACKS: Record<number, string> = {
+  401: 'Сессия истекла — войдите снова',
+  403: 'Действие недоступно',
+  404: 'Не найдено',
+  409: 'Действие уже выполнено или недоступно сейчас',
+  502: 'Сервис временно недоступен. Попробуйте позже.',
+  503: 'Сервис временно недоступен. Попробуйте позже.',
+};
+
+interface ErrorWithResponse {
+  response?: { status?: number; data?: { detail?: unknown } };
+}
+
+const responseOf = (err: unknown): ErrorWithResponse['response'] | undefined =>
+  typeof err === 'object' && err !== null && 'response' in err
+    ? (err as ErrorWithResponse).response
+    : undefined;
+
+/** Russian message from a backend error: `detail` first, then the HTTP status. */
+export function getErrorMessage(err: unknown, fallback: string): string {
+  const response = responseOf(err);
+  if (!response) {
+    return 'Нет связи с сервером. Проверьте подключение.';
+  }
+  const detail = response.data?.detail;
+  if (typeof detail === 'string' && detail) {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const joined = detail.map((e: { msg?: string }) => e.msg ?? '').filter(Boolean).join('; ');
+    if (joined) return joined;
+  }
+  if (detail && typeof detail === 'object' && 'message' in detail) {
+    const msg = (detail as { message?: unknown }).message;
+    if (typeof msg === 'string' && msg) return msg;
+  }
+  return (response.status && STATUS_FALLBACKS[response.status]) || fallback;
+}
+
+/** The server answered (4xx/5xx): our view of the run may be stale. */
+const isServerAnswer = (err: unknown): boolean => !!responseOf(err)?.status;
 
 // --- Async Thunks ---
 
@@ -67,12 +124,13 @@ export const fetchDungeonsAtLocation = createAsyncThunk<
   async (locationId, thunkAPI) => {
     try {
       return await api.fetchDungeonsAtLocation(locationId);
-    } catch {
-      return thunkAPI.rejectWithValue('Не удалось загрузить список подземелий');
+    } catch (err: unknown) {
+      return thunkAPI.rejectWithValue(getErrorMessage(err, 'Не удалось загрузить список подземелий'));
     }
   },
 );
 
+/** Solo entry. */
 export const createSession = createAsyncThunk<
   SessionCreateResponse,
   { dungeonId: number; characterId: number },
@@ -82,63 +140,7 @@ export const createSession = createAsyncThunk<
   async ({ dungeonId, characterId }, thunkAPI) => {
     try {
       const result = await api.createSession(dungeonId, characterId);
-      toast.success('Группа создана');
-      return result;
-    } catch (err: unknown) {
-      const message = getErrorMessage(err, 'Не удалось создать группу');
-      toast.error(message);
-      return thunkAPI.rejectWithValue(message);
-    }
-  },
-);
-
-export const inviteMember = createAsyncThunk<
-  SessionCreateResponse,
-  { sessionId: number; characterId: number },
-  { rejectValue: string }
->(
-  'dungeon/inviteMember',
-  async ({ sessionId, characterId }, thunkAPI) => {
-    try {
-      const result = await api.inviteMember(sessionId, characterId);
-      toast.success('Участник приглашён');
-      return result;
-    } catch (err: unknown) {
-      const message = getErrorMessage(err, 'Не удалось пригласить участника');
-      toast.error(message);
-      return thunkAPI.rejectWithValue(message);
-    }
-  },
-);
-
-export const leaveSession = createAsyncThunk<
-  void,
-  { sessionId: number; characterId: number },
-  { rejectValue: string }
->(
-  'dungeon/leaveSession',
-  async ({ sessionId, characterId }, thunkAPI) => {
-    try {
-      await api.leaveSession(sessionId, characterId);
-      toast.success('Вы покинули группу');
-    } catch (err: unknown) {
-      const message = getErrorMessage(err, 'Не удалось покинуть группу');
-      toast.error(message);
-      return thunkAPI.rejectWithValue(message);
-    }
-  },
-);
-
-export const enterDungeon = createAsyncThunk<
-  SessionState,
-  { sessionId: number; characterId: number },
-  { rejectValue: string }
->(
-  'dungeon/enterDungeon',
-  async ({ sessionId, characterId }, thunkAPI) => {
-    try {
-      const result = await api.enterDungeon(sessionId, characterId);
-      toast.success('Группа вошла в подземелье');
+      toast.success('Вы вошли в подземелье');
       return result;
     } catch (err: unknown) {
       const message = getErrorMessage(err, 'Не удалось войти в подземелье');
@@ -148,17 +150,39 @@ export const enterDungeon = createAsyncThunk<
   },
 );
 
+/** Squad entry (leader + free squadmates on the location). */
+export const partyRunThunk = createAsyncThunk<
+  SessionState,
+  { dungeonId: number; characterId: number },
+  { rejectValue: string }
+>(
+  'dungeon/partyRun',
+  async ({ dungeonId, characterId }, thunkAPI) => {
+    try {
+      const result = await api.partyRunDungeon(dungeonId, characterId);
+      toast.success('Отряд вошёл в подземелье');
+      return result;
+    } catch (err: unknown) {
+      const message = getErrorMessage(err, 'Не удалось войти отрядом');
+      toast.error(message);
+      return thunkAPI.rejectWithValue(message);
+    }
+  },
+);
+
 export const fetchSessionState = createAsyncThunk<
   SessionState,
   { sessionId: number; characterId: number },
-  { rejectValue: string }
+  { rejectValue: string; fulfilledMeta: { startedAt: number } }
 >(
   'dungeon/fetchSessionState',
   async ({ sessionId, characterId }, thunkAPI) => {
+    // When it was asked for: a load asked for before a move landed shows the party where it was.
+    const startedAt = Date.now();
     try {
-      return await api.getSessionState(sessionId, characterId);
-    } catch {
-      return thunkAPI.rejectWithValue('Не удалось загрузить состояние подземелья');
+      return thunkAPI.fulfillWithValue(await api.getSessionState(sessionId, characterId), { startedAt });
+    } catch (err: unknown) {
+      return thunkAPI.rejectWithValue(getErrorMessage(err, 'Не удалось загрузить состояние подземелья'));
     }
   },
 );
@@ -166,16 +190,17 @@ export const fetchSessionState = createAsyncThunk<
 export const moveDungeon = createAsyncThunk<
   MoveResponse,
   { sessionId: number; characterId: number; corridorId: number },
-  { rejectValue: string }
+  { rejectValue: string; fulfilledMeta: { at: number } }
 >(
   'dungeon/moveDungeon',
   async ({ sessionId, characterId, corridorId }, thunkAPI) => {
     try {
-      const result = await api.moveInDungeon(sessionId, characterId, corridorId);
-      return result;
+      return thunkAPI.fulfillWithValue(await api.moveInDungeon(sessionId, characterId, corridorId), { at: Date.now() });
     } catch (err: unknown) {
+      // A failed move spends nothing (e.g. a battle that could not start).
       const message = getErrorMessage(err, 'Не удалось переместиться');
       toast.error(message);
+      if (isServerAnswer(err)) thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return thunkAPI.rejectWithValue(message);
     }
   },
@@ -191,10 +216,12 @@ export const fleeDungeonThunk = createAsyncThunk<
     try {
       const result = await api.fleeDungeon(sessionId, characterId);
       toast.success(result.message);
+      thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return result;
     } catch (err: unknown) {
       const message = getErrorMessage(err, 'Не удалось сбежать из подземелья');
       toast.error(message);
+      if (isServerAnswer(err)) thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return thunkAPI.rejectWithValue(message);
     }
   },
@@ -202,7 +229,7 @@ export const fleeDungeonThunk = createAsyncThunk<
 
 export const interactRoom = createAsyncThunk<
   InteractResponse,
-  { sessionId: number; characterId: number; action: string; extraData?: Record<string, unknown> },
+  { sessionId: number; characterId: number; action: InteractAction; extraData?: Record<string, unknown> },
   { rejectValue: string }
 >(
   'dungeon/interactRoom',
@@ -213,13 +240,20 @@ export const interactRoom = createAsyncThunk<
         if (result.success) {
           toast.success(result.message);
         } else {
-          toast.error(result.message);
+          toast(result.message);
         }
       }
+      if (result.success && action === 'open_chest') playDungeonSound('chest');
+      if (result.success && action === 'merchant_buy') playDungeonSound('coins');
+      if (result.success && action === 'use_portal') playDungeonSound('teleport');
+      thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
+      // Events and the trader move the leader's gold: keep the header's purse honest.
+      thunkAPI.dispatch(getMe());
       return result;
     } catch (err: unknown) {
       const message = getErrorMessage(err, 'Не удалось выполнить действие');
       toast.error(message);
+      if (isServerAnswer(err)) thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return thunkAPI.rejectWithValue(message);
     }
   },
@@ -234,11 +268,16 @@ export const distributeLootThunk = createAsyncThunk<
   async ({ sessionId, characterId, distributions }, thunkAPI) => {
     try {
       const result = await api.distributeLoot(sessionId, characterId, distributions);
-      toast.success(result.message || 'Добыча распределена');
+      if (result.failed.length > 0) {
+        toast.error(result.message);
+      } else {
+        toast.success(result.message || 'Добыча распределена');
+      }
       return result;
     } catch (err: unknown) {
       const message = getErrorMessage(err, 'Не удалось распределить добычу');
       toast.error(message);
+      if (isServerAnswer(err)) thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return thunkAPI.rejectWithValue(message);
     }
   },
@@ -246,42 +285,24 @@ export const distributeLootThunk = createAsyncThunk<
 
 export const finalizeSessionThunk = createAsyncThunk<
   FinalizeResponse,
-  { sessionId: number; characterId: number },
+  { sessionId: number; characterId: number; force?: boolean },
   { rejectValue: string }
 >(
   'dungeon/finalizeSession',
-  async ({ sessionId, characterId }, thunkAPI) => {
+  async ({ sessionId, characterId, force = false }, thunkAPI) => {
     try {
-      const result = await api.finalizeSession(sessionId, characterId);
-      toast.success(result.message || 'Подземелье завершено');
+      const result = await api.finalizeSession(sessionId, characterId, force);
+      toast.success(result.message || 'Забег завершён');
+      thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return result;
     } catch (err: unknown) {
-      const message = getErrorMessage(err, 'Не удалось завершить подземелье');
+      const message = getErrorMessage(err, 'Не удалось завершить забег');
       toast.error(message);
+      if (isServerAnswer(err)) thunkAPI.dispatch(fetchSessionState({ sessionId, characterId }));
       return thunkAPI.rejectWithValue(message);
     }
   },
 );
-
-// --- Helpers ---
-
-function getErrorMessage(err: unknown, fallback: string): string {
-  if (
-    typeof err === 'object' &&
-    err !== null &&
-    'response' in err
-  ) {
-    const response = (err as { response?: { data?: { detail?: unknown } } }).response;
-    const detail = response?.data?.detail;
-    if (typeof detail === 'string') {
-      return detail;
-    }
-    if (Array.isArray(detail)) {
-      return detail.map((e: { msg?: string }) => e.msg ?? '').filter(Boolean).join('; ') || fallback;
-    }
-  }
-  return fallback;
-}
 
 // --- Slice ---
 
@@ -290,14 +311,14 @@ const dungeonSlice = createSlice({
   initialState,
   reducers: {
     clearDungeonState(state) {
-      state.currentSession = null;
       state.sessionState = null;
+      state.lastSkippedMembers = [];
       state.lastMoveResponse = null;
       state.lastFleeResponse = null;
       state.lastInteractResponse = null;
       state.lastDistributeResponse = null;
       state.lastFinalizeResponse = null;
-      state.error = null;
+      state.stateError = null;
     },
     clearDistributeResponse(state) {
       state.lastDistributeResponse = null;
@@ -311,14 +332,11 @@ const dungeonSlice = createSlice({
     clearInteractResponse(state) {
       state.lastInteractResponse = null;
     },
+    clearSkippedMembers(state) {
+      state.lastSkippedMembers = [];
+    },
     clearDungeonsAtLocation(state) {
       state.dungeonsAtLocation = [];
-    },
-    updateSessionFromWs(state, action: PayloadAction<SessionState>) {
-      state.sessionState = action.payload;
-    },
-    updateSessionMembers(state, action: PayloadAction<SessionCreateResponse>) {
-      state.currentSession = action.payload;
     },
   },
   extraReducers: (builder) => {
@@ -337,66 +355,48 @@ const dungeonSlice = createSlice({
         state.error = action.payload ?? 'Произошла ошибка';
       })
 
-      // --- Create session ---
+      // --- Solo entry ---
       .addCase(createSession.pending, (state) => {
         state.sessionLoading = true;
       })
-      .addCase(createSession.fulfilled, (state, action) => {
+      .addCase(createSession.fulfilled, (state) => {
         state.sessionLoading = false;
-        state.currentSession = action.payload;
+        state.lastSkippedMembers = [];
       })
       .addCase(createSession.rejected, (state) => {
         state.sessionLoading = false;
       })
 
-      // --- Invite member ---
-      .addCase(inviteMember.pending, (state) => {
+      // --- Squad entry ---
+      .addCase(partyRunThunk.pending, (state) => {
         state.sessionLoading = true;
       })
-      .addCase(inviteMember.fulfilled, (state, action) => {
-        state.sessionLoading = false;
-        state.currentSession = action.payload;
-      })
-      .addCase(inviteMember.rejected, (state) => {
-        state.sessionLoading = false;
-      })
-
-      // --- Leave session ---
-      .addCase(leaveSession.pending, (state) => {
-        state.sessionLoading = true;
-      })
-      .addCase(leaveSession.fulfilled, (state) => {
-        state.sessionLoading = false;
-        state.currentSession = null;
-        state.sessionState = null;
-      })
-      .addCase(leaveSession.rejected, (state) => {
-        state.sessionLoading = false;
-      })
-
-      // --- Enter dungeon ---
-      .addCase(enterDungeon.pending, (state) => {
-        state.sessionLoading = true;
-      })
-      .addCase(enterDungeon.fulfilled, (state, action) => {
+      .addCase(partyRunThunk.fulfilled, (state, action) => {
         state.sessionLoading = false;
         state.sessionState = action.payload;
+        state.lastSkippedMembers = action.payload.skipped_members ?? [];
       })
-      .addCase(enterDungeon.rejected, (state) => {
+      .addCase(partyRunThunk.rejected, (state) => {
         state.sessionLoading = false;
       })
 
       // --- Fetch session state ---
-      .addCase(fetchSessionState.pending, (state) => {
+      .addCase(fetchSessionState.pending, (state, action) => {
         state.stateLoading = true;
+        state.stateRequestId = action.meta.requestId;
       })
       .addCase(fetchSessionState.fulfilled, (state, action) => {
+        // Only the latest load counts, and not one asked for before the last move landed.
+        if (action.meta.requestId !== state.stateRequestId) return;
         state.stateLoading = false;
+        if (action.meta.startedAt < state.freshAfter) return;
+        state.stateError = null;
         state.sessionState = action.payload;
       })
       .addCase(fetchSessionState.rejected, (state, action) => {
+        if (action.meta.requestId !== state.stateRequestId) return;
         state.stateLoading = false;
-        state.error = action.payload ?? 'Произошла ошибка';
+        state.stateError = action.payload ?? 'Произошла ошибка';
       })
 
       // --- Move ---
@@ -406,20 +406,18 @@ const dungeonSlice = createSlice({
       })
       .addCase(moveDungeon.fulfilled, (state, action) => {
         state.moveLoading = false;
+        state.freshAfter = action.meta.at;
         state.lastMoveResponse = action.payload;
-        // Update current room in session state
         if (state.sessionState) {
-          state.sessionState.current_room = action.payload.new_room;
-          // If a battle started, update phase
-          if (
-            action.payload.room_event?.type === 'battle_started' ||
-            action.payload.corridor_event?.type === 'battle'
-          ) {
+          if (action.payload.new_room) {
+            state.sessionState.current_room = action.payload.new_room;
+          }
+          const battleId =
+            (action.payload.room_event?.type === 'battle_started' ? action.payload.room_event.battle_id : null) ??
+            (action.payload.corridor_event?.type === 'battle' ? action.payload.corridor_event.battle_id : null);
+          if (battleId) {
             state.sessionState.phase = 'in_battle';
-            state.sessionState.active_battle_id =
-              action.payload.room_event?.battle_id ??
-              action.payload.corridor_event?.battle_id ??
-              null;
+            state.sessionState.active_battle_id = battleId;
           }
         }
       })
@@ -435,8 +433,15 @@ const dungeonSlice = createSlice({
         state.fleeLoading = false;
         state.lastFleeResponse = action.payload;
         if (state.sessionState) {
+          const remaining = action.payload.items_remaining;
           state.sessionState.status = 'escaped';
-          state.sessionState.phase = 'escaped';
+          state.sessionState.phase = remaining.length > 0 ? 'distributing_loot' : 'finished';
+          state.sessionState.finalized = remaining.length === 0;
+          state.sessionState.group_inventory = remaining.map((i) => ({
+            item_id: i.item_id,
+            item_name: i.item_name,
+            quantity: i.quantity,
+          }));
         }
       })
       .addCase(fleeDungeonThunk.rejected, (state) => {
@@ -464,7 +469,6 @@ const dungeonSlice = createSlice({
       .addCase(distributeLootThunk.fulfilled, (state, action) => {
         state.distributeLoading = false;
         state.lastDistributeResponse = action.payload;
-        // Update group inventory with remaining items
         if (state.sessionState) {
           state.sessionState.group_inventory = action.payload.remaining_inventory;
         }
@@ -482,8 +486,9 @@ const dungeonSlice = createSlice({
         state.finalizeLoading = false;
         state.lastFinalizeResponse = action.payload;
         if (state.sessionState) {
-          state.sessionState.phase = 'completed';
-          state.sessionState.status = 'completed';
+          state.sessionState.phase = 'finished';
+          state.sessionState.finalized = true;
+          state.sessionState.group_inventory = [];
         }
       })
       .addCase(finalizeSessionThunk.rejected, (state) => {
@@ -499,8 +504,7 @@ export const {
   clearInteractResponse,
   clearDistributeResponse,
   clearFinalizeResponse,
-  updateSessionFromWs,
-  updateSessionMembers,
+  clearSkippedMembers,
 } = dungeonSlice.actions;
 
 // --- Selectors ---
@@ -508,8 +512,9 @@ export const {
 export const selectDungeonsAtLocation = (state: RootState) => state.dungeon.dungeonsAtLocation;
 export const selectDungeonsLoading = (state: RootState) => state.dungeon.loading;
 export const selectDungeonsError = (state: RootState) => state.dungeon.error;
-export const selectCurrentSession = (state: RootState) => state.dungeon.currentSession;
 export const selectSessionState = (state: RootState) => state.dungeon.sessionState;
+export const selectSessionStateError = (state: RootState) => state.dungeon.stateError;
+export const selectLastSkippedMembers = (state: RootState) => state.dungeon.lastSkippedMembers;
 export const selectSessionLoading = (state: RootState) => state.dungeon.sessionLoading;
 export const selectStateLoading = (state: RootState) => state.dungeon.stateLoading;
 export const selectMoveLoading = (state: RootState) => state.dungeon.moveLoading;

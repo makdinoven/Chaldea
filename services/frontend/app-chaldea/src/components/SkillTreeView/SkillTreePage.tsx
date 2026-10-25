@@ -14,6 +14,7 @@ import {
 } from '../../redux/slices/playerTreeSlice';
 import useMediaQuery from '../../hooks/useMediaQuery';
 import PlayerTreeCanvas, { type TreeView } from './PlayerTreeCanvas';
+import { HeaderToggle, useFullscreenPage } from '../CommonComponents/Fullscreen/fullscreen';
 import NodeDetailPanel from './NodeDetailPanel';
 import useNodePage from './useNodePage';
 import useSkillPage from './useSkillPage';
@@ -420,6 +421,11 @@ const SkillTreePage = () => {
     onUpgradeSkill: setSkillPageId,
   });
 
+  // The 3D books take the whole screen under the site header — once they are on the table.
+  const booksOnTable =
+    showsBooks && authInitialized && user.status !== 'loading' && !!user.id && !!characterId && !!classId && views.length > 0;
+  const { top: headerTop, headerHidden, toggleHeader } = useFullscreenPage(booksOnTable);
+
   // Auth loading
   if (!authInitialized || user.status === 'loading') {
     return (
@@ -489,7 +495,7 @@ const SkillTreePage = () => {
 
   return (
     // On a phone the books take the full width: the page's container padding is given back to them.
-    <div className={`w-full py-4 ${showsBooks ? '-mx-5 w-[calc(100%+2.5rem)] sm:mx-0 sm:w-full sm:px-2 md:px-6' : 'px-2 md:px-6'}`}>
+    <div className={`w-full py-4 ${showsBooks ? '' : 'px-2 md:px-6'}`}>
       <div className="w-full">
         {/* Class switcher — narrow screens only, where one tree is shown at a time */}
         {!viewingSubclass && !isWideScreen && !showsBooks && (
@@ -523,17 +529,24 @@ const SkillTreePage = () => {
           square that never exceeds 80vh, so the circle stays a circle, and the
           canvas is clipped to it while the overlays below sit outside the clip.
         */}
+        {showsBooks && (
+          <>
+            {/* The whole screen is the books' room: no page showing round the site header. */}
+            <div className="fixed inset-0 z-0 bg-[#12121e]" />
+            <HeaderToggle top={headerTop} hidden={headerHidden} onToggle={toggleHeader} />
+          </>
+        )}
         <div
-          className={`relative ${
-            roundFrame
-              ? 'w-full max-w-[80vh] aspect-square mx-auto'
-              : // On a phone the table takes the screen below the site's header, so its buttons stay in view.
-                `w-full ${showsBooks ? 'h-[max(26rem,calc(100dvh-15rem))]' : 'h-[65vh]'} md:h-[80vh]`
-          }`}
+          className={
+            showsBooks
+              ? 'fixed inset-x-0 bottom-0 z-0'
+              : `relative ${roundFrame ? 'w-full max-w-[80vh] aspect-square mx-auto' : 'w-full h-[65vh] md:h-[80vh]'}`
+          }
+          style={showsBooks ? { top: headerTop } : undefined}
         >
           <div
             className={`absolute inset-0 overflow-hidden bg-[#12121e] ${
-              roundFrame ? 'rounded-full' : 'rounded-card'
+              showsBooks ? '' : roundFrame ? 'rounded-full' : 'rounded-card'
             }`}
           >
             {showsBooks ? (

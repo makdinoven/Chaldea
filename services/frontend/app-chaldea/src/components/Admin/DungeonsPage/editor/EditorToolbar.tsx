@@ -3,6 +3,8 @@ interface EditorToolbarProps {
   isSaving: boolean;
   onSave: () => void;
   onValidate: () => void;
+  /** Opens the dungeon as the 3D miniature players will see. */
+  onPreview3D: () => void;
   onAutoLayout: () => void;
   onFitView: () => void;
   onZoomIn: () => void;
@@ -14,6 +16,7 @@ const EditorToolbar = ({
   isSaving,
   onSave,
   onValidate,
+  onPreview3D,
   onAutoLayout,
   onFitView,
   onZoomIn,
@@ -31,12 +34,17 @@ const EditorToolbar = ({
       </button>
 
       {/* Validate */}
-      <button className="btn-line !text-sm !px-4 !py-1.5" onClick={onValidate}>
+      <button className="btn-line !w-auto !text-sm !px-4 !py-1.5" onClick={onValidate}>
         Валидация
       </button>
 
+      {/* 3D preview */}
+      <button className="btn-line !w-auto !text-sm !px-4 !py-1.5" onClick={onPreview3D}>
+        3D-вид
+      </button>
+
       {/* Auto-layout */}
-      <button className="btn-line !text-sm !px-4 !py-1.5" onClick={onAutoLayout}>
+      <button className="btn-line !w-auto !text-sm !px-4 !py-1.5" onClick={onAutoLayout}>
         Авто-раскладка
       </button>
 
@@ -45,7 +53,7 @@ const EditorToolbar = ({
 
       {/* Fit view */}
       <button
-        className="btn-line !text-sm !px-3 !py-1.5"
+        className="btn-line !w-auto !text-sm !px-3 !py-1.5"
         onClick={onFitView}
         title="По размеру"
       >
@@ -54,14 +62,14 @@ const EditorToolbar = ({
 
       {/* Zoom controls */}
       <button
-        className="btn-line !text-sm !px-2.5 !py-1.5 !min-w-[32px]"
+        className="btn-line !w-auto !text-sm !px-2.5 !py-1.5 !min-w-[32px]"
         onClick={onZoomIn}
         title="Приблизить"
       >
         +
       </button>
       <button
-        className="btn-line !text-sm !px-2.5 !py-1.5 !min-w-[32px]"
+        className="btn-line !w-auto !text-sm !px-2.5 !py-1.5 !min-w-[32px]"
         onClick={onZoomOut}
         title="Отдалить"
       >

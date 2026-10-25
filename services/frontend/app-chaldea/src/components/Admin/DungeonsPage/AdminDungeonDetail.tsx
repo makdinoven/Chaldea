@@ -118,6 +118,9 @@ const AdminDungeonDetail = () => {
       {/* Visual Editor */}
       <DungeonVisualEditor
         dungeonId={dungeonId}
+        dungeonName={dungeon.name}
+        theme={dungeon.theme}
+        floorThemes={dungeon.floor_themes}
         rooms={rooms}
         corridors={corridors}
         onUpdate={loadDungeon}

@@ -5,6 +5,7 @@ import {
   setSkillTreeViewPref,
   useClientPrefs,
   type BattleViewPref,
+  type DungeonViewPref,
   type GraphicsPref,
   type SkillTreeViewPref,
   type TextSizePref,
@@ -21,6 +22,12 @@ const SKILL_TREE_OPTIONS: Option<SkillTreeViewPref>[] = [
 const BATTLE_OPTIONS: Option<BattleViewPref>[] = [
   { value: '2d', label: '2D' },
   { value: '3d', label: '3D-стол' },
+];
+
+const DUNGEON_OPTIONS: Option<DungeonViewPref>[] = [
+  { value: 'auto', label: 'По графике' },
+  { value: '3d', label: '3D-стол' },
+  { value: '2d', label: '2D-карта' },
 ];
 
 const GRAPHICS_OPTIONS: Option<GraphicsPref>[] = [
@@ -72,6 +79,19 @@ const InterfaceTab = () => {
           value={webgl ? prefs.battleView : '2d'}
           disabled={!webgl}
           onChange={(battleView) => setClientPrefs({ battleView })}
+        />
+
+        <ChoiceGroup
+          label="Подземелье открывается"
+          hint={
+            webgl
+              ? '«По графике» — 3D-стол, если графика не облегчённая. Переключиться можно и в самом забеге.'
+              : noWebglHint
+          }
+          options={DUNGEON_OPTIONS}
+          value={webgl ? prefs.dungeonView : '2d'}
+          disabled={!webgl}
+          onChange={(dungeonView) => setClientPrefs({ dungeonView })}
         />
 
         <Toggle
