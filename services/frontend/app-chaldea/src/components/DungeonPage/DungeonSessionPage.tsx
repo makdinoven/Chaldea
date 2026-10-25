@@ -134,9 +134,9 @@ const ARRIVAL_FALLBACK_MS = 8000;
 const MAP_PHASES = new Set<string>(['exploring', 'resting', 'battle_pending', 'in_battle']);
 
 const STABILITY_LABELS: Record<string, string> = {
-  static: 'Изученное',
-  unstable: 'Нестабильное',
-  chaotic: 'Хаотичное',
+  static: 'Изученный',
+  unstable: 'Нестабильный',
+  chaotic: 'Хаотичный',
 };
 
 const PASSAGE_TITLES: Record<string, { down: string; up: string }> = {

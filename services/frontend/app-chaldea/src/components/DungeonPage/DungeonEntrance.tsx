@@ -25,8 +25,8 @@ interface DungeonEntranceProps {
 
 const STABILITY_LABELS: Record<string, string> = {
   static: 'Изученный',
-  unstable: 'Опасный',
-  chaotic: 'Смертельный',
+  unstable: 'Нестабильный',
+  chaotic: 'Хаотичный',
 };
 
 const STABILITY_COLORS: Record<string, string> = {
