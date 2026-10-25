@@ -109,7 +109,6 @@ const AdminMobDetail = ({ templateId, onClose }: AdminMobDetailProps) => {
 
       <div className="flex gap-4 text-sm text-white/70">
         <span>Опыт: <span className="text-white">{template.xp_reward}</span></span>
-        <span>Золото: <span className="text-gold">{template.gold_reward}</span></span>
         <span>Респавн: <span className="text-white">{template.respawn_enabled ? `${template.respawn_seconds ?? 0} сек` : 'Выкл'}</span></span>
       </div>
 

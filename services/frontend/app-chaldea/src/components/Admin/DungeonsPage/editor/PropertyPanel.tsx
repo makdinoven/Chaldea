@@ -8,6 +8,7 @@ import {
   DUNGEON_KEYS,
   DUNGEON_KEY_KINDS,
 } from '../../../DungeonPage/dungeonConstants';
+import { EntityListPicker, EntityPicker } from './pickers';
 
 const GRID_MIN = 2;
 const GRID_MAX = 8;
@@ -171,17 +172,6 @@ interface PropertyPanelProps {
   onDeleteCorridor: (corridorId: number) => void;
 }
 
-// --- Helpers ---
-
-const parseMobIds = (str: string): number[] =>
-  str
-    .split(/[,\s]+/)
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !isNaN(n));
-
-const mobIdsToString = (ids: number[] | undefined): string =>
-  (ids || []).join(', ');
-
 // --- Sub-components ---
 
 const SectionHeader = ({ children }: { children: React.ReactNode }) => (
@@ -204,14 +194,12 @@ const BattleConfig = ({
   onChange: (c: Record<string, unknown>) => void;
 }) => (
   <div className="flex flex-col gap-2">
-    <FieldLabel>ID шаблонов мобов (через запятую)</FieldLabel>
-    <input
-      className="input-underline !text-sm"
-      placeholder="1, 2, 3"
-      value={mobIdsToString(config.mob_template_ids as number[])}
-      onChange={(e) =>
-        onChange({ ...config, mob_template_ids: parseMobIds(e.target.value) })
-      }
+    <FieldLabel>Мобы</FieldLabel>
+    <EntityListPicker
+      kind="mob"
+      repeats
+      ids={(config.mob_template_ids as number[]) ?? []}
+      onChange={(mob_template_ids) => onChange({ ...config, mob_template_ids })}
     />
     <KeyRewardField
       config={config}
@@ -243,15 +231,14 @@ export const LootTable = ({
     </div>
     {items.map((row, idx) => (
       <div key={idx} className="flex flex-wrap gap-1.5 items-end bg-white/[0.03] rounded p-2">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[9px] text-white/40">ID предмета</span>
-          <input
-            type="number"
-            className="input-underline !text-sm !w-16"
-            value={row.item_id}
-            onChange={(e) => {
+        <div className="flex flex-col gap-0.5 basis-full min-w-0">
+          <span className="text-[9px] text-white/40">Предмет</span>
+          <EntityPicker
+            kind="item"
+            value={row.item_id || null}
+            onChange={(id) => {
               const updated = [...items];
-              updated[idx] = { ...row, item_id: Number(e.target.value) };
+              updated[idx] = { ...row, item_id: id ?? 0 };
               onChange(updated);
             }}
           />
@@ -307,14 +294,12 @@ const BossConfig = ({
 }) => (
   <div className="flex flex-col gap-3">
     <div className="flex flex-col gap-2">
-      <FieldLabel>ID шаблонов мобов (через запятую)</FieldLabel>
-      <input
-        className="input-underline !text-sm"
-        placeholder="5"
-        value={mobIdsToString(config.mob_template_ids as number[])}
-        onChange={(e) =>
-          onChange({ ...config, mob_template_ids: parseMobIds(e.target.value) })
-        }
+      <FieldLabel>Босс и его свита</FieldLabel>
+      <EntityListPicker
+        kind="mob"
+        repeats
+        ids={(config.mob_template_ids as number[]) ?? []}
+        onChange={(mob_template_ids) => onChange({ ...config, mob_template_ids })}
       />
     </div>
     <LootTable
@@ -488,14 +473,12 @@ const OutcomeDataFields = ({
   if (outcomeType === 'battle') {
     return (
       <div className="flex flex-col gap-0.5">
-        <span className="text-[9px] text-white/40">ID мобов (через запятую)</span>
-        <input
-          className="input-underline !text-sm"
-          placeholder="1, 3, 5"
-          value={((data.mob_template_ids as number[]) ?? []).join(', ')}
-          onChange={(e) => set('mob_template_ids',
-            e.target.value.split(',').map((s) => Number(s.trim())).filter((n) => n > 0)
-          )}
+        <span className="text-[9px] text-white/40">Мобы</span>
+        <EntityListPicker
+          kind="mob"
+          repeats
+          ids={(data.mob_template_ids as number[]) ?? []}
+          onChange={(ids) => set('mob_template_ids', ids)}
         />
       </div>
     );
@@ -504,7 +487,7 @@ const OutcomeDataFields = ({
   if (outcomeType === 'reward') {
     return (
       <div className="flex flex-col gap-1 col-span-2">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <div className="flex flex-col gap-0.5 flex-1">
             <span className="text-[9px] text-white/40">Золото</span>
             <input
@@ -515,15 +498,12 @@ const OutcomeDataFields = ({
               onChange={(e) => set('gold', Number(e.target.value) || 0)}
             />
           </div>
-          <div className="flex flex-col gap-0.5 flex-1">
-            <span className="text-[9px] text-white/40">ID предмета</span>
-            <input
-              type="number"
-              className="input-underline !text-sm"
-              placeholder="5"
-              value={((data.items as {item_id: number}[])?.[0]?.item_id) ?? ''}
-              onChange={(e) => {
-                const itemId = Number(e.target.value) || 0;
+          <div className="flex flex-col gap-0.5 basis-full order-last min-w-0">
+            <span className="text-[9px] text-white/40">Предмет</span>
+            <EntityPicker
+              kind="item"
+              value={((data.items as {item_id: number}[])?.[0]?.item_id) || null}
+              onChange={(itemId) => {
                 const qty = ((data.items as {quantity: number}[])?.[0]?.quantity) ?? 1;
                 set('items', itemId ? [{ item_id: itemId, quantity: qty }] : []);
               }}
@@ -703,12 +683,12 @@ const RestConfig = ({
       />
     </div>
     <div className="flex flex-col gap-1">
-      <FieldLabel>Мобы вылазки (ID)</FieldLabel>
-      <input
-        className="input-underline !text-sm"
-        placeholder="1, 2"
-        value={mobIdsToString(config.ambush_mob_ids as number[])}
-        onChange={(e) => onChange({ ...config, ambush_mob_ids: parseMobIds(e.target.value) })}
+      <FieldLabel>Мобы вылазки</FieldLabel>
+      <EntityListPicker
+        kind="mob"
+        repeats
+        ids={(config.ambush_mob_ids as number[]) ?? []}
+        onChange={(ambush_mob_ids) => onChange({ ...config, ambush_mob_ids })}
       />
     </div>
     <p className="col-span-2 text-white/40 text-[10px]">
@@ -795,15 +775,14 @@ const MerchantConfig = ({
       </div>
       {items.map((item, idx) => (
         <div key={idx} className="flex flex-wrap gap-1.5 items-end bg-white/[0.03] rounded p-2">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[9px] text-white/40">ID предмета</span>
-            <input
-              type="number"
-              className="input-underline !text-sm !w-16"
-              value={item.item_id}
-              onChange={(e) => {
+          <div className="flex flex-col gap-0.5 basis-full min-w-0">
+            <span className="text-[9px] text-white/40">Предмет</span>
+            <EntityPicker
+              kind="item"
+              value={item.item_id || null}
+              onChange={(id) => {
                 const updated = [...items];
-                updated[idx] = { ...item, item_id: Number(e.target.value) };
+                updated[idx] = { ...item, item_id: id ?? 0 };
                 onChange({ ...config, items: updated });
               }}
             />
@@ -1733,15 +1712,12 @@ const CorridorPanel = ({
 
       {corridor.random_battle_chance > 0 && (
         <div className="flex flex-col gap-1">
-          <FieldLabel>ID мобов (через запятую)</FieldLabel>
-          <input
-            className="input-underline !text-sm"
-            placeholder="1, 2, 3"
-            value={mobIdsToString(corridor.random_battle_mob_ids ?? undefined)}
-            onChange={(e) => {
-              const ids = parseMobIds(e.target.value);
-              update({ random_battle_mob_ids: ids.length > 0 ? ids : null });
-            }}
+          <FieldLabel>Мобы</FieldLabel>
+          <EntityListPicker
+            kind="mob"
+            repeats
+            ids={corridor.random_battle_mob_ids ?? []}
+            onChange={(ids) => update({ random_battle_mob_ids: ids.length > 0 ? ids : null })}
           />
         </div>
       )}

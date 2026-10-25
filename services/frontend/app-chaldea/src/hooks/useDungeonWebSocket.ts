@@ -35,6 +35,7 @@ export type DungeonWsEventType =
   | 'challenge_finished'
   | 'chat_message'
   | 'room_lit'
+  | 'item_given'
   | 'heartbeat_ack'
   | 'ping';
 

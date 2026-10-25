@@ -126,7 +126,7 @@ export interface DungeonCreate {
   floor_themes?: Record<string, string> | null;
 }
 
-export type DungeonUpdate = Partial<DungeonCreate>;
+export type DungeonUpdate = Partial<DungeonCreate> & { is_active?: boolean };
 
 export interface DungeonDetail extends Dungeon {
   rooms: DungeonRoom[];
@@ -220,6 +220,60 @@ export const deleteCorridor = async (corridorId: number): Promise<void> => {
 export const validateDungeon = async (dungeonId: number): Promise<DungeonValidationResponse> => {
   const { data } = await axios.post<DungeonValidationResponse>(
     `/dungeons/admin/dungeons/${dungeonId}/validate`,
+  );
+  return data;
+};
+
+/** What keeps players out of a dungeon now: the cooldown after a clear, a group inside. */
+export interface DungeonAdminStatus {
+  is_on_cooldown: boolean;
+  cooldown_remaining_seconds: number;
+  occupied_session_id: number | null;
+}
+
+export const fetchDungeonStatus = async (dungeonId: number): Promise<DungeonAdminStatus> => {
+  const { data } = await axios.get<DungeonAdminStatus>(`/dungeons/admin/dungeons/${dungeonId}/status`);
+  return data;
+};
+
+/** Restore a cleared dungeon at once: its cooldown is lifted. */
+export const clearDungeonCooldown = async (dungeonId: number): Promise<void> => {
+  await axios.delete(`/dungeons/admin/dungeons/${dungeonId}/cooldown`);
+};
+
+/** FEAT-177: what the generator builds the draft from (left out = the dungeon's own settings). */
+export interface DungeonGeneratePayload {
+  floors: number;
+  rooms_per_floor: number;
+  level?: number;
+  party_size?: number;
+  difficulty: 'easy' | 'normal' | 'hard';
+  theme?: string;
+  locks: boolean;
+  secrets: boolean;
+  seed?: number;
+  mob_pool?: number[];
+  boss_pool?: number[];
+  loot_pool?: number[];
+  /** The dungeon's current rooms are deleted only with this set. */
+  replace: boolean;
+}
+
+export interface DungeonGenerateResult {
+  seed: number;
+  rooms: number;
+  corridors: number;
+  warnings: string[];
+  validation: DungeonValidationResponse;
+}
+
+export const generateDungeon = async (
+  dungeonId: number,
+  payload: DungeonGeneratePayload,
+): Promise<DungeonGenerateResult> => {
+  const { data } = await axios.post<DungeonGenerateResult>(
+    `/dungeons/admin/dungeons/${dungeonId}/generate`,
+    payload,
   );
   return data;
 };
@@ -1087,6 +1141,23 @@ export const distributeLoot = async (
     `/dungeons/sessions/${sessionId}/distribute-loot`,
     { character_id: characterId, distributions },
   );
+  return data;
+};
+
+/** FEAT-178: mid-run the leader hands a found consumable to a member's camp backpack. */
+export const giveFoundItem = async (
+  sessionId: number,
+  characterId: number,
+  targetCharacterId: number,
+  itemId: number,
+  quantity = 1,
+): Promise<{ message: string; group_inventory: GroupInventoryItem[] }> => {
+  const { data } = await axios.post(`/dungeons/sessions/${sessionId}/give`, {
+    character_id: characterId,
+    target_character_id: targetCharacterId,
+    item_id: itemId,
+    quantity,
+  });
   return data;
 };
 

@@ -33,6 +33,9 @@ import {
   SHARPENABLE_ITEM_TYPES,
 } from '../../../constants/professions';
 import { getClientPrefs } from '../../../utils/clientPrefs';
+import { packIntoBackpack } from '../../../api/backpack';
+import { apiErrorMessage } from '../../../api/errors';
+import useBackpack from '../../CommonComponents/ItemSlot/useBackpack';
 
 const parseSocketedGems = (raw: string | null | undefined): (number | null)[] => {
   if (!raw) return [];
@@ -58,6 +61,8 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
   const contextMenu = useAppSelector(selectContextMenu);
   const currentLocation = useAppSelector(state => state.user.character?.current_location);
   const menuRef = useRef<HTMLDivElement>(null);
+  // FEAT-178: what the camp backpack has room for (only while a menu is open)
+  const { state: backpack } = useBackpack(contextMenu.isOpen ? characterId : null, contextMenu.isOpen);
 
   // Confirmation modal state for drop actions
   const [confirmModal, setConfirmModal] = useState<{
@@ -287,7 +292,29 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
           })();
         },
       });
-    } else if (itemType === 'consumable') {
+    }
+    if (itemType === 'consumable') {
+      // В рюкзак — consumables for a dungeon run (FEAT-178), packed outside one
+      if (!contextMenu.slotType && backpack?.backpack && !backpack.in_dungeon) {
+        const pack = (quantity: number) => {
+          dispatch(closeContextMenu());
+          (async () => {
+            try {
+              await packIntoBackpack(characterId, inventoryItem.id, quantity);
+              toast.success(quantity > 1 ? `В рюкзаке: ${item.name} ×${quantity}` : `В рюкзаке: ${item.name}`);
+              dispatch(fetchInventory(characterId));
+            } catch (e) {
+              toast.error(apiErrorMessage(e, 'Не удалось положить в рюкзак'));
+            }
+          })();
+        };
+        actions.push({ label: 'В рюкзак', handler: () => pack(1) });
+        if (inventoryItem.quantity > 1) {
+          actions.push({ label: `В рюкзак — все (${inventoryItem.quantity})`, handler: () => pack(inventoryItem.quantity) });
+        }
+      }
+    }
+    if (itemType === 'consumable' && !item.is_food) {
       // Использовать — for buff items (books etc.) or regular consumables
       if (item.buff_type && item.buff_value != null && item.buff_duration_minutes != null) {
         // Buff item — use dedicated buff endpoint

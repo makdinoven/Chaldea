@@ -60,6 +60,10 @@ export const FOOD_HINT =
   "Сытость на 24 ч. Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. " +
   "Характеристики ниже действуют, пока активна сытость; восстановление срабатывает сразу при еде.";
 
+export const BACKPACK_HINT =
+  "Носится в слоте плаща. В подземелье из своих вещей доступно только содержимое рюкзака (расходники). " +
+  "Вместимость по редкости: обычный 4, редкий 6, эпический 8, легендарный и выше 10 слотов.";
+
 /** Types that start with durability 100 when picked in the form */
 export const DEFAULT_DURABILITY_TYPES: readonly string[] = [
   "head", "body", "cloak", "weapon",
@@ -407,6 +411,7 @@ export const buildItemPayload = (item: Record<string, unknown>): Record<string, 
   }
 
   payload.is_food = rules.food && Boolean(item.is_food);
+  payload.is_backpack = type === "cloak" && Boolean(item.is_backpack);
 
   payload.identify_level = rules.identify ? numOrNull(item.identify_level) : null;
 

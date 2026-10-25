@@ -64,6 +64,7 @@ import DungeonPartyPanel from './DungeonPartyPanel';
 import PartyFrames from './PartyFrames';
 import { playDungeonSound } from '../../utils/dungeonSounds';
 import DungeonInventory from './DungeonInventory';
+import { announceBackpackChange } from '../../api/backpack';
 import DungeonLootDistribution from './DungeonLootDistribution';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import { battlePath } from '../../utils/battlePath';
@@ -78,7 +79,6 @@ import { floorTheme } from '../DungeonBoard3D/dungeonThemes';
 import { useBoardPresentation, type BoardMoveEvent } from '../DungeonBoard3D/useBoardPresentation';
 import type { CorridorScene, FloorSpan } from '../DungeonBoard3D/DungeonBoardScene';
 import DungeonChat from './DungeonChat';
-import type { BoardTab } from './DungeonBoardView';
 import { markRemark, voteRemark } from './remarks';
 import { MARK_SECONDS, type BoardMark } from '../DungeonBoard3D/PartyMarks';
 import { MarkTools, PartyDecision } from './PartyDecision';
@@ -161,6 +161,7 @@ const lockLine = (exit: RoomExit, keys: string[]) => {
 const LEADER_ECHO_EVENTS = new Set([
   'room_entered', 'trap_triggered', 'battle_started', 'loot_added', 'event_result',
   'rest_started', 'rest_completed', 'mana_core_result', 'loot_distributed', 'lock_picked', 'lever_pulled',
+  'item_given',
 ]);
 
 const REFRESH_DEBOUNCE_MS = 300;
@@ -420,6 +421,14 @@ const DungeonSessionPage = () => {
           if (!quiet) toast.success(`Получено: ${str(data.item_name) ?? 'ничего'}`);
           break;
         }
+        case 'item_given': {
+          // FEAT-178: a find handed to someone's backpack; the one who got it sees their backpack fill.
+          if (data.target_character_id === characterIdRef.current && !quiet) {
+            toast.success(`Лидер передал вам: ${str(data.item_name) ?? 'предмет'} — в рюкзаке`);
+          }
+          announceBackpackChange();
+          break;
+        }
         case 'room_entered': {
           // A squadmate sees the leader's move played on the board too (the leader has his own response).
           if (!isLeaderRef.current && !data.teleported) {
@@ -617,10 +626,10 @@ const DungeonSessionPage = () => {
     [sessionId, characterId, addChat, speak],
   );
 
-  // The chat in view (a tab): nothing unread while it is.
-  const handleBoardTab = useCallback((tab: BoardTab | null) => {
-    chatVisible.current = tab === 'chat';
-    if (tab === 'chat') setChatUnread(0);
+  // The chat in view (the desktop window, or the phone's tab): nothing unread while it is.
+  const handleChatVisible = useCallback((visible: boolean) => {
+    chatVisible.current = visible;
+    if (visible) setChatUnread(0);
   }, []);
 
   const handlePing = useCallback(
@@ -1068,6 +1077,22 @@ const DungeonSessionPage = () => {
     />
   );
 
+  /** The run's things: keys, finds, my backpack and belt (FEAT-178). */
+  const runInventory = (compact = false) => (
+    <DungeonInventory
+      items={session.group_inventory}
+      keys={session.keys}
+      compact={compact}
+      sessionId={session.session_id}
+      characterId={characterId}
+      isLeader={isLeader}
+      members={session.members}
+      active={session.status === 'active'}
+      inBattle={session.phase === 'in_battle'}
+      onChanged={refresh}
+    />
+  );
+
   /** The run on the table, with the page's panels over it. */
   const chatPanel = (
     <DungeonChat
@@ -1121,7 +1146,7 @@ const DungeonSessionPage = () => {
         groupPanel={groupPanel}
         chatPanel={chatPanel}
         chatUnread={chatUnread}
-        onTabChange={handleBoardTab}
+        onChatVisible={handleChatVisible}
         decision={decision}
         roomHasAction={roomHasAction}
         describeRoom={describeRoom}
@@ -1226,7 +1251,7 @@ const DungeonSessionPage = () => {
               </div>
             ),
             roomTitle: session.current_room?.name ?? 'бой',
-            groupPanel: <DungeonInventory items={session.group_inventory} keys={session.keys} />,
+            groupPanel: runInventory(),
           })}
           {null}
         </>
@@ -1771,7 +1796,7 @@ const DungeonSessionPage = () => {
           roomTitle: room?.name ?? '—',
           groupPanel: (
             <>
-              <DungeonInventory items={session.group_inventory} keys={session.keys} />
+              {runInventory()}
               {fleeButton}
             </>
           ),
@@ -1837,7 +1862,7 @@ const DungeonSessionPage = () => {
         <div className="w-80 shrink-0 flex flex-col gap-4">
           {roomPanel}
           <DungeonPartyPanel members={session.members} currentCharacterId={characterId} busy={busy} />
-          <DungeonInventory items={session.group_inventory} keys={session.keys} compact />
+          {runInventory(true)}
           {fleeButton}
           <div className="gray-bg rounded-card p-3">
             <DungeonChat
@@ -1861,7 +1886,7 @@ const DungeonSessionPage = () => {
         {mobileTab === 'party' && (
           <div className="flex flex-col gap-4">
             <DungeonPartyPanel members={session.members} currentCharacterId={characterId} busy={busy} />
-            <DungeonInventory items={session.group_inventory} keys={session.keys} />
+            {runInventory()}
             {fleeButton}
           </div>
         )}

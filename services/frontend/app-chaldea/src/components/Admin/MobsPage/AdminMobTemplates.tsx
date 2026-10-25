@@ -19,6 +19,9 @@ import useDebounce from '../../../hooks/useDebounce';
 import AdminPagination from '../AdminPagination/AdminPagination';
 import AdminMobTemplateForm from './AdminMobTemplateForm';
 import AdminMobDetail from './AdminMobDetail';
+import toast from 'react-hot-toast';
+import { fillMobXp } from '../../../api/mobs';
+import { apiErrorMessage } from '../../../api/errors';
 
 const TIER_OPTIONS = [
   { value: '', label: 'Все типы' },
@@ -70,6 +73,31 @@ const AdminMobTemplates = () => {
 
   const handleTierChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     dispatch(setTierFilter(e.target.value));
+  };
+
+  // Mobs left with 0 XP get the default for their level and tier; hand-set values stay.
+  const [filling, setFilling] = useState(false);
+  const handleFillXp = async () => {
+    setFilling(true);
+    try {
+      const { count } = await fillMobXp(true);
+      if (count === 0) {
+        toast('У всех мобов опыт уже заполнен');
+        return;
+      }
+      if (!window.confirm(
+        `Заполнить опыт ${count} мобам, у которых он сейчас 0?
+` +
+        'Обычный — 20 + 6 × уровень, элитный ×3, босс ×10. Заданный вручную опыт не меняется.',
+      )) return;
+      const done = await fillMobXp(false);
+      toast.success(`Опыт заполнен: ${done.count}`);
+      loadTemplates();
+    } catch (e) {
+      toast.error(apiErrorMessage(e, 'Не удалось заполнить опыт мобов'));
+    } finally {
+      setFilling(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -134,7 +162,15 @@ const AdminMobTemplates = () => {
             </option>
           ))}
         </select>
-        <button className="btn-blue !text-base !px-6 !py-2 sm:ml-auto" onClick={handleCreate}>
+        <button
+          className="btn-line !w-auto !text-base !px-5 !py-2 sm:ml-auto disabled:opacity-40"
+          onClick={() => void handleFillXp()}
+          disabled={filling}
+          title="Опыт по формуле всем мобам, у которых он 0: обычный 20 + 6 × уровень, элитный ×3, босс ×10"
+        >
+          {filling ? 'Заполнение...' : 'Заполнить опыт по формуле'}
+        </button>
+        <button className="btn-blue !text-base !px-6 !py-2" onClick={handleCreate}>
           Создать моба
         </button>
       </div>
@@ -170,7 +206,6 @@ const AdminMobTemplates = () => {
                     <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Тип</th>
                     <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Уровень</th>
                     <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Опыт</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Золото</th>
                     <th className="text-right text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Действия</th>
                   </tr>
                 </thead>
@@ -193,7 +228,6 @@ const AdminMobTemplates = () => {
                       </td>
                       <td className="px-4 py-3 text-sm text-white/70">{mob.level}</td>
                       <td className="px-4 py-3 text-sm text-white/70">{mob.xp_reward}</td>
-                      <td className="px-4 py-3 text-sm text-gold">{mob.gold_reward}</td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col items-end gap-1.5">
                           <button
@@ -242,7 +276,6 @@ const AdminMobTemplates = () => {
                   </div>
                   <div className="flex gap-4 text-xs text-white/50">
                     <span>Опыт: {mob.xp_reward}</span>
-                    <span className="text-gold">Золото: {mob.gold_reward}</span>
                   </div>
                   <div className="flex gap-3 flex-wrap">
                     <button

@@ -389,10 +389,6 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
             <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Опыт (XP)</span>
             <input type="number" name="xp_reward" value={form.xp_reward} onChange={handleChange} min={0} className="input-underline" />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Золото</span>
-            <input type="number" name="gold_reward" value={form.gold_reward} onChange={handleChange} min={0} className="input-underline" />
-          </label>
         </div>
       </div>
 

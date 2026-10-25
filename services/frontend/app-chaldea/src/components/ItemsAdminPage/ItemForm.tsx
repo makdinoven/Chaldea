@@ -34,6 +34,7 @@ import {
   DEFAULT_DURABILITY_TYPES,
   DEFAULT_TOOL_DURABILITY,
   FOOD_HINT,
+  BACKPACK_HINT,
   IDENTIFY_LEVEL_OPTIONS,
   RARITY_CAP_MESSAGE,
   RECOVERY_FIELDS,
@@ -73,6 +74,7 @@ interface ItemFormState {
   max_stack_size: number | string;
   is_unique: boolean;
   is_food?: boolean;
+  is_backpack?: boolean;
   description: string;
   image?: string | null;
   full_image?: string | null;
@@ -94,6 +96,7 @@ const initialState = (itemType: string): ItemFormState => {
     max_stack_size: 1,
     is_unique: false,
     is_food: false,
+    is_backpack: false,
     description: "",
     fast_slot_bonus: 0,
     socket_count: 0,
@@ -267,6 +270,7 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       const next: ItemFormState = { ...st, item_type: nextType };
       if (resetRarity) next.item_rarity = "common";
       if (nextType !== "consumable") next.is_food = false;
+      if (nextType !== "cloak") next.is_backpack = false;
       if (DEFAULT_DURABILITY_TYPES.includes(nextType) && Number(st.max_durability) === 0) {
         next.max_durability = DEFAULT_DURABILITY;
       }
@@ -605,6 +609,24 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
             <span className="text-sm text-white">Еда (даёт сытость)</span>
           </label>
           {Boolean(item.is_food) && <p className="text-white/40 text-xs mt-3">{FOOD_HINT}</p>}
+        </fieldset>
+      )}
+
+      {/* ── Camp backpack (FEAT-178) ── */}
+      {item.item_type === "cloak" && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Походный рюкзак</legend>
+          <label className="flex items-center gap-3 mt-2">
+            <input
+              type="checkbox"
+              name="is_backpack"
+              checked={Boolean(item.is_backpack)}
+              onChange={handleChange}
+              className="w-5 h-5 accent-site-blue shrink-0"
+            />
+            <span className="text-sm text-white">Это походный рюкзак</span>
+          </label>
+          {Boolean(item.is_backpack) && <p className="text-white/40 text-xs mt-3">{BACKPACK_HINT}</p>}
         </fieldset>
       )}
 

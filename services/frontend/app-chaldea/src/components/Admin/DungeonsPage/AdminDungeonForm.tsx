@@ -13,7 +13,9 @@ import {
 } from '../../../redux/slices/dungeonAdminSlice';
 import type { DungeonCreate, LootEntryDto } from '../../../api/dungeons';
 import { LootTable } from './editor/PropertyPanel';
+import { EntityPicker } from './editor/pickers';
 import ThemePicker from './ThemePicker';
+import DungeonStatusControl from './DungeonStatusControl';
 import { isTheme, type DungeonTheme } from '../../DungeonBoard3D/dungeonThemes';
 
 interface FormData {
@@ -164,7 +166,7 @@ const AdminDungeonForm = () => {
       return;
     }
     if (!form.location_id || form.location_id <= 0) {
-      toast.error('Укажите ID локации');
+      toast.error('Выберите локацию');
       return;
     }
 
@@ -221,6 +223,13 @@ const AdminDungeonForm = () => {
       </h1>
 
       <form className="gray-bg p-4 sm:p-6 flex flex-col gap-5" onSubmit={handleSubmit}>
+        {editingId && (
+          <div>
+            <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-3">Состояние</h3>
+            <DungeonStatusControl dungeonId={editingId} />
+          </div>
+        )}
+
         {/* Basic fields */}
         <div>
           <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-3">Основное</h3>
@@ -248,18 +257,14 @@ const AdminDungeonForm = () => {
               </select>
             </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">ID локации *</span>
-              <input
-                type="number"
-                name="location_id"
-                value={form.location_id || ''}
-                onChange={handleChange}
-                min={1}
-                required
-                className="input-underline"
+            <div className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Локация *</span>
+              <EntityPicker
+                kind="location"
+                value={form.location_id || null}
+                onChange={(id) => setForm((prev) => ({ ...prev, location_id: id ?? 0 }))}
               />
-            </label>
+            </div>
 
             <label className="flex flex-col gap-1">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Рекомендуемый уровень</span>
@@ -493,17 +498,14 @@ const AdminDungeonForm = () => {
               />
             </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">ID предмета (Кристалл подземелья)</span>
-              <input
-                type="number"
-                value={form.mana_core_item_id ?? ''}
-                onChange={(e) => handleNullableNumber('mana_core_item_id', e.target.value)}
-                min={1}
-                className="input-underline"
-                placeholder="Не задано"
+            <div className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Предмет (Кристалл подземелья)</span>
+              <EntityPicker
+                kind="item"
+                value={form.mana_core_item_id}
+                onChange={(id) => setForm((prev) => ({ ...prev, mana_core_item_id: id }))}
               />
-            </label>
+            </div>
           </div>
         </div>
 

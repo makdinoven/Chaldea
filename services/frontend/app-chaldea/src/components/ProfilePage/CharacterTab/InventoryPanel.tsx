@@ -3,6 +3,7 @@ import { selectInventory } from '../../../redux/slices/profileSlice';
 import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
 import CategorySidebar from '../InventoryTab/CategorySidebar';
 import ItemGrid from '../InventoryTab/ItemGrid';
+import BackpackStrip from './BackpackStrip';
 import bagIcon from '../../../assets/icons/equipment/bag.svg';
 
 /**
@@ -34,6 +35,9 @@ const InventoryPanel = () => {
       <div className="flex-1 min-h-0 px-4 lg:px-5 pb-4 pt-2 flex flex-col">
         <ItemGrid />
       </div>
+
+      {/* FEAT-178: the camp backpack, when one is worn */}
+      <BackpackStrip />
     </PanelShell>
   );
 };

@@ -19,6 +19,7 @@ interface ItemTypeLineProps {
     weapon_subclass?: string | null;
     armor_subclass?: string | null;
     is_food?: boolean;
+    is_backpack?: boolean;
   };
 }
 
@@ -40,7 +41,9 @@ const ItemTypeLine = ({ item }: ItemTypeLineProps) => {
     const typeLabel =
       item.item_type === 'consumable' && item.is_food
         ? 'Еда'
-        : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
+        : item.item_type === 'cloak' && item.is_backpack
+          ? 'Походный рюкзак'
+          : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
     segments.push({ text: typeLabel, className: 'text-white/80' });
     if (ARMOR_SUBCLASS_TYPES.includes(item.item_type) && item.armor_subclass) {
       segments.push({ text: ARMOR_SUBCLASS_LABELS[item.armor_subclass] ?? item.armor_subclass, className: 'text-white' });

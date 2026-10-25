@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState, type ReactNode, type WheelEvent, type CSSProperties } from 'react';
+import { lazy, Suspense, useMemo, useState, type ReactNode, type WheelEvent, type CSSProperties, type Ref } from 'react';
 import { buildDioramaLayout } from './dioramaLayout';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import { setClientPrefs } from '../../utils/clientPrefs';
@@ -51,6 +51,8 @@ interface DungeonBoardLiveProps {
   marks?: BoardMark[];
   /** More buttons beside the zoom ones (the party's marks). */
   extraControls?: ReactNode;
+  /** The controls' box, for whatever must stand clear of it (the chat window above). */
+  controlsRef?: Ref<HTMLDivElement>;
 }
 
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
@@ -79,6 +81,7 @@ const DungeonBoardLive = ({
   controlsStyle,
   marks,
   extraControls,
+  controlsRef,
 }: DungeonBoardLiveProps) => {
   const [zoom, setZoom] = useState(1);
   const [overview, setOverview] = useState(false);
@@ -138,7 +141,7 @@ const DungeonBoardLive = ({
         </ErrorBoundary>
       </div>
 
-      <div className={`flex flex-col gap-2 ${controlsClassName}`} style={controlsStyle}>
+      <div ref={controlsRef} className={`flex flex-col gap-2 ${controlsClassName}`} style={controlsStyle}>
         <div className="flex items-center gap-1.5">
           <button
             type="button"

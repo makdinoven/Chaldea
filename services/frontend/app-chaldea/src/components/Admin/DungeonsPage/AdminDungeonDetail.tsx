@@ -3,7 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import DungeonVisualEditor from './DungeonVisualEditor';
+import DungeonGeneratorModal from './DungeonGeneratorModal';
+import DungeonStatusControl from './DungeonStatusControl';
 import type { Dungeon, DungeonRoom, DungeonCorridor } from '../../../api/dungeons';
+import { updateDungeon, validateDungeon } from '../../../api/dungeons';
 
 const STABILITY_LABELS: Record<string, string> = {
   static: 'Статичный',
@@ -19,11 +22,37 @@ const AdminDungeonDetail = () => {
   const [corridors, setCorridors] = useState<DungeonCorridor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [generatorOpen, setGeneratorOpen] = useState(false);
 
   const dungeonId = Number(id);
 
-  const loadDungeon = async () => {
-    setLoading(true);
+  const [switching, setSwitching] = useState(false);
+
+  /** Show the dungeon on its location or hide it. A dungeon that fails the check is not switched on. */
+  const toggleActive = async () => {
+    if (!dungeon) return;
+    setSwitching(true);
+    try {
+      if (!dungeon.is_active) {
+        const check = await validateDungeon(dungeonId);
+        if (!check.valid) {
+          toast.error(`Сначала исправьте: ${check.errors[0]}`);
+          return;
+        }
+      }
+      await updateDungeon(dungeonId, { is_active: !dungeon.is_active });
+      toast.success(dungeon.is_active ? 'Подземелье скрыто с локации' : 'Подземелье включено и видно на локации');
+      await loadDungeon(true);
+    } catch {
+      toast.error('Не удалось переключить подземелье');
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  /** `quiet`: refresh under the open page (the generator's window stays up). */
+  const loadDungeon = async (quiet = false) => {
+    if (!quiet) setLoading(true);
     setError(null);
     try {
       const { data } = await axios.get(`/dungeons/admin/dungeons/${dungeonId}`);
@@ -40,7 +69,7 @@ const AdminDungeonDetail = () => {
 
   useEffect(() => {
     if (dungeonId) {
-      loadDungeon();
+      void loadDungeon();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dungeonId]);
@@ -84,11 +113,19 @@ const AdminDungeonDetail = () => {
         <span className="px-3 py-1 rounded-full text-xs font-medium self-start bg-white/20 text-white">
           {STABILITY_LABELS[dungeon.stability_type] || dungeon.stability_type}
         </span>
-        {!dungeon.is_active && (
-          <span className="px-3 py-1 rounded-full text-xs font-medium self-start bg-site-red/30 text-site-red">
-            Неактивно
-          </span>
-        )}
+        <button
+          type="button"
+          onClick={() => void toggleActive()}
+          disabled={switching}
+          title={dungeon.is_active ? 'Скрыть подземелье с локации' : 'Показать подземелье на локации'}
+          className={`px-3 py-1 rounded-full text-xs font-medium self-start transition-colors disabled:opacity-50 ${
+            dungeon.is_active
+              ? 'bg-green-500/20 text-green-300 hover:bg-green-500/30'
+              : 'bg-site-red/30 text-site-red hover:bg-site-red/40'
+          }`}
+        >
+          {switching ? '...' : dungeon.is_active ? 'Активно — выключить' : 'Неактивно — включить'}
+        </button>
       </div>
 
       {dungeon.description && (
@@ -100,20 +137,23 @@ const AdminDungeonDetail = () => {
         <span>Коридоров: <span className="text-white">{corridors.length}</span></span>
         <span>Рек. уровень: <span className="text-white">{dungeon.recommended_level ?? '—'}</span></span>
         <span>Рек. группа: <span className="text-white">{dungeon.recommended_party_size ?? '—'}</span></span>
-        <button
-          onClick={async () => {
-            try {
-              await axios.delete(`/dungeons/admin/dungeons/${dungeonId}/cooldown`);
-              toast.success('Кулдаун снят');
-            } catch {
-              toast.error('Не удалось снять кулдаун');
-            }
-          }}
-          className="text-xs text-site-red hover:text-white transition-colors"
-        >
-          Снять кулдаун
+        <button onClick={() => setGeneratorOpen(true)} className="btn-blue !text-sm !px-4 !py-1.5">
+          Сгенерировать
         </button>
       </div>
+
+      <DungeonGeneratorModal
+        open={generatorOpen}
+        onClose={() => setGeneratorOpen(false)}
+        dungeonId={dungeonId}
+        roomsCount={rooms.length}
+        defaultLevel={dungeon.recommended_level}
+        defaultPartySize={dungeon.recommended_party_size}
+        defaultTheme={dungeon.theme}
+        onGenerated={() => void loadDungeon(true)}
+      />
+
+      <DungeonStatusControl dungeonId={dungeonId} />
 
       {/* Visual Editor */}
       <DungeonVisualEditor
@@ -123,7 +163,7 @@ const AdminDungeonDetail = () => {
         floorThemes={dungeon.floor_themes}
         rooms={rooms}
         corridors={corridors}
-        onUpdate={loadDungeon}
+        onUpdate={() => void loadDungeon()}
       />
     </div>
   );

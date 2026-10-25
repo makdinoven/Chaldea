@@ -9,10 +9,11 @@ import type { DungeonStability } from '../DungeonBoard3D/DungeonDoors';
 /*
   The run page in 3D: the table fills the screen under the site header and
   everything else floats over it. Top left: the run's header, the party in a
-  list of portraits with their numbers, what is happening now. Right: one
-  panel with tabs — the room (its own action and, below, everything the party
-  can try here), the run's loot, the chat and log. Bottom middle: where the party goes
-  next. On a phone the panel is a bottom sheet with the same tabs.
+  list of portraits with their numbers, what is happening now; under them, down
+  to the board's buttons, the chat and log (the bigger the party, the shorter
+  the chat). Right: one panel with tabs — the room (its own action and, below,
+  everything the party can try here) and the run's loot. Bottom middle: where
+  the party goes next. On a phone the panel is a bottom sheet, the chat one of its tabs.
 */
 
 export type BoardTab = 'room' | 'loot' | 'chat';
@@ -22,8 +23,13 @@ const TABS: { tab: BoardTab; label: string }[] = [
   { tab: 'loot', label: 'Инвентарь' },
   { tab: 'chat', label: 'Чат' },
 ];
+/** On a desktop the chat has a window of its own (left), not a tab. */
+const DESKTOP_TABS = TABS.filter((t) => t.tab !== 'chat');
 
 const HEADER_GAP_PX = 12;
+/** The desktop controls' distance from the bottom edge (lg:bottom-5) and the chat's gap above them. */
+const CONTROLS_BOTTOM_PX = 20;
+const CHAT_GAP_PX = 12;
 
 interface DungeonBoardViewProps {
   dungeon: BoardDungeon;
@@ -60,8 +66,8 @@ interface DungeonBoardViewProps {
   chatPanel?: ReactNode;
   /** Lines in the chat not seen yet. */
   chatUnread?: number;
-  /** The tab shown (desktop panel or phone sheet; null = the sheet folded). */
-  onTabChange?: (tab: BoardTab | null) => void;
+  /** Whether the chat is in view now (the desktop window unfolded, or the phone's chat tab). */
+  onChatVisible?: (visible: boolean) => void;
   /** Where the party goes next: the votes (bottom middle). */
   decision?: ReactNode;
   /** The current room waits for the party to do something (chest, event choice…). */
@@ -97,7 +103,7 @@ const DungeonBoardView = ({
   groupPanel,
   chatPanel,
   chatUnread = 0,
-  onTabChange,
+  onChatVisible,
   decision,
   roomHasAction = false,
   partyStrip,
@@ -121,12 +127,24 @@ const DungeonBoardView = ({
     setRoomCalls(true);
   }, [roomHasAction, currentRoomId]);
 
-  // Tell the page what is in view (the chat's unread count clears while it is).
+  // Tell the page whether the chat is in view (its unread count clears while it is).
   const desktop = useIsDesktop();
-  const shownTab = desktop ? (panelOpen ? panelTab : null) : sheetTab;
+  const [chatOpen, setChatOpen] = useState(true);
+  const chatShown = !!chatPanel && (desktop ? chatOpen : sheetTab === 'chat');
   useEffect(() => {
-    onTabChange?.(shownTab);
-  }, [shownTab, onTabChange]);
+    onChatVisible?.(chatShown);
+  }, [chatShown, onChatVisible]);
+
+  // The desktop chat window runs down to just above the board's buttons.
+  const controls = useRef<HTMLDivElement>(null);
+  const [controlsHeight, setControlsHeight] = useState(90);
+  useEffect(() => {
+    const el = controls.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setControlsHeight(el.offsetHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const top = headerBottom + HEADER_GAP_PX;
 
@@ -193,6 +211,7 @@ const DungeonBoardView = ({
         extraControls={markTools}
         controlsClassName="absolute right-3 items-end lg:items-start lg:right-auto lg:left-5 lg:!bottom-5"
         controlsStyle={desktop ? undefined : { bottom: phoneBottom + 8 }}
+        controlsRef={controls}
       />
 
       {/* What lies under the pointer: a small card by the cursor (desktop only — a phone has no hover) */}
@@ -210,17 +229,39 @@ const DungeonBoardView = ({
         </div>
       )}
 
-      {/* Top left: the run, the party, what is happening now (on a phone, out of the way while the sheet is open) */}
+      {/* Left: the run, the party, what is happening now; on a desktop the chat under them, down to the board's
+          buttons — it gets whatever height the party leaves (on a phone, out of the way while the sheet is open). */}
       <div
-        className={`absolute left-3 right-3 lg:left-5 lg:right-auto lg:w-[400px] flex-col gap-2 overflow-y-auto gold-scrollbar max-h-[28vh] lg:max-h-[calc(100vh-280px)] pointer-events-none [&>*]:pointer-events-auto ${
+        className={`absolute left-3 right-3 lg:left-5 lg:right-auto lg:w-[400px] flex-col gap-2 pointer-events-none max-h-[28vh] lg:max-h-none ${
           sheetTab ? 'hidden lg:flex' : 'flex'
         }`}
-        style={{ top }}
+        style={desktop ? { top, bottom: CONTROLS_BOTTOM_PX + controlsHeight + CHAT_GAP_PX } : { top }}
       >
-        {/* On a phone the party comes first: who is how is worth more than the run's title */}
-        <div className="order-2 lg:order-none">{header}</div>
-        <div className="order-1 lg:order-none">{partyStrip}</div>
-        <div className="order-3 lg:order-none flex flex-col gap-2">{banners}</div>
+        <div className="flex flex-col gap-2 min-h-0 overflow-y-auto gold-scrollbar [&>*]:pointer-events-auto">
+          {/* On a phone the party comes first: who is how is worth more than the run's title */}
+          <div className="order-2 lg:order-none">{header}</div>
+          <div className="order-1 lg:order-none">{partyStrip}</div>
+          <div className="order-3 lg:order-none flex flex-col gap-2">{banners}</div>
+        </div>
+        {desktop && chatPanel && (
+          <div
+            className={`pointer-events-auto gray-bg backdrop-blur-md border border-white/10 shadow-card flex flex-col ${
+              chatOpen ? 'flex-1 min-h-[180px] p-3 pt-2 gap-2' : 'shrink-0 px-3 py-2'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => setChatOpen((v) => !v)}
+              className="flex items-center justify-between gap-2 text-left shrink-0"
+              aria-expanded={chatOpen}
+              title={chatOpen ? 'Свернуть чат' : 'Развернуть чат'}
+            >
+              <span className="gold-text text-xs font-medium uppercase tracking-[0.06em]">{tabLabel('chat', 'Чат')}</span>
+              <span className="text-xs text-white/50 hover:text-site-blue">{chatOpen ? '▾' : '▸'}</span>
+            </button>
+            {chatOpen && <div className="flex-1 min-h-0">{chatPanel}</div>}
+          </div>
+        )}
       </div>
 
       {/* Desktop: where the party goes next, under the table's middle */}
@@ -236,7 +277,7 @@ const DungeonBoardView = ({
         style={{ top }}
       >
         <div className="pointer-events-auto flex items-center gap-1 bg-black/60 backdrop-blur-sm rounded-card p-1">
-          {TABS.map(({ tab, label }) => (
+          {DESKTOP_TABS.map(({ tab, label }) => (
             <button
               key={tab}
               type="button"
@@ -264,11 +305,9 @@ const DungeonBoardView = ({
         {/* Mounted on one layout only: the room panel asks the server for a merchant's goods. */}
         {panelOpen && desktop && (
           <div
-            className={`pointer-events-auto w-[340px] gray-bg backdrop-blur-md border border-white/10 shadow-card p-3 flex flex-col gap-4 ${
-              panelTab === 'chat' ? 'flex-1 min-h-0' : 'max-h-full overflow-y-auto gold-scrollbar'
-            }`}
+            className="pointer-events-auto w-[340px] gray-bg backdrop-blur-md border border-white/10 shadow-card p-3 flex flex-col gap-4 max-h-full overflow-y-auto gold-scrollbar"
           >
-            {content(panelTab)}
+            {content(panelTab === 'chat' ? 'room' : panelTab)}
           </div>
         )}
       </div>

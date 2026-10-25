@@ -198,6 +198,12 @@ export const fetchMobTemplates = async (params: {
   return data;
 };
 
+/** XP by the formula for every template still at 0 (`dryRun`: only count them). */
+export const fillMobXp = async (dryRun: boolean): Promise<{ count: number; dry_run: boolean }> => {
+  const { data } = await axios.post('/characters/admin/mob-templates/fill-xp', null, { params: { dry_run: dryRun } });
+  return data;
+};
+
 export const fetchMobTemplate = async (id: number): Promise<MobTemplateDetail> => {
   const { data } = await axios.get<MobTemplateDetail>(
     `/characters/admin/mob-templates/${id}`,
