@@ -25,6 +25,7 @@ const sections: AdminSection[] = [
   { label: 'Деревья классов', path: '/admin/class-trees', description: 'Визуальный редактор деревьев навыков классов и подклассов', module: 'skill_trees' },
   { label: 'Стартовые наборы', path: '/admin/starter-kits', description: 'Настройка стартовых предметов и навыков по классам', module: 'characters' },
   { label: 'Персонажи', path: '/admin/characters', description: 'Управление персонажами всех игроков', module: 'characters' },
+  { label: 'Уровни и опыт', path: '/admin/levels', description: 'Сколько опыта нужно на каждый уровень, заполнение по формуле', module: 'characters' },
   { label: 'Правила', path: '/admin/rules', description: 'Управление блоками правил игры', module: 'rules' },
   { label: 'Пользователи и роли', path: '/admin/users-roles', description: 'Управление ролями, правами доступа и разрешениями', module: 'users' },
   { label: 'Расы', path: '/admin/races', description: 'Управление расами, подрасами и пресетами статов', module: 'races' },

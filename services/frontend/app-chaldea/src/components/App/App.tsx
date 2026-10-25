@@ -41,6 +41,7 @@ import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
 import AdminMobTemplates from "../Admin/MobsPage/AdminMobTemplates";
+import AdminLevelsPage from "../Admin/LevelsPage/AdminLevelsPage";
 import AdminActiveMobs from "../Admin/MobsPage/AdminActiveMobs";
 import AdminMobPacks from "../Admin/MobPacksPage/AdminMobPacks";
 import AdminBattlesPage from "../Admin/BattlesPage/AdminBattlesPage";
@@ -242,6 +243,11 @@ const App = () => {
             <Route path="admin/npcs" element={
               <ProtectedRoute requiredPermission="npcs:read">
                 <AdminNpcsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/levels" element={
+              <ProtectedRoute requiredPermission="characters:update">
+                <AdminLevelsPage />
               </ProtectedRoute>
             } />
             <Route path="admin/mobs" element={
