@@ -3087,6 +3087,34 @@ def admin_list_mob_templates(
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
+@router.get("/admin/levels/thresholds", response_model=List[schemas.LevelThresholdItem])
+def admin_list_level_thresholds(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("characters:read")),
+):
+    """Сколько опыта всего нужно для каждого уровня (со 2-го)."""
+    return db.query(models.LevelThreshold).order_by(models.LevelThreshold.level_number).all()
+
+
+@router.put("/admin/levels/thresholds", response_model=List[schemas.LevelThresholdItem])
+def admin_save_level_thresholds(
+    data: schemas.LevelThresholdsUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("characters:update")),
+):
+    """Заменить таблицу уровней целиком. Уже набранные уровни у персонажей не отнимаются."""
+    try:
+        db.query(models.LevelThreshold).delete(synchronize_session=False)
+        for t in data.thresholds:
+            db.add(models.LevelThreshold(level_number=t.level_number, required_experience=t.required_experience))
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при сохранении таблицы уровней: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось сохранить таблицу уровней")
+    return db.query(models.LevelThreshold).order_by(models.LevelThreshold.level_number).all()
+
+
 @router.post("/admin/mob-templates/fill-xp")
 def admin_fill_mob_xp(
     dry_run: bool = Query(False, description="Только посчитать, сколько шаблонов будет заполнено"),

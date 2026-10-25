@@ -1328,14 +1328,15 @@ def check_and_update_level(db: Session, character_id: int, passive_experience: i
             logger.info(f"Нет порога для уровня {next_level}. Уровень персонажа останется {character.level}.")
             break
 
+        # `required_experience` is the TOTAL experience for the level (as the profile's bar and the
+        # admin level change read it), so the character's total is compared as it is, not spent.
         required_exp = threshold.required_experience
         if passive_experience >= required_exp:
             # Повышаем уровень
             character.level += 1
             character.stat_points += 10
-            passive_experience -= required_exp
             leveled_up = True
-            logger.info(f"Персонаж ID {character_id} повысился до уровня {character.level}. stat_points += 10. Остаток опыта: {passive_experience}")
+            logger.info(f"Персонаж ID {character_id} повысился до уровня {character.level}. stat_points += 10. Опыт: {passive_experience}")
         else:
             break
 

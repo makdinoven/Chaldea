@@ -31,6 +31,11 @@ character-service/app/
 
 ⚠️ Ниже перечислены не все эндпоинты сервиса — только игровое ядро. Административные блоки (NPC, mob-templates, mob-packs, active-mobs, бестиарий, телепорты, логи) в этот документ не вынесены; источник истины — `app/main.py`.
 
+**Уровни (2026-10-25).** `level_thresholds.required_experience` — опыт ВСЕГО для уровня (со 2-го); подъём уровня
+(`crud.check_and_update_level`) сравнивает с ним суммарный пассивный опыт, несколько уровней за раз. Админка
+«Уровни и опыт» (`/admin/levels`): `GET/PUT /characters/admin/levels/thresholds` (`characters:read` / `characters:update`),
+PUT заменяет таблицу целиком (уровни подряд со 2-го, опыт строго растёт). Набранные уровни не отнимаются.
+
 **Награды мобов (2026-10-25).** Мобы дают только опыт: `gold_reward` в `mob_templates` остаётся, но battle-service его
 больше не выплачивает, а из админки поле убрано. `POST /characters/admin/mob-templates/fill-xp[?dry_run=true]`
 (`mobs:manage`) ставит опыт по формуле шаблонам, у которых он 0: обычный 20 + 6 × уровень, элитный ×3, босс ×10

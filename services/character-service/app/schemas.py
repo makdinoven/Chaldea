@@ -1529,3 +1529,36 @@ class AdminMoveCharacterResponse(BaseModel):
     to_location_id: int
     to_location_name: Optional[str] = None
     gathering_cancelled: bool = False
+
+
+# ---------- Level thresholds (admin, 2026-10-25) ----------
+
+LEVEL_MAX = 500
+
+
+class LevelThresholdItem(BaseModel):
+    """`required_experience` is the TOTAL experience a character needs to reach `level_number`."""
+    level_number: int
+    required_experience: int
+
+    class Config:
+        orm_mode = True
+
+
+class LevelThresholdsUpdate(BaseModel):
+    """The whole table at once: levels 2, 3, 4… with no gaps, total experience rising."""
+    thresholds: List[LevelThresholdItem]
+
+    @validator("thresholds")
+    def _consistent(cls, v):
+        if len(v) > LEVEL_MAX - 1:
+            raise ValueError(f"Не больше {LEVEL_MAX} уровней")
+        ordered = sorted(v, key=lambda t: t.level_number)
+        prev_xp = 0
+        for idx, t in enumerate(ordered):
+            if t.level_number != idx + 2:
+                raise ValueError("Уровни идут подряд со 2-го, без пропусков и повторов")
+            if t.required_experience <= prev_xp:
+                raise ValueError(f"Уровень {t.level_number}: опыта должно быть больше, чем для предыдущего")
+            prev_xp = t.required_experience
+        return ordered
