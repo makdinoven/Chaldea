@@ -330,6 +330,33 @@ async def test_validate_dungeon_orphan_rooms(admin_client, created_dungeon):
     assert len(data["warnings"]) > 0
 
 
+async def test_validate_dungeon_mana_core_room_without_corridors(admin_client, created_dungeon):
+    """POST validate - a corridor-less mana core room is reached by the path
+    revealed after the boss, so it is neither unreachable nor orphaned."""
+    dungeon_id = created_dungeon["id"]
+    e = await admin_client.post(
+        "/dungeons/admin/dungeons/%d/rooms" % dungeon_id,
+        json=_room_payload("fork", name="Entrance", is_entrance=True),
+    )
+    b = await admin_client.post(
+        "/dungeons/admin/dungeons/%d/rooms" % dungeon_id,
+        json={**_room_payload("boss", name="Boss", is_boss_room=True),
+              "room_config": {"mob_template_ids": [1]}},
+    )
+    await admin_client.post(
+        "/dungeons/admin/dungeons/%d/corridors" % dungeon_id,
+        json={"from_room_id": e.json()["id"], "to_room_id": b.json()["id"]},
+    )
+    await admin_client.post(
+        "/dungeons/admin/dungeons/%d/rooms" % dungeon_id,
+        json={**_room_payload("deadend", name="Core"), "is_mana_core_room": True},
+    )
+    resp = await admin_client.post("/dungeons/admin/dungeons/%d/validate" % dungeon_id)
+    data = resp.json()
+    assert not any("Core" in e for e in data["errors"]), data
+    assert not any("Core" in w and "коридор" in w for w in data["warnings"]), data
+
+
 async def test_validate_dungeon_deadend_warning(admin_client, created_dungeon):
     """POST validate - warns about deadends that have outgoing corridors."""
     dungeon_id = created_dungeon["id"]

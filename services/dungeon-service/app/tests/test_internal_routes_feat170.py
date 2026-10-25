@@ -70,9 +70,10 @@ class _Spy:
 
 @pytest.fixture()
 def session_spy(monkeypatch):
-    """Patch the only read the character-session route performs."""
-    spy = _Spy(result=42)
-    monkeypatch.setattr(main.session_state, "get_character_active_session", spy)
+    """Patch the only read the character-session route performs (FEAT-175:
+    DB-based lookup, returns (active_session_id, pending_loot_session_id))."""
+    spy = _Spy(result=(42, None))
+    monkeypatch.setattr(main.gameplay, "find_character_session", spy)
     return spy
 
 
@@ -86,15 +87,9 @@ def callback_spies(monkeypatch):
     guard ran too late, it would have been called.
     """
     spies = {
-        "get_session_state": _Spy(result={"active_battle_id": 77}),
-        "clear_active_battle": _Spy(result=None),
-        "process_battle_completion": _Spy(result={"room_cleared": True}),
-        "get_battle_state": _Spy(result={"battle_id": 77, "status": "finished"}),
+        "process_battle_callback": _Spy(result={"status": "processed", "battle_id": 77}),
     }
-    monkeypatch.setattr(main.session_state, "get_session_state", spies["get_session_state"])
-    monkeypatch.setattr(main.session_state, "clear_active_battle", spies["clear_active_battle"])
-    monkeypatch.setattr(main.gameplay, "process_battle_completion", spies["process_battle_completion"])
-    monkeypatch.setattr(main.http_clients, "get_battle_state", spies["get_battle_state"])
+    monkeypatch.setattr(main.gameplay, "process_battle_callback", spies["process_battle_callback"])
     return spies
 
 
@@ -133,12 +128,10 @@ class TestCharacterSessionGate:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json() == {"in_dungeon": True, "session_id": 42}
-        assert session_spy.calls == [((11,), {})]
+        assert len(session_spy.calls) == 1 and session_spy.calls[0][0][1] == 11
 
     async def test_correct_header_no_active_session(self, no_auth_client, token, monkeypatch):
-        monkeypatch.setattr(
-            main.session_state, "get_character_active_session", _Spy(result=None),
-        )
+        monkeypatch.setattr(main.gameplay, "find_character_session", _Spy(result=(None, None)))
         resp = await no_auth_client.get(
             "/dungeons/internal/character-session/11", headers=HEADERS,
         )
@@ -196,40 +189,25 @@ class TestBattleCallbackGate:
             headers=HEADERS,
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {
-            "status": "processed", "results": {"room_cleared": True},
-        }
-        assert callback_spies["process_battle_completion"].calls, (
+        assert resp.json() == {"status": "processed", "battle_id": 77}
+        assert callback_spies["process_battle_callback"].calls, (
             "the guard passed but the session was never advanced"
         )
+        args = callback_spies["process_battle_callback"].calls[0][0]
+        assert args[1:] == (100, 77, None, [], False)
 
-    async def test_correct_header_unknown_session_is_404_not_401(
-        self, no_auth_client, token, monkeypatch, callback_spies,
+    async def test_duplicate_delivery_is_reported_as_ignored(
+        self, no_auth_client, token, monkeypatch,
     ):
-        """A legitimate handler-level rejection — the point is that a valid
-        token reaches the handler, so the status is the handler's own 404."""
-        monkeypatch.setattr(main.session_state, "get_session_state", _Spy(result=None))
+        """Exactly-once is decided inside gameplay (row lock + active_battle_id
+        compare); the route passes the verdict through."""
+        monkeypatch.setattr(main.gameplay, "process_battle_callback",
+                            _Spy(result={"status": "ignored", "battle_id": 77}))
         resp = await no_auth_client.post(
-            "/dungeons/internal/battle-callback",
-            json=CALLBACK_BODY,
-            headers=HEADERS,
-        )
-        assert resp.status_code == 404
-        assert resp.json()["detail"] == "Сессия подземелья не найдена"
-
-    async def test_correct_header_battle_id_mismatch_is_ignored(
-        self, no_auth_client, token, monkeypatch, callback_spies,
-    ):
-        monkeypatch.setattr(
-            main.session_state, "get_session_state", _Spy(result={"active_battle_id": 999}),
-        )
-        resp = await no_auth_client.post(
-            "/dungeons/internal/battle-callback",
-            json=CALLBACK_BODY,
-            headers=HEADERS,
+            "/dungeons/internal/battle-callback", json=CALLBACK_BODY, headers=HEADERS,
         )
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ignored", "reason": "battle_id_mismatch"}
+        assert resp.json()["status"] == "ignored"
 
 
 class TestBattleCallbackRejectionsTouchNothing:

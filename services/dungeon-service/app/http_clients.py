@@ -115,7 +115,9 @@ async def get_characters_at_location(location_id: int) -> list:
         raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
 
 
-async def spawn_dungeon_mobs(mob_template_ids: List[int], location_id: int) -> List[int]:
+async def spawn_dungeon_mobs(
+    mob_template_ids: List[int], location_id: int, stat_multiplier: float = 1.0,
+) -> List[int]:
     """
     POST /characters/internal/spawn-dungeon-mobs
     Spawns ActiveMob entries from the given mob templates at the location.
@@ -131,6 +133,8 @@ async def spawn_dungeon_mobs(mob_template_ids: List[int], location_id: int) -> L
     payload = {
         "mob_template_ids": mob_template_ids,
         "location_id": location_id,
+        # FEAT-175: dungeon mob_multiplier scales the spawned mobs' base stats.
+        "stat_multiplier": stat_multiplier,
     }
     try:
         async with _client() as client:
@@ -335,48 +339,56 @@ async def get_item_info(item_id: int) -> dict:
 # Battle Service  (http://battle-service:8010)
 # =====================================================================
 
-async def create_battle(
-    players: List[dict],
-    battle_type: str = "pve",
-    context: Optional[dict] = None,
-    auth_token: Optional[str] = None,
-) -> dict:
+async def create_dungeon_battle(session_id: int, players: List[dict]) -> dict:
     """
-    POST /battles/
-    Body: BattleCreate schema — {"players": [{"character_id": N, "team": N}, ...], "battle_type": "pve"}
+    POST /battles/internal/dungeon (FEAT-175)
+    Body: {"dungeon_session_id": N, "players": [{"character_id": N, "team": 1|2}, ...]}
 
-    Creates a new battle and returns the BattleCreated response
-    (battle_id, participants, next_actor, deadline_at).
-
-    The `context` parameter is kept for future use (dungeon_session_id, room_id)
-    but is NOT sent to battle-service as BattleCreate does not include it.
-    auth_token is the user's JWT token, required by battle-service.
+    Creates a battle tagged with the dungeon session: battle-service exempts
+    the run's members from the dungeon activity lock and calls
+    POST /dungeons/internal/battle-callback when the battle ends. Internal
+    token, no JWT — a run may continue from a callback with no user request.
     """
-    url = f"{settings.BATTLE_SERVICE_URL}/battles/"
-    payload = {
-        "players": players,
-        "battle_type": battle_type,
-    }
-    headers = {}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
+    url = f"{settings.BATTLE_SERVICE_URL}/battles/internal/dungeon"
+    payload = {"dungeon_session_id": session_id, "players": players}
     try:
         async with _client(timeout=15.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
-        logger.error("Ошибка при создании боя (type=%s): %s", battle_type, e)
+        logger.error("Ошибка при создании боя подземелья (session=%d): %s", session_id, e)
         detail = "Ошибка при создании боя"
-        if e.response.status_code == 400:
-            # Try to extract a more specific message from battle-service
+        if e.response.status_code in (400, 409):
             try:
                 detail = e.response.json().get("detail", detail)
             except Exception:
                 pass
         raise HTTPException(status_code=502, detail=detail)
     except httpx.RequestError as e:
-        logger.error("Ошибка соединения с battle-service (create_battle): %s", e)
+        logger.error("Ошибка соединения с battle-service (create_dungeon_battle): %s", e)
+        raise HTTPException(status_code=503, detail="Боевая система недоступна")
+
+
+async def get_battle_result(battle_id: int) -> Optional[dict]:
+    """
+    GET /battles/internal/{battle_id}/result (FEAT-175)
+    Durable outcome once the Redis state has expired:
+    {"status", "winner_team", "aborted", "dungeon_session_id"}. None on 404.
+    """
+    url = f"{settings.BATTLE_SERVICE_URL}/battles/internal/{battle_id}/result"
+    try:
+        async with _client() as client:
+            resp = await client.get(url, headers=_internal_token_headers())
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error("Ошибка при получении результата боя %d: %s", battle_id, e)
+        raise HTTPException(status_code=502, detail="Ошибка при получении результата боя")
+    except httpx.RequestError as e:
+        logger.error("Ошибка соединения с battle-service (result %d): %s", battle_id, e)
         raise HTTPException(status_code=503, detail="Боевая система недоступна")
 
 
@@ -465,3 +477,105 @@ async def deduct_gold(character_id: int, amount: int) -> bool:
     except httpx.RequestError as e:
         logger.error("Ошибка соединения с character-service (deduct_gold %d): %s", character_id, e)
         raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
+
+
+# =====================================================================
+# Character Service — Activity lock & dungeon mobs (FEAT-175)
+# =====================================================================
+
+async def get_activity_lock(character_id: int) -> dict:
+    """GET /characters/internal/{id}/activity-lock ->
+    {"locked", "reason": "dungeon"|"unconscious"|None, "until", "dungeon_session_id"}"""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/activity-lock"
+    try:
+        async with _client() as client:
+            resp = await client.get(url, headers=_internal_token_headers())
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Персонаж не найден")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error("Ошибка при проверке блокировки персонажа %d: %s", character_id, e)
+        raise HTTPException(status_code=502, detail="Ошибка при проверке состояния персонажа")
+    except httpx.RequestError as e:
+        logger.error("Ошибка соединения с character-service (activity-lock %d): %s", character_id, e)
+        raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
+
+
+async def set_dungeon_lock(character_ids: List[int], session_id: int) -> None:
+    """POST /characters/internal/activity-lock/dungeon — all or nothing.
+    A conflict (someone knocked out / in another run) comes back as 409 with
+    the shared Russian wording."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/activity-lock/dungeon"
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                url, json={"character_ids": character_ids, "session_id": session_id},
+                headers=_internal_token_headers(),
+            )
+            if resp.status_code == 409:
+                detail = resp.json().get("detail")
+                message = detail.get("message") if isinstance(detail, dict) else detail
+                raise HTTPException(status_code=409, detail=message or "Персонаж занят")
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("Ошибка при блокировке персонажей %s: %s", character_ids, e)
+        raise HTTPException(status_code=502, detail="Не удалось начать забег — ошибка сервиса персонажей")
+    except httpx.RequestError as e:
+        logger.error("Ошибка соединения с character-service (set lock): %s", e)
+        raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
+
+
+async def clear_dungeon_lock(character_ids: List[int], session_id: int) -> bool:
+    """POST /characters/internal/activity-lock/dungeon/clear. Only clears a lock
+    that still points at this session. Returns False on failure (logged)."""
+    if not character_ids:
+        return True
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/activity-lock/dungeon/clear"
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                url, json={"character_ids": character_ids, "session_id": session_id},
+                headers=_internal_token_headers(),
+            )
+            resp.raise_for_status()
+            return True
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        logger.error("Не удалось снять блокировку подземелья %s (session=%d): %s",
+                     character_ids, session_id, e)
+        return False
+
+
+async def knockout_characters(
+    character_ids: List[int], seconds: int, session_id: int, return_location_id: Optional[int],
+) -> Optional[dict]:
+    """POST /characters/internal/activity-lock/knockout — wipe: knock out,
+    release the dungeon lock, put back on the dungeon location."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/activity-lock/knockout"
+    payload = {
+        "character_ids": character_ids, "seconds": seconds,
+        "session_id": session_id, "return_location_id": return_location_id,
+    }
+    try:
+        async with _client() as client:
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
+            resp.raise_for_status()
+            return resp.json()
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        logger.error("Не удалось оглушить персонажей %s (session=%d): %s", character_ids, session_id, e)
+        return None
+
+
+async def despawn_dungeon_mobs(character_ids: List[int]) -> None:
+    """POST /characters/internal/despawn-dungeon-mobs — best effort, idempotent."""
+    if not character_ids:
+        return
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/despawn-dungeon-mobs"
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                url, json={"character_ids": character_ids}, headers=_internal_token_headers(),
+            )
+            resp.raise_for_status()
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        logger.warning("Не удалось убрать мобов подземелья %s: %s", character_ids, e)

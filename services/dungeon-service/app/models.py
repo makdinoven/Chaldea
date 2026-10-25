@@ -38,6 +38,17 @@ class Dungeon(Base):
     mana_core_chance = Column(Float, nullable=False, default=0.0)
     mana_core_item_id = Column(BigInteger, nullable=True)
     image_url = Column(String(512), nullable=True)
+    # Floors: each floor below the first adds this share to mob strength,
+    # loot chances and the chance to lose a loot stack when fleeing.
+    floor_mob_step = Column(Float, nullable=False, default=0.2, server_default="0.2")
+    floor_loot_step = Column(Float, nullable=False, default=0.15, server_default="0.15")
+    floor_flee_step = Column(Float, nullable=False, default=0.1, server_default="0.1")
+    # What searching a room may turn up by luck (FEAT-176): [{item_id, quantity, chance}].
+    search_loot = Column(JSON, nullable=True)
+    # How the 3D miniature looks (walls, floor, light): one of DUNGEON_THEMES, and
+    # per-floor overrides {"2": "volcano"} — a floor not listed takes `theme`.
+    theme = Column(String(32), nullable=False, default="stone", server_default="stone")
+    floor_themes = Column(JSON, nullable=True)
 
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
@@ -68,9 +79,15 @@ class DungeonRoom(Base):
     is_entrance = Column(Boolean, nullable=False, default=False)
     is_boss_room = Column(Boolean, nullable=False, default=False)
     is_mana_core_room = Column(Boolean, nullable=False, default=False)
+    # 1 = the top floor; deeper floors count up.
+    floor = Column(Integer, nullable=False, default=1, server_default="1")
     room_config = Column(JSON, nullable=True)
     position_x = Column(Float, nullable=True, default=None)
     position_y = Column(Float, nullable=True, default=None)
+    # FEAT-175: footprint in floor squares for the 3D diorama (NULL = frontend
+    # default for the room type). 2..8 each.
+    grid_w = Column(Integer, nullable=True, default=None)
+    grid_d = Column(Integer, nullable=True, default=None)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     dungeon = relationship("Dungeon", back_populates="rooms")
@@ -105,6 +122,13 @@ class DungeonCorridor(Base):
     random_battle_mob_ids = Column(JSON, nullable=True)
     trap_chance = Column(Float, nullable=False, default=0.0)
     trap_config = Column(JSON, nullable=True)
+    # A locked door: {"key": "copper", "lever": false, "pickable": true, "difficulty": 12, "stat_check": "agility",
+    # "pick_cost": 2} — opened by its key, by a lever somewhere (rooms' room_config.lever_corridor_id) or by picking.
+    lock_config = Column(JSON, nullable=True)
+    # corridor (same floor) | stairs | drop (one way down) | lift — the last three join neighbouring floors.
+    passage_type = Column(String(16), nullable=False, default="corridor", server_default="corridor")
+    # drop: {"hidden": true, "stat_check": "intelligence", "difficulty": 12, "fail_damage": 15}
+    passage_config = Column(JSON, nullable=True)
     description = Column(String(512), nullable=True)
 
     # Visual editor handle positions (which side of the room the corridor connects to)
@@ -137,6 +161,18 @@ class DungeonSession(Base):
     finished_at = Column(TIMESTAMP, nullable=True)
     cooldown_until = Column(TIMESTAMP, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # FEAT-175 lifecycle (see alembic 004)
+    last_activity_at = Column(TIMESTAMP, nullable=True)
+    active_battle_id = Column(BigInteger, nullable=True)
+    finalized_at = Column(TIMESTAMP, nullable=True)
+    # Keys found during this run (kinds from schemas.DUNGEON_KEYS) and the locked corridors opened.
+    keys_found = Column(JSON, nullable=True)
+    unlocked_corridor_ids = Column(JSON, nullable=True)
+    # The battle being fought (alembic 009): its mobs, and for a corridor ambush the corridor
+    # and the room the party was heading for. Kept here so a lost Redis loses nothing.
+    battle_mob_ids = Column(JSON, nullable=True)
+    pending_target_room_id = Column(BigInteger, nullable=True)
+    pending_corridor_id = Column(BigInteger, nullable=True)
 
     dungeon = relationship("Dungeon", back_populates="sessions")
     current_room = relationship("DungeonRoom", foreign_keys=[current_room_id])

@@ -14,6 +14,7 @@ os.environ.setdefault("DB_USERNAME", "testuser")
 os.environ.setdefault("DB_PASSWORD", "testpass")
 os.environ.setdefault("DB_DATABASE", "testdb")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("DUNGEON_SWEEPER_DISABLED", "1")
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -105,14 +106,23 @@ _REGULAR_USER = UserRead(
 @pytest_asyncio.fixture()
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield a clean async DB session; tables created/dropped per test."""
+    from sqlalchemy import text as _text
+
     async with _test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # `Locations` belongs to locations-service (shared DB); the admin CRUD
+        # checks location_id against it (FEAT-175).
+        await conn.execute(_text("CREATE TABLE IF NOT EXISTS Locations (id INTEGER PRIMARY KEY)"))
+        await conn.execute(_text(
+            "INSERT OR IGNORE INTO Locations (id) VALUES (1), (77), (100), (197), (999)"
+        ))
 
     async with _TestAsyncSession() as session:
         yield session
 
     async with _test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(_text("DROP TABLE IF EXISTS Locations"))
 
 
 @pytest_asyncio.fixture()
@@ -127,6 +137,9 @@ async def admin_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
+    # Admin routes use require_permission("dungeons:*") (FEAT-175) on top of
+    # get_current_user_via_http; the admin user carries all four permissions.
+    app.dependency_overrides[get_current_user_via_http] = override_admin
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -180,14 +193,14 @@ async def dungeon_with_rooms(admin_client, created_dungeon):
 
     battle_resp = await admin_client.post(
         "/dungeons/admin/dungeons/%d/rooms" % dungeon_id,
-        json=_room_payload("battle", name="Battle Room"),
+        json=_room_payload("battle", name="Battle Room", room_config={"mob_template_ids": [1]}),
     )
     assert battle_resp.status_code == 201
     battle_room = battle_resp.json()
 
     boss_resp = await admin_client.post(
         "/dungeons/admin/dungeons/%d/rooms" % dungeon_id,
-        json=_room_payload("boss", name="Boss Room", is_boss_room=True),
+        json=_room_payload("boss", name="Boss Room", is_boss_room=True, room_config={"mob_template_ids": [5]}),
     )
     assert boss_resp.status_code == 201
     boss_room = boss_resp.json()
@@ -370,4 +383,6 @@ def sample_redis_state():
 # ---------------------------------------------------------------------------
 
 def pytest_sessionfinish(session, exitstatus):
-    os._exit(exitstatus)
+    # PYTEST_NO_FORCE_EXIT=1 keeps the failure report (local debugging).
+    if os.environ.get("PYTEST_NO_FORCE_EXIT") != "1":
+        os._exit(exitstatus)

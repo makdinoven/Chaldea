@@ -6,7 +6,7 @@ Follows battle-service ws_manager.py pattern.
 """
 
 import logging
-from typing import List
+from typing import Awaitable, Callable, List, Optional
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 # All active WS connections: session_id -> { user_id -> WebSocket }
 session_connections: dict[int, dict[int, WebSocket]] = {}
+
+# Called with (session_id, event) for every broadcast, whoever is connected (the run's log, FEAT-176).
+listeners: List[Callable[[int, dict], Awaitable[None]]] = []
+
+
+def add_listener(listener: Callable[[int, dict], Awaitable[None]]) -> None:
+    if listener not in listeners:
+        listeners.append(listener)
 
 
 # ──────────────────────────────────────────────
@@ -55,22 +63,32 @@ async def connect(session_id: int, user_id: int, websocket: WebSocket) -> None:
     if session_id not in session_connections:
         session_connections[session_id] = {}
 
-    # Close existing connection if any
+    # Register the new socket first, then close the replaced one (its handler
+    # will call disconnect(..., websocket=old) and must find the new socket).
     old_ws = session_connections[session_id].get(user_id)
-    if old_ws is not None:
-        await _close_ws_safe(old_ws)
-
     session_connections[session_id][user_id] = websocket
+    if old_ws is not None and old_ws is not websocket:
+        await _close_ws_safe(old_ws)
     logger.info("WS: user %d connected to dungeon session %d", user_id, session_id)
 
 
-async def disconnect(session_id: int, user_id: int) -> None:
+async def disconnect(session_id: int, user_id: int, websocket: Optional[WebSocket] = None) -> None:
     """
-    Remove user from session connections.
-    Closes the WebSocket gracefully.
+    Remove user from session connections and close the socket.
+
+    When `websocket` is given, only that exact socket is removed: a reconnect
+    registers the NEW socket first and closes the old one, and the old
+    handler then calls disconnect on its way out — it must not evict the
+    replacement (FEAT-175 reconnect bug).
     """
     conns = session_connections.get(session_id)
     if conns is None:
+        return
+
+    current = conns.get(user_id)
+    if websocket is not None and current is not websocket:
+        # Stale handler of a replaced connection: close its own socket only.
+        await _close_ws_safe(websocket)
         return
 
     ws = conns.pop(user_id, None)
@@ -89,6 +107,11 @@ async def broadcast_to_session(session_id: int, data: dict) -> None:
     Send JSON data to all users connected to a specific dungeon session.
     Removes stale connections that fail to send.
     """
+    for listener in listeners:
+        try:
+            await listener(session_id, data)
+        except Exception:
+            logger.warning("WS: listener failed for session %d", session_id, exc_info=True)
     conns = session_connections.get(session_id)
     if not conns:
         return

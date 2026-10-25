@@ -6,6 +6,10 @@ Key schema:
   - dungeon:{dungeon_id}:cooldown                — STRING, session_id (cooldown_hours TTL)
   - dungeon:session:{session_id}:inventory        — JSON, group inventory cache (48h TTL)
   - dungeon:character:{character_id}:active_session — STRING, session_id (48h TTL)
+  - dungeon:session:{session_id}:vote:{character_id} — STRING "room_id|choice", a member's say on where to go
+  - dungeon:session:{session_id}:ping:{character_id} — STRING, a short rate limit on board marks
+  - dungeon:session:{session_id}:challenge:{character_id} — JSON, the minigame a member is playing
+  - dungeon:session:{session_id}:busy:{target}     — STRING, character_id of whoever works on it now
 
 Follows the singleton-client pattern from battle-service redis_state.py.
 """
@@ -51,6 +55,42 @@ def _cooldown_key(dungeon_id: int) -> str:
 
 def _inventory_key(session_id: int) -> str:
     return f"dungeon:session:{session_id}:inventory"
+
+
+def _vote_key(session_id: int, character_id: int) -> str:
+    return f"dungeon:session:{session_id}:vote:{character_id}"
+
+
+def _ping_key(session_id: int, character_id: int) -> str:
+    return f"dungeon:session:{session_id}:ping:{character_id}"
+
+
+def _challenge_key(session_id: int, character_id: int) -> str:
+    return f"dungeon:session:{session_id}:challenge:{character_id}"
+
+
+def _shield_key(session_id: int) -> str:
+    return f"dungeon_shield:{session_id}"
+
+
+def _intel_key(session_id: int) -> str:
+    return f"dungeon_intel:{session_id}"
+
+
+def _chat_key(session_id: int) -> str:
+    return f"dungeon_chat:{session_id}"
+
+
+def _say_key(session_id: int, character_id: int) -> str:
+    return f"dungeon:session:{session_id}:say:{character_id}"
+
+
+def _torch_key(session_id: int) -> str:
+    return f"dungeon_torch:{session_id}"
+
+
+def _busy_key(session_id: int, target: str) -> str:
+    return f"dungeon:session:{session_id}:busy:{target}"
 
 
 def _active_session_key(character_id: int) -> str:
@@ -183,10 +223,22 @@ async def set_dungeon_cooldown(
 ) -> None:
     """Set a TTL-based cooldown key for a dungeon."""
     rds = await get_redis()
-    ttl_seconds = cooldown_hours * 3600
+    ttl_seconds = int(cooldown_hours * 3600)
+    if ttl_seconds <= 0:
+        return
     await rds.set(
         _cooldown_key(dungeon_id), str(session_id), ex=ttl_seconds
     )
+
+
+async def set_dungeon_cooldown_seconds(
+    dungeon_id: int, session_id: int, seconds: int
+) -> None:
+    """Re-arm the Redis cooldown with an exact remaining time (DB fallback)."""
+    if seconds <= 0:
+        return
+    rds = await get_redis()
+    await rds.set(_cooldown_key(dungeon_id), str(session_id), ex=int(seconds))
 
 
 async def check_dungeon_cooldown(dungeon_id: int) -> Tuple[bool, int]:
@@ -257,6 +309,154 @@ async def get_session_inventory(session_id: int) -> Optional[list]:
     return json.loads(raw)
 
 
+# ---------- party votes and marks -------------------------------------------
+
+async def set_vote(session_id: int, character_id: int, room_id: int, choice: str) -> None:
+    """A member's say on where the party goes from `room_id` (a new room voids it)."""
+    rds = await get_redis()
+    await rds.set(_vote_key(session_id, character_id), f"{room_id}|{choice}", ex=SESSION_TTL)
+
+
+async def get_votes(session_id: int, character_ids: List[int], room_id: int) -> Dict[int, str]:
+    """The members' votes cast in `room_id`, by character id."""
+    rds = await get_redis()
+    votes: Dict[int, str] = {}
+    for cid in character_ids:
+        raw = await rds.get(_vote_key(session_id, cid))
+        if not raw:
+            continue
+        voted_in, _, choice = raw.partition("|")
+        if voted_in == str(room_id):
+            votes[cid] = choice
+    return votes
+
+
+async def allow_ping(session_id: int, character_id: int, seconds: int) -> bool:
+    """One board mark per member every `seconds`."""
+    rds = await get_redis()
+    key = _ping_key(session_id, character_id)
+    if await rds.get(key):
+        return False
+    await rds.set(key, "1", ex=seconds)
+    return True
+
+
+# ---------- class challenges (minigames) -------------------------------------
+
+async def set_challenge(session_id: int, character_id: int, challenge: dict, ttl: int) -> None:
+    rds = await get_redis()
+    await rds.set(_challenge_key(session_id, character_id), json.dumps(challenge), ex=ttl)
+
+
+async def get_challenge(session_id: int, character_id: int) -> Optional[Dict]:
+    rds = await get_redis()
+    raw = await rds.get(_challenge_key(session_id, character_id))
+    return json.loads(raw) if raw else None
+
+
+async def delete_challenge(session_id: int, character_id: int) -> None:
+    rds = await get_redis()
+    await rds.delete(_challenge_key(session_id, character_id))
+
+
+async def claim_target(session_id: int, target: str, character_id: int, ttl: int) -> Optional[int]:
+    """Take a lock (or anything one member works on at a time). Returns None if
+    taken now, or the character already at it."""
+    rds = await get_redis()
+    key = _busy_key(session_id, target)
+    holder = await rds.get(key)
+    if holder and int(holder) != character_id:
+        return int(holder)
+    await rds.set(key, str(character_id), ex=ttl)
+    return None
+
+
+async def release_target(session_id: int, target: str, character_id: Optional[int] = None) -> None:
+    """Free a target. With `character_id`, only if that member still holds it (it may have lapsed
+    and been taken by someone else meanwhile)."""
+    rds = await get_redis()
+    key = _busy_key(session_id, target)
+    if character_id is not None:
+        holder = await rds.get(key)
+        if holder is None or int(holder) != character_id:
+            return
+    await rds.delete(key)
+
+
+async def set_shield(session_id: int, shield: dict) -> None:
+    rds = await get_redis()
+    await rds.set(_shield_key(session_id), json.dumps(shield), ex=SESSION_TTL)
+
+
+async def get_shield(session_id: int) -> Optional[Dict]:
+    rds = await get_redis()
+    raw = await rds.get(_shield_key(session_id))
+    return json.loads(raw) if raw else None
+
+
+async def delete_shield(session_id: int) -> None:
+    rds = await get_redis()
+    await rds.delete(_shield_key(session_id))
+
+
+async def get_intel(session_id: int) -> Dict:
+    """What the party has learnt of the way ahead: {scouted: {corridor: info}, alerted: [...], disarmed: [...]}."""
+    rds = await get_redis()
+    raw = await rds.get(_intel_key(session_id))
+    intel = json.loads(raw) if raw else {}
+    intel.setdefault("scouted", {})
+    intel.setdefault("alerted", [])
+    intel.setdefault("disarmed", [])
+    return intel
+
+
+async def set_intel(session_id: int, intel: Dict) -> None:
+    rds = await get_redis()
+    await rds.set(_intel_key(session_id), json.dumps(intel, ensure_ascii=False), ex=SESSION_TTL)
+
+
+async def push_chat(session_id: int, entry: dict, keep: int) -> None:
+    """Add a line to the run's chat and log, keeping the newest `keep`."""
+    rds = await get_redis()
+    key = _chat_key(session_id)
+    await rds.rpush(key, json.dumps(entry, ensure_ascii=False))
+    await rds.ltrim(key, -keep, -1)
+    await rds.expire(key, SESSION_TTL)
+
+
+async def get_chat(session_id: int, limit: int) -> List[Dict]:
+    rds = await get_redis()
+    raw = await rds.lrange(_chat_key(session_id), -limit, -1)
+    return [json.loads(r) for r in raw]
+
+
+async def allow_say(session_id: int, character_id: int, seconds: int) -> bool:
+    """One chat line per member every `seconds`."""
+    rds = await get_redis()
+    key = _say_key(session_id, character_id)
+    if await rds.get(key):
+        return False
+    await rds.set(key, "1", ex=seconds)
+    return True
+
+
+async def set_torch(session_id: int, room_id: int) -> None:
+    """A torch burns in this room until the party leaves it."""
+    rds = await get_redis()
+    await rds.set(_torch_key(session_id), str(room_id), ex=SESSION_TTL)
+
+
+async def get_torch(session_id: int) -> Optional[int]:
+    rds = await get_redis()
+    raw = await rds.get(_torch_key(session_id))
+    return int(raw) if raw else None
+
+
+async def delete_torch(session_id: int) -> None:
+    rds = await get_redis()
+    await rds.delete(_torch_key(session_id))
+
+
 # ---------- cleanup ----------------------------------------------------------
 
 async def cleanup_session(
@@ -273,9 +473,16 @@ async def cleanup_session(
     keys_to_delete = [
         _state_key(session_id),
         _inventory_key(session_id),
+        _shield_key(session_id),
+        _torch_key(session_id),
+        _chat_key(session_id),
+        _intel_key(session_id),
     ]
     for cid in member_character_ids:
         keys_to_delete.append(_active_session_key(cid))
+        keys_to_delete.append(_vote_key(session_id, cid))
+        keys_to_delete.append(_ping_key(session_id, cid))
+        keys_to_delete.append(_challenge_key(session_id, cid))
 
     if keys_to_delete:
         await rds.delete(*keys_to_delete)
