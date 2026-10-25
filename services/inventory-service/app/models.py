@@ -79,6 +79,8 @@ class Items(Base):
 
     # FEAT-164: food — eaten via /eat-food, gives "Сытость" for 24h
     is_food = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-178: a cloak worn as a camp backpack (capacity by rarity, see backpack.py)
+    is_backpack = Column(Boolean, nullable=False, default=False, server_default="0")
 
     # FEAT-168: how a consumable is used in battle.
     # NULL / 'instant' — applied immediately; 'weapon_coating' — poison on the
@@ -280,6 +282,19 @@ class CharacterInventory(Base):
     current_durability = Column(Integer, nullable=True)  # NULL = full, 0 = broken
 
     item = relationship("Items", back_populates="inventories")
+
+
+class BackpackItem(Base):
+    """FEAT-178: a stack packed into the character's camp backpack. Kept apart from
+    `character_inventory`, so trades, sales, the auction and crafting never reach it."""
+    __tablename__ = "character_backpack"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE'), nullable=False, index=True)
+    quantity = Column(Integer, nullable=False, default=1)
+
+    item = relationship("Items")
 
 
 class EquipmentRule(Base):

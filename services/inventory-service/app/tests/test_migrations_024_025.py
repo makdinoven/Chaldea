@@ -112,8 +112,8 @@ class TestRevisionChain:
         assert len(m024.revision) <= 32
         assert len(m025.revision) <= 32
 
-    def test_no_branch_and_027_is_head(self):
-        """Ровно один потомок у каждой ревизии, 027 — голова."""
+    def test_no_branch_and_028_is_head(self):
+        """Ровно один потомок у каждой ревизии, 028 (FEAT-178) — голова."""
         revisions, downs = set(), {}
         for fname in os.listdir(_VERSIONS_DIR):
             if not re.match(r"^\d{3}_.*\.py$", fname):
@@ -127,7 +127,7 @@ class TestRevisionChain:
         parents = [d for d in downs.values() if d]
         assert len(parents) == len(set(parents)), "ветвление в дереве миграций"
         heads = revisions - set(parents)
-        assert heads == {"027_fast_slots_belt_only"}
+        assert heads == {"028_camp_backpack"}
 
 
 # ===========================================================================

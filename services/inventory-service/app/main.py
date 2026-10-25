@@ -13,6 +13,7 @@ import models
 import schemas
 import crud
 import activity_lock
+import backpack
 import equipment_rules
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
@@ -1148,6 +1149,9 @@ async def recover_in_attributes_service(character_id: int, recovery: dict):
         resp.raise_for_status()
 
 
+# Items worn in their own slots; everything else goes on the belt (fast slots).
+BELT_EXEMPT_TYPES = ("head", "body", "cloak", "belt", "ring", "necklace", "bracelet", "weapon")
+
 # -----------------------------------------------------------------------------
 # Экипировка (equip)
 # -----------------------------------------------------------------------------
@@ -1177,8 +1181,24 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.rollback()
             raise HTTPException(status_code=400, detail="Еду нельзя положить в быстрый слот")
 
+        # FEAT-178: belt items come from the camp backpack in a dungeon run — the bag is closed there
+        to_belt = db_item.item_type not in BELT_EXEMPT_TYPES
+        in_run = backpack.in_dungeon(db, character_id)
+        if req.backpack_item_id and not to_belt:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="Из походного рюкзака можно положить только на пояс")
+        if to_belt and in_run and not req.backpack_item_id:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=backpack.BAG_CLOSED)
+
         # 2) Проверяем наличие в инвентаре
-        if req.inventory_item_id:
+        if req.backpack_item_id:
+            inv_slot = db.query(models.BackpackItem).filter(
+                models.BackpackItem.id == req.backpack_item_id,
+                models.BackpackItem.character_id == character_id,
+                models.BackpackItem.item_id == req.item_id,
+            ).with_for_update().first()
+        elif req.inventory_item_id:
             # Конкретный экземпляр (с заточкой, камнями и т.д.)
             inv_slot = db.query(models.CharacterInventory).filter(
                 models.CharacterInventory.id == req.inventory_item_id,
@@ -1196,8 +1216,8 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.rollback()
             raise HTTPException(status_code=400, detail="Недостаточно предметов в инвентаре")
 
-        # 2.5) Проверяем, что предмет опознан
-        if not inv_slot.is_identified:
+        # 2.5) Проверяем, что предмет опознан (packed consumables always are)
+        if not getattr(inv_slot, "is_identified", True):
             db.rollback()
             raise HTTPException(status_code=400, detail="Предмет не опознан")
 
@@ -1231,8 +1251,15 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
         if slot.item_id:
             old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
             if old_item:
-                # возвращаем старый предмет в инвентарь
-                crud.return_item_to_inventory(db, character_id, old_item)
+                # FEAT-178: a backpack leaving the cloak slot empties into the bag (and stays on in a run);
+                # a belt item swapped in a run goes back to the backpack, the bag being closed
+                if slot.slot_type == backpack.CLOAK_SLOT:
+                    backpack.leaving_cloak_slot(db, character_id, old_item)
+                if str(slot.slot_type).startswith("fast_slot_") and in_run:
+                    backpack.add(db, character_id, old_item, 1)
+                else:
+                    # возвращаем старый предмет в инвентарь
+                    crud.return_item_to_inventory(db, character_id, old_item)
                 db.flush()
                 # Copy enhancement data and socketed_gems from slot to the newly created inventory row
                 old_enh_bonuses = crud.get_enhancement_bonuses(slot)
@@ -1264,10 +1291,12 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.flush()
 
         # Save enhancement data, socketed_gems and durability from inventory before removing
-        inv_enh_points = inv_slot.enhancement_points_spent
-        inv_enh_bonuses = crud.get_enhancement_bonuses(inv_slot)
-        inv_socketed_gems = crud.get_socketed_gems(inv_slot)
-        inv_current_durability = inv_slot.current_durability
+        # (a packed stack has none of them)
+        from_bag = isinstance(inv_slot, models.CharacterInventory)
+        inv_enh_points = inv_slot.enhancement_points_spent if from_bag else 0
+        inv_enh_bonuses = crud.get_enhancement_bonuses(inv_slot) if from_bag else {}
+        inv_socketed_gems = crud.get_socketed_gems(inv_slot) if from_bag else []
+        inv_current_durability = inv_slot.current_durability if from_bag else None
 
         # 4) Уменьшаем количество нового предмета
         inv_slot.quantity -= 1
@@ -1370,7 +1399,14 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
         slot_current_durability = slot.current_durability
 
         # 2) Возвращаем предмет
-        crud.return_item_to_inventory(db, character_id, old_item)
+        # FEAT-178: a backpack coming off empties into the bag (not in a run); a belt item taken off
+        # in a run goes back to the backpack — the bag is closed there
+        if slot.slot_type == backpack.CLOAK_SLOT:
+            backpack.leaving_cloak_slot(db, character_id, old_item)
+        if str(slot.slot_type).startswith("fast_slot_") and backpack.in_dungeon(db, character_id):
+            backpack.add(db, character_id, old_item, 1)
+        else:
+            crud.return_item_to_inventory(db, character_id, old_item)
         db.flush()
 
         # Copy enhancement data, socketed_gems and durability to the newly created inventory row
@@ -1442,6 +1478,8 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
     # (battle-service), иначе предмет списывается впустую.
     check_not_in_battle(db, character_id, "Нельзя использовать предметы во время боя")
     check_not_gathering(db, character_id, "Нельзя использовать предметы во время добычи")
+    # FEAT-178: in a dungeon run only the camp backpack is at hand (POST .../backpack/use)
+    backpack.check_bag_open(db, character_id)
     db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Предмет не найден")
@@ -3565,6 +3603,26 @@ BUFF_TYPE_LABELS = {
 DEFAULT_BUFF_TYPE_LABEL = "к опыту"
 
 
+def _consumable_row(db: Session, character_id: int, row_id: int, from_backpack: bool):
+    """A stack to consume from: the camp backpack's, or the bag's — the bag is closed in a dungeon run."""
+    if from_backpack:
+        row = db.query(models.BackpackItem).filter(
+            models.BackpackItem.id == row_id,
+            models.BackpackItem.character_id == character_id,
+        ).with_for_update().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Предмета нет в походном рюкзаке")
+        return row
+    backpack.check_bag_open(db, character_id)
+    row = db.query(models.CharacterInventory).filter(
+        models.CharacterInventory.id == row_id,
+        models.CharacterInventory.character_id == character_id,
+    ).with_for_update().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
+    return row
+
+
 @router.post("/{character_id}/use-buff-item", response_model=schemas.UseBuffItemResult)
 def use_buff_item(
     character_id: int,
@@ -3578,13 +3636,8 @@ def use_buff_item(
     check_not_gathering(db, character_id, "Нельзя использовать предметы во время добычи")
 
     try:
-        # 1. Find inventory row
-        inv_row = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.id == req.inventory_item_id,
-            models.CharacterInventory.character_id == character_id,
-        ).with_for_update().first()
-        if not inv_row:
-            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
+        # 1. Find the stack: in the camp backpack (FEAT-178) or the bag (closed in a dungeon run)
+        inv_row = _consumable_row(db, character_id, req.inventory_item_id, req.from_backpack)
 
         # 2. Load item definition
         item_obj = db.query(models.Items).filter(models.Items.id == inv_row.item_id).first()
@@ -3680,11 +3733,9 @@ def eat_food(
     check_not_in_battle(db, character_id, "Нельзя есть во время боя")
 
     try:
-        inv_row = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.id == req.inventory_item_id,
-            models.CharacterInventory.character_id == character_id,
-        ).with_for_update().first()
-        if not inv_row or inv_row.quantity < 1:
+        # The stack: in the camp backpack (FEAT-178) or the bag (closed in a dungeon run)
+        inv_row = _consumable_row(db, character_id, req.inventory_item_id, req.from_backpack)
+        if inv_row.quantity < 1:
             raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
 
         item_obj = db.query(models.Items).filter(models.Items.id == inv_row.item_id).first()
@@ -3757,6 +3808,178 @@ def eat_food(
         "message": f"Вы поели: {payload['source_item_name']}. Сытость на {SATIETY_DURATION_LABEL}",
         "satiety": satiety,
     }
+
+
+# -----------------------------------------------------------------------------
+# FEAT-178: походный рюкзак
+# -----------------------------------------------------------------------------
+
+def _backpack_state(db: Session, character_id: int) -> dict:
+    worn = backpack.worn_backpack(db, character_id)
+    entries = []
+    for row in backpack.rows(db, character_id):
+        item = row.item
+        if item is None:
+            continue
+        entries.append({
+            "id": row.id, "item_id": item.id, "quantity": row.quantity, "name": item.name,
+            "description": item.description, "image_url": item.image,
+            "rarity": schemas._enum_value(item.item_rarity), "max_stack_size": item.max_stack_size or 1,
+            "is_food": bool(item.is_food),
+            "health_recovery": item.health_recovery or 0, "mana_recovery": item.mana_recovery or 0,
+            "energy_recovery": item.energy_recovery or 0, "stamina_recovery": item.stamina_recovery or 0,
+        })
+    return {
+        "backpack": {
+            "item_id": worn.id, "name": worn.name, "image_url": worn.image,
+            "rarity": schemas._enum_value(worn.item_rarity),
+        } if worn else None,
+        "capacity": backpack.capacity_of(worn),
+        "items": entries,
+        "belt": [
+            {"slot_type": slot.slot_type, "item_id": slot.item_id,
+             "name": slot.item.name if slot.item else None, "image_url": slot.item.image if slot.item else None}
+            for slot in sorted(
+                db.query(models.EquipmentSlot).filter(
+                    models.EquipmentSlot.character_id == character_id,
+                    models.EquipmentSlot.slot_type.like("fast_slot_%"),
+                    models.EquipmentSlot.is_enabled == True,  # noqa: E712
+                ).all(),
+                key=lambda sl: int(sl.slot_type.rsplit("_", 1)[1]),
+            )
+        ],
+        "in_dungeon": backpack.in_dungeon(db, character_id),
+    }
+
+
+@router.get("/{character_id}/backpack", response_model=schemas.BackpackResponse)
+def get_backpack(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Походный рюкзак персонажа: что надето, вместимость, что упаковано."""
+    verify_character_ownership(db, character_id, current_user.id)
+    return _backpack_state(db, character_id)
+
+
+@router.post("/{character_id}/backpack/pack", response_model=schemas.BackpackResponse)
+def pack_backpack(
+    character_id: int,
+    req: schemas.BackpackPackRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Положить расходник из инвентаря в походный рюкзак (только вне подземелья)."""
+    verify_character_ownership(db, character_id, current_user.id)
+    check_not_in_battle(db, character_id, "Нельзя собирать рюкзак во время боя")
+    if backpack.in_dungeon(db, character_id):
+        raise HTTPException(status_code=409, detail=backpack.PACK_IN_RUN)
+    try:
+        row = db.query(models.CharacterInventory).filter(
+            models.CharacterInventory.id == req.inventory_item_id,
+            models.CharacterInventory.character_id == character_id,
+        ).with_for_update().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
+        if row.quantity < req.quantity:
+            raise HTTPException(status_code=400, detail="Недостаточно предметов в инвентаре")
+        if not row.is_identified:
+            raise HTTPException(status_code=400, detail="Предмет не опознан")
+        item = db.query(models.Items).filter(models.Items.id == row.item_id).first()
+        backpack.add(db, character_id, item, req.quantity)
+        row.quantity -= req.quantity
+        if row.quantity <= 0:
+            db.delete(row)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    return _backpack_state(db, character_id)
+
+
+@router.post("/{character_id}/backpack/unpack", response_model=schemas.BackpackResponse)
+def unpack_backpack(
+    character_id: int,
+    req: schemas.BackpackUnpackRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Выложить из походного рюкзака в инвентарь (только вне подземелья)."""
+    verify_character_ownership(db, character_id, current_user.id)
+    check_not_in_battle(db, character_id, "Нельзя разбирать рюкзак во время боя")
+    if backpack.in_dungeon(db, character_id):
+        raise HTTPException(status_code=409, detail=backpack.PACK_IN_RUN)
+    try:
+        row, _ = backpack.take(db, character_id, req.backpack_item_id, req.quantity)
+        crud._add_items_to_inventory(db, character_id, row.item_id, req.quantity)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    return _backpack_state(db, character_id)
+
+
+@router.post("/{character_id}/backpack/use")
+async def use_backpack_item(
+    character_id: int,
+    req: schemas.BackpackUseRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Использовать предмет из походного рюкзака (вне боя): еда, бафф или восстановление."""
+    verify_character_ownership(db, character_id, current_user.id)
+    check_not_in_battle(db, character_id, "В бою расходники берутся с пояса")
+    row = db.query(models.BackpackItem).filter(
+        models.BackpackItem.id == req.backpack_item_id,
+        models.BackpackItem.character_id == character_id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Предмета нет в походном рюкзаке")
+    item = db.query(models.Items).filter(models.Items.id == row.item_id).first()
+    if item.is_food:
+        return eat_food(character_id, schemas.EatFoodRequest(inventory_item_id=row.id, from_backpack=True),
+                        db, current_user)
+    if crud.get_item_xp_buffs(db, item):
+        return use_buff_item(character_id, schemas.UseBuffItemRequest(inventory_item_id=row.id, from_backpack=True),
+                             db, current_user)
+    recover_payload = {
+        key: getattr(item, key) for key in ("health_recovery", "energy_recovery", "mana_recovery", "stamina_recovery")
+        if (getattr(item, key) or 0) > 0
+    }
+    if not recover_payload:
+        raise HTTPException(status_code=400, detail="Этот предмет действует только в бою — положите его на пояс")
+    try:
+        backpack.take(db, character_id, row.id, 1)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    await recover_in_attributes_service(character_id, recover_payload)
+    return {"status": "ok", "detail": f"Использовано: {item.name}"}
+
+
+@router.post("/internal/characters/{character_id}/backpack/add", response_model=schemas.BackpackResponse)
+def add_to_backpack_internal(
+    character_id: int,
+    req: schemas.BackpackAddRequest,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Положить найденный расходник прямо в рюкзак участника (лидер раздаёт в подземелье).
+
+    409 — нет рюкзака или места; 400 — не расходник. Только service-to-service.
+    """
+    item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    try:
+        backpack.add(db, character_id, item, req.quantity)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    return _backpack_state(db, character_id)
 
 
 @router.get("/{character_id}/active-buffs", response_model=schemas.ActiveBuffsResponse)

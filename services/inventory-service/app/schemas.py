@@ -567,6 +567,8 @@ class ItemBase(BaseModel):
 
     # FEAT-164: food gives "Сытость" (24h) when eaten via /eat-food
     is_food: bool = False
+    # FEAT-178: a cloak worn as a camp backpack (capacity by rarity)
+    is_backpack: bool = False
 
     # FEAT-168: battle behaviour of a consumable (NULL == "instant")
     consumable_action: Optional[str] = None
@@ -777,6 +779,8 @@ class ItemCreate(ItemBase):
         if item_type is None or item_rarity is None:
             return values  # field-level validation already failed
 
+        if values.get("is_backpack") and item_type != "cloak":
+            raise ValueError("Походным рюкзаком может быть только плащ")
         if values.get("is_food"):
             if item_type != FOOD_ITEM_TYPE:
                 raise ValueError("Едой может быть только расходуемый предмет")
@@ -1038,6 +1042,8 @@ class EquipItemRequest(BaseModel):
     """
     item_id: int
     inventory_item_id: Optional[int] = None
+    # FEAT-178: put a stack of the camp backpack on the belt (`inventory_item_id` is then ignored)
+    backpack_item_id: Optional[int] = None
     # Weapons only: which hand. Omitted = the server picks an allowed hand.
     slot_type: Optional[str] = None
 
@@ -1692,11 +1698,96 @@ class ActiveBuffsResponse(BaseModel):
 
 class UseBuffItemRequest(BaseModel):
     inventory_item_id: int
+    # FEAT-178: `inventory_item_id` is a stack of the camp backpack, not of the bag
+    from_backpack: bool = False
 
 
 class EatFoodRequest(BaseModel):
     """FEAT-164: eat one food item from the inventory."""
     inventory_item_id: int
+    # FEAT-178: `inventory_item_id` is a stack of the camp backpack, not of the bag
+    from_backpack: bool = False
+
+
+# ---------- FEAT-178: camp backpack ----------
+
+class BackpackPackRequest(BaseModel):
+    inventory_item_id: int
+    quantity: int = 1
+
+    @validator("quantity")
+    def _positive(cls, v):
+        if v < 1:
+            raise ValueError("Количество — от 1")
+        return v
+
+
+class BackpackUnpackRequest(BaseModel):
+    backpack_item_id: int
+    quantity: int = 1
+
+    @validator("quantity")
+    def _positive(cls, v):
+        if v < 1:
+            raise ValueError("Количество — от 1")
+        return v
+
+
+class BackpackUseRequest(BaseModel):
+    """Use one item of a packed stack (out of battle)."""
+    backpack_item_id: int
+
+
+class BackpackAddRequest(BaseModel):
+    """Internal: put found consumables straight into a member's backpack (dungeon-service)."""
+    item_id: int
+    quantity: int = 1
+
+    @validator("quantity")
+    def _positive(cls, v):
+        if v < 1:
+            raise ValueError("Количество — от 1")
+        return v
+
+
+class BackpackEntry(BaseModel):
+    id: int
+    item_id: int
+    quantity: int
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: Optional[str] = None
+    max_stack_size: int = 1
+    is_food: bool = False
+    health_recovery: int = 0
+    mana_recovery: int = 0
+    energy_recovery: int = 0
+    stamina_recovery: int = 0
+
+
+class WornBackpack(BaseModel):
+    item_id: int
+    name: str
+    image_url: Optional[str] = None
+    rarity: Optional[str] = None
+
+
+class BeltSlot(BaseModel):
+    """An enabled fast slot, empty or not (the dungeon inventory draws the whole belt)."""
+    slot_type: str
+    item_id: Optional[int] = None
+    name: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+class BackpackResponse(BaseModel):
+    backpack: Optional[WornBackpack] = None
+    capacity: int = 0
+    items: List[BackpackEntry] = []
+    belt: List[BeltSlot] = []
+    # In a dungeon run the bag is closed and packing is off.
+    in_dungeon: bool = False
 
 
 class SatietyInfo(BaseModel):

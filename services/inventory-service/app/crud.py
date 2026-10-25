@@ -821,6 +821,12 @@ def fast_slot_number(slot_type: str) -> int:
 
 
 def recalc_fast_slots(db: Session, character_id: int):
+    # FEAT-178: in a dungeon run the bag is closed — what falls off a lost belt goes into
+    # the camp backpack while it fits (a consumable); anything else still goes to the bag.
+    import backpack  # backpack imports crud
+    from fastapi import HTTPException
+    in_run = backpack.in_dungeon(db, character_id)
+
     # 1) Смотрим, какие предметы надеты
     eq_slots = db.query(models.EquipmentSlot).filter(
         models.EquipmentSlot.character_id == character_id,
@@ -859,8 +865,16 @@ def recalc_fast_slots(db: Session, character_id: int):
             # если там что-то лежит -> снимаем
             if slot.item_id is not None:
                 old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
-                # возвращаем в инвентарь
-                return_item_to_inventory(db, character_id, old_item)
+                packed = False
+                if in_run:
+                    try:
+                        backpack.add(db, character_id, old_item, 1)
+                        packed = True
+                    except HTTPException:
+                        pass  # no backpack, no room, not a consumable: the bag keeps it
+                if not packed:
+                    # возвращаем в инвентарь
+                    return_item_to_inventory(db, character_id, old_item)
                 slot.item_id = None
         db.add(slot)
 
