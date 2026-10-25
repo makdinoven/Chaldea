@@ -117,6 +117,7 @@ def test_bar_shows_earned_of_the_whole_step():
     p = level_progress(300, 200, 420, 3)  # level 2 at 200, level 3 at 420
     assert (p.current_exp_in_level, p.exp_for_level, p.exp_to_next_level) == (100, 220, 120)
     assert p.progress_fraction == round(100 / 220, 4) and p.next_level == 3 and not p.max_level
+    assert p.total_exp == 300
 
 
 def test_bar_never_goes_below_zero_for_a_level_set_by_hand():

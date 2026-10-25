@@ -2045,7 +2045,7 @@ def level_progress(total_xp: int, level_xp: int, next_xp: Optional[int], next_le
     below 0 — a level set by hand may sit above the character's experience."""
     if next_xp is None:
         return schemas.LevelProgress(current_exp_in_level=0, exp_to_next_level=0, progress_fraction=1.0,
-                                     exp_for_level=0, next_level=None, max_level=True)
+                                     exp_for_level=0, next_level=None, max_level=True, total_exp=total_xp)
     step = max(1, next_xp - level_xp)
     earned = min(max(0, total_xp - level_xp), step)
     return schemas.LevelProgress(
@@ -2054,6 +2054,7 @@ def level_progress(total_xp: int, level_xp: int, next_xp: Optional[int], next_le
         progress_fraction=round(earned / step, 4),
         exp_for_level=step,
         next_level=next_level,
+        total_exp=total_xp,
     )
 
 

@@ -381,6 +381,8 @@ class LevelProgress(BaseModel):
     next_level: Optional[int] = None
     # No threshold above this level: the table's last level is reached.
     max_level: bool = False
+    # All the experience the character has ever earned (the profile shows it on a click).
+    total_exp: int = 0
 
 class Attribute(BaseModel):
     current: int
