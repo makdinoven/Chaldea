@@ -111,10 +111,12 @@ const AdminLevelsPage = () => {
     }
     setSaving(true);
     try {
-      const { data } = await axios.put<Threshold[]>(URL, { thresholds: rows });
-      setRows(data);
-      setSaved(data);
-      toast.success('Таблица уровней сохранена');
+      const { data } = await axios.put<{ thresholds: Threshold[]; raised: number }>(URL, { thresholds: rows });
+      setRows(data.thresholds);
+      setSaved(data.thresholds);
+      toast.success(data.raised
+        ? `Таблица сохранена. Опыт подтянут до порога уровня у персонажей: ${data.raised}`
+        : 'Таблица уровней сохранена');
     } catch (e) {
       toast.error(apiErrorMessage(e, 'Не удалось сохранить таблицу уровней'));
     } finally {
@@ -140,7 +142,8 @@ const AdminLevelsPage = () => {
       <p className="text-white/60 text-sm max-w-3xl">
         Для каждого уровня указан опыт <span className="text-white">всего</span>: чтобы получить уровень, персонаж должен
         набрать столько опыта с самого начала. Выше последнего уровня таблицы персонажи сами не растут. Уже набранные
-        уровни при изменении таблицы не отнимаются. За каждый новый уровень — 10 очков характеристик.
+        уровни при изменении таблицы не отнимаются, а если опыта у персонажа меньше порога его уровня, при сохранении
+        он подтягивается до этого порога. За каждый новый уровень — 10 очков характеристик.
       </p>
 
       {loading && <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />}
@@ -225,8 +228,9 @@ const AdminLevelsPage = () => {
                     Отменить изменения
                   </button>
                 )}
-                <button type="button" onClick={() => void save()} disabled={!dirty || saving || !!problem}
+                <button type="button" onClick={() => void save()} disabled={saving || !!problem}
                   className="btn-blue !w-full sm:!w-auto !px-6 disabled:opacity-40 disabled:cursor-not-allowed">
+                  {/* Saving an unchanged table still raises players to their level's threshold. */}
                   {saving ? 'Сохранение...' : 'Сохранить'}
                 </button>
               </div>

@@ -132,9 +132,16 @@ export interface CharacterProfile {
   active_title: string | null;
   active_title_rarity: string | null;
   level_progress?: {
+    /** Earned within the current level (never below 0). */
     current_exp_in_level: number;
+    /** Left until the next level. */
     exp_to_next_level: number;
     progress_fraction: number;
+    /** The whole step from this level to the next (the bar's 100%). */
+    exp_for_level?: number;
+    next_level?: number | null;
+    /** No threshold above: the table's last level is reached. */
+    max_level?: boolean;
   };
   attributes?: {
     current_health: number;

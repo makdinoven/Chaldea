@@ -11,6 +11,9 @@ import AvatarEquipmentGrid from './AvatarEquipmentGrid';
 import FastSlots from '../EquipmentPanel/FastSlots';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 
+/** Experience in Russian digit groups: 29 726. */
+const fmtXp = (n: number | null | undefined) => Math.round(n ?? 0).toLocaleString('ru-RU');
+
 const getRarityColorClass = (rarity?: string | null): string => {
   switch (rarity) {
     case 'common': return 'text-rarity-common';
@@ -86,8 +89,9 @@ const CharacterPanel = () => {
                   Опыт
                 </span>
                 <span className="text-white/85 text-sm">
-                  {Math.round(profile.level_progress?.current_exp_in_level ?? 0)}
-                  /{Math.round(profile.level_progress?.exp_to_next_level ?? 0)}
+                  {profile.level_progress?.max_level
+                    ? 'Последний уровень'
+                    : `${fmtXp(profile.level_progress?.current_exp_in_level)} / ${fmtXp(profile.level_progress?.exp_for_level)}`}
                 </span>
               </div>
               <div className="stat-bar">
@@ -99,6 +103,11 @@ const CharacterPanel = () => {
                   }}
                 />
               </div>
+              {profile.level_progress?.next_level && !profile.level_progress.max_level && (
+                <span className="text-white/45 text-[11px] text-right -mt-1.5">
+                  до {profile.level_progress.next_level}-го уровня — {fmtXp(profile.level_progress.exp_to_next_level)}
+                </span>
+              )}
               <div className="flex items-center justify-center gap-2 mt-0.5">
                 <span className="gold-text text-xs font-medium uppercase tracking-[0.05em]">
                   Очки прокачки
