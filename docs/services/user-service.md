@@ -150,3 +150,10 @@ user-service/
 5. **Неиспользуемые таблицы** - `users_avatar_preview` и `users_avatar_character_preview` создаются но не читаются
 6. **Нет пагинации** для `/users/all` и `/users/admins`
 7. **Silent failure** при недоступности locations-service (exception подавляется через `pass`)
+
+
+## FEAT-175: блокировка активности в `/users/me`
+
+`character.activity_lock` (из `/characters/internal/{id}/short_info`):
+`{"locked": bool, "reason": "dungeon"|"unconscious"|null, "until": iso|null, "dungeon_session_id": int|null}` —
+для баннера «в подземелье» / «без сознания до …». Публичный профиль поле не отдаёт.

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 import asyncio
 import models, schemas, crud
 import locations_client
+import activity_lock
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -2234,11 +2235,13 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         "character_title": character.current_title.name if character.current_title else "",
         "character_title_rarity": character.current_title.rarity if character.current_title else None,
         "character_level": character.level,
+        "character_class_id": character.id_class,
         "user_id": user_id,
         "user_nickname": "",
         "character_name": character.name,
         "current_location_id": character.current_location_id,
         "travel_cooldown_until": character.travel_cooldown_until,
+        "activity_lock": activity_lock.lock_for_character(character),
     }
 
     # Release the pooled connection before calling user-service. user-service's
@@ -2302,6 +2305,8 @@ def _build_short_info(character_id: int, db: Session) -> dict:
         "age": ch.age,
         "travel_cooldown_until": ch.travel_cooldown_until.isoformat() if ch.travel_cooldown_until else None,
         "currency_balance": ch.currency_balance,
+        # FEAT-175: banner data for the frontend (via /users/me).
+        "activity_lock": activity_lock.lock_for_character(ch),
     }
 
 
@@ -3786,7 +3791,8 @@ def spawn_dungeon_mobs_endpoint(
             continue
         try:
             active_mob, character = crud.spawn_mob_from_template(
-                db, template_id, req.location_id, "dungeon"
+                db, template_id, req.location_id, "dungeon",
+                stat_multiplier=req.stat_multiplier,
             )
             character_ids.append(character.id)
         except Exception as e:
@@ -3806,6 +3812,145 @@ def spawn_dungeon_mobs_endpoint(
         )
 
     return schemas.SpawnDungeonMobsResponse(character_ids=character_ids)
+
+
+@router.post("/internal/despawn-dungeon-mobs")
+def despawn_dungeon_mobs_endpoint(
+    req: schemas.DespawnDungeonMobsRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """FEAT-175: remove dungeon mobs once their fight is over, so they never
+    linger (or respawn) on the surface. Only `spawn_type='dungeon'` rows are
+    touched; the hidden `npc_role='mob'` character rows stay (battle history
+    and logs still point at them). Idempotent."""
+    if not req.character_ids:
+        return {"removed": 0}
+    removed = (
+        db.query(models.ActiveMob)
+        .filter(
+            models.ActiveMob.character_id.in_(req.character_ids),
+            models.ActiveMob.spawn_type == "dungeon",
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"removed": removed}
+
+
+# ============================================================
+# Internal: Activity lock (FEAT-175, used by dungeon-service)
+# ============================================================
+
+def _lock_rows(db: Session, character_ids: List[int]):
+    ids = sorted(set(int(c) for c in character_ids))
+    if not ids:
+        return []
+    # Sorted ids + FOR UPDATE: concurrent callers lock rows in the same order.
+    return (
+        db.query(models.Character)
+        .filter(models.Character.id.in_(ids))
+        .order_by(models.Character.id)
+        .with_for_update()
+        .all()
+    )
+
+
+@router.get(
+    "/internal/{character_id}/activity-lock",
+    response_model=schemas.ActivityLockResponse,
+)
+def internal_get_activity_lock(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    return activity_lock.lock_for_character(character)
+
+
+@router.post("/internal/activity-lock/dungeon")
+def internal_set_dungeon_lock(
+    req: schemas.DungeonLockRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Lock characters into a dungeon run — all or nothing.
+
+    409 (nothing written) if any character is missing, knocked out, or already
+    locked into a different session. Re-locking into the same session is a
+    no-op, so the call is idempotent.
+    """
+    rows = _lock_rows(db, req.character_ids)
+    found = {c.id for c in rows}
+    missing = sorted(set(int(c) for c in req.character_ids) - found)
+    if missing:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=f"Персонаж не найден: {missing[0]}")
+    for c in rows:
+        lock = activity_lock.lock_for_character(c)
+        if lock["locked"] and not (
+            lock["reason"] == activity_lock.REASON_DUNGEON
+            and lock["dungeon_session_id"] == req.session_id
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "character_id": c.id,
+                    "message": activity_lock.lock_message(lock, subject=c.name),
+                    "activity_lock": lock,
+                },
+            )
+    for c in rows:
+        c.dungeon_session_id = req.session_id
+    db.commit()
+    return {"locked": sorted(found), "session_id": req.session_id}
+
+
+@router.post("/internal/activity-lock/dungeon/clear")
+def internal_clear_dungeon_lock(
+    req: schemas.DungeonLockRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Release the dungeon lock — only where it still points at this session
+    (a newer run must never be unlocked by an old one). Idempotent."""
+    cleared = []
+    for c in _lock_rows(db, req.character_ids):
+        if c.dungeon_session_id == req.session_id:
+            c.dungeon_session_id = None
+            cleared.append(c.id)
+    db.commit()
+    return {"cleared": cleared}
+
+
+@router.post("/internal/activity-lock/knockout")
+def internal_knockout(
+    req: schemas.KnockoutRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Knock characters out until now + seconds (dungeon wipe). Also releases
+    their dungeon lock and, if `return_location_id` is given, puts anyone who
+    is somewhere else back on that location. Idempotent: re-applying only
+    extends `unconscious_until` to the later moment."""
+    until = datetime.utcnow() + timedelta(seconds=req.seconds)
+    result = []
+    for c in _lock_rows(db, req.character_ids):
+        if req.session_id is None or c.dungeon_session_id == req.session_id:
+            c.dungeon_session_id = None
+        if c.unconscious_until is None or c.unconscious_until < until:
+            c.unconscious_until = until
+        moved = False
+        if req.return_location_id is not None and c.current_location_id != req.return_location_id:
+            c.current_location_id = req.return_location_id
+            moved = True
+        result.append({"character_id": c.id, "moved": moved})
+    db.commit()
+    return {"until": until.isoformat(), "characters": result}
 
 
 # ============================================================

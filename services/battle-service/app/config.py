@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     RABBITMQ_URL: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
     LOCATIONS_SERVICE_URL: str = os.getenv("LOCATIONS_SERVICE_URL", "http://locations-service:8006")
     PARTY_SERVICE_URL: str = os.getenv("PARTY_SERVICE_URL", "http://party-service:8014")
+    # FEAT-175: dungeon battles report their outcome back to dungeon-service.
+    DUNGEON_SERVICE_URL: str = os.getenv("DUNGEON_SERVICE_URL", "http://dungeon-service:8013")
 
     class Config:
         env_file = ".env"

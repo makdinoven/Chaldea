@@ -59,7 +59,7 @@ character-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/characters/{id}/full_profile` | Полный профиль с уровнем, атрибутами, титулом. **FEAT-171 (C1, optional-auth):** владелец, админ/модератор с `characters:read` и NPC получают прежнее тело; любой другой зритель — `PublicProfileResponse` (`id`, `name`, `level`, `active_title`, `active_title_rarity`, `avatar`). Ключей `currency_balance`, `stat_points`, `level_progress`, `attributes` в его ответе **нет** (именно отсутствуют, а не null). Несуществующий персонаж → 404 |
-| GET | `/characters/{id}/profile` | Профиль с данными пользователя |
+| GET | `/characters/{id}/profile` | Профиль с данными пользователя; `character_class_id` (1 воин, 2 плут, 3 маг) — для миниатюр на 3D-столе данжа |
 | GET | `/characters/{id}/short_info` | Краткая инфо (имя, аватар, локация). **FEAT-171 (C4, D7):** `currency_balance` убран **безусловно, для всех** — маршрут читают сервис-в-сервис, поэтому optional-auth тут не годится. Баланс отдаёт только двойник `/characters/internal/{id}/short_info` |
 | GET | `/characters/{id}/race_info` | Раса, подраса, класс, уровень |
 | GET | `/characters/list` | Список всех персонажей |
@@ -312,3 +312,34 @@ character-service/app/
 7. **Одобрение неатомарно** - 13 шагов по пяти сервисам под одним коммитом; дублирующие публикации в RabbitMQ оставляют узкую гонку двойной выдачи
 
 Полный список с приоритетами — в `docs/ISSUES.md`.
+
+
+## Блокировка активности (FEAT-175)
+
+Источник истины — две nullable-колонки `characters` (миграция `023_activity_lock`):
+`dungeon_session_id` (персонаж в забеге) и `unconscious_until` (наивный UTC; прошедшее время = свободен,
+фоновая очистка не нужна). Логика — `app/activity_lock.py`.
+
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/characters/internal/{id}/activity-lock` | `{"locked", "reason": "dungeon"|"unconscious"|null, "until", "dungeon_session_id"}` |
+| POST | `/characters/internal/activity-lock/dungeon` `{character_ids, session_id}` | Блокировка всех или никого (`SELECT … FOR UPDATE` по возрастанию id); 409 `{character_id, message, activity_lock}` если кто-то без сознания или в другом забеге; повтор для той же сессии — no-op |
+| POST | `/characters/internal/activity-lock/dungeon/clear` `{character_ids, session_id}` | Снимает только блокировку этой сессии |
+| POST | `/characters/internal/activity-lock/knockout` `{character_ids, seconds, session_id?, return_location_id?}` | Вайп: «без сознания» до now+seconds, снимает блокировку подземелья, возвращает на локацию |
+| POST | `/characters/internal/despawn-dungeon-mobs` `{character_ids}` | Удаляет `active_mobs` с `spawn_type='dungeon'` (строки персонажей-мобов остаются скрытыми) |
+
+`GET /characters/{id}/profile` и оба `short_info` отдают объект `activity_lock` (его же получает
+`/users/me` → `character.activity_lock`). Мастер Телепорта отказывает заблокированному персонажу (409).
+
+Мобы подземелий: `spawn-dungeon-mobs` принимает `stat_multiplier` (= `dungeons.mob_multiplier`,
+масштабирует числовые базовые характеристики шаблона, положительные не опускаются ниже 1);
+`spawn_type='dungeon'` не попадают в `get_mobs_at_location`, не получают `respawn_at` и не
+возрождаются. Миграция 023 удалила утёкших мобов подземелий (кроме тех, что в бою).
+
+Формулировки отказа одинаковы во всех сервисах (`activity_lock.lock_message`):
+«Персонаж находится в подземелье» / «Персонаж без сознания до HH:MM МСК» (для второго
+участника — «Цель …», «Целевой персонаж …», «Другой участник обмена …»). Код ответа — **409**.
+Колонки `characters.dungeon_session_id` / `characters.unconscious_until` пишет только
+character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
+сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
+«не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 import models
 import schemas
 import crud
+import activity_lock
 import equipment_rules
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,6 +86,11 @@ def check_not_in_battle(db: Session, character_id: int, message: str = "Дейс
     """Raise 400 if character is in an active battle (shared DB query)."""
     if crud.is_character_in_battle(db, character_id):
         raise HTTPException(status_code=400, detail=message)
+
+
+def check_not_activity_locked(db: Session, character_id: int, subject: str = "Персонаж"):
+    """FEAT-175: 409 if the character is in a dungeon run or knocked out."""
+    activity_lock.check_not_activity_locked(db, character_id, subject=subject)
 
 
 def check_not_gathering(db: Session, character_id: int, message: str = "Действие заблокировано во время добычи"):
@@ -1630,6 +1636,10 @@ def trade_propose(
     if init_loc is None or target_loc is None or init_loc != target_loc:
         raise HTTPException(status_code=400, detail="Персонажи должны находиться на одной локации")
 
+    # FEAT-175: neither in a dungeon run nor knocked out
+    check_not_activity_locked(db, req.initiator_character_id, subject="Ваш персонаж")
+    check_not_activity_locked(db, req.target_character_id, subject="Целевой персонаж")
+
     # Neither in battle
     if crud.is_character_in_battle(db, req.initiator_character_id):
         raise HTTPException(status_code=400, detail="Ваш персонаж сейчас в бою")
@@ -1679,6 +1689,11 @@ def trade_update_items(
 
     # Verify ownership of character
     verify_character_ownership(db, req.character_id, current_user.id)
+    # FEAT-175: both sides must be free (no dungeon run, not knocked out).
+    check_not_activity_locked(db, trade.initiator_character_id,
+                              subject="Ваш персонаж" if req.character_id == trade.initiator_character_id else "Другой участник обмена")
+    check_not_activity_locked(db, trade.target_character_id,
+                              subject="Ваш персонаж" if req.character_id == trade.target_character_id else "Другой участник обмена")
 
     # Validate gold >= 0
     if req.gold < 0:
@@ -1721,6 +1736,11 @@ def trade_confirm(
         raise HTTPException(status_code=403, detail="Вы не являетесь участником этого обмена")
 
     verify_character_ownership(db, req.character_id, current_user.id)
+    # FEAT-175: both sides must be free (no dungeon run, not knocked out).
+    check_not_activity_locked(db, trade.initiator_character_id,
+                              subject="Ваш персонаж" if req.character_id == trade.initiator_character_id else "Другой участник обмена")
+    check_not_activity_locked(db, trade.target_character_id,
+                              subject="Ваш персонаж" if req.character_id == trade.target_character_id else "Другой участник обмена")
 
     both_confirmed = crud.confirm_trade(db, trade, req.character_id)
 
@@ -2447,6 +2467,7 @@ def craft_item(
 ):
     """Выполнить крафт предмета."""
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_activity_locked(db, character_id)
     check_not_in_battle(db, character_id, "Нельзя крафтить во время боя")
     check_not_gathering(db, character_id, "Нельзя крафтить во время добычи")
 
@@ -2923,6 +2944,7 @@ async def sharpen_item(
     """Заточить конкретный стат предмета подходящим камнем заточки.
     Точить может любой персонаж; опыт профессии за заточку не начисляется (FEAT-165)."""
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_activity_locked(db, character_id)
     check_not_in_battle(db, character_id, "Нельзя затачивать предметы во время боя")
     check_not_gathering(db, character_id, "Нельзя затачивать предметы во время добычи")
 
@@ -3096,6 +3118,7 @@ def refine_item(
 ):
     """Переработать сырьё одного вида. Всегда успешно; остаток, не кратный пропорции, не тратится."""
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_activity_locked(db, character_id)
     check_not_in_battle(db, character_id, "Нельзя перерабатывать во время боя")
     check_not_gathering(db, character_id, "Нельзя перерабатывать во время добычи")
 
@@ -3263,6 +3286,7 @@ async def insert_gem(
 ):
     """Вставить огранку (в украшение) или руну (в оружие, броню, шлем, плащ). Доступно любому персонажу."""
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_activity_locked(db, character_id)
     check_not_in_battle(db, character_id, "Нельзя вставлять камни/руны во время боя")
     check_not_gathering(db, character_id, "Нельзя вставлять камни/руны во время добычи")
 
@@ -3357,6 +3381,7 @@ async def extract_gem(
 ):
     """Извлечь огранку (ювелир) или руну (зачарователь) из слота предмета."""
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_activity_locked(db, character_id)
     check_not_in_battle(db, character_id, "Нельзя извлекать камни/руны во время боя")
     check_not_gathering(db, character_id, "Нельзя извлекать камни/руны во время добычи")
 

@@ -70,6 +70,11 @@ class Battle(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+    # FEAT-175: set for battles created by dungeon-service; battle-service then
+    # reports the outcome back (POST /dungeons/internal/battle-callback).
+    dungeon_session_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
 
     participants = relationship(
         "BattleParticipant",

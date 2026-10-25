@@ -248,3 +248,29 @@ def private_viewer(db_session):
     with _test_engine.connect() as conn:
         conn.execute(text("DROP TABLE IF EXISTS characters"))
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# FEAT-175 activity lock. The lock lives in two `characters` columns owned by
+# character-service; the per-file `characters` mirrors in this suite don't
+# carry them. Default: "not locked". Tests that exercise the real query opt
+# out with @pytest.mark.real_activity_lock (see test_activity_lock.py).
+# ---------------------------------------------------------------------------
+
+import activity_lock as _activity_lock  # noqa: E402
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_activity_lock: run the real FEAT-175 activity-lock query",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _activity_lock_default_unlocked(request, monkeypatch):
+    if request.node.get_closest_marker("real_activity_lock"):
+        return
+    monkeypatch.setattr(
+        _activity_lock, "get_activity_lock",
+        lambda db, character_id: _activity_lock.compute_lock(None, None),
+    )

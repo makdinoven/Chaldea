@@ -7493,7 +7493,8 @@ async def start_gathering(
 
     # 4. Battle-lock + already-gathering-lock checks. Late import keeps the
     # main->crud import direction one-way (no module-level cycle).
-    from main import check_not_in_battle, check_not_gathering  # noqa: WPS433
+    from main import check_not_in_battle, check_not_gathering, check_not_activity_locked  # noqa: WPS433
+    await check_not_activity_locked(db, character_id)
     await check_not_in_battle(
         db, character_id, "Нельзя начать добычу во время боя"
     )

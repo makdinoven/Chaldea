@@ -11,7 +11,7 @@ from sqlalchemy import text, select
 
 from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle, get_active_battle_for_character
 from schemas import (
-    BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse,
+    BattleCreated, BattleCreate, DungeonBattleCreate, ActionResponse, ActionRequest, LogResponse,
     BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
     PackAttack, PartyPackAttack,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
@@ -59,6 +59,7 @@ from tasks import save_log
 from skills_client import character_has_skill, get_resolved_skill, get_item, character_skills
 import httpx
 import logging
+import activity_lock
 import os
 import random
 import uuid
@@ -742,7 +743,29 @@ async def _track_cumulative_stats(
                         logger.warning(f"[QUEST] Auto-progress error for char {char_id}: {e}")
 
 
-async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
+async def _ensure_not_activity_locked(
+    db, character_id: int, subject: str = "Персонаж", allow_dungeon_session_id=None,
+) -> None:
+    """FEAT-175: refuse (409) a character who is in a dungeon run or knocked
+    out. `allow_dungeon_session_id` exempts characters locked into THAT run —
+    the dungeon's own battles."""
+    lock = await activity_lock.get_activity_lock(db, character_id)
+    if not lock["locked"]:
+        return
+    if (
+        allow_dungeon_session_id is not None
+        and lock["reason"] == activity_lock.REASON_DUNGEON
+        and lock["dungeon_session_id"] == allow_dungeon_session_id
+    ):
+        return
+    raise HTTPException(409, activity_lock.lock_message(lock, subject=subject))
+
+
+async def _is_activity_locked(db, character_id: int) -> bool:
+    return (await activity_lock.get_activity_lock(db, character_id))["locked"]
+
+
+async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dungeon_session_id=None):
     """Create the Battle + participants, init Redis state, register NPCs.
 
     Shared by the public create endpoint and the party-start flow. Validation
@@ -750,7 +773,8 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
     Returns (battle_obj, participant_objs, first_actor_pid, deadline).
     """
     battle_obj, participant_objs = await create_battle(
-        db, player_ids, teams, battle_type=battle_type, location_id=location_id
+        db, player_ids, teams, battle_type=battle_type, location_id=location_id,
+        dungeon_session_id=dungeon_session_id,
     )
 
     first_actor_pid = participant_objs[0].id
@@ -863,6 +887,10 @@ async def create_battle_endpoint(
         existing_battle = await get_active_battle_for_character(db, cid)
         if existing_battle:
             raise HTTPException(400, "Персонаж уже в бою")
+    # FEAT-175: no battles outside the dungeon flow for locked characters
+    # (dungeon battles go through POST /battles/internal/dungeon).
+    for cid in player_ids:
+        await _ensure_not_activity_locked(db, cid)
 
     # 1. Проверка минимального количества участников
     if len(battle_in.players) < 2:
@@ -963,6 +991,7 @@ async def mob_attack(
     await _validate_location_mob(db, req.mob_character_id, loc)
     if await get_active_battle_for_character(db, req.character_id):
         raise HTTPException(400, "Персонаж уже в бою")
+    await _ensure_not_activity_locked(db, req.character_id)
     if await get_active_battle_for_character(db, req.mob_character_id):
         raise HTTPException(400, "Этот моб уже в бою")
 
@@ -1047,11 +1076,14 @@ async def party_mob_attack(
     except Exception as e:
         logger.warning(f"gathering-status check failed: {e}")
 
+    await _ensure_not_activity_locked(db, req.leader_character_id)
     available = []
     for cid in members:
         if cid in gathering:
             continue
         if await get_active_battle_for_character(db, cid):
+            continue
+        if await _is_activity_locked(db, cid):  # FEAT-175: dungeon / knocked out
             continue
         available.append(cid)
 
@@ -1127,6 +1159,7 @@ async def pack_attack(
 
     if await get_active_battle_for_character(db, req.character_id):
         raise HTTPException(400, "Персонаж уже в бою")
+    await _ensure_not_activity_locked(db, req.character_id)
     lead_id = roster.get("lead_character_id") or mob_ids[0]
     if await get_active_battle_for_character(db, lead_id):
         raise HTTPException(400, "Эта стая уже в бою")
@@ -1215,11 +1248,14 @@ async def party_pack_attack(
     except Exception as e:
         logger.warning(f"gathering-status check failed: {e}")
 
+    await _ensure_not_activity_locked(db, req.leader_character_id)
     available = []
     for cid in members:
         if cid in gathering:
             continue
         if await get_active_battle_for_character(db, cid):
+            continue
+        if await _is_activity_locked(db, cid):  # FEAT-175: dungeon / knocked out
             continue
         available.append(cid)
 
@@ -1334,6 +1370,8 @@ async def pvp_forced_request(
         raise HTTPException(400, "Персонаж уже в бою")
     if await get_active_battle_for_character(db, req.victim_character_id):
         raise HTTPException(400, "Целевой персонаж уже в бою")
+    await _ensure_not_activity_locked(db, req.attacker_character_id)
+    await _ensure_not_activity_locked(db, req.victim_character_id, subject="Цель")
     if not await _consume_pvp_gate(req.attacker_character_id, loc, req.victim_character_id):
         raise HTTPException(403, "Нужен PvP-пост с этой целью, чтобы подать заявку на нападение")
 
@@ -1368,6 +1406,10 @@ async def admin_approve_pvp_request(
             or await get_active_battle_for_character(db, r["victim_character_id"])):
         await _pvp_req_delete(request_id)
         raise HTTPException(400, "Один из участников уже в бою")
+    if (await _is_activity_locked(db, r["attacker_character_id"])
+            or await _is_activity_locked(db, r["victim_character_id"])):
+        await _pvp_req_delete(request_id)
+        raise HTTPException(409, "Один из участников находится в подземелье или без сознания")
     loc = r["location_id"]
     team0 = await _pvp_side_roster(db, r["attacker_character_id"], loc)
     team1 = await _pvp_side_roster(db, r["victim_character_id"], loc)
@@ -1397,6 +1439,152 @@ async def admin_reject_pvp_request(
 # nginx blocks `/battles/internal/` from outside; this is the inner layer.
 # The browser uses the public twins `GET /battles/{id}/state` and
 # `POST /battles/{id}/action`, which stay JWT-gated and unchanged.
+@router.post(
+    "/internal/dungeon",
+    response_model=BattleCreated,
+    status_code=201,
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_create_dungeon_battle(
+    body: DungeonBattleCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-175: create a dungeon battle (dungeon-service only).
+
+    Team 1 = the party: every member must be locked into exactly this dungeon
+    session (that is the exemption from the dungeon activity lock) and free of
+    other battles. Team 2 = freshly spawned dungeon mobs. The battle is tagged
+    with `dungeon_session_id`, so its end is reported back to dungeon-service.
+    No JWT: the run may continue from a callback with nobody's request around.
+    """
+    if len(body.players) < 2:
+        raise HTTPException(400, "Нужно минимум два участника")
+    player_ids = [p.character_id for p in body.players]
+    teams = [p.team if p.team is not None else 1 for p in body.players]
+    if not any(t == 1 for t in teams) or not any(t == 2 for t in teams):
+        raise HTTPException(400, "Нужны команда группы (1) и команда мобов (2)")
+    for cid, team in zip(player_ids, teams):
+        if await get_active_battle_for_character(db, cid):
+            raise HTTPException(409, "Персонаж уже в бою")
+        if team == 1:
+            lock = await activity_lock.get_activity_lock(db, cid)
+            if not (
+                lock["reason"] == activity_lock.REASON_DUNGEON
+                and lock["dungeon_session_id"] == body.dungeon_session_id
+            ):
+                raise HTTPException(
+                    409,
+                    activity_lock.lock_message(lock) or "Персонаж не участвует в этом забеге",
+                )
+    loc_row = (await db.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid"),
+        {"cid": player_ids[teams.index(1)]},
+    )).fetchone()
+    location_id = loc_row[0] if loc_row else None
+
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", location_id,
+        dungeon_session_id=body.dungeon_session_id,
+    )
+    return BattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+    )
+
+
+async def _get_dungeon_session_id(db, battle_id: int):
+    row = (await db.execute(
+        text("SELECT dungeon_session_id FROM battles WHERE id = :bid"),
+        {"bid": battle_id},
+    )).fetchone()
+    value = row[0] if row else None
+    return value if isinstance(value, int) else None
+
+
+async def _post_dungeon_callback(payload: dict) -> None:
+    """Fire-and-forget POST to dungeon-service. A miss is not fatal: the
+    dungeon page also polls GET /battles/internal/{id}/state and the battle row."""
+    url = f"{settings.DUNGEON_SERVICE_URL}/dungeons/internal/battle-callback"
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=payload, headers=_internal_token_headers())
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Dungeon callback for battle %s answered %s: %s",
+                        payload.get("battle_id"), resp.status_code, resp.text[:200],
+                    )
+                return
+        except httpx.RequestError as e:
+            logger.warning("Dungeon callback for battle %s failed: %s", payload.get("battle_id"), e)
+        await asyncio.sleep(1 + attempt * 2)
+    logger.error("Dungeon callback for battle %s gave up after retries", payload.get("battle_id"))
+
+
+async def _notify_dungeon_battle_end(
+    db, battle_id: int, winner_team, battle_state, aborted: bool = False,
+) -> None:
+    """FEAT-175: if this battle belongs to a dungeon run, report the outcome."""
+    try:
+        session_id = await _get_dungeon_session_id(db, battle_id)
+    except Exception as e:  # never break the battle ending over the callback
+        logger.error("Dungeon callback lookup failed for battle %s: %s", battle_id, e)
+        return
+    if session_id is None:
+        return
+    defeated = []
+    for pdata in ((battle_state or {}).get("participants") or {}).values():
+        if (pdata.get("hp") or 0) <= 0 and pdata.get("character_id") is not None:
+            defeated.append(pdata["character_id"])
+    payload = {
+        "battle_id": battle_id,
+        "session_id": session_id,
+        "winner_team": winner_team,
+        "defeated_characters": defeated,
+        "aborted": aborted,
+    }
+    asyncio.create_task(_post_dungeon_callback(payload))
+
+
+@router.get("/internal/{battle_id}/result", dependencies=[Depends(verify_internal_token)])
+async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_db)):
+    """FEAT-175: durable outcome for dungeon-service's polling fallback once the
+    Redis state has expired. `winner_team` comes from battle_history (written
+    at the normal end); a force-finished battle has none."""
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(404, "Бой не найден")
+    status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+    winner_team = None
+    has_history = False
+    if status in ("finished", "forfeit"):
+        rows = (await db.execute(
+            text(
+                "SELECT bp.team, bh.result FROM battle_participants bp "
+                "JOIN battle_history bh ON bh.battle_id = bp.battle_id "
+                "AND bh.character_id = bp.character_id "
+                "WHERE bp.battle_id = :bid"
+            ),
+            {"bid": battle_id},
+        )).fetchall()
+        for team, result in rows:
+            has_history = True
+            result_val = result.value if hasattr(result, "value") else result
+            if result_val == "victory":
+                winner_team = team
+    return {
+        "battle_id": battle_id,
+        "status": status,
+        "dungeon_session_id": battle.dungeon_session_id,
+        "winner_team": winner_team,
+        # Finished without history = force-finished (admin / abandonment).
+        "aborted": status in ("finished", "forfeit") and not has_history,
+    }
+
+
 @router.get("/internal/{battle_id}/state", dependencies=[Depends(verify_internal_token)])
 async def get_state_internal(battle_id: int):
     """Internal endpoint for autobattle-service and dungeon-service —
@@ -2330,6 +2518,10 @@ async def _finalize_battle(
         )
     except Exception as e:
         logger.error(f"WS publish (battle_finished) failed for battle {battle_id}: {e}")
+
+    # FEAT-175: dungeon battles report back (after rewards, so the dungeon can
+    # despawn its mobs safely).
+    await _notify_dungeon_battle_end(db_session, battle_id, winner_team, battle_state)
 
     return battle_rewards
 
@@ -3696,6 +3888,8 @@ async def send_pvp_invitation(
         raise HTTPException(400, "Персонаж уже в бою")
     if await get_active_battle_for_character(db, req.target_character_id):
         raise HTTPException(400, "Целевой персонаж уже в бою")
+    await _ensure_not_activity_locked(db, req.initiator_character_id)
+    await _ensure_not_activity_locked(db, req.target_character_id, subject="Цель")
 
     # No duplicate pending invitation
     dup_result = await db.execute(
@@ -3802,6 +3996,8 @@ async def _filter_available(db, character_ids: list) -> list:
             continue
         if await get_active_battle_for_character(db, cid):
             continue
+        if await _is_activity_locked(db, cid):  # FEAT-175
+            continue
         out.append(cid)
     return out
 
@@ -3900,6 +4096,8 @@ async def respond_to_pvp_invitation(
         raise HTTPException(400, "Персонаж инициатора уже в бою")
     if await get_active_battle_for_character(db, target_char_id):
         raise HTTPException(400, "Персонаж уже в бою")
+    await _ensure_not_activity_locked(db, init_char_id, subject="Персонаж инициатора")
+    await _ensure_not_activity_locked(db, target_char_id)
 
     # Update invitation status
     await db.execute(
@@ -4163,6 +4361,8 @@ async def pvp_attack(
         raise HTTPException(400, "Персонаж уже в бою")
     if await get_active_battle_for_character(db, req.victim_character_id):
         raise HTTPException(400, "Целевой персонаж уже в бою")
+    await _ensure_not_activity_locked(db, req.attacker_character_id)
+    await _ensure_not_activity_locked(db, req.victim_character_id, subject="Цель")
 
     # FEAT-128 task #17 — best-effort cancel of victim's active gathering session
     # before creating the battle row. Per spec §3.5.3 "attacker wins the race":
@@ -4621,6 +4821,9 @@ async def _force_finish_battle(
     # will get 404 on next state fetch and stop acting for this battle.
     # No explicit deregistration needed.
 
+    # FEAT-175: an aborted dungeon battle must not leave the run stuck.
+    await _notify_dungeon_battle_end(db, battle_id, None, state, aborted=True)
+
     logger.info("Battle %s force-finished (reason=%s)", battle_id, reason)
 
 
@@ -4960,6 +5163,9 @@ async def admin_approve_join_request(
     if battle_status in ("finished", "forfeit"):
         raise HTTPException(400, "Бой уже завершён")
 
+    # FEAT-175: the joiner may have entered a dungeon / been knocked out since.
+    await _ensure_not_activity_locked(db, character_id)
+
     # 3. Update request status
     now = datetime.utcnow()
     await db.execute(
@@ -5189,6 +5395,7 @@ async def create_join_request(
         active_bid = await get_active_battle_for_character(db, req.character_id)
         if active_bid:
             raise HTTPException(400, "Персонаж уже участвует в активном бою")
+        await _ensure_not_activity_locked(db, req.character_id)
 
         # 6. Character is not already a participant in this battle
         part_result = await db.execute(
@@ -6116,6 +6323,7 @@ async def create_party(
         raise HTTPException(400, "Персонаж не находится в локации")
     if await get_active_battle_for_character(db, req.leader_character_id):
         raise HTTPException(400, "Персонаж уже в бою")
+    await _ensure_not_activity_locked(db, req.leader_character_id)
 
     # Return the existing forming party if the leader already has one.
     existing = await db.execute(
@@ -6180,6 +6388,7 @@ async def invite_to_party(
         raise HTTPException(400, "Игрок должен быть в той же локации")
     if await get_active_battle_for_character(db, req.character_id):
         raise HTTPException(400, "Игрок уже в бою")
+    await _ensure_not_activity_locked(db, req.character_id, subject="Игрок")
 
     members = await _party_members(db, party.id)
     if any(m.character_id == req.character_id for m in members):
@@ -6248,6 +6457,7 @@ async def respond_to_party(
             raise HTTPException(400, "Вы должны быть в локации группы")
         if await get_active_battle_for_character(db, req.character_id):
             raise HTTPException(400, "Вы уже в бою")
+        await _ensure_not_activity_locked(db, req.character_id)
         member.status = PartyMemberStatus.accepted
     else:
         member.status = PartyMemberStatus.declined
@@ -6357,6 +6567,7 @@ async def start_party_battle(
     for m in members:
         if await get_active_battle_for_character(db, m.character_id):
             raise HTTPException(400, "Один из участников уже в бою")
+        await _ensure_not_activity_locked(db, m.character_id)
 
     player_ids = [m.character_id for m in members]
     teams = [m.team for m in members]

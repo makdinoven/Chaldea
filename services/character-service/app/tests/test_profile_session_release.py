@@ -127,6 +127,7 @@ def test_profile_payload_survives_early_session_close(
     assert body["character_name"] == "Дудка"
     assert body["character_photo"] == "avatar_1.png"
     assert body["character_level"] == 7
+    assert body["character_class_id"] == 1
     assert body["current_location_id"] == 3
     assert body["user_id"] == 42
     assert body["user_nickname"] == "Dudka"

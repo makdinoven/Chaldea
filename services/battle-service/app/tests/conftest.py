@@ -34,3 +34,31 @@ _mock_cm.__aenter__ = AsyncMock(return_value=_mock_conn)
 _mock_cm.__aexit__ = AsyncMock(return_value=False)
 _mock_engine.begin = MagicMock(return_value=_mock_cm)
 database.engine = _mock_engine
+
+
+# ---------------------------------------------------------------------------
+# FEAT-175 activity lock. The lock lives in two `characters` columns owned by
+# character-service; the mocked DBs in this suite don't model them. Default:
+# "not locked" and "not a dungeon battle". Tests that exercise the real query
+# opt out with @pytest.mark.real_activity_lock (see test_activity_lock.py).
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+import activity_lock as _activity_lock  # noqa: E402
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_activity_lock: run the real FEAT-175 activity-lock query",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _activity_lock_default_unlocked(request, monkeypatch):
+    if request.node.get_closest_marker("real_activity_lock"):
+        return
+
+    async def _unlocked(db, character_id):
+        return _activity_lock.compute_lock(None, None)
+
+    monkeypatch.setattr(_activity_lock, "get_activity_lock", _unlocked)

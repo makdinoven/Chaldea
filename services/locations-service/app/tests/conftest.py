@@ -54,3 +54,31 @@ def client():
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# FEAT-175 activity lock. The lock lives in two `characters` columns owned by
+# character-service; most tests here run against mocked DBs or hand-written
+# table mirrors that don't carry them. Default: "not locked". Tests that
+# exercise the real query opt out with @pytest.mark.real_activity_lock
+# (see test_activity_lock.py).
+# ---------------------------------------------------------------------------
+
+import activity_lock as _activity_lock  # noqa: E402
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_activity_lock: run the real FEAT-175 activity-lock query",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _activity_lock_default_unlocked(request, monkeypatch):
+    if request.node.get_closest_marker("real_activity_lock"):
+        return
+
+    async def _unlocked(db, character_id):
+        return _activity_lock.compute_lock(None, None)
+
+    monkeypatch.setattr(_activity_lock, "get_activity_lock", _unlocked)

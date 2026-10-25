@@ -4,6 +4,7 @@ import re
 import time
 import models, schemas
 import locations_client
+import activity_lock
 from config import settings
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
@@ -1678,7 +1679,13 @@ def replace_mob_spawns(db: Session, template_id: int, spawns: list):
 # Mob Spawning & Lifecycle (Phase 3)
 # ============================================================
 
-def spawn_mob_from_template(db: Session, template_id: int, location_id: int, spawn_type: str = "random"):
+def spawn_mob_from_template(
+    db: Session,
+    template_id: int,
+    location_id: int,
+    spawn_type: str = "random",
+    stat_multiplier: float = 1.0,
+):
     """
     Create a mob instance from a template:
     1. Load MobTemplate
@@ -1724,7 +1731,13 @@ def spawn_mob_from_template(db: Session, template_id: int, location_id: int, spa
         # Fallback: generate from subrace
         attributes = generate_attributes_for_subrace(db, template.id_subrace)
 
-    attributes_response = _sync_send_attributes_request(new_character.id, dict(attributes))
+    attributes = dict(attributes)
+    # FEAT-175: dungeon `mob_multiplier` scales every numeric base stat
+    # (health, strength, agility, ...). 1.0 = template as authored.
+    if stat_multiplier and stat_multiplier != 1.0:
+        attributes = _scale_mob_attributes(attributes, stat_multiplier)
+
+    attributes_response = _sync_send_attributes_request(new_character.id, attributes)
 
     if attributes_response:
         new_character.id_attributes = attributes_response.get("id")
@@ -1765,6 +1778,21 @@ def spawn_mob_from_template(db: Session, template_id: int, location_id: int, spa
     logger.info(f"ActiveMob ID {active_mob.id} создан на локации {location_id}")
 
     return active_mob, new_character
+
+
+def _scale_mob_attributes(attributes: dict, multiplier: float) -> dict:
+    """Scale numeric mob base attributes; non-numeric values pass through.
+    Positive stats never drop below 1 so a weak multiplier can't zero them."""
+    scaled = {}
+    for key, value in attributes.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            scaled[key] = value
+            continue
+        new_value = int(round(value * multiplier))
+        if value > 0 and new_value < 1:
+            new_value = 1
+        scaled[key] = new_value
+    return scaled
 
 
 def _sync_send_attributes_request(character_id: int, attributes: dict):
@@ -1911,9 +1939,11 @@ def get_mobs_at_location(db: Session, location_id: int):
 
     # 1. Lazy respawn: find dead mobs at this location whose respawn_at <= now
     now = datetime.utcnow()
+    # FEAT-175: dungeon mobs never respawn on (or show up at) the surface.
     dead_mobs = db.query(ActiveMob).filter(
         ActiveMob.location_id == location_id,
         ActiveMob.status == "dead",
+        ActiveMob.spawn_type != "dungeon",
         ActiveMob.respawn_at != None,
         ActiveMob.respawn_at <= now,
     ).all()
@@ -1952,6 +1982,7 @@ def get_mobs_at_location(db: Session, location_id: int):
         ActiveMob.location_id == location_id,
         ActiveMob.status.in_(["alive", "in_battle"]),
         ActiveMob.pack_group_id == None,  # noqa: E711
+        ActiveMob.spawn_type != "dungeon",
     ).all()
 
     # FEAT-152: one batched query for persisted HP (after the lazy-respawn pass,
@@ -2441,7 +2472,9 @@ def update_active_mob_status(db: Session, character_id: int, new_status: str):
         active_mob.killed_at = datetime.utcnow()
         # Individual respawn only for standalone mobs. Pack members respawn at the
         # pack level (all-dead rollup below), never individually.
-        if active_mob.pack_group_id is None:
+        # Dungeon mobs (FEAT-175) never respawn — they are despawned by
+        # dungeon-service when the fight is over.
+        if active_mob.pack_group_id is None and active_mob.spawn_type != "dungeon":
             template = db.query(MobTemplate).filter(MobTemplate.id == active_mob.mob_template_id).first()
             if template and template.respawn_enabled and template.respawn_seconds:
                 active_mob.respawn_at = datetime.utcnow() + timedelta(seconds=template.respawn_seconds)
@@ -3506,6 +3539,11 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     )
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    # FEAT-175: no teleport while in a dungeon run or knocked out.
+    lock_text = activity_lock.lock_message(activity_lock.lock_for_character(character))
+    if lock_text:
+        raise HTTPException(status_code=409, detail=lock_text)
 
     source = db.query(Character).filter(Character.id == source_npc_id).first()
     if not source or not source.is_npc:

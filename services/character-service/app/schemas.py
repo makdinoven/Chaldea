@@ -447,10 +447,14 @@ class CharacterProfileResponse(BaseModel):
         character_title_rarity: Optional[str] = None
         character_name: str
         character_level: Optional[int] = None
+        # Board miniatures (FEAT-175): 1 warrior, 2 rogue, 3 mage.
+        character_class_id: Optional[int] = None
         user_id: Optional[int] = None
         user_nickname: Optional[str] = None
         current_location_id: Optional[int] = None
         travel_cooldown_until: Optional[datetime] = None
+        # FEAT-175: {"locked", "reason": "dungeon"|"unconscious"|null, "until", "dungeon_session_id"}
+        activity_lock: Optional[dict] = None
 
         class Config:
             orm_mode = True
@@ -1046,6 +1050,45 @@ class TrySpawnResponse(BaseModel):
 class SpawnDungeonMobsRequest(BaseModel):
     mob_template_ids: List[int]
     location_id: int
+    # FEAT-175: dungeon `mob_multiplier`, scales the mobs' base stats.
+    stat_multiplier: float = 1.0
+
+    @validator("stat_multiplier")
+    def validate_stat_multiplier(cls, v):
+        if v <= 0 or v > 10:
+            raise ValueError("stat_multiplier должен быть в диапазоне (0, 10]")
+        return v
+
+
+class DespawnDungeonMobsRequest(BaseModel):
+    character_ids: List[int]
+
+
+class ActivityLockResponse(BaseModel):
+    locked: bool
+    reason: Optional[str] = None
+    until: Optional[str] = None
+    dungeon_session_id: Optional[int] = None
+
+
+class DungeonLockRequest(BaseModel):
+    character_ids: List[int]
+    session_id: int
+
+
+class KnockoutRequest(BaseModel):
+    character_ids: List[int]
+    seconds: int
+    # Only clear a dungeon lock that belongs to this session (None = any).
+    session_id: Optional[int] = None
+    # Put the characters back to this location if they are elsewhere.
+    return_location_id: Optional[int] = None
+
+    @validator("seconds")
+    def validate_seconds(cls, v):
+        if v <= 0 or v > 7 * 24 * 3600:
+            raise ValueError("seconds должен быть в диапазоне (0, 604800]")
+        return v
 
 
 class SpawnDungeonMobsResponse(BaseModel):

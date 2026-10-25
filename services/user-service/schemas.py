@@ -142,6 +142,9 @@ class CharacterShortPublic(BaseModel):
 
 class CharacterShort(CharacterShortPublic):
     currency_balance: Optional[int] = None
+    # FEAT-175: activity lock of the owner's current character (dungeon run /
+    # knocked out) — {"locked", "reason", "until", "dungeon_session_id"}.
+    activity_lock: Optional[dict] = None
 
 class ClearCurrentCharacterRequest(BaseModel):
     character_id: int

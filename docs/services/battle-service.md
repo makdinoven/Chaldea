@@ -615,3 +615,27 @@ FEAT-171 объявила приватным.
 `build_percent_resist_buffs`) плюс боевые `percent_resist*`. Ниже нуля — урон проходит сильнее.
 Шанс наложения эффекта уменьшается на `res_effects − vul_effects` (отрицательный итог его повышает).
 До этого колонки `vul_*` суммировались со снаряжения в атрибуты, но в бою не читались вовсе.
+
+
+## Подземелья и блокировка активности (FEAT-175)
+
+* `battles.dungeon_session_id` (миграция `008_dungeon_session_id`) помечает бои подземелья.
+* `POST /battles/internal/dungeon` (X-Internal-Token) `{dungeon_session_id, players:[{character_id, team}]}` —
+  создание боя подземелья: команда 1 должна быть заблокирована именно в этом забеге (единственное
+  исключение из блокировки), команда 2 — мобы. Ответ — `BattleCreated`.
+* Конец такого боя (`_finalize_battle` и `_force_finish_battle`) шлёт в dungeon-service
+  `POST /dungeons/internal/battle-callback` `{battle_id, session_id, winner_team, defeated_characters, aborted}`
+  (фоновая задача, 3 попытки при 5xx/сетевой ошибке; промах подстрахован опросом).
+* `GET /battles/internal/{id}/result` (X-Internal-Token) — итог после истечения Redis-состояния:
+  `{status, winner_team, aborted, dungeon_session_id}` (победитель — по `battle_history`).
+* `_ensure_not_activity_locked` отказывает (409) во всех путях создания боя, PvP-вызовах/нападениях,
+  лобби, заявках на вступление и их одобрении; заблокированные соотрядцы тихо исключаются из
+  групповых атак (`_filter_available`, party mob/pack attack).
+
+Формулировки отказа одинаковы во всех сервисах (`activity_lock.lock_message`):
+«Персонаж находится в подземелье» / «Персонаж без сознания до HH:MM МСК» (для второго
+участника — «Цель …», «Целевой персонаж …», «Другой участник обмена …»). Код ответа — **409**.
+Колонки `characters.dungeon_session_id` / `characters.unconscious_until` пишет только
+character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
+сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
+«не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.

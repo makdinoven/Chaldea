@@ -16,6 +16,7 @@ import httpx
 import schemas
 import crud
 import visibility
+import activity_lock
 from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
 from auth_http import (
@@ -169,6 +170,11 @@ async def verify_character_ownership(db: AsyncSession, character_id: int, user_i
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+
+async def check_not_activity_locked(db: AsyncSession, character_id: int):
+    """FEAT-175: 409 if the character is in a dungeon run or knocked out."""
+    await activity_lock.check_not_activity_locked(db, character_id)
 
 
 async def check_not_in_battle(db: AsyncSession, character_id: int, message: str = "Действие заблокировано во время боя"):
@@ -854,6 +860,7 @@ async def create_new_post(
     current_user=Depends(get_current_user_via_http),
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
+    await check_not_activity_locked(session, post_data.character_id)
     await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
     await check_not_gathering(session, post_data.character_id, "Вы не можете писать посты во время добычи")
 
@@ -1193,6 +1200,7 @@ async def tag_player(
 
     # Verify character ownership
     await verify_character_ownership(session, body.sender_character_id, current_user.id)
+    await check_not_activity_locked(session, body.sender_character_id)
 
     # Get sender character name from character-service
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1240,6 +1248,7 @@ async def move_and_post(
     """
     # 0. Проверяем, что персонаж принадлежит текущему пользователю
     await verify_character_ownership(session, movement.character_id, current_user.id)
+    await check_not_activity_locked(session, movement.character_id)
     await check_not_in_battle(session, movement.character_id, "Вы не можете покинуть локацию во время боя")
     await check_not_gathering(session, movement.character_id, "Вы не можете покинуть локацию во время добычи")
 
@@ -1523,6 +1532,7 @@ async def quick_move(
     """
     # 0. Проверяем владение персонажем и отсутствие боя
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
     await check_not_in_battle(session, body.character_id, "Вы не можете покинуть локацию во время боя")
     await check_not_gathering(session, body.character_id, "Вы не можете покинуть локацию во время добычи")
 
@@ -2149,6 +2159,7 @@ async def drop_loot(
     """
     # 1. Проверяем принадлежность персонажа
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
 
     # 2. Проверяем, что персонаж находится в данной локации
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -2217,6 +2228,7 @@ async def pickup_loot(
     """
     # 1. Проверяем принадлежность персонажа
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
 
     # 2. Проверяем, что персонаж находится в данной локации
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -2792,6 +2804,7 @@ async def buy_from_npc(
     """
     # 1. Verify ownership
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
 
     # 0/FEAT-145: gate NPC trading behind an npc_dialogue post naming this NPC
     await _require_npc_gate(session, body.character_id, npc_id)
@@ -2918,6 +2931,7 @@ async def sell_to_npc(
     """
     # 1. Verify ownership
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
 
     # 0/FEAT-145: gate NPC trading behind an npc_dialogue post naming this NPC
     await _require_npc_gate(session, body.character_id, npc_id)
@@ -3089,6 +3103,7 @@ async def accept_quest(
 ):
     """Accept a quest."""
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
     cq = await crud.accept_quest(session, quest_id, body.character_id)
     return {"detail": "Квест принят", "character_quest_id": cq.id}
 
@@ -3121,6 +3136,7 @@ async def complete_quest(
     Awards rewards: currency (direct SQL), exp (direct SQL), items (inventory-service).
     """
     await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_activity_locked(session, body.character_id)
 
     # Check if quest is completable
     check = await crud.check_quest_completable(session, body.character_id, quest_id)

@@ -14,6 +14,12 @@ class PlayerIn(BaseModel):
     team: int | None = None
 
 
+class DungeonBattleCreate(BaseModel):
+    """FEAT-175: internal create used by dungeon-service only."""
+    dungeon_session_id: int
+    players: List[PlayerIn]
+
+
 class BattleCreate(BaseModel):
     players: List[PlayerIn]
     battle_type: Optional[str] = None

@@ -19,9 +19,13 @@ async def create_battle(
     teams: list[int],
     battle_type: models.BattleType = models.BattleType.pve,
     location_id: int = None,
+    dungeon_session_id: int = None,
 ) -> tuple[models.Battle, list[models.BattleParticipant]]:
 
-    battle = models.Battle(battle_type=battle_type, location_id=location_id)
+    battle = models.Battle(
+        battle_type=battle_type, location_id=location_id,
+        dungeon_session_id=dungeon_session_id,
+    )
     db.add(battle)
     await db.flush()
 

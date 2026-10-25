@@ -63,6 +63,9 @@ class Character(Base):
     npc_status = Column(Enum('alive', 'dead', name='npc_status_enum'), nullable=False, default='alive', server_default='alive')
     last_teleport_at = Column(DateTime, nullable=True)
     travel_cooldown_until = Column(TIMESTAMP, nullable=True, default=None)
+    # FEAT-175 activity lock (see activity_lock.py): in a dungeon run / knocked out.
+    dungeon_session_id = Column(Integer, nullable=True, default=None)
+    unconscious_until = Column(DateTime, nullable=True, default=None)
     # FEAT-154: registration overhaul (all nullable, no backfill)
     origin_id = Column(Integer, nullable=True)  # -> locations-service origin_countries.id (no FK)
     registered_at = Column(TIMESTAMP, nullable=True, default=None)
