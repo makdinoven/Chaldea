@@ -57,6 +57,9 @@ import ClientPrefsEffects from "./ClientPrefsEffects";
 import BestiaryPage from "../Bestiary/BestiaryPage";
 import ArchivePage from "../pages/ArchivePage/ArchivePage";
 import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
+import EpisodesPage from "../pages/EpisodesPage/EpisodesPage";
+import EpisodePage from "../pages/EpisodesPage/EpisodePage";
+import EpisodeLocationPage from "../pages/EpisodesPage/EpisodeLocationPage";
 import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
 import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
 import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
@@ -153,6 +156,9 @@ const App = () => {
             <Route path="bestiary" element={<BestiaryPage />} />
             <Route path="archive" element={<ArchivePage />} />
             <Route path="archive/:slug" element={<ArchiveArticlePage />} />
+            <Route path="episodes" element={<EpisodesPage />} />
+            <Route path="episodes/:episodeId" element={<EpisodePage />} />
+            <Route path="episodes/:episodeId/location/:locationId" element={<EpisodeLocationPage />} />
             <Route path="admin" element={
               <ProtectedRoute requiredRole="editor">
                 <AdminPage />

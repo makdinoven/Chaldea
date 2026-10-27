@@ -71,6 +71,10 @@ export const navItems: NavItem[] = [
     path: '/guide',
   },
   {
+    label: 'ЭПИЗОДЫ',
+    path: '/episodes',
+  },
+  {
     label: 'СОБЫТИЯ',
     path: '/events',
   },
