@@ -4271,6 +4271,9 @@ async def admin_remove_origin_starting_point_route(
 # --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
+# FEAT-179: before `router`, whose `/locations/{location_id}` would swallow `/locations/episodes`.
+import episodes  # noqa: E402
+app.include_router(episodes.router)
 app.include_router(registration_router)
 app.include_router(router)
 app.include_router(rules_router)

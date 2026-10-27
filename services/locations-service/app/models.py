@@ -906,3 +906,122 @@ class PostDraft(Base):
     def is_active(self) -> bool:
         """Это живой черновик своей локации, а не архивная строка."""
         return self.active == 1
+
+
+# ---------------------------------------------------------------------------
+# Эпизоды (FEAT-179): игроки ведут свои истории вне основного мира. Раздел со
+# своими локациями, участниками и мини-ролями; посты пишутся от мини-ролей и
+# ничего не дают основному персонажу.
+# ---------------------------------------------------------------------------
+
+class Episode(Base):
+    __tablename__ = "episodes"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, nullable=False)
+    category = Column(Enum('world', 'separate', name='episode_category'), nullable=False)
+    title = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    # Only members (and the top admin role) open a private episode.
+    is_private = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Hidden by staff: seen by its members and staff only.
+    is_hidden = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('ix_episodes_owner', 'owner_user_id'),
+    )
+
+
+class EpisodeMember(Base):
+    __tablename__ = "episode_members"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    episode_id = Column(BigInteger, ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+    role = Column(Enum('owner', 'master', 'player', name='episode_member_role'), nullable=False, default='player')
+    joined_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('episode_id', 'user_id', name='uq_episode_member'),
+        Index('ix_episode_members_user', 'user_id'),
+    )
+
+
+class EpisodeRole(Base):
+    """A mini-role: a slot the owner or a master gives a member; its holder
+    names and dresses it. A role that already wrote posts is archived instead
+    of deleted, so its posts keep their author."""
+    __tablename__ = "episode_roles"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    episode_id = Column(BigInteger, ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+    name = Column(String(100), nullable=False)
+    avatar_url = Column(String(512), nullable=True)
+    description = Column(Text, nullable=True)
+    archived = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('ix_episode_roles_episode', 'episode_id'),
+    )
+
+
+class EpisodeLocation(Base):
+    __tablename__ = "episode_locations"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    episode_id = Column(BigInteger, ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('ix_episode_locations_episode', 'episode_id'),
+    )
+
+
+class EpisodePost(Base):
+    __tablename__ = "episode_posts"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    location_id = Column(BigInteger, ForeignKey("episode_locations.id", ondelete="CASCADE"), nullable=False)
+    role_id = Column(BigInteger, ForeignKey("episode_roles.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+    content = Column(MEDIUMTEXT, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    edited_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        Index('ix_episode_posts_location', 'location_id', 'id'),
+    )
+
+
+class EpisodePostLike(Base):
+    __tablename__ = "episode_post_likes"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    post_id = Column(BigInteger, ForeignKey("episode_posts.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('post_id', 'user_id', name='uq_episode_post_like'),
+    )
+
+
+class EpisodeJoinRequest(Base):
+    __tablename__ = "episode_join_requests"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    episode_id = Column(BigInteger, ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+    message = Column(String(500), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('episode_id', 'user_id', name='uq_episode_join_request'),
+    )

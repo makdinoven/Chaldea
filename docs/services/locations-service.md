@@ -580,3 +580,35 @@ Country -> Region -> District -> Location
 character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
 сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
 «не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.
+
+## Эпизоды (FEAT-179, миграция 045)
+
+Истории игроков вне основного мира: раздел («Истории мира» / «Отдельные истории») со своими локациями,
+участниками и мини-ролями. Посты пишутся от мини-роли и ничего не дают основному персонажу (ни опыта, ни
+боёв, ни лимитов). Код целиком в `app/episodes.py` (роутер подключён в `main.py` раньше `router`, иначе
+`/locations/{location_id}` перехватил бы `/locations/episodes`).
+
+Таблицы: `episodes`, `episode_members` (owner/master/player), `episode_roles` (мини-роли; роль с постами
+не удаляется, а уходит в архив), `episode_locations`, `episode_posts` (MEDIUMTEXT), `episode_post_likes`,
+`episode_join_requests`. Имена и аватары игроков читаются сырым SQL из `users`.
+
+Доступ:
+- закрытый эпизод (`is_private`) видят и читают только участники и роль `admin`; модераторы — нет; в списке
+  посторонним он не показывается;
+- скрытый модерацией (`is_hidden`) видят участники и admin/moderator;
+- локации, участников, роли и заявки ведут владелец и мастера; мастеров назначает и эпизод удаляет только
+  владелец (и admin); у одного игрока может быть несколько ролей; роль оформляет её владелец или мастер;
+- писать может только участник от своей неархивной роли; править пост — автор или admin; удалять — автор,
+  владелец/мастер, admin/moderator;
+- не больше 3 своих эпизодов на игрока (admin без ограничения).
+
+Эндпоинты (префикс `/locations/episodes`): `GET/POST ""`, `GET/PUT/DELETE /{id}`, `POST /{id}/hide`,
+`POST /{id}/locations`, `GET/PUT/DELETE /{id}/locations/{lid}`, `GET/POST /{id}/locations/{lid}/posts`
+(`before_id`, страница 30), `PUT/DELETE /{id}/posts/{pid}`, `POST/DELETE /{id}/posts/{pid}/like`,
+`GET /{id}/user-search?q`, `POST /{id}/members`, `PUT/DELETE /{id}/members/{uid}`, `POST /{id}/roles`,
+`PUT/DELETE /{id}/roles/{rid}`, `POST /{id}/requests`, `DELETE /{id}/requests/mine`, `GET /{id}/requests`,
+`POST /{id}/requests/{rq}/accept|decline`. Уведомления (RabbitMQ) — о приёме в эпизод, выданной роли и
+новой заявке.
+
+Картинки — `POST /photo/upload_episode_image` (photo-service, любой вошедший игрок, папка `episode_images/`);
+сервис принимает только https-ссылки из этой папки. Тесты: `tests/test_episodes.py`.
