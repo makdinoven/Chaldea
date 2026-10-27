@@ -976,6 +976,29 @@ async def upload_cosmetic_background_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/photo/upload_episode_image")
+async def upload_episode_image(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Picture for a player's episode, its location or a mini-role (FEAT-179).
+    Not tied to an entity — the URL is saved by locations-service, which only
+    accepts URLs from this `episode_images/` folder."""
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = f"episode_{current_user.id}_{uuid4().hex}_{int(time.time())}{result.extension}"
+        image_url = upload_file_to_s3(
+            result.data, unique_filename, subdirectory="episode_images", content_type=result.content_type
+        )
+        return {"image_url": image_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/photo/upload_ticket_attachment")
 async def upload_ticket_attachment(
     file: UploadFile = File(...),

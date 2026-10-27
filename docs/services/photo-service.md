@@ -41,6 +41,7 @@ photo-service/
 | POST | `/photo/change_skill_rank_image` | Изображение ранга навыка |
 | POST | `/photo/change_item_image` | Изображение предмета: оригинал → `items.full_image`, иконка по `crop_x/crop_y/crop_width/crop_height` (пиксели оригинала, все четыре или ни одного) → `items.image` |
 | POST | `/photo/recrop_item_image` | Перевырезать иконку предмета из сохранённого `full_image` (404, если оригинала нет) |
+| POST | `/photo/upload_episode_image` | Картинка эпизода, его локации или мини-роли (FEAT-179): любой вошедший игрок, папка `episode_images/`, без записи в БД — URL сохраняет locations-service |
 
 ## Обработка изображений
 
