@@ -22,6 +22,18 @@ export const originalOf = (url: string): string => {
   return at === -1 ? url : url.slice(0, at);
 };
 
+/**
+ * Why a picked file cannot be a picture, or null. "GIFs" saved from Tenor,
+ * Discord and the like are often MP4 videos named `*.gif.mp4` — the browser
+ * cannot draw them and photo-service rejects them.
+ */
+export const notPictureMessage = (file: File): string | null => {
+  if (file.type.startsWith('image/')) return null;
+  return file.type.startsWith('video/')
+    ? 'Это видео, а не гифка — такие часто скачиваются с Tenor и Discord. Сохраните анимацию в формате GIF и загрузите снова'
+    : 'Это не картинка. Подходят JPEG, PNG, WebP и GIF';
+};
+
 /** Appends the crop square to a form, as the photo-service fields want it. */
 export const appendCrop = (form: FormData, crop?: CropArea | null) => {
   if (!crop) return;

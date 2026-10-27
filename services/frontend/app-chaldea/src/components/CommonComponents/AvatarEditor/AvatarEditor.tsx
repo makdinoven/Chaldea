@@ -4,7 +4,7 @@ import Cropper, { type Area } from 'react-easy-crop';
 import toast from 'react-hot-toast';
 import ModalShell from '../ModalShell/ModalShell';
 import { apiErrorMessage } from '../../../api/errors';
-import { originalOf, type CropArea } from '../../../api/avatarCrop';
+import { notPictureMessage, originalOf, type CropArea } from '../../../api/avatarCrop';
 
 /*
   Choosing an avatar's frame: the player drags and zooms the picture under a
@@ -68,6 +68,11 @@ const AvatarEditor = ({ title = 'Аватар', currentUrl, round = false, onClo
 
   const pick = (picked: File | undefined) => {
     if (!picked) return;
+    const notPicture = notPictureMessage(picked);
+    if (notPicture) {
+      toast.error(notPicture);
+      return;
+    }
     if (picked.size > MAX_FILE_SIZE) {
       toast.error('Файл слишком большой. Максимальный размер: 15 МБ');
       return;
@@ -124,7 +129,7 @@ const AvatarEditor = ({ title = 'Аватар', currentUrl, round = false, onClo
         </>
       }
     >
-      <input ref={input} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden"
+      <input ref={input} type="file" accept="image/*" className="hidden"
         onChange={(e) => {
           pick(e.target.files?.[0]);
           e.target.value = '';

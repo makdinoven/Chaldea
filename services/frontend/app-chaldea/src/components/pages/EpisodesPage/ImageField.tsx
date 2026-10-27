@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { uploadEpisodeImage } from '../../../api/episodes';
-import { recropImage } from '../../../api/avatarCrop';
+import { notPictureMessage, recropImage } from '../../../api/avatarCrop';
 import { apiErrorMessage } from '../../../api/errors';
 import AvatarEditor from '../../CommonComponents/AvatarEditor/AvatarEditor';
 
@@ -21,6 +21,12 @@ const ImageField = ({ label, value, onChange, round = false }: ImageFieldProps) 
 
   const pick = async (file: File | undefined) => {
     if (!file) return;
+    const notPicture = notPictureMessage(file);
+    if (notPicture) {
+      toast.error(notPicture);
+      if (input.current) input.current.value = '';
+      return;
+    }
     setBusy(true);
     try {
       onChange(await uploadEpisodeImage(file));
@@ -61,7 +67,7 @@ const ImageField = ({ label, value, onChange, round = false }: ImageFieldProps) 
           </button>
         )}
       </div>
-      <input ref={input} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden"
+      <input ref={input} type="file" accept="image/*" className="hidden"
         onChange={(e) => void pick(e.target.files?.[0])} />
       {framing && (
         <AvatarEditor
