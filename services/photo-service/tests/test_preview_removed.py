@@ -98,7 +98,7 @@ class TestChangeUserAvatarStillWorks:
     """Verify that the user avatar upload endpoint still functions correctly."""
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_upload_user_avatar_returns_200(self, mock_auth, mock_s3, mock_db, client):
         """POST with valid image + correct auth -> 200 with avatar_url."""
@@ -118,7 +118,7 @@ class TestChangeUserAvatarStillWorks:
         assert body["message"] == "Фото успешно загружено"
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_upload_user_avatar_no_preview_side_effect(self, mock_auth, mock_s3, mock_db, client):
         """update_user_avatar should be called WITHOUT preview table writes."""
@@ -144,7 +144,7 @@ class TestChangeCharacterAvatarStillWorks:
     """Verify that the character avatar upload endpoint still functions correctly."""
 
     @patch("main.update_character_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
     @patch("main.get_character_owner_id", return_value=42)
     @patch("auth_http.requests.get")
     def test_upload_character_avatar_returns_200(self, mock_auth, mock_owner, mock_s3, mock_db, client):
@@ -165,7 +165,7 @@ class TestChangeCharacterAvatarStillWorks:
         assert body["message"] == "Фото успешно загружено"
 
     @patch("main.update_character_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
     @patch("main.get_character_owner_id", return_value=42)
     @patch("auth_http.requests.get")
     def test_upload_character_avatar_no_preview_side_effect(self, mock_auth, mock_owner, mock_s3, mock_db, client):

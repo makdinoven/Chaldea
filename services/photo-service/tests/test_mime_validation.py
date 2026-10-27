@@ -125,7 +125,7 @@ class TestMimeAccepted:
     """Valid image MIME types must pass validation and reach S3 upload."""
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_image_jpeg_accepted(self, mock_auth, mock_s3, mock_db, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -140,7 +140,7 @@ class TestMimeAccepted:
         assert response.status_code == 200
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_image_png_accepted(self, mock_auth, mock_s3, mock_db, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -155,7 +155,7 @@ class TestMimeAccepted:
         assert response.status_code == 200
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_image_webp_accepted(self, mock_auth, mock_s3, mock_db, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -170,7 +170,7 @@ class TestMimeAccepted:
         assert response.status_code == 200
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_image_gif_accepted(self, mock_auth, mock_s3, mock_db, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)

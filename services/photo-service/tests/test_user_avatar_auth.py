@@ -90,7 +90,7 @@ class TestChangeUserAvatarAuth:
         assert "аватар" in response.json()["detail"].lower() or "свой" in response.json()["detail"].lower()
 
     @patch("main.update_user_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_avatars/photo.webp")
     @patch("auth_http.requests.get")
     def test_correct_user_returns_200(self, mock_auth, mock_s3, mock_db, client):
         """Authenticated as user 42, uploading for user 42 -> 200."""
