@@ -77,7 +77,7 @@ def db_probe():
 
 class TestRequestAvatarUploadSuccess:
 
-    @patch("main.upload_file_to_s3", return_value=S3_URL)
+    @patch("avatar_crop.upload_file_to_s3", return_value=S3_URL)
     @patch("auth_http.requests.get")
     def test_returns_200_with_permanent_avatar_url(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -94,7 +94,7 @@ class TestRequestAvatarUploadSuccess:
         assert body["avatar_url"] == S3_URL
         assert body["avatar_url"].startswith("https://")
 
-    @patch("main.upload_file_to_s3", return_value=S3_URL)
+    @patch("avatar_crop.upload_file_to_s3", return_value=S3_URL)
     @patch("auth_http.requests.get")
     def test_uploads_into_the_drafts_subdirectory(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -117,7 +117,7 @@ class TestRequestAvatarUploadSuccess:
         assert filename.startswith("char_draft_")
         assert filename.endswith(".webp")
 
-    @patch("main.upload_file_to_s3", return_value=S3_URL)
+    @patch("avatar_crop.upload_file_to_s3", return_value=S3_URL)
     @patch("auth_http.requests.get")
     def test_any_authenticated_user_may_upload(self, mock_auth, mock_s3, client):
         """No role and no permission is required — the character has no owner yet."""
@@ -131,7 +131,7 @@ class TestRequestAvatarUploadSuccess:
         )
         assert resp.status_code == 200
 
-    @patch("main.upload_file_to_s3", return_value=S3_URL)
+    @patch("avatar_crop.upload_file_to_s3", return_value=S3_URL)
     @patch("auth_http.requests.get")
     def test_two_uploads_get_distinct_filenames(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -153,7 +153,7 @@ class TestRequestAvatarUploadSuccess:
 
 class TestRequestAvatarUploadWritesNothing:
 
-    @patch("main.upload_file_to_s3", return_value=S3_URL)
+    @patch("avatar_crop.upload_file_to_s3", return_value=S3_URL)
     @patch("auth_http.requests.get")
     def test_no_row_is_written(self, mock_auth, mock_s3, client, db_probe):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -177,7 +177,7 @@ class TestRequestAvatarUploadWritesNothing:
         import main
 
         params = inspect.signature(main.upload_character_request_avatar).parameters
-        assert set(params) == {"file", "current_user"}
+        assert set(params) == {"file", "current_user", "crop_x", "crop_y", "crop_width", "crop_height"}
 
 
 # ===========================================================================
@@ -186,7 +186,7 @@ class TestRequestAvatarUploadWritesNothing:
 
 class TestRequestAvatarUploadOversize:
 
-    @patch("main.upload_file_to_s3")
+    @patch("avatar_crop.upload_file_to_s3")
     @patch("auth_http.requests.get")
     def test_file_over_the_limit_returns_413(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -216,7 +216,7 @@ class TestRequestAvatarUploadOversize:
         ).json()["detail"]
         assert "слишком большой" in detail
 
-    @patch("main.upload_file_to_s3", return_value=S3_URL)
+    @patch("avatar_crop.upload_file_to_s3", return_value=S3_URL)
     @patch("auth_http.requests.get")
     def test_a_file_just_under_the_limit_is_accepted(self, mock_auth, mock_s3, client):
         """The boundary belongs to the accepted side."""
@@ -245,7 +245,7 @@ class TestRequestAvatarUploadOversize:
 
 class TestRequestAvatarUploadInvalidContent:
 
-    @patch("main.upload_file_to_s3")
+    @patch("avatar_crop.upload_file_to_s3")
     @patch("auth_http.requests.get")
     def test_disallowed_mime_returns_400(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -261,7 +261,7 @@ class TestRequestAvatarUploadInvalidContent:
         assert resp.status_code == 400
         mock_s3.assert_not_called()
 
-    @patch("main.upload_file_to_s3")
+    @patch("avatar_crop.upload_file_to_s3")
     @patch("auth_http.requests.get")
     def test_pdf_returns_400(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -275,7 +275,7 @@ class TestRequestAvatarUploadInvalidContent:
         )
         assert resp.status_code == 400
 
-    @patch("main.upload_file_to_s3")
+    @patch("avatar_crop.upload_file_to_s3")
     @patch("auth_http.requests.get")
     def test_image_mime_with_garbage_bytes_returns_400_not_413(
         self, mock_auth, mock_s3, client
@@ -303,7 +303,7 @@ class TestRequestAvatarUploadInvalidContent:
         )
         mock_s3.assert_not_called()
 
-    @patch("main.upload_file_to_s3")
+    @patch("avatar_crop.upload_file_to_s3")
     @patch("auth_http.requests.get")
     def test_empty_file_returns_400(self, mock_auth, mock_s3, client):
         mock_auth.return_value = _mock_response(200, USER_RESPONSE)
@@ -333,7 +333,7 @@ class TestRequestAvatarUploadAuth:
         )
         assert resp.status_code == 401
 
-    @patch("main.upload_file_to_s3")
+    @patch("avatar_crop.upload_file_to_s3")
     @patch("auth_http.requests.get")
     def test_invalid_token_returns_401_and_uploads_nothing(
         self, mock_auth, mock_s3, client

@@ -53,7 +53,7 @@ class TestCharacterAvatarUploadSuccess:
     """Happy-path: valid image, mocked S3 and DB, correct auth."""
 
     @patch("main.update_character_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
     @patch("main.get_character_owner_id", return_value=42)
     @patch("auth_http.requests.get")
     def test_upload_returns_200_with_avatar_url(self, mock_auth, mock_owner, mock_s3, mock_db, client):
@@ -75,7 +75,7 @@ class TestCharacterAvatarUploadSuccess:
         assert body["message"] == "Фото успешно загружено"
 
     @patch("main.update_character_avatar")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
+    @patch("avatar_crop.upload_file_to_s3", return_value="https://s3.example.com/bucket/character_avatars/photo.webp")
     @patch("main.get_character_owner_id", return_value=42)
     @patch("auth_http.requests.get")
     def test_upload_calls_s3_and_db(self, mock_auth, mock_owner, mock_s3, mock_db, client):

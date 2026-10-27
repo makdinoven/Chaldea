@@ -34,6 +34,7 @@ from utils import (
     convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime,
     normalize_orientation, crop_image, download_s3_file,
 )
+import avatar_crop
 from fastapi.middleware.cors import CORSMiddleware
 from auth_http import get_admin_user, get_current_user_via_http, require_permission
 
@@ -49,17 +50,54 @@ app.add_middleware(
 )
 
 @app.post("/photo/change_user_avatar_photo")
-async def change_user_avatar_photo(user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http), db: Session = Depends(get_db)):
+async def change_user_avatar_photo(
+    user_id: int = Form(...),
+    file: UploadFile = File(...),
+    crop_x: Optional[float] = Form(None),
+    crop_y: Optional[float] = Form(None),
+    crop_width: Optional[float] = Form(None),
+    crop_height: Optional[float] = Form(None),
+    current_user = Depends(get_current_user_via_http),
+    db: Session = Depends(get_db),
+):
+    """The avatar is the chosen square (crop_* in source pixels); the whole
+    picture is kept for re-framing (see avatar_crop)."""
     if user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Вы можете загружать только свой аватар")
     validate_image_mime(file)
+    box = avatar_crop.crop_box(crop_x, crop_y, crop_width, crop_height)
     try:
-        result = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("profile_photo", user_id, extension=result.extension)
-        avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="user_avatars", content_type=result.content_type)
+        avatar_url = avatar_crop.upload_framed(
+            file.file, f"profile_photo_{user_id}_{uuid4().hex}", "user_avatars", box)
         update_user_avatar(db, user_id, avatar_url)
         return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
+    except HTTPException:
+        raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/recrop_user_avatar")
+async def recrop_user_avatar(
+    user_id: int = Form(...),
+    crop_x: float = Form(...),
+    crop_y: float = Form(...),
+    crop_width: float = Form(...),
+    crop_height: float = Form(...),
+    current_user = Depends(get_current_user_via_http),
+    db: Session = Depends(get_db),
+):
+    """A new frame for the current avatar, cut from its whole picture."""
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете менять только свой аватар")
+    try:
+        avatar_url = avatar_crop.reframe(get_user_avatar(db, user_id), (crop_x, crop_y, crop_width, crop_height))
+        update_user_avatar(db, user_id, avatar_url)
+        return {"message": "Кадр аватара обновлён", "avatar_url": avatar_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/photo/delete_user_avatar_photo")
@@ -126,21 +164,61 @@ async def upload_chat_image(file: UploadFile = File(...), current_user = Depends
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/photo/change_character_avatar_photo")
-async def change_character_avatar_photo(character_id: int = Form(...), user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http), db: Session = Depends(get_db)):
+def _own_character(db: Session, character_id: int, current_user) -> None:
     owner_id = get_character_owner_id(db, character_id)
     if owner_id is None:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Вы можете загружать аватар только своего персонажа")
+
+
+@app.post("/photo/change_character_avatar_photo")
+async def change_character_avatar_photo(
+    character_id: int = Form(...),
+    user_id: int = Form(...),
+    file: UploadFile = File(...),
+    crop_x: Optional[float] = Form(None),
+    crop_y: Optional[float] = Form(None),
+    crop_width: Optional[float] = Form(None),
+    crop_height: Optional[float] = Form(None),
+    current_user = Depends(get_current_user_via_http),
+    db: Session = Depends(get_db),
+):
+    _own_character(db, character_id, current_user)
     validate_image_mime(file)
+    box = avatar_crop.crop_box(crop_x, crop_y, crop_width, crop_height)
     try:
-        result = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("profile_photo", character_id, extension=result.extension)
-        avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="character_avatars", content_type=result.content_type)
+        avatar_url = avatar_crop.upload_framed(
+            file.file, f"profile_photo_{character_id}_{uuid4().hex}", "character_avatars", box)
         update_character_avatar(db, character_id, avatar_url, user_id)
         return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
+    except HTTPException:
+        raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/recrop_character_avatar")
+async def recrop_character_avatar(
+    character_id: int = Form(...),
+    crop_x: float = Form(...),
+    crop_y: float = Form(...),
+    crop_width: float = Form(...),
+    crop_height: float = Form(...),
+    current_user = Depends(get_current_user_via_http),
+    db: Session = Depends(get_db),
+):
+    """A new frame for the character's avatar, cut from its whole picture."""
+    _own_character(db, character_id, current_user)
+    try:
+        avatar_url = avatar_crop.reframe(
+            get_character_avatar(db, character_id), (crop_x, crop_y, crop_width, crop_height))
+        update_character_avatar(db, character_id, avatar_url, current_user.id)
+        return {"message": "Кадр аватара обновлён", "avatar_url": avatar_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -979,19 +1057,48 @@ async def upload_cosmetic_background_image(
 @app.post("/photo/upload_episode_image")
 async def upload_episode_image(
     file: UploadFile = File(...),
+    crop_x: Optional[float] = Form(None),
+    crop_y: Optional[float] = Form(None),
+    crop_width: Optional[float] = Form(None),
+    crop_height: Optional[float] = Form(None),
     current_user=Depends(get_current_user_via_http),
 ):
     """Picture for a player's episode, its location or a mini-role (FEAT-179).
     Not tied to an entity — the URL is saved by locations-service, which only
     accepts URLs from this `episode_images/` folder."""
     validate_image_mime(file)
+    box = avatar_crop.crop_box(crop_x, crop_y, crop_width, crop_height)
     try:
-        result = convert_to_webp(file.file)
-        unique_filename = f"episode_{current_user.id}_{uuid4().hex}_{int(time.time())}{result.extension}"
-        image_url = upload_file_to_s3(
-            result.data, unique_filename, subdirectory="episode_images", content_type=result.content_type
-        )
+        image_url = avatar_crop.upload_framed(
+            file.file, f"episode_{current_user.id}_{uuid4().hex}_{int(time.time())}", "episode_images", box)
         return {"image_url": image_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Folders whose pictures belong to nothing in the DB yet (a mini-role or a
+# character request saves the URL itself), so any signed-in player may re-frame them.
+REFRAMABLE_FOLDERS = {"episode_images", "character_avatar_drafts"}
+
+
+@app.post("/photo/recrop_image")
+async def recrop_image(
+    image_url: str = Form(...),
+    crop_x: float = Form(...),
+    crop_y: float = Form(...),
+    crop_width: float = Form(...),
+    crop_height: float = Form(...),
+    current_user=Depends(get_current_user_via_http),
+):
+    """A new frame for a mini-role or character-request picture; returns its URL.
+    The caller stores it — nothing is written here."""
+    if avatar_crop.folder_of(image_url) not in REFRAMABLE_FOLDERS:
+        raise HTTPException(status_code=400, detail="Эту картинку нельзя перекадрировать")
+    try:
+        return {"image_url": avatar_crop.reframe(image_url, (crop_x, crop_y, crop_width, crop_height))}
     except HTTPException:
         raise
     except Exception as e:
@@ -1030,6 +1137,10 @@ async def upload_ticket_attachment(
 @app.post("/photo/upload_character_request_avatar")
 async def upload_character_request_avatar(
     file: UploadFile = File(...),
+    crop_x: Optional[float] = Form(None),
+    crop_y: Optional[float] = Form(None),
+    crop_width: Optional[float] = Form(None),
+    crop_height: Optional[float] = Form(None),
     current_user=Depends(get_current_user_via_http),
 ):
     """
@@ -1040,16 +1151,10 @@ async def upload_character_request_avatar(
     Доступно любому авторизованному пользователю.
     """
     validate_image_mime(file)
+    box = avatar_crop.crop_box(crop_x, crop_y, crop_width, crop_height)
     try:
-        result = convert_to_webp(file.file)
-        timestamp = int(time.time())
-        unique_filename = f"char_draft_{uuid4().hex}_{timestamp}{result.extension}"
-        avatar_url = upload_file_to_s3(
-            result.data,
-            unique_filename,
-            subdirectory="character_avatar_drafts",
-            content_type=result.content_type,
-        )
+        avatar_url = avatar_crop.upload_framed(
+            file.file, f"char_draft_{uuid4().hex}_{int(time.time())}", "character_avatar_drafts", box)
 
         return {"avatar_url": avatar_url}
     except HTTPException:
