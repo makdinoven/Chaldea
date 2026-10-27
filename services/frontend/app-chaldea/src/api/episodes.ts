@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { appendCrop, type CropArea } from './avatarCrop';
 
 /**
  * FEAT-179 — episodes: player-run stories outside the main world
@@ -193,10 +194,11 @@ export const listRequests = async (id: number) => (await axios.get<JoinRequest[]
 export const answerRequest = async (id: number, requestId: number, accept: boolean) =>
   axios.post(`${BASE}/${id}/requests/${requestId}/${accept ? 'accept' : 'decline'}`);
 
-/** Uploads a picture for an episode, its location or a mini-role; returns its URL. */
-export const uploadEpisodeImage = async (file: File) => {
+/** Uploads a picture for an episode, its location or (framed) a mini-role; returns its URL. */
+export const uploadEpisodeImage = async (file: File, crop?: CropArea) => {
   const form = new FormData();
   form.append('file', file);
+  appendCrop(form, crop);
   const { data } = await axios.post<{ image_url: string }>('/photo/upload_episode_image', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });

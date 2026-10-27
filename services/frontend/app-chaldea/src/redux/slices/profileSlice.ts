@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, createSelector, PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
+import { appendCrop, recropCharacterAvatar, type CropArea } from '../../api/avatarCrop';
 import type { RootState, AppDispatch } from '../store';
 import { getMe } from './userSlice';
 import type { EquipmentRules } from '../../utils/equipmentRules';
@@ -869,20 +870,25 @@ export const loadProfileData = createAsyncThunk<
 
 export const uploadCharacterAvatar = createAsyncThunk<
   string,
-  { characterId: number; userId: number; file: File },
+  { characterId: number; userId: number; file: File | null; crop: CropArea },
   { rejectValue: string; dispatch: AppDispatch }
 >(
   'profile/uploadCharacterAvatar',
-  async ({ characterId, userId, file }, thunkAPI) => {
+  // A new picture with its frame, or (no file) a new frame for the current one.
+  async ({ characterId, userId, file, crop }, thunkAPI) => {
     try {
-      const formData = new FormData();
-      formData.append('character_id', String(characterId));
-      formData.append('user_id', String(userId));
-      formData.append('file', file);
-
-      const response = await axios.post('/photo/change_character_avatar_photo', formData);
-
-      const avatarUrl: string = response.data.avatar_url;
+      let avatarUrl: string;
+      if (file) {
+        const formData = new FormData();
+        formData.append('character_id', String(characterId));
+        formData.append('user_id', String(userId));
+        formData.append('file', file);
+        appendCrop(formData, crop);
+        const response = await axios.post('/photo/change_character_avatar_photo', formData);
+        avatarUrl = response.data.avatar_url;
+      } else {
+        avatarUrl = await recropCharacterAvatar(characterId, crop);
+      }
 
       // Refresh header avatar via userSlice
       thunkAPI.dispatch(getMe());

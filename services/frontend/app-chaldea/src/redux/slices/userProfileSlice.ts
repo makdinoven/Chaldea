@@ -20,6 +20,7 @@ import {
   deleteProfileBackground as deleteProfileBackgroundApi,
 } from '../../api/userProfile';
 import { getMe } from './userSlice';
+import { recropUserAvatar, type CropArea } from '../../api/avatarCrop';
 import type { RootState } from '../store';
 
 // ── Types ──
@@ -284,10 +285,13 @@ export const removeFriendThunk = createAsyncThunk(
 
 export const uploadAvatar = createAsyncThunk(
   'userProfile/uploadAvatar',
-  async ({ userId, file }: { userId: number; file: File }, { dispatch }) => {
-    const { data } = await uploadUserAvatar(userId, file);
+  /** A new picture with its frame, or (no file) a new frame for the current one. */
+  async ({ userId, file, crop }: { userId: number; file: File | null; crop: CropArea }, { dispatch }) => {
+    const url = file
+      ? (await uploadUserAvatar(userId, file, crop)).data.avatar_url as string
+      : await recropUserAvatar(userId, crop);
     dispatch(getMe());
-    return data.avatar_url as string;
+    return url;
   },
 );
 

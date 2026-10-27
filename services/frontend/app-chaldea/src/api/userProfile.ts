@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { appendCrop, type CropArea } from './avatarCrop';
 import { BASE_URL_DEFAULT } from './api';
 
 // Wall Posts
@@ -43,10 +44,11 @@ export const fetchUserProfile = (userId: number) =>
   axios.get(`${BASE_URL_DEFAULT}/users/${userId}/profile`);
 
 // User Avatar Upload (via photo-service)
-export const uploadUserAvatar = (userId: number, file: File) => {
+export const uploadUserAvatar = (userId: number, file: File, crop?: CropArea | null) => {
   const formData = new FormData();
   formData.append('user_id', String(userId));
   formData.append('file', file);
+  appendCrop(formData, crop);
   return axios.post(`${BASE_URL_DEFAULT}/photo/change_user_avatar_photo`, formData);
 };
 

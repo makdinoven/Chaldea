@@ -1,5 +1,4 @@
-import { useRef } from 'react';
-import toast from 'react-hot-toast';
+import { useState } from 'react';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import {
   selectProfile,
@@ -9,8 +8,7 @@ import {
 } from '../../../redux/slices/profileSlice';
 import type { EquipmentSlotData } from '../../../redux/slices/profileSlice';
 import EquipmentSlot from '../EquipmentPanel/EquipmentSlot';
-
-const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
+import AvatarEditor from '../../CommonComponents/AvatarEditor/AvatarEditor';
 
 /**
  * Equipment diamond (FEAT-149 mock): portrait center, slots around —
@@ -26,7 +24,7 @@ const AvatarEquipmentGrid = () => {
   const equipmentSlots = useAppSelector(selectEquipmentSlots);
   const userId = useAppSelector((state) => state.user.id) as number | null;
   const raceInfo = useAppSelector((state) => state.profile.raceInfo);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [avatarEditor, setAvatarEditor] = useState(false);
 
   const getSlot = (slotType: string): EquipmentSlotData =>
     equipmentSlots.find((s) => s.slot_type === slotType) ?? {
@@ -37,42 +35,19 @@ const AvatarEquipmentGrid = () => {
       item: null,
     };
 
-  const handleAvatarClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error('Файл слишком большой. Максимальный размер: 15 МБ');
-      return;
-    }
-
-    if (!raceInfo?.id || !userId) return;
-
-    try {
-      await dispatch(
-        uploadCharacterAvatar({ characterId: raceInfo.id, userId, file }),
-      ).unwrap();
-      toast.success('Аватарка обновлена');
-    } catch (err) {
-      const message = typeof err === 'string' ? err : 'Не удалось загрузить аватарку';
-      toast.error(message);
-    }
-  };
-
   return (
     <div className="w-full max-w-[320px] lg:max-w-none mx-auto">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFileChange}
-      />
+      {avatarEditor && raceInfo?.id && userId && (
+        <AvatarEditor
+          title="Аватар персонажа"
+          currentUrl={profile?.avatar}
+          onClose={() => setAvatarEditor(false)}
+          onUpload={(file, crop) =>
+            dispatch(uploadCharacterAvatar({ characterId: raceInfo.id, userId, file, crop })).unwrap()}
+          onReframe={(crop) =>
+            dispatch(uploadCharacterAvatar({ characterId: raceInfo.id, userId, file: null, crop })).unwrap()}
+        />
+      )}
 
       {/* Diamond grid: 5 columns, portrait spans center cols 2-4 / rows 2-4 */}
       <div className="grid grid-cols-[46px_46px_1fr_46px_46px] lg:grid-cols-[60px_60px_1fr_60px_60px] gap-[9px] place-items-center">
@@ -84,8 +59,8 @@ const AvatarEquipmentGrid = () => {
         {/* Portrait — center, spans rows 2-4 */}
         <div className="col-start-2 col-span-3 row-start-2 row-span-3 w-full self-stretch flex items-center px-1 lg:px-2">
           <div
-            className="gold-outline relative rounded-card w-full h-[200px] lg:h-[236px] overflow-hidden bg-black/30 cursor-pointer group"
-            onClick={handleAvatarClick}
+            className="gold-outline relative rounded-card w-full max-w-[236px] mx-auto aspect-square overflow-hidden bg-black/30 cursor-pointer group"
+            onClick={() => setAvatarEditor(true)}
           >
             {profile?.avatar ? (
               <img

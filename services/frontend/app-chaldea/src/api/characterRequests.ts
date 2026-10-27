@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { apiErrorMessage } from './errors';
+import { appendCrop, type CropArea } from './avatarCrop';
 
 /**
  * FEAT-154 — character-request flow (character-service) plus the pre-character
@@ -185,9 +186,10 @@ export const updateCharacterRequest = async (
  * returns a permanent S3 URL that the request then carries.
  * **413** over 15 MB · **400** invalid image · **401**.
  */
-export const uploadCharacterRequestAvatar = async (file: File): Promise<AvatarUploadResponse> => {
+export const uploadCharacterRequestAvatar = async (file: File, crop?: CropArea): Promise<AvatarUploadResponse> => {
   const form = new FormData();
   form.append('file', file);
+  appendCrop(form, crop);
   try {
     const { data } = await axios.post<AvatarUploadResponse>(
       '/photo/upload_character_request_avatar',

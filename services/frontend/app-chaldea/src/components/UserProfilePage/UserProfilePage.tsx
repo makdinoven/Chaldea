@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Calendar, FileText, UserPlus, UserCheck, UserX, Activity, MessageSquare, Slash, Lock } from 'react-feather';
@@ -26,9 +26,9 @@ import FriendsSection from './FriendsSection';
 import CharactersSection from './CharactersSection';
 import { buildColorEffectStyle, buildNicknameTextShadow } from './profileStyle';
 import AvatarWithFrame from '../common/AvatarWithFrame';
+import AvatarEditor from '../CommonComponents/AvatarEditor/AvatarEditor';
 import { formatServerDate } from '../../utils/serverDate';
 
-const MAX_FILE_SIZE = 15 * 1024 * 1024;
 
 type Tab = 'wall' | 'characters' | 'friends';
 
@@ -64,7 +64,7 @@ const UserProfilePage = () => {
   const [blockState, setBlockState] = useState<BlockCheckResponse | null>(null);
   const [blockBusy, setBlockBusy] = useState(false);
   const [messageSending, setMessageSending] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [avatarEditor, setAvatarEditor] = useState(false);
 
   // Responsive avatar size
   const [avatarSize, setAvatarSize] = useState(
@@ -140,27 +140,7 @@ const UserProfilePage = () => {
 
   const handleAvatarClick = () => {
     if (!isOwnProfile) return;
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error('Файл слишком большой. Максимальный размер: 15 МБ');
-      return;
-    }
-
-    if (!profileUserId) return;
-
-    try {
-      await dispatch(uploadAvatar({ userId: profileUserId, file })).unwrap();
-      toast.success('Аватарка обновлена');
-    } catch {
-      toast.error('Не удалось загрузить аватарку');
-    }
+    setAvatarEditor(true);
   };
 
   const handleFriendAction = async () => {
@@ -301,13 +281,15 @@ const UserProfilePage = () => {
         {/* Avatars row */}
         <div className="flex items-end gap-5 flex-shrink-0">
           {/* User avatar */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleFileChange}
-          />
+          {avatarEditor && profileUserId && (
+            <AvatarEditor
+              title="Аватар профиля"
+              currentUrl={profile.avatar}
+              onClose={() => setAvatarEditor(false)}
+              onUpload={(file, crop) => dispatch(uploadAvatar({ userId: profileUserId, file, crop })).unwrap()}
+              onReframe={(crop) => dispatch(uploadAvatar({ userId: profileUserId, file: null, crop })).unwrap()}
+            />
+          )}
           <div className="relative mb-8" style={{ width: avatarSize, minWidth: avatarSize }}>
             <div
               className={`relative ${isOwnProfile ? 'cursor-pointer group' : ''}`}
