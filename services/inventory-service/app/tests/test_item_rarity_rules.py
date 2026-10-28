@@ -36,7 +36,7 @@ USER = {"id": 2, "username": "player", "role": "user", "permissions": []}
 EQUIPMENT_TYPES = ["head", "body", "cloak", "belt", "ring", "necklace", "bracelet", "weapon"]
 NON_EQUIPMENT_TYPES = [
     "consumable", "resource", "scroll", "misc", "recipe",
-    "gem", "rune", "gathering_tool",
+    "gem", "rune", "gathering_tool", "furniture",
 ]
 EQUIPMENT_ONLY = ["mythical", "divine", "demonic"]
 COMMON_RARITIES = ["common", "rare", "epic", "legendary"]
@@ -46,6 +46,7 @@ RARITY_ERROR = "Мифическая, божественная и демонич
 _TYPE_EXTRAS = {
     "weapon": {"weapon_subclass": "sword"},
     "gathering_tool": {"tool_category": "pickaxe", "max_durability": 10},
+    "furniture": {"furniture_room_type": "hall"},
 }
 
 

@@ -15,6 +15,7 @@ import crud
 import activity_lock
 import backpack
 import equipment_rules
+import house_workshop
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
@@ -193,12 +194,24 @@ def _ensure_linked_recipe_exists(db: Session, item_in: schemas.ItemCreate):
         raise HTTPException(status_code=400, detail="Рецепт для предмета-рецепта не найден")
 
 
+def _ensure_seed_result_exists(db: Session, item_in: schemas.ItemCreate, item_id: Optional[int] = None):
+    """FEAT-180 stage 6a: a seed grows into an existing item other than itself."""
+    result_id = item_in.seed_result_item_id
+    if result_id is None:
+        return
+    if item_id is not None and result_id == item_id:
+        raise HTTPException(status_code=400, detail="Семя не может вырасти в само себя")
+    if not db.query(models.Items.id).filter(models.Items.id == result_id).first():
+        raise HTTPException(status_code=400, detail="Предмета, который вырастет из семян, нет")
+
+
 @router.post("/items", response_model=schemas.Item, status_code=201)
 def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:create"))):
     """Создаёт новый предмет."""
     if db.query(models.Items).filter(models.Items.name == item_in.name).first():
         raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
     _ensure_linked_recipe_exists(db, item_in)
+    _ensure_seed_result_exists(db, item_in)
     # FEAT-168: `effects` / `damage_entries` are child tables, not item columns.
     payload = item_in.dict(exclude_unset=True)
     for field in crud.ITEM_NESTED_EFFECT_FIELDS:
@@ -390,6 +403,7 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
         if db.query(models.Items).filter(models.Items.name == item_in.name).first():
             raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
     _ensure_linked_recipe_exists(db, item_in)
+    _ensure_seed_result_exists(db, item_in, item_id)
     wearability_before = (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass)
     # Equip added the old numbers to every wearer and unequip will take away the
     # new ones; without settling the difference now, editing a worn item left
@@ -399,6 +413,16 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
         if field in crud.ITEM_NESTED_EFFECT_FIELDS:
             continue  # FEAT-168: child tables, written below
         setattr(db_item, field, value)
+    if schemas._enum_value(db_item.item_type) != "resource":
+        # FEAT-180 6a: only a resource is a seed (a partial update may have changed the type).
+        for field in schemas.SEED_FIELDS:
+            setattr(db_item, field, None)
+    # FEAT-180 6b: the house flags follow the type too (a partial update may have changed it).
+    if (schemas._enum_value(db_item.item_type) != "resource"
+            or schemas._enum_value(db_item.resource_subcategory) != "trophy"):
+        db_item.is_elite_trophy = False
+    if schemas._enum_value(db_item.item_type) != "scroll":
+        db_item.is_home_teleport = False
     db.flush()
     # FEAT-168: replace-all, but only for the lists the client actually sent —
     # a payload that omits them leaves the existing rows untouched.
@@ -1489,6 +1513,9 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
     if db_item.is_food:
         # FEAT-164: food must go through /eat-food (satiety rules)
         raise HTTPException(status_code=400, detail=FOOD_REJECT_MESSAGE)
+    if db_item.is_home_teleport:
+        # FEAT-180 6b: read through POST /{id}/home-teleport, never spent for nothing here
+        raise HTTPException(status_code=400, detail="Свиток возвращения домой читают через «Вернуться домой»")
 
     inv_slot = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.character_id == character_id,
@@ -3706,7 +3733,6 @@ def use_buff_item(
 FOOD_REJECT_MESSAGE = "Еду нужно съесть"
 SATIETY_HTTP_TIMEOUT = 5.0
 SATIETY_UNAVAILABLE_MESSAGE = "Не удалось применить сытость, попробуйте позже"
-SATIETY_DURATION_LABEL = "24 ч"
 
 
 def _extract_detail(resp: httpx.Response, fallback: str) -> str:
@@ -3724,7 +3750,8 @@ def eat_food(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Съесть еду: сытость на 24 ч (+ мгновенное восстановление, если есть).
+    """Съесть еду: сытость на 24 ч, с кухней дома под рукой — дольше (FEAT-180 6a)
+    (+ мгновенное восстановление, если есть).
 
     Предмет списывается только после того, как сервис атрибутов применил
     сытость (201). Во время боя есть нельзя; в подземелье и на сборе — можно.
@@ -3744,7 +3771,10 @@ def eat_food(
         if not item_obj.is_food:
             raise HTTPException(status_code=400, detail="Этот предмет нельзя съесть")
 
+        # FEAT-180 stage 6a: a kitchen of a house the character may use where it stands.
+        satiety_hours = house_workshop.kitchen_satiety_hours(db, character_id)
         payload = {
+            "duration_hours": satiety_hours,
             "item_id": item_obj.id,
             "source_item_name": item_obj.name,
             "rarity": schemas._enum_value(item_obj.item_rarity),
@@ -3805,8 +3835,9 @@ def eat_food(
 
     return {
         "success": True,
-        "message": f"Вы поели: {payload['source_item_name']}. Сытость на {SATIETY_DURATION_LABEL}",
+        "message": f"Вы поели: {payload['source_item_name']}. Сытость на {satiety_hours} ч",
         "satiety": satiety,
+        "satiety_hours": satiety_hours,
     }
 
 
@@ -4512,4 +4543,9 @@ async def admin_npc_unequip(
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
 
 
+# FEAT-180: before `router`, whose `/inventory/{character_id}/...` routes come first otherwise.
+import house_storage  # noqa: E402
+import home_teleport  # noqa: E402
+app.include_router(house_storage.router)
+app.include_router(home_teleport.router)
 app.include_router(router)

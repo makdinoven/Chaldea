@@ -28,7 +28,7 @@ class Items(Base):
     item_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'weapon',
         'consumable', 'resource', 'scroll', 'misc',
-        'recipe', 'gem', 'rune', 'gathering_tool'
+        'recipe', 'gem', 'rune', 'gathering_tool', 'furniture'
     ), nullable=False)
     # Links a recipe item (item_type='recipe') to its recipe. Name kept for
     # compatibility (photo-service reads it); blueprints were removed in FEAT-165.
@@ -81,6 +81,26 @@ class Items(Base):
     is_food = Column(Boolean, nullable=False, default=False, server_default="0")
     # FEAT-178: a cloak worn as a camp backpack (capacity by rarity, see backpack.py)
     is_backpack = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-180: furniture (item_type='furniture') stands in a house room of this
+    # type (hall/bedroom/storage/workshop) and adds its bonus there. VARCHAR, not
+    # ENUM, so a new room type does not lock `items`.
+    furniture_room_type = Column(String(20), nullable=True)
+    furniture_sleep_bonus = Column(Float, nullable=False, default=0.0, server_default="0")
+    furniture_storage_stacks = Column(Integer, nullable=False, default=0, server_default="0")
+    furniture_xp_bonus_pct = Column(Float, nullable=False, default=0.0, server_default="0")
+    furniture_refine_bonus_pct = Column(Float, nullable=False, default=0.0, server_default="0")
+    # FEAT-180 stage 6a: a resource with these set is a seed — planted in a house
+    # garden / greenhouse / apiary (`seed_room_type`), it grows in `seed_grow_hours`
+    # into `seed_result_quantity` of `seed_result_item_id` and gives herbalism XP.
+    seed_result_item_id = Column(Integer, nullable=True)
+    seed_result_quantity = Column(Integer, nullable=True)
+    seed_grow_hours = Column(Integer, nullable=True)
+    seed_room_type = Column(String(20), nullable=True)
+    seed_herbalism_xp = Column(Integer, nullable=True)
+    # FEAT-180 stage 6b: an elite trophy (resource, subcategory 'trophy') hangs in a
+    # house trophy hall; a home teleport scroll carries its reader to a return circle.
+    is_elite_trophy = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_home_teleport = Column(Boolean, nullable=False, default=False, server_default="0")
 
     # FEAT-168: how a consumable is used in battle.
     # NULL / 'instant' — applied immediately; 'weapon_coating' — poison on the
@@ -293,6 +313,25 @@ class BackpackItem(Base):
     character_id = Column(Integer, nullable=False, index=True)
     item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE'), nullable=False, index=True)
     quantity = Column(Integer, nullable=False, default=1)
+
+    item = relationship("Items")
+
+
+class HouseStorageItem(Base):
+    """FEAT-180: a stack in a house's storage. The house, its owner and the
+    residents' rights live in locations-service (`houses`, `house_residents`);
+    an item keeps its sharpening, gems and wear while it lies here."""
+    __tablename__ = "house_storage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    house_id = Column(Integer, nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE'), nullable=False, index=True)
+    quantity = Column(Integer, nullable=False, default=1)
+    is_identified = Column(Boolean, nullable=False, default=True, server_default="1")
+    enhancement_points_spent = Column(Integer, nullable=False, default=0, server_default="0")
+    enhancement_bonuses = Column(Text, nullable=True)
+    socketed_gems = Column(Text, nullable=True)
+    current_durability = Column(Integer, nullable=True)
 
     item = relationship("Items")
 

@@ -30,7 +30,9 @@ def lock_client(client, db_session):
             current_location_id INTEGER,
             currency_balance INTEGER DEFAULT 0,
             dungeon_session_id INTEGER,
-            unconscious_until DATETIME
+            unconscious_until DATETIME,
+            asleep_since DATETIME,
+            reading_since DATETIME
         )"""
     ))
     db_session.execute(text(

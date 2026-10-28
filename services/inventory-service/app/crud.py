@@ -8,6 +8,7 @@ import random
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, and_, or_, func
 from sqlalchemy.exc import IntegrityError
+import house_workshop
 import models
 import schemas
 from rabbitmq_publisher import publish_auction_notification
@@ -1941,7 +1942,11 @@ def execute_craft(
     }
     if cp is not None:
         base_xp = recipe.xp_reward if recipe.xp_reward is not None else RARITY_XP_MAP.get(recipe.rarity, 10)
+        # FEAT-180: a house workshop of the profession adds to the experience.
+        workshop = house_workshop.workshop_for(db, cp)
+        base_xp = int(round(base_xp * (1 + workshop["xp"])))
         xp = award_profession_xp(db, cp, base_xp)
+        xp["workshop_level"] = workshop["level"]
 
     return {
         "success": True,
@@ -2101,6 +2106,8 @@ def get_xp_multiplier(db: Session, character_id: int, buff_type: str = "xp_bonus
         buff = get_active_buff(db, character_id, candidate)
         if buff:
             total += buff.value
+    # FEAT-180 stage 6b: house blessings and trophies, once per source (not per chain step).
+    total += house_workshop.house_xp_bonus(db, character_id, buff_type)
     return 1.0 + total
 
 
@@ -2328,12 +2335,16 @@ def refine_items(db: Session, character_id: int, source_item_id: int, quantity: 
     _consume_from_stacks(db, stacks, consumed)
     db.flush()
 
-    chance = refine_double_chance(cp.current_rank)
+    # FEAT-180: a house workshop of the profession raises the double chance and the experience.
+    workshop = house_workshop.workshop_for(db, cp)
+    chance = refine_double_chance(cp.current_rank) + workshop["refine"]
     doubled_batches = sum(1 for _ in range(batches) if random.random() < chance)
     total = conversion.result_quantity * (batches + doubled_batches)
     _add_items_to_inventory(db, character_id, result_item.id, total)
 
-    xp = award_profession_xp(db, cp, refine_xp_per_batch(result_item.item_rarity) * batches)
+    xp = award_profession_xp(db, cp, int(round(
+        refine_xp_per_batch(result_item.item_rarity) * batches * (1 + workshop["xp"]))))
+    xp["workshop_level"] = workshop["level"]
 
     return {
         "success": True,

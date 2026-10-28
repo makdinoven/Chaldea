@@ -47,7 +47,8 @@ class TestOrmEnumsMatchMigration:
 
     def test_item_type_matches_and_has_no_blueprint(self, m022, original_enum_values):
         orm_values = original_enum_values["items.item_type"]
-        assert list(orm_values) == list(m022.ITEM_TYPES_NEW)
+        # Migration 030 (FEAT-180) appended 'furniture' after 022's list.
+        assert list(orm_values) == list(m022.ITEM_TYPES_NEW) + ["furniture"]
         assert "blueprint" not in orm_values
         assert "blueprint" in m022.ITEM_TYPES_OLD  # downgrade restores it
 

@@ -26,6 +26,7 @@ class ItemType(str, Enum):
     gem = "gem"
     rune = "rune"
     gathering_tool = "gathering_tool"
+    furniture = "furniture"
 
 
 # Armor class only means something for these slots (cloak/belt have none)
@@ -45,6 +46,21 @@ FOOD_ITEM_TYPE = "consumable"
 
 def _enum_value(value):
     return value.value if isinstance(value, Enum) else value
+
+
+# FEAT-180: house furniture — the room it stands in and sane input bounds
+# (the admin sets the numbers; there is no cap on the sum in a room).
+FURNITURE_ROOM_TYPES = ("hall", "bedroom", "storage", "workshop")
+FURNITURE_MAX_SLEEP_BONUS = 10.0
+FURNITURE_MAX_STORAGE_STACKS = 1000
+FURNITURE_MAX_PCT = 100.0
+# FEAT-180 stage 6a: seeds — the house room they grow in and input bounds.
+SEED_ROOM_TYPES = ("garden", "greenhouse", "apiary")
+SEED_FIELDS = ("seed_result_item_id", "seed_result_quantity", "seed_grow_hours", "seed_room_type",
+               "seed_herbalism_xp")
+SEED_MAX_QUANTITY = 100
+SEED_MAX_GROW_HOURS = 720
+SEED_MAX_XP = 10000
 
 
 def is_rarity_allowed_for_type(item_type, item_rarity) -> bool:
@@ -570,6 +586,25 @@ class ItemBase(BaseModel):
     # FEAT-178: a cloak worn as a camp backpack (capacity by rarity)
     is_backpack: bool = False
 
+    # FEAT-180: furniture for a house room; only the bonus of its room type applies
+    furniture_room_type: Optional[str] = None
+    furniture_sleep_bonus: float = 0.0
+    furniture_storage_stacks: int = 0
+    furniture_xp_bonus_pct: float = 0.0
+    furniture_refine_bonus_pct: float = 0.0
+
+    # FEAT-180 stage 6a: a seed (resource) — all five set, or none
+    seed_result_item_id: Optional[int] = None
+    seed_result_quantity: Optional[int] = None
+    seed_grow_hours: Optional[int] = None
+    seed_room_type: Optional[str] = None
+    seed_herbalism_xp: Optional[int] = None
+
+    # FEAT-180 stage 6b: an elite trophy (resource / trophy) for a house trophy hall,
+    # and a home teleport scroll (scroll) to a house's return circle
+    is_elite_trophy: bool = False
+    is_home_teleport: bool = False
+
     # FEAT-168: battle behaviour of a consumable (NULL == "instant")
     consumable_action: Optional[str] = None
     coating_turns: Optional[int] = None
@@ -770,6 +805,69 @@ class ItemCreate(ItemBase):
                 raise ValueError("Для ремкомплекта укажите силу ремонта больше 0")
         elif has_power and item_type == "resource":
             raise ValueError("Сила ремонта указывается только для ремкомплекта")
+        return values
+
+    @root_validator
+    def _validate_furniture(cls, values):
+        item_type = _enum_value(values.get("item_type"))
+        if item_type is None:
+            return values
+        room = values.get("furniture_room_type")
+        bonuses = {
+            "furniture_sleep_bonus": ("bedroom", FURNITURE_MAX_SLEEP_BONUS),
+            "furniture_storage_stacks": ("storage", FURNITURE_MAX_STORAGE_STACKS),
+            "furniture_xp_bonus_pct": ("workshop", FURNITURE_MAX_PCT),
+            "furniture_refine_bonus_pct": ("workshop", FURNITURE_MAX_PCT),
+        }
+        if item_type != "furniture":
+            if room or any(values.get(f) for f in bonuses):
+                raise ValueError("Комната и бонусы мебели задаются только для мебели")
+            return values
+        if room not in FURNITURE_ROOM_TYPES:
+            raise ValueError("Укажите, для какой комнаты эта мебель")
+        for field, (bonus_room, top) in bonuses.items():
+            value = values.get(field) or 0
+            if value < 0 or value > top:
+                raise ValueError(f"Бонус мебели должен быть от 0 до {top}")
+            if value and room != bonus_room:
+                raise ValueError("Этот бонус не действует в комнате такого типа")
+        return values
+
+    @root_validator
+    def _validate_seed(cls, values):
+        """FEAT-180 stage 6a: a seed has all its fields or none; only a resource is a seed."""
+        item_type = _enum_value(values.get("item_type"))
+        if item_type is None:
+            return values
+        given = [f for f in SEED_FIELDS if values.get(f) is not None]
+        if not given:
+            return values
+        if item_type != "resource":
+            raise ValueError("Семенами может быть только ресурс")
+        if len(given) != len(SEED_FIELDS):
+            raise ValueError("Для семян укажите всё: что вырастет, сколько, за сколько часов, где и опыт травничества")
+        if values["seed_room_type"] not in SEED_ROOM_TYPES:
+            raise ValueError("Семена сажают в огороде, оранжерее или на пасеке")
+        if not 1 <= values["seed_result_quantity"] <= SEED_MAX_QUANTITY:
+            raise ValueError(f"Урожай семян — от 1 до {SEED_MAX_QUANTITY}")
+        if not 1 <= values["seed_grow_hours"] <= SEED_MAX_GROW_HOURS:
+            raise ValueError(f"Семена растут от 1 до {SEED_MAX_GROW_HOURS} часов")
+        if not 0 <= values["seed_herbalism_xp"] <= SEED_MAX_XP:
+            raise ValueError(f"Опыт травничества за урожай — от 0 до {SEED_MAX_XP}")
+        return values
+
+    @root_validator
+    def _validate_house_flags(cls, values):
+        """FEAT-180 stage 6b: only a trophy is elite, only a scroll carries home."""
+        item_type = _enum_value(values.get("item_type"))
+        if item_type is None:
+            return values
+        if values.get("is_elite_trophy") and (
+                item_type != "resource"
+                or _enum_value(values.get("resource_subcategory")) != ResourceSubcategory.trophy.value):
+            raise ValueError("Элитным может быть только трофей (ресурс с подкатегорией «Трофеи»)")
+        if values.get("is_home_teleport") and item_type != "scroll":
+            raise ValueError("Свитком возвращения домой может быть только свиток")
         return values
 
     @root_validator
@@ -1806,6 +1904,8 @@ class EatFoodResponse(BaseModel):
     success: bool
     message: str
     satiety: SatietyInfo
+    # FEAT-180 stage 6a: how long this satiety lasts (24 h, more with a house kitchen)
+    satiety_hours: int = 24
 
 
 class XpMultiplierResponse(BaseModel):

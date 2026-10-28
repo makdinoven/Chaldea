@@ -39,7 +39,7 @@ def env(client, db_session):
     db_session.execute(text(
         "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, id_class INTEGER DEFAULT 1, "
         "is_npc INTEGER DEFAULT 0, current_location_id INTEGER, currency_balance INTEGER DEFAULT 0, "
-        "dungeon_session_id INTEGER, unconscious_until DATETIME)"
+        "dungeon_session_id INTEGER, unconscious_until DATETIME, asleep_since DATETIME, reading_since DATETIME)"
     ))
     db_session.execute(text("INSERT INTO characters (id, user_id, name) VALUES (1, 1, 'Hero'), (2, 2, 'Other')"))
     for slot_type in ("cloak", "belt", "fast_slot_1", "fast_slot_2"):
