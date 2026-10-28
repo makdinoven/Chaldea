@@ -3647,6 +3647,7 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     previous_location_id = character.current_location_id
 
     character.current_location_id = target.current_location_id
+    character.house_room_id = None  # FEAT-180 stage 7: out of any house
     character.last_teleport_at = datetime.utcnow()
     db.flush()
 
@@ -3864,11 +3865,17 @@ def apply_admin_move(
     from_location_name,
     to_location_id: int,
     to_location_name,
-    admin_user_id: int,
-    admin_username: str,
+    admin_user_id: Optional[int] = None,
+    admin_username: Optional[str] = None,
     gathering_cancelled: bool = False,
+    event_type: str = "admin_teleport",
+    description: Optional[str] = None,
+    house_room_id: Optional[int] = None,
 ):
     """Write the move itself — location, cooldown and audit row — in ONE commit.
+
+    FEAT-180 stage 6b: a home teleport scroll moves the same way, logged with
+    `event_type="home_teleport"`, its own description and no admin fields.
 
     Called only after every cleanup has already succeeded (FEAT-162 §3.3), so
     a failure here leaves the character where they were, with their gates
@@ -3889,26 +3896,28 @@ def apply_admin_move(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
 
     character.current_location_id = to_location_id
+    # FEAT-180 stage 7: out of any house; a home teleport puts it straight into the circle room.
+    character.house_room_id = house_room_id
     # Перенос не должен наказывать игрока невозможностью ходить дальше.
     character.travel_cooldown_until = None
 
+    metadata = {
+        "from_location_id": from_location_id,
+        "from_location_name": from_location_name,
+        "to_location_id": to_location_id,
+        "to_location_name": to_location_name,
+        "gathering_cancelled": gathering_cancelled,
+    }
+    if event_type == "admin_teleport":
+        metadata.update(admin_user_id=admin_user_id, admin_username=admin_username, admin_action=True)
     db.add(CharacterLog(
         character_id=character_id,
-        event_type="admin_teleport",
-        description=(
+        event_type=event_type,
+        description=description or (
             f"Перенесён администратором: «{from_location_name or '—'}» "
             f"→ «{to_location_name or '—'}»"
         ),
-        metadata_={
-            "from_location_id": from_location_id,
-            "from_location_name": from_location_name,
-            "to_location_id": to_location_id,
-            "to_location_name": to_location_name,
-            "admin_user_id": admin_user_id,
-            "admin_username": admin_username,
-            "gathering_cancelled": gathering_cancelled,
-            "admin_action": True,
-        },
+        metadata_=metadata,
     ))
 
     db.commit()

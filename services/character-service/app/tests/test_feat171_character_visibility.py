@@ -415,7 +415,8 @@ class TestShortInfo:
             f"/characters/internal/{PLAYER_CHARACTER}/short_info",
             headers=INTERNAL_HEADERS,
         ).json()
-        assert set(internal) - set(public) == {"currency_balance"}
+        # FEAT-180 stage 7: the twin also tells the house room (the header link).
+        assert set(internal) - set(public) == {"currency_balance", "current_house"}
         assert set(public) - set(internal) == set()
 
 

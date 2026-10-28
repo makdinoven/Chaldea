@@ -871,6 +871,47 @@ def _is_in_dungeon_run(db: Session, character_id: int) -> bool:
     return row is not None
 
 
+async def _prepare_move(db: Session, character_id: int, from_location_id, gather_reason: str) -> bool:
+    """Steps 4–7 of a forced move (admin teleport, FEAT-180 home teleport scroll):
+    refuse in battle / a dungeon run (409), cancel gathering, expire the intentions
+    in the location being left (502 when locations-service fails — nothing moved).
+    Returns whether a gathering was cancelled."""
+    # 4. Бой — отказ: выдёргивание из боя оставило бы бой неразрешимым.
+    if _is_in_battle(db, character_id):
+        raise HTTPException(status_code=409, detail="Персонаж находится в бою — перенос невозможен")
+
+    # 5. Подземелье — отказ: забег привязан к локации подземелья и несёт
+    #    состояние для остальных участников.
+    if _is_in_dungeon_run(db, character_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Персонаж находится в подземелье — перенос невозможен",
+        )
+
+    # 6. Сбор ресурсов отменяем (идемпотентно, с возвратом 50% выносливости).
+    try:
+        cancel_payload = await locations_client.cancel_gathering(
+            character_id, reason=gather_reason,
+        )
+    except locations_client.LocationsServiceError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
+        )
+    gathering_cancelled = bool(cancel_payload.get("cancelled"))
+
+    # 7. Гашение намерений и заявок в покидаемой локации + роспуск группы.
+    #    Критический шаг: при сбое персонаж НЕ переносится.
+    try:
+        await locations_client.notify_character_left_location(character_id, from_location_id)
+    except locations_client.LocationsServiceError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
+        )
+    return gathering_cancelled
+
+
 @router.post("/admin/{character_id}/move", response_model=schemas.AdminMoveCharacterResponse)
 async def admin_move_character(
     character_id: int,
@@ -920,39 +961,8 @@ async def admin_move_character(
 
     from_location_name = crud._get_location_name(db, from_location_id)
 
-    # 4. Бой — отказ: выдёргивание из боя оставило бы бой неразрешимым.
-    if _is_in_battle(db, character_id):
-        raise HTTPException(status_code=409, detail="Персонаж находится в бою — перенос невозможен")
-
-    # 5. Подземелье — отказ: забег привязан к локации подземелья и несёт
-    #    состояние для остальных участников.
-    if _is_in_dungeon_run(db, character_id):
-        raise HTTPException(
-            status_code=409,
-            detail="Персонаж находится в подземелье — перенос невозможен",
-        )
-
-    # 6. Сбор ресурсов отменяем (идемпотентно, с возвратом 50% выносливости).
-    try:
-        cancel_payload = await locations_client.cancel_gathering(
-            character_id, reason="admin_teleport",
-        )
-    except locations_client.LocationsServiceError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
-        )
-    gathering_cancelled = bool(cancel_payload.get("cancelled"))
-
-    # 7. Гашение намерений и заявок в покидаемой локации + роспуск группы.
-    #    Критический шаг: при сбое персонаж НЕ переносится.
-    try:
-        await locations_client.notify_character_left_location(character_id, from_location_id)
-    except locations_client.LocationsServiceError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
-        )
+    # 4–7. Бой/подземелье — отказ; сбор отменён, намерения погашены.
+    gathering_cancelled = await _prepare_move(db, character_id, from_location_id, "admin_teleport")
 
     # 8. Одна локальная транзакция: локация + сброс кулдауна + запись в журнал.
     try:
@@ -983,6 +993,62 @@ async def admin_move_character(
         to_location_id=data.new_location_id,
         to_location_name=to_location_name,
         gathering_cancelled=gathering_cancelled,
+    )
+
+
+
+@router.post("/internal/{character_id}/home-teleport", response_model=schemas.HomeTeleportResponse)
+async def internal_home_teleport(
+    character_id: int,
+    data: schemas.HomeTeleportRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """FEAT-180 stage 6b: inventory-service moves a character home with a home
+    teleport scroll (it checked the scroll and the house). The same side effects
+    as the admin move (gathering cancelled, intentions expired, travel cooldown
+    reset, a `home_teleport` journal row); 409 in battle, a dungeon run or
+    another activity lock, 400 when already there. Lives under
+    /characters/internal/ (nginx answers 403 from outside) + X-Internal-Token."""
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    to_location_name = crud._get_location_name(db, data.location_id)
+    if to_location_name is None:
+        raise HTTPException(status_code=404, detail="Локация назначения не найдена")
+    from_location_id = character.current_location_id
+    if from_location_id is not None and int(from_location_id) == int(data.location_id):
+        raise HTTPException(status_code=400, detail="Персонаж уже в этой локации")
+    lock_text = activity_lock.lock_message(activity_lock.lock_for_character(character))
+    if lock_text:
+        raise HTTPException(status_code=409, detail=lock_text)
+    from_location_name = crud._get_location_name(db, from_location_id)
+
+    gathering_cancelled = await _prepare_move(db, character_id, from_location_id, "home_teleport")
+    try:
+        crud.apply_admin_move(
+            db,
+            character_id=character_id,
+            from_location_id=from_location_id,
+            from_location_name=from_location_name,
+            to_location_id=data.location_id,
+            to_location_name=to_location_name,
+            gathering_cancelled=gathering_cancelled,
+            event_type="home_teleport",
+            house_room_id=data.house_room_id,
+            description=(
+                f"Вернулся домой свитком: «{from_location_name or '—'}» → «{to_location_name or '—'}»"
+            ),
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при телепорте домой персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+    return schemas.HomeTeleportResponse(
+        character_id=character_id, from_location_id=from_location_id, location_id=data.location_id,
+        location_name=to_location_name, gathering_cancelled=gathering_cancelled,
     )
 
 
@@ -1474,6 +1540,19 @@ async def delete_character(
                 logger.warning(f"Failed to clear post drafts for character {character_id}: {resp.status_code} - {resp.text}")
     except Exception as e:
         logger.warning(f"Error clearing post drafts for character {character_id}: {e}")
+
+    # 4.6. FEAT-180: its houses pass to their heirs or are seized; it stops living
+    #      in other houses (graceful — locations-service also does this lazily).
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/houses/internal/character-deleted/{character_id}",
+                headers=crud._internal_token_headers(),
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Failed to settle houses of character {character_id}: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error settling houses of character {character_id}: {e}")
 
     return {"message": f"Персонаж с ID {character_id} успешно удален."}
 
@@ -2139,6 +2218,7 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
       - character_title: имя текущего титула (если установлен; иначе пустая строка),
       - character_photo: фотография персонажа (например, avatar).
     """
+    houses_inside = _houses_inside(db, location_id)
     characters = db.query(models.Character).filter(
         models.Character.current_location_id == location_id,
         models.Character.is_npc == False,
@@ -2157,8 +2237,50 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
             "character_title": ch.current_title.name if ch.current_title else "",
             "character_title_rarity": ch.current_title.rarity if ch.current_title else None,
             "user_id": ch.user_id,
+            "in_house": houses_inside.get(ch.id),
         })
     return result
+
+
+def _current_house(db: Session, ch: models.Character) -> Optional[dict]:
+    """FEAT-180 stage 7: the house room the character stands in now —
+    {house_id, house_name, room_id, room_name} — or None. Same rule as
+    `_houses_inside`: the room's house must stand in the character's location."""
+    if not ch.house_room_id or not ch.current_location_id:
+        return None
+    try:
+        row = db.execute(text(
+            "SELECT h.id, h.name, r.id, r.name FROM house_rooms r "
+            "JOIN houses h ON h.id = r.house_id "
+            "JOIN house_plots p ON p.id = h.plot_id "
+            "WHERE r.id = :room AND p.location_id = :loc"
+        ), {"room": ch.house_room_id, "loc": ch.current_location_id}).fetchone()
+    except SQLAlchemyError:
+        # Stand-in schemas without the house tables: nobody is inside.
+        db.rollback()
+        return None
+    if row is None:
+        return None
+    return {"house_id": row[0], "house_name": row[1], "room_id": row[2], "room_name": row[3]}
+
+
+def _houses_inside(db: Session, location_id: int) -> dict:
+    """FEAT-180 stage 7: character id -> {house_id, house_name} for characters standing inside a
+    house of this location (locations-service tables, read straight from the shared DB). The room
+    is not told. A room whose house stands elsewhere does not count."""
+    try:
+        rows = db.execute(text(
+            "SELECT c.id, h.id, h.name FROM characters c "
+            "JOIN house_rooms r ON r.id = c.house_room_id "
+            "JOIN houses h ON h.id = r.house_id "
+            "JOIN house_plots p ON p.id = h.plot_id "
+            "WHERE c.current_location_id = :loc AND p.location_id = :loc"
+        ), {"loc": location_id}).fetchall()
+    except SQLAlchemyError:
+        # Stand-in schemas without the house tables: nobody is inside.
+        db.rollback()
+        return {}
+    return {r[0]: {"house_id": r[1], "house_name": r[2]} for r in rows}
 
 
 @router.put("/internal/{character_id}/update_location")
@@ -2190,6 +2312,8 @@ def update_location(
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
 
+    if character.current_location_id is None or str(character.current_location_id) != str(new_location_id):
+        character.house_room_id = None  # FEAT-180 stage 7: leaving the location leaves any house
     character.current_location_id = new_location_id
     try:
         db.commit()
@@ -2317,7 +2441,12 @@ def internal_get_short_info(
     питает /users/me и счётчик золота в шапке. Живёт под префиксом
     /characters/internal/ (nginx отдаёт 403 снаружи) + X-Internal-Token.
     """
-    return _build_short_info(character_id, db)
+    body = _build_short_info(character_id, db)
+    # FEAT-180 stage 7: the header's «back to the house» link (via /users/me).
+    # Internal only — the room is private to the house's people.
+    ch = db.query(models.Character).filter(models.Character.id == character_id).first()
+    body["current_house"] = _current_house(db, ch)
+    return body
 
 
 @router.get("/{character_id}/short_info")
@@ -3993,6 +4122,7 @@ def internal_knockout(
         moved = False
         if req.return_location_id is not None and c.current_location_id != req.return_location_id:
             c.current_location_id = req.return_location_id
+            c.house_room_id = None  # FEAT-180 stage 7: out of any house
             moved = True
         result.append({"character_id": c.id, "moved": moved})
     db.commit()

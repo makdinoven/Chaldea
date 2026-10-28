@@ -66,6 +66,20 @@ class Character(Base):
     # FEAT-175 activity lock (see activity_lock.py): in a dungeon run / knocked out.
     dungeon_session_id = Column(Integer, nullable=True, default=None)
     unconscious_until = Column(DateTime, nullable=True, default=None)
+    # FEAT-180: asleep in a house bedroom (naive UTC) — locks activity like the
+    # two above; rest there is multiplied by sleep_regen_factor. Set and cleared
+    # by locations-service (houses), read by the regen in attributes-service.
+    asleep_since = Column(DateTime, nullable=True, default=None)
+    sleep_regen_factor = Column(Float, nullable=True, default=None)
+    sleep_house_room_id = Column(BigInteger, nullable=True, default=None)
+    # FEAT-180 stage 6b: reading in a house library (naive UTC) — locks activity
+    # like sleep; set and cleared by locations-service (houses).
+    reading_since = Column(DateTime, nullable=True, default=None)
+    reading_house_room_id = Column(BigInteger, nullable=True, default=None)
+    # FEAT-180 stage 7: the house room (locations-service `house_rooms.id`, no FK) the
+    # character stands in. Set by locations-service; cleared here on every change of
+    # location. Counts only while that room's house stands in `current_location_id`.
+    house_room_id = Column(BigInteger, nullable=True, default=None, index=True)
     # FEAT-154: registration overhaul (all nullable, no backfill)
     origin_id = Column(Integer, nullable=True)  # -> locations-service origin_countries.id (no FK)
     registered_at = Column(TIMESTAMP, nullable=True, default=None)

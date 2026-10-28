@@ -448,6 +448,8 @@ class PlayerInLocation(BaseModel):
     character_title: Optional[str] = ""
     character_title_rarity: Optional[str] = None
     user_id: Optional[int] = None
+    # FEAT-180 stage 7: inside a house of this location ({house_id, house_name}), the room not told.
+    in_house: Optional[dict] = None
 
 class CharacterProfileResponse(BaseModel):
         character_photo: str
@@ -1536,6 +1538,21 @@ class AdminMoveCharacterResponse(BaseModel):
     from_location_name: Optional[str] = None
     to_location_id: int
     to_location_name: Optional[str] = None
+    gathering_cancelled: bool = False
+
+
+# FEAT-180 stage 6b: internal home teleport (inventory-service, scroll used).
+class HomeTeleportRequest(BaseModel):
+    location_id: int
+    # FEAT-180 stage 7: the return circle room the character arrives in (inside the house).
+    house_room_id: Optional[int] = None
+
+
+class HomeTeleportResponse(BaseModel):
+    character_id: int
+    from_location_id: Optional[int] = None
+    location_id: int
+    location_name: Optional[str] = None
     gathering_cancelled: bool = False
 
 
