@@ -302,7 +302,7 @@ def _normalize_site_background_url(value: Optional[str]) -> Optional[str]:
     return value
 
 
-async def _fetch_character_short(char_id: int):
+async def _fetch_character_short(char_id: int, with_house: bool = False):
     """Fetch character short info + location, reused by /me and /profile.
 
     FEAT-171 C4i: публичный `short_info` больше не отдаёт `currency_balance`,
@@ -354,6 +354,9 @@ async def _fetch_character_short(char_id: int):
             "travel_cooldown_until": ch_json.get("travel_cooldown_until"),
             "currency_balance": ch_json.get("currency_balance"),
             "activity_lock": ch_json.get("activity_lock"),
+            # FEAT-180 stage 7: the house room the character stands in — only for
+            # the owner's own /me (the room is private to the house's people).
+            **({"current_house": ch_json.get("current_house")} if with_house else {}),
         }
 
 
@@ -675,7 +678,7 @@ async def read_users_me(current_user: models.User = Depends(get_current_user), d
     }
 
     if current_user.current_character:
-        char_data = await _fetch_character_short(current_user.current_character)
+        char_data = await _fetch_character_short(current_user.current_character, with_house=True)
         if char_data:
             me_data["character"] = char_data
 

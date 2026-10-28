@@ -83,7 +83,7 @@ def character_short(monkeypatch):
     """Stub the cross-service lookup and record every outgoing request."""
     calls = []
 
-    async def _fake(char_id):
+    async def _fake(char_id, with_house=False):
         calls.append(char_id)
         return {
             "id": SHORT_INFO["id"],

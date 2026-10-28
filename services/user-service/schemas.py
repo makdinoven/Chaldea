@@ -145,6 +145,8 @@ class CharacterShort(CharacterShortPublic):
     # FEAT-175: activity lock of the owner's current character (dungeon run /
     # knocked out) — {"locked", "reason", "until", "dungeon_session_id"}.
     activity_lock: Optional[dict] = None
+    # FEAT-180 stage 7: {house_id, house_name, room_id, room_name} while inside a house (/me only).
+    current_house: Optional[dict] = None
 
 class ClearCurrentCharacterRequest(BaseModel):
     character_id: int
