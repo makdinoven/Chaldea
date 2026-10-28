@@ -630,6 +630,8 @@ class PlayerInLocation(BaseModel):
     character_title: Optional[str] = ""
     character_title_rarity: Optional[str] = None
     user_id: Optional[int] = None
+    # FEAT-180 stage 7: inside a house of this location ({house_id, house_name}; the room is not told).
+    in_house: Optional[Dict[str, Any]] = None
 
 
 class NpcInLocation(BaseModel):

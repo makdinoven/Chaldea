@@ -18,6 +18,10 @@ MSK_OFFSET = timedelta(hours=3)
 
 REASON_DUNGEON = "dungeon"
 REASON_UNCONSCIOUS = "unconscious"
+# FEAT-180: asleep in a house bedroom (`characters.asleep_since`), until woken.
+REASON_ASLEEP = "asleep"
+# FEAT-180 stage 6b: reading in a house library (`characters.reading_since`), until stopped.
+REASON_READING = "reading"
 
 
 def _as_naive_utc(value) -> Optional[datetime]:
@@ -35,7 +39,8 @@ def _as_naive_utc(value) -> Optional[datetime]:
     return value
 
 
-def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] = None) -> dict:
+def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] = None,
+                 asleep_since=None, reading_since=None) -> dict:
     """Build the public lock object from the two raw column values.
 
     Unconsciousness wins over the dungeon lock (a knocked-out character never
@@ -57,6 +62,10 @@ def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] 
             "until": None,
             "dungeon_session_id": dungeon_session_id,
         }
+    if _as_naive_utc(asleep_since) is not None:
+        return {"locked": True, "reason": REASON_ASLEEP, "until": None, "dungeon_session_id": None}
+    if _as_naive_utc(reading_since) is not None:
+        return {"locked": True, "reason": REASON_READING, "until": None, "dungeon_session_id": None}
     return {"locked": False, "reason": None, "until": None, "dungeon_session_id": None}
 
 
@@ -64,6 +73,8 @@ def lock_for_character(character) -> dict:
     return compute_lock(
         getattr(character, "dungeon_session_id", None),
         getattr(character, "unconscious_until", None),
+        asleep_since=getattr(character, "asleep_since", None),
+        reading_since=getattr(character, "reading_since", None),
     )
 
 
@@ -76,6 +87,10 @@ def lock_message(lock: dict, subject: str = "Персонаж") -> Optional[str]
         if until is not None:
             return f"{subject} без сознания до {(until + MSK_OFFSET).strftime('%H:%M')} МСК"
         return f"{subject} без сознания"
+    if lock.get("reason") == REASON_ASLEEP:
+        return f"{subject} спит — сначала нужно проснуться"
+    if lock.get("reason") == REASON_READING:
+        return f"{subject} читает — сначала нужно закончить чтение"
     return f"{subject} находится в подземелье"
 
 
@@ -92,13 +107,15 @@ LOCK_STATUS_CODE = 409
 
 async def get_activity_lock(db, character_id: int) -> dict:
     result = await db.execute(
-        text("SELECT dungeon_session_id, unconscious_until FROM characters WHERE id = :cid"),
+        text("SELECT dungeon_session_id, unconscious_until, asleep_since, reading_since "
+             "FROM characters WHERE id = :cid"),
         {"cid": character_id},
     )
     row = result.fetchone()
     if not row:
         return compute_lock(None, None)
-    return compute_lock(row[0], row[1])
+    return compute_lock(row[0], row[1], asleep_since=row[2] if len(row) > 2 else None,
+                        reading_since=row[3] if len(row) > 3 else None)
 
 
 async def check_not_activity_locked(db, character_id: int, subject: str = "Персонаж") -> None:

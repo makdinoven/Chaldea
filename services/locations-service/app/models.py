@@ -1025,3 +1025,345 @@ class EpisodeJoinRequest(Base):
     __table_args__ = (
         UniqueConstraint('episode_id', 'user_id', name='uq_episode_join_request'),
     )
+
+
+# ---------------------------------------------------------------------------
+# Дома игроков (FEAT-180). Админ размечает участки в городских локациях; на
+# участке стоит готовый дом из комнат-шаблонов. Персонаж покупает его за золото,
+# вписывает жильцов и даёт им доступ к комнатам и кладовой. Комнаты — ролевые
+# локации со своими постами (опыт как за обычный пост, в ленту не попадают).
+# Вещи кладовой лежат в inventory-service (`house_storage`).
+# ---------------------------------------------------------------------------
+
+# Stage 6a: the generic workshop gave way to profession rooms (forge ... study),
+# plus a cellar, a garden, a greenhouse, an apiary and a bath.
+# Stage 6b: library, shrine, trophy hall, guest room, return circle.
+HOUSE_ROOM_TYPES = ('hall', 'bedroom', 'storage', 'cellar', 'garden', 'greenhouse', 'apiary', 'bath',
+                    'forge', 'alchemy_lab', 'kitchen', 'jewelry', 'enchanting', 'study',
+                    'library', 'shrine', 'trophy_hall', 'guest_room', 'return_circle')
+# Stage 5: a plot's plan is a grid on up to four layers, switched between.
+HOUSE_LAYERS = ('floor1', 'floor2', 'basement', 'yard')
+
+
+class HousePlot(Base):
+    __tablename__ = "house_plots"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
+    # Region of the location, kept for the region map's markers.
+    region_id = Column(BigInteger, nullable=True)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    price = Column(Integer, nullable=False)
+    # Stage 5: the plan's grid (the same size on every layer) and the price of
+    # one extension cell the owner may add.
+    grid_w = Column(Integer, nullable=False, default=3, server_default="3")
+    grid_h = Column(Integer, nullable=False, default=1, server_default="1")
+    extension_price = Column(Integer, nullable=True)
+    # ready: sold with the template rooms; empty: land only, the owner builds rooms.
+    kind = Column(Enum('ready', 'empty', name='house_plot_kind'), nullable=False, default='ready',
+                  server_default='ready')
+    map_x = Column(Float, nullable=True)
+    map_y = Column(Float, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('ix_house_plots_location', 'location_id'),
+        Index('ix_house_plots_region', 'region_id'),
+    )
+
+
+class HousePlotRoom(Base):
+    """A room the house on a plot comes with; copied into `house_rooms` on purchase."""
+    __tablename__ = "house_plot_rooms"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    plot_id = Column(BigInteger, ForeignKey("house_plots.id", ondelete="CASCADE"), nullable=False)
+    room_type = Column(Enum(*HOUSE_ROOM_TYPES, name='house_room_type'), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    cell_id = Column(BigInteger, ForeignKey("house_plot_cells.id", ondelete="CASCADE"), nullable=True)
+
+
+class HousePlotLayer(Base):
+    """A layer of the plot's plan; with an unlock price the owner buys it first (a second floor)."""
+    __tablename__ = "house_plot_layers"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    plot_id = Column(BigInteger, ForeignKey("house_plots.id", ondelete="CASCADE"), nullable=False)
+    layer = Column(Enum(*HOUSE_LAYERS, name='house_layer'), nullable=False)
+    unlock_price = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('plot_id', 'layer', name='uq_house_plot_layer'),
+    )
+
+
+class HousePlotCell(Base):
+    """A place on the plan where one room stands. 'extension' cells are bought first.
+    `allowed_types` (comma separated) narrows what the layer allows there."""
+    __tablename__ = "house_plot_cells"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    plot_id = Column(BigInteger, ForeignKey("house_plots.id", ondelete="CASCADE"), nullable=False)
+    layer = Column(Enum(*HOUSE_LAYERS, name='house_layer'), nullable=False)
+    x = Column(Integer, nullable=False)
+    y = Column(Integer, nullable=False)
+    kind = Column(Enum('open', 'extension', name='house_cell_kind'), nullable=False, default='open',
+                  server_default='open')
+    allowed_types = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('plot_id', 'layer', 'x', 'y', name='uq_house_plot_cell'),
+    )
+
+
+class House(Base):
+    __tablename__ = "houses"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # One house per plot; a plot with a house cannot be deleted. A seized house
+    # leaves its plot (plot_id NULL, the plot sells again) and stays as an archive.
+    plot_id = Column(BigInteger, ForeignKey("house_plots.id"), nullable=True, unique=True)
+    owner_character_id = Column(Integer, nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    purchased_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # Stage 4. active / frozen (a season's tax unpaid) / seized (archived).
+    status = Column(Enum('active', 'frozen', 'seized', name='house_status'), nullable=False,
+                    default='active', server_default='active')
+    # Last tax period (game season + its transition, 49 real days) that is paid.
+    tax_paid_through = Column(Integer, nullable=True)
+    heir_character_id = Column(Integer, nullable=True)
+    sale_price = Column(Integer, nullable=True)
+    listed_at = Column(TIMESTAMP, nullable=True)
+    former_plot_id = Column(BigInteger, nullable=True)
+    seized_at = Column(TIMESTAMP, nullable=True)
+    seized_reason = Column(String(20), nullable=True)
+
+    __table_args__ = (
+        Index('ix_houses_owner', 'owner_character_id'),
+    )
+
+
+class HouseRoom(Base):
+    __tablename__ = "house_rooms"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    house_id = Column(BigInteger, ForeignKey("houses.id", ondelete="CASCADE"), nullable=False)
+    room_type = Column(Enum(*HOUSE_ROOM_TYPES, name='house_room_type'), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    image_url = Column(String(512), nullable=True)
+    # Open: anyone reads its posts. Writing is always for the owner and residents let in.
+    is_open = Column(Boolean, nullable=False, default=False, server_default="0")
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    # Stage 2: 0 while being built for the first time, then 1..3. An upgrade (or
+    # the first build) finishes by itself once upgrade_complete_at has passed.
+    level = Column(Integer, nullable=False, default=1, server_default="1")
+    upgrade_to_level = Column(Integer, nullable=True)
+    upgrade_complete_at = Column(TIMESTAMP, nullable=True)
+    # A workshop's profession (inventory-service `professions.id`); only that profession gets its bonus.
+    workshop_profession_id = Column(Integer, nullable=True)
+    # Stage 5: where on the plan it stands (NULL once the admin removed the place).
+    cell_id = Column(BigInteger, ForeignKey("house_plot_cells.id", ondelete="SET NULL"), nullable=True)
+
+    __table_args__ = (
+        Index('ix_house_rooms_house', 'house_id'),
+        UniqueConstraint('house_id', 'cell_id', name='uq_house_room_cell'),
+    )
+
+
+class HouseLayerUnlock(Base):
+    __tablename__ = "house_layer_unlocks"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    house_id = Column(BigInteger, ForeignKey("houses.id", ondelete="CASCADE"), nullable=False)
+    layer = Column(Enum(*HOUSE_LAYERS, name='house_layer'), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('house_id', 'layer', name='uq_house_layer_unlock'),
+    )
+
+
+class HouseCellUnlock(Base):
+    __tablename__ = "house_cell_unlocks"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    house_id = Column(BigInteger, ForeignKey("houses.id", ondelete="CASCADE"), nullable=False)
+    cell_id = Column(BigInteger, ForeignKey("house_plot_cells.id", ondelete="CASCADE"), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('house_id', 'cell_id', name='uq_house_cell_unlock'),
+    )
+
+
+class HouseResident(Base):
+    __tablename__ = "house_residents"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    house_id = Column(BigInteger, ForeignKey("houses.id", ondelete="CASCADE"), nullable=False)
+    character_id = Column(Integer, nullable=False)
+    can_take = Column(Boolean, nullable=False, default=False, server_default="0")
+    can_put = Column(Boolean, nullable=False, default=True, server_default="1")
+    added_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('house_id', 'character_id', name='uq_house_resident'),
+        Index('ix_house_residents_character', 'character_id'),
+    )
+
+
+class HouseResidentRoom(Base):
+    """A room a resident may enter and write in."""
+    __tablename__ = "house_resident_rooms"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    resident_id = Column(BigInteger, ForeignKey("house_residents.id", ondelete="CASCADE"), nullable=False)
+    room_id = Column(BigInteger, ForeignKey("house_rooms.id", ondelete="CASCADE"), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('resident_id', 'room_id', name='uq_house_resident_room'),
+    )
+
+
+class HousePost(Base):
+    __tablename__ = "house_posts"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    room_id = Column(BigInteger, ForeignKey("house_rooms.id", ondelete="CASCADE"), nullable=False)
+    character_id = Column(Integer, nullable=False)
+    content = Column(MEDIUMTEXT, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    edited_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        Index('ix_house_posts_room', 'room_id', 'id'),
+    )
+
+
+class HouseBuildCost(Base):
+    """What building a room of a type up to a level costs (set by admins)."""
+    __tablename__ = "house_build_costs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    room_type = Column(Enum(*HOUSE_ROOM_TYPES, name='house_room_type'), nullable=False)
+    level = Column(Integer, nullable=False)
+    gold = Column(Integer, nullable=False, default=0, server_default="0")
+    build_hours = Column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        UniqueConstraint('room_type', 'level', name='uq_house_build_cost'),
+    )
+
+
+class HouseBuildCostItem(Base):
+    """A material (inventory-service `items.id`) a build step takes from the bag."""
+    __tablename__ = "house_build_cost_items"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    cost_id = Column(BigInteger, ForeignKey("house_build_costs.id", ondelete="CASCADE"), nullable=False)
+    item_id = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)
+
+
+class HouseFurniture(Base):
+    """A piece of furniture (inventory-service `items.id`, item_type 'furniture')
+    standing in a room. Rooms holding furniture cannot be pulled down, so the
+    FK has no cascade: furniture never disappears with a room."""
+    __tablename__ = "house_furniture"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    room_id = Column(BigInteger, ForeignKey("house_rooms.id"), nullable=False)
+    item_id = Column(Integer, nullable=False)
+    placed_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('ix_house_furniture_room', 'room_id'),
+    )
+
+
+class HouseSettings(Base):
+    """Singleton (id 1): the tax rates admins set."""
+    __tablename__ = "house_settings"
+
+    id = Column(Integer, primary_key=True)
+    tax_price_pct = Column(Float, nullable=False, default=5.0, server_default="5")
+    tax_per_room_level = Column(Integer, nullable=False, default=50, server_default="50")
+
+
+class HouseGardenBed(Base):
+    """A planted bed of a garden, greenhouse or apiary (stage 6a). The seed's
+    result, quantity and herbalism experience are copied in at planting, so a
+    seed changed later by admins does not change what grows."""
+    __tablename__ = "house_garden_beds"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    room_id = Column(BigInteger, ForeignKey("house_rooms.id", ondelete="CASCADE"), nullable=False)
+    bed_no = Column(Integer, nullable=False)
+    character_id = Column(Integer, nullable=False)
+    seed_item_id = Column(Integer, nullable=False)
+    result_item_id = Column(Integer, nullable=False)
+    result_quantity = Column(Integer, nullable=False)
+    herbalism_xp = Column(Integer, nullable=False, default=0, server_default="0")
+    planted_at = Column(TIMESTAMP, nullable=False)
+    ready_at = Column(TIMESTAMP, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('room_id', 'bed_no', name='uq_house_garden_bed'),
+    )
+
+
+class HouseBathUse(Base):
+    """When a character last bathed in any house's bath (one bath per 24 h)."""
+    __tablename__ = "house_bath_uses"
+
+    character_id = Column(Integer, primary_key=True, autoincrement=False)
+    last_at = Column(TIMESTAMP, nullable=False)
+
+
+class HouseBuff(Base):
+    """A house blessing of a character (stage 6b): a library's bonus to all character
+    experience, or a shrine's blessing (gathering experience, rest, post experience).
+    One row per source; an expired row means nothing (inventory-service and
+    attributes-service read it with `expires_at` in the future)."""
+    __tablename__ = "house_buffs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    source = Column(Enum('library', 'shrine', name='house_buff_source'), nullable=False)
+    kind = Column(Enum('character_xp', 'gathering_xp', 'regen', 'post_xp', name='house_buff_kind'), nullable=False)
+    value = Column(Float, nullable=False)
+    expires_at = Column(TIMESTAMP, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('character_id', 'source', name='uq_house_buff'),
+    )
+
+
+class HouseShrineUse(Base):
+    """When a character last prayed in any house's shrine (once per 24 h)."""
+    __tablename__ = "house_shrine_uses"
+
+    character_id = Column(Integer, primary_key=True, autoincrement=False)
+    last_at = Column(TIMESTAMP, nullable=False)
+
+
+class HouseGuest(Base):
+    """A character the owner invited as a guest (stage 6b): it may enter the guest
+    rooms of the house and sleep there, nothing else."""
+    __tablename__ = "house_guests"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    house_id = Column(BigInteger, ForeignKey("houses.id", ondelete="CASCADE"), nullable=False)
+    character_id = Column(Integer, nullable=False)
+    invited_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('house_id', 'character_id', name='uq_house_guest'),
+        Index('ix_house_guests_character', 'character_id'),
+    )
