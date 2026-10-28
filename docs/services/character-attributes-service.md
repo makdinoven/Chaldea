@@ -167,6 +167,12 @@ character-service, inventory-service и (в async-варианте) skills-servi
 - **Конец боя:** battle-service при синхронизации ресурсов ставит `regen_anchor_at = UTC_TIMESTAMP()`.
 - **Мобы/NPC** (`characters.is_npc = 1`) и персонажи без строки в `characters` пропускаются.
 - **Сытость** — таблица `character_satiety` (одна строка на персонажа, `UNIQUE(character_id)`): `item_id`, `source_item_name`, `rarity`, `regen_bonus`, `modifiers` (JSON), `started_at`, `expires_at` (24 ч, naive UTC). Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. Пока сытость активна, новая еда → 409 «Вы уже наелись». Модификаторы еды добавляются в базовые колонки как у экипировки (без производных бонусов) и вычитаются при первом пересчёте после `expires_at` (строка удаляется в той же транзакции), затем выполняется reconcile перков. Если сытость закончилась посреди окна, до `expires_at` считается с бонусом, после — без.
+- **Святилище дома** (FEAT-180 6б): благословение `regen` из `house_buffs` (locations-service; `source='shrine'`,
+  `kind='regen'`) умножает покой на (1 + value) до своего `expires_at` — так же, как окно сытости (`regen.
+  get_shrine_regen`, в `_effective_hours` складывается с сытостью и сном). locations-service досчитывает реген
+  перед каждой молитвой, поэтому окно от якоря до конца благословения целиком «благословлённое». Нет таблицы —
+  без бонуса. `rest-status` учитывает его в `regen_percent_per_hour` и отдаёт `shrine_regen_bonus` (доля) и
+  `shrine_regen_until`.
 
 ### `GET /attributes/{id}/rest-status`
 ```json
@@ -179,7 +185,7 @@ character-service, inventory-service и (в async-варианте) skills-servi
 `busy_reason`: `null | battle | dungeon | gathering`. NPC → `is_resting=false`, `satiety=null`. 404 «Атрибуты персонажа не найдены».
 
 ### `POST /attributes/internal/{id}/satiety`
-Тело: `{item_id, source_item_name, rarity, modifiers: {...}, recovery: {health_recovery, mana_recovery, energy_recovery, stamina_recovery}}`. Ответ 201 `{satiety, stats_changed}`. Ошибки: 400 «Недопустимая редкость еды» / недопустимые модификаторы / отрицательное восстановление; 404; 409 «Вы уже наелись». Одна транзакция: блокировка → пересчёт → проверка → модификаторы → мгновенное восстановление → запись сытости.
+Тело: `{item_id, source_item_name, rarity, modifiers: {...}, recovery: {health_recovery, mana_recovery, energy_recovery, stamina_recovery}, duration_hours}`. `duration_hours` (FEAT-180 6а, необязательно, 1..72, по умолчанию 24) — сколько держится сытость: inventory-service присылает больше, если под рукой кухня дома; вне диапазона → 422. Ответ 201 `{satiety, stats_changed}`. Ошибки: 400 «Недопустимая редкость еды» / недопустимые модификаторы / отрицательное восстановление; 404; 409 «Вы уже наелись». Одна транзакция: блокировка → пересчёт → проверка → модификаторы → мгновенное восстановление → запись сытости.
 
 ### `POST /attributes/internal/settle-regen`
 Тело `{"character_ids": [1, 2]}` (1..50 уникальных) → `{"settled": [...], "missing": [...]}`; каждый id в своей короткой транзакции. Вызывается party-service перед чтением ресурсов участников.
@@ -253,3 +259,13 @@ character-service, inventory-service и (в async-варианте) skills-servi
 5 с до таймаута HTTP (на проде у персонажа с перком «Знания правят миром»), а проверка золота по
 таймауту считалась «условие не выполнено». Следствие: перк, открытый другим перком в том же
 пересчёте, включится на следующем пересчёте.
+
+## Сон в доме (FEAT-180)
+
+`regen.get_sleep` читает `characters.asleep_since` / `sleep_regen_factor` (колонки character-service,
+пишет их locations-service). Часы отдыха после засыпания умножаются на множитель спальни (×2 / ×2.5 / ×3),
+сытость складывается сверху, время боя/подземелья/добычи по-прежнему не считается (`_effective_hours`).
+locations-service досчитывает восстановление (`/internal/settle-regen`) перед тем, как уложить персонажа и
+перед пробуждением, поэтому весь отрезок от якоря (или от засыпания) — сон. `GET /{id}/rest-status`
+отдаёт `asleep_since`, а `regen_percent_per_hour` уже включает множитель сна. Тесты:
+`tests/test_house_sleep_regen.py`.

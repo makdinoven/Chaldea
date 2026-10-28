@@ -356,3 +356,44 @@ PUT заменяет таблицу целиком (уровни подряд с
 character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
 сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
 «не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.
+
+## Сон в доме (FEAT-180, миграция 024)
+
+`characters.asleep_since` (DATETIME, naive UTC), `sleep_regen_factor` (FLOAT), `sleep_house_room_id`
+(BIGINT, `house_rooms.id` без FK). Пишет и очищает locations-service (сон в спальне дома / пробуждение).
+Пока `asleep_since` задан, персонаж заблокирован: `activity_lock` отдаёт причину `asleep` («Персонаж спит —
+сначала нужно проснуться»); без сознания и подземелье важнее сна. Колонку читают копии `activity_lock` в
+battle-, inventory- и locations-service.
+
+## Чтение в библиотеке и свиток возвращения (FEAT-180 этап 6б, миграция 025)
+
+`characters.reading_since` (DATETIME, naive UTC) и `reading_house_room_id` (BIGINT, `house_rooms.id` без FK) —
+пишет и очищает locations-service (библиотека дома). Пока `reading_since` задан, `activity_lock` отдаёт
+причину `reading` («Персонаж читает — сначала нужно закончить чтение»); сон, без сознания и подземелье
+важнее. Колонку читают копии `activity_lock` в battle-, inventory- и locations-service.
+
+`POST /characters/internal/{character_id}/home-teleport {location_id}` (X-Internal-Token; nginx закрывает
+`/characters/internal/`) — inventory-service, когда прочитан свиток возвращения домой. Те же шаги, что у
+`admin/{id}/move` (общий `_prepare_move`): бой / подземелье → 409, отмена добычи (`reason=home_teleport`),
+гашение намерений в покидаемой локации (502 при сбое — никто не перенесён), затем `crud.apply_admin_move` с
+`event_type="home_teleport"` (сброс кулдауна перехода, запись в журнал без полей админа). Дополнительно: та же
+локация → 400 «Персонаж уже в этой локации», иная блокировка активности (сон, чтение) → 409, нет локации → 404.
+Ответ `{character_id, from_location_id, location_id, location_name, gathering_cancelled}`. Тесты:
+`tests/test_home_teleport_internal.py`.
+
+## Присутствие в доме (FEAT-180 этап 7, миграция 026)
+
+`characters.house_room_id` (BIGINT NULL, индекс `ix_characters_house_room_id`, без FK) — комната дома
+(locations-service `house_rooms.id`), где стоит персонаж. Пишет locations-service (вход/переход/выход);
+character-service **обнуляет при каждой смене локации**: `PUT /characters/internal/{id}/update_location` (если
+локация действительно другая — обычный переход и быстрое перемещение через locations-service), перенос Мастера
+телепортов (`crud.execute_teleport`), админский перенос и свиток (`crud.apply_admin_move`), нокаут подземелья с
+возвратом в другую локацию (`/internal/activity-lock/knockout`). Свиток возвращения:
+`POST /characters/internal/{id}/home-teleport {location_id, house_room_id?}` — `house_room_id` (круг возвращения,
+который выбрал inventory-service) ставится в той же транзакции, что и перенос; без поля персонаж просто в локации.
+Комната считается только пока её дом стоит в текущей локации, поэтому пропущенная очистка безопасна.
+
+`GET /characters/by_location` — у игрока `in_house: {house_id, house_name} | null` (персонаж внутри дома этой
+локации; комната не раскрывается; таблицы домов читаются сырым SQL, без них — null). Откат миграции снимает индекс
+и колонку. Тесты: `tests/test_house_presence.py`.
+- `GET /characters/internal/{id}/short_info` отдаёт `current_house {house_id, house_name, room_id, room_name}` (или null) — комната дома, где стоит персонаж (правило то же: дом в его локации). Публичный `short_info` этого поля не содержит. user-service передаёт его только в `/users/me` — для ссылки «вернуться в дом» в шапке.
