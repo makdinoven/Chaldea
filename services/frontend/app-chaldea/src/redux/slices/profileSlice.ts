@@ -66,6 +66,22 @@ export interface ItemData {
   damage_entries?: ItemDamageEntry[] | null;
   /** XP books (§3.9-bis): wins over the legacy `buff_*` triple above */
   xp_buffs?: ItemXpBuff[] | null;
+  /** Furniture (FEAT-180): the room type it goes into and its bonus */
+  furniture_room_type?: string | null;
+  furniture_sleep_bonus?: number | null;
+  furniture_storage_stacks?: number | null;
+  furniture_xp_bonus_pct?: number | null;
+  furniture_refine_bonus_pct?: number | null;
+  /** Seeds (FEAT-180 stage 6a): what grows, how many, in how many hours and where */
+  seed_result_item_id?: number | null;
+  seed_result_quantity?: number | null;
+  seed_grow_hours?: number | null;
+  seed_room_type?: string | null;
+  seed_herbalism_xp?: number | null;
+  /** FEAT-180 stage 6b: an elite trophy hangs in a house trophy hall (resource/trophy only) */
+  is_elite_trophy?: boolean;
+  /** FEAT-180 stage 6b: a scroll that carries its reader home to a return circle */
+  is_home_teleport?: boolean;
 }
 
 export interface InventoryItem {
@@ -273,12 +289,16 @@ export interface RestStatus {
   base_regen_percent_per_hour: number;
   regen_percent_per_hour: number;
   satiety: SatietyInfo | null;
+  /** FEAT-180: when the character fell asleep in a house bedroom (naive UTC); the sleep multiplier is already in `regen_percent_per_hour`. */
+  asleep_since?: string | null;
 }
 
 export interface EatFoodResult {
   success: boolean;
   message: string;
   satiety: SatietyInfo;
+  /** How long this meal keeps the character fed (longer at a house with a kitchen). */
+  satiety_hours?: number;
 }
 
 export interface RepairItemRequest {

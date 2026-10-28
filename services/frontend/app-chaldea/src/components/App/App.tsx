@@ -60,6 +60,10 @@ import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
 import EpisodesPage from "../pages/EpisodesPage/EpisodesPage";
 import EpisodePage from "../pages/EpisodesPage/EpisodePage";
 import EpisodeLocationPage from "../pages/EpisodesPage/EpisodeLocationPage";
+import MyHousesPage from "../pages/HousesPage/MyHousesPage";
+import HousePage from "../pages/HousesPage/HousePage";
+import HouseMarketPage from "../pages/HousesPage/HouseMarketPage";
+import HousesAdminPage from "../Admin/HousesAdminPage/HousesAdminPage";
 import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
 import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
 import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
@@ -159,6 +163,11 @@ const App = () => {
             <Route path="episodes" element={<EpisodesPage />} />
             <Route path="episodes/:episodeId" element={<EpisodePage />} />
             <Route path="episodes/:episodeId/location/:locationId" element={<EpisodeLocationPage />} />
+            <Route path="houses" element={<ProtectedRoute><MyHousesPage /></ProtectedRoute>} />
+            <Route path="houses/market" element={<HouseMarketPage />} />
+            <Route path="houses/:houseId" element={<HousePage />} />
+            <Route path="houses/:houseId/room/:roomId" element={<HousePage />} />
+            <Route path="houses/:houseId/manage" element={<HousePage manage />} />
             <Route path="admin" element={
               <ProtectedRoute requiredRole="editor">
                 <AdminPage />
@@ -167,6 +176,11 @@ const App = () => {
             <Route path="admin/locations" element={
               <ProtectedRoute requiredPermission="locations:read">
                 <AdminLocationsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/houses" element={
+              <ProtectedRoute requiredPermission="locations:read">
+                <HousesAdminPage />
               </ProtectedRoute>
             } />
             <Route path="admin/floating-structures" element={

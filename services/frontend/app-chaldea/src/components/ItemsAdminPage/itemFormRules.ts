@@ -60,6 +60,59 @@ export const FOOD_HINT =
   "Сытость на 24 ч. Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. " +
   "Характеристики ниже действуют, пока активна сытость; восстановление срабатывает сразу при еде.";
 
+export const FURNITURE_HALL_HINT = "Украшение без бонуса — видно гостям в описании комнаты";
+
+/* ── Seeds (FEAT-180 stage 6a) — bounds mirror inventory-service schemas ── */
+
+export const SEED_MAX_QUANTITY = 100;
+export const SEED_MAX_GROW_HOURS = 720;
+export const SEED_MAX_XP = 10000;
+export const SEED_DEFAULT_GROW_HOURS = 12;
+export const SEED_FIELDS = [
+  "seed_result_item_id",
+  "seed_result_quantity",
+  "seed_grow_hours",
+  "seed_room_type",
+  "seed_herbalism_xp",
+] as const;
+
+/** A resource is a seed once the admin picked where it grows. */
+export const isSeedItem = (item: Record<string, unknown>): boolean =>
+  item.item_type === "resource" && Boolean(item.seed_room_type);
+
+const isWholeIn = (v: unknown, min: number, max: number) => {
+  const n = Number(v);
+  return v !== "" && v !== null && v !== undefined && Number.isInteger(n) && n >= min && n <= max;
+};
+
+/** Same rules as the server's seed validator; returns a Russian error or null. */
+export const validateSeed = (item: Record<string, unknown>, ownId?: number): string | null => {
+  if (!isSeedItem(item)) return null;
+  const resultId = Number(item.seed_result_item_id);
+  if (!item.seed_result_item_id || !Number.isFinite(resultId)) return "Выберите, что вырастет из семян";
+  if (ownId != null && resultId === ownId) return "Семена не могут вырастать сами в себя";
+  if (!isWholeIn(item.seed_result_quantity, 1, SEED_MAX_QUANTITY)) return `Урожай семян — от 1 до ${SEED_MAX_QUANTITY}`;
+  if (!isWholeIn(item.seed_grow_hours, 1, SEED_MAX_GROW_HOURS)) return `Семена растут от 1 до ${SEED_MAX_GROW_HOURS} часов`;
+  if (!isWholeIn(item.seed_herbalism_xp, 0, SEED_MAX_XP)) return `Опыт травничества за урожай — от 0 до ${SEED_MAX_XP}`;
+  return null;
+};
+
+/* ── House items (FEAT-180 stage 6b) — rules mirror inventory-service schemas ── */
+
+export const ELITE_TROPHY_HINT =
+  "Элитный трофей вешают в трофейный зал дома: каждый даёт хозяину и жильцам +1 % к опыту за бои (всего не больше 15 %).";
+export const HOME_TELEPORT_HINT =
+  "Прочитанный свиток переносит персонажа в дом с построенным кругом возвращения. Круг 2–3 уровня может сохранить свиток.";
+
+/** Same rules (and messages) as the server's house flag validator; a Russian error or null. */
+export const validateHouseFlags = (item: Record<string, unknown>): string | null => {
+  if (item.is_elite_trophy && (item.item_type !== "resource" || item.resource_subcategory !== "trophy"))
+    return "Элитным может быть только трофей (ресурс с подкатегорией «Трофеи»)";
+  if (item.is_home_teleport && item.item_type !== "scroll")
+    return "Свитком возвращения домой может быть только свиток";
+  return null;
+};
+
 export const BACKPACK_HINT =
   "Носится в слоте плаща. В подземелье из своих вещей доступно только содержимое рюкзака (расходники). " +
   "Вместимость по редкости: обычный 4, редкий 6, эпический 8, легендарный и выше 10 слотов.";
@@ -316,6 +369,8 @@ export interface FieldRules {
   resource: boolean;
   recipeAuto: boolean;
   gatheringTool: boolean;
+  /** Furniture room type + its bonus (FEAT-180) */
+  furniture: boolean;
   /** "Еда" checkbox (consumables only) */
   food: boolean;
   /** Battle effect editor: potions, poisons, scrolls — never food (FEAT-168) */
@@ -343,6 +398,7 @@ export const rulesFor = (itemType: string, isFood = false): FieldRules => {
     resource: itemType === "resource",
     recipeAuto: itemType === "recipe",
     gatheringTool: itemType === "gathering_tool",
+    furniture: itemType === "furniture",
     food,
     battleEffects: (itemType === "consumable" || itemType === "scroll") && !eatable,
   };
@@ -460,6 +516,27 @@ export const buildItemPayload = (item: Record<string, unknown>): Record<string, 
   for (const key of ["gather_double_chance_bonus", "gather_speed_bonus_pct", "gather_stamina_bonus_pct"]) {
     payload[key] = rules.gatheringTool ? num(item[key]) : 0;
   }
+
+  // Furniture (FEAT-180): each bonus only for its room type, the rest zeroed
+  // so the backend validator accepts the item.
+  const room = rules.furniture && item.furniture_room_type ? String(item.furniture_room_type) : null;
+  payload.furniture_room_type = room;
+  payload.furniture_sleep_bonus = room === "bedroom" ? num(item.furniture_sleep_bonus) : 0;
+  payload.furniture_storage_stacks = room === "storage" ? Math.round(num(item.furniture_storage_stacks)) : 0;
+  payload.furniture_xp_bonus_pct = room === "workshop" ? num(item.furniture_xp_bonus_pct) : 0;
+  payload.furniture_refine_bonus_pct = room === "workshop" ? num(item.furniture_refine_bonus_pct) : 0;
+
+  // Seeds (FEAT-180 stage 6a): all five fields or none, resources only.
+  const seed = rules.resource && isSeedItem(item);
+  payload.seed_room_type = seed ? String(item.seed_room_type) : null;
+  payload.seed_result_item_id = seed ? numOrNull(item.seed_result_item_id) : null;
+  payload.seed_result_quantity = seed ? Math.round(num(item.seed_result_quantity)) : null;
+  payload.seed_grow_hours = seed ? Math.round(num(item.seed_grow_hours)) : null;
+  payload.seed_herbalism_xp = seed ? Math.round(num(item.seed_herbalism_xp)) : null;
+
+  // House items (FEAT-180 stage 6b): only a trophy is elite, only a scroll carries home.
+  payload.is_elite_trophy = subcategory === "trophy" && Boolean(item.is_elite_trophy);
+  payload.is_home_teleport = type === "scroll" && Boolean(item.is_home_teleport);
 
   return payload;
 };

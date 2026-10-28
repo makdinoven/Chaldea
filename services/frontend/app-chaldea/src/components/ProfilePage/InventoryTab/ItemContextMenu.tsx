@@ -36,6 +36,8 @@ import { getClientPrefs } from '../../../utils/clientPrefs';
 import { packIntoBackpack } from '../../../api/backpack';
 import { apiErrorMessage } from '../../../api/errors';
 import useBackpack from '../../CommonComponents/ItemSlot/useBackpack';
+import { isHomeTeleportScroll } from '../../../utils/houseItems';
+import HomeTeleportModal from './HomeTeleportModal';
 
 const parseSocketedGems = (raw: string | null | undefined): (number | null)[] => {
   if (!raw) return [];
@@ -88,6 +90,8 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
   const [sharpenTarget, setSharpenTarget] = useState<SharpenableItemRef | null>(null);
   // Socket modal state: anyone inserts, only the matching profession extracts
   const [socketTarget, setSocketTarget] = useState<JewelryItemRef | null>(null);
+  // Home teleport scroll dialog (FEAT-180 stage 6b)
+  const [homeScroll, setHomeScroll] = useState<{ rowId: number; name: string } | null>(null);
 
   // Close on click outside
   useEffect(() => {
@@ -355,6 +359,18 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
       }
     }
 
+    // Вернуться домой — a home teleport scroll goes through its own dialog (FEAT-180 stage 6b);
+    // the generic use endpoint refuses it.
+    if (!contextMenu.slotType && isHomeTeleportScroll(item) && inventoryItem.id > 0) {
+      actions.push({
+        label: 'Вернуться домой',
+        handler: () => {
+          dispatch(closeContextMenu());
+          setHomeScroll({ rowId: inventoryItem.id, name: item.name });
+        },
+      });
+    }
+
     // Изучить — only for recipe items
     if (itemType === 'recipe' && item.blueprint_recipe_id) {
       actions.push({
@@ -539,6 +555,15 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
           characterId={characterId}
           item={sharpenTarget}
           onClose={() => setSharpenTarget(null)}
+        />
+      )}
+
+      {homeScroll && (
+        <HomeTeleportModal
+          characterId={characterId}
+          inventoryItemId={homeScroll.rowId}
+          scrollName={homeScroll.name}
+          onClose={() => setHomeScroll(null)}
         />
       )}
 

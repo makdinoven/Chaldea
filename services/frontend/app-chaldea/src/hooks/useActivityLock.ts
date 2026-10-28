@@ -7,19 +7,23 @@ import { parseServerDate } from '../utils/serverDate';
  * FEAT-175 activity lock of the selected character, as sent by `/users/me`
  * (`character.activity_lock`, computed by character-service):
  * - `dungeon` — the character is inside a dungeon run;
- * - `unconscious` — knocked out after a wipe until `until` (naive UTC).
+ * - `unconscious` — knocked out after a wipe until `until` (naive UTC);
+ * - `asleep` — FEAT-180: sleeping in a house bedroom until woken;
+ * - `reading` — FEAT-180 stage 6b: reading in a house library until stopped.
  * While locked the backend refuses outside-world actions with 409.
  */
+export type ActivityLockReason = 'dungeon' | 'unconscious' | 'asleep' | 'reading';
+
 export interface ActivityLockData {
   locked: boolean;
-  reason: 'dungeon' | 'unconscious' | null;
+  reason: ActivityLockReason | null;
   until: string | null;
   dungeon_session_id: number | null;
 }
 
 export interface ActivityLockState {
   locked: boolean;
-  reason: 'dungeon' | 'unconscious' | null;
+  reason: ActivityLockReason | null;
   /** End of unconsciousness (local Date), null otherwise. */
   until: Date | null;
   dungeonSessionId: number | null;
@@ -78,6 +82,26 @@ const useActivityLock = (): ActivityLockState => {
       message: untilDate
         ? `Персонаж без сознания до ${formatLocalTime(untilDate)}`
         : 'Персонаж без сознания',
+    };
+  }
+
+  if (lock.reason === 'asleep') {
+    return {
+      locked: true,
+      reason: 'asleep',
+      until: null,
+      dungeonSessionId: null,
+      message: 'Персонаж спит',
+    };
+  }
+
+  if (lock.reason === 'reading') {
+    return {
+      locked: true,
+      reason: 'reading',
+      until: null,
+      dungeonSessionId: null,
+      message: 'Персонаж читает',
     };
   }
 

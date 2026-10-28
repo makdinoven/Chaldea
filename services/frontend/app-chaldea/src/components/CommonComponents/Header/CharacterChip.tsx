@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { MapPin, User } from 'react-feather';
+import { Home, MapPin, User } from 'react-feather';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAppSelector } from '../../../redux/store';
 import CharacterSwitchDropdown from './CharacterSwitchDropdown';
@@ -96,7 +96,19 @@ const CharacterChip = () => {
                 </span>
               )}
             </span>
-            {character.current_location ? (
+            {character.current_house ? (
+              <Link
+                to={`/houses/${character.current_house.house_id}/room/${character.current_house.room_id}`}
+                onClick={(e) => e.stopPropagation()}
+                title="Вернуться в дом"
+                className="flex items-center gap-1 text-gold-light hover:text-gold transition-colors duration-200 ease-site leading-none max-w-full"
+              >
+                <Home size={11} className="flex-shrink-0" />
+                <span className="text-[10.5px] font-medium truncate">
+                  {character.current_house.house_name} · {character.current_house.room_name}
+                </span>
+              </Link>
+            ) : character.current_location ? (
               <Link
                 to={`/location/${character.current_location.id}`}
                 onClick={(e) => e.stopPropagation()}

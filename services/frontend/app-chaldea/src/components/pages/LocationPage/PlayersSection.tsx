@@ -107,7 +107,7 @@ const getRarityColorClass = (rarity?: string): string => {
   }
 };
 
-const AvatarCard = ({ avatar, name, level, title, titleRarity, actionsSlot }: { avatar: string | null; name: string; level?: number; title?: string; titleRarity?: string; actionsSlot?: ReactNode }) => (
+const AvatarCard = ({ avatar, name, level, title, titleRarity, actionsSlot, inHouse }: { avatar: string | null; name: string; level?: number; title?: string; titleRarity?: string; actionsSlot?: ReactNode; inHouse?: string | null }) => (
   <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors duration-200">
     {title ? (
       <span className={`text-[10px] sm:text-xs text-center leading-tight break-words w-full ${getRarityColorClass(titleRarity)}`}>
@@ -133,6 +133,12 @@ const AvatarCard = ({ avatar, name, level, title, titleRarity, actionsSlot }: { 
     {level !== undefined && (
       <span className="gold-text text-[10px] sm:text-xs font-medium">
         LVL {level}
+      </span>
+    )}
+    {inHouse && (
+      <span title={`В доме «${inHouse}»`}
+        className="max-w-full px-1.5 py-px rounded-full border border-site-blue/40 bg-site-blue/10 text-site-blue text-[9.5px] sm:text-[10px] leading-tight text-center truncate">
+        в доме «{inHouse}»
       </span>
     )}
     {actionsSlot}
@@ -342,6 +348,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                           level={player.level}
                           title={player.character_title}
                           titleRarity={player.character_title_rarity}
+                          inHouse={player.in_house?.house_name ?? null}
                           actionsSlot={
                             currentCharacterId != null &&
                             currentUserId != null &&

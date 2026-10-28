@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Hourglass, Utensils } from 'lucide-react';
+import { Flame, Home, LibraryBig, Trophy, Hourglass, Utensils } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
   fetchAttributes,
@@ -10,6 +10,10 @@ import {
 import type { RestBusyReason } from '../../../redux/slices/profileSlice';
 import { RARITY_TEXT_COLORS } from '../../../constants/items';
 import { PERCENTAGE_STATS, STAT_LABELS } from '../constants';
+import { getHouseBuffs, percentText, type HouseBuffs } from '../../../api/houses';
+import { apiErrorMessage } from '../../../api/errors';
+import { buffText } from '../../pages/HousesPage/HouseBuffs';
+import { parseServerDate } from '../../../utils/serverDate';
 
 /** Local countdown tick for the satiety timer */
 const TICK_MS = 30_000;
@@ -60,6 +64,27 @@ const RestStatusPanel = () => {
     setNow(Date.now());
   }, [restStatus]);
 
+  // House blessings (library, shrine) and the trophy hall bonus — FEAT-180
+  const [houseBuffs, setHouseBuffs] = useState<HouseBuffs | null>(null);
+  const [houseError, setHouseError] = useState<string | null>(null);
+
+  const loadHouseBuffs = (id: number) => {
+    getHouseBuffs(id)
+      .then((data) => {
+        setHouseBuffs(data);
+        setHouseError(null);
+      })
+      .catch((e) => setHouseError(apiErrorMessage(e, 'Не удалось загрузить бонусы дома')));
+  };
+
+  useEffect(() => {
+    setHouseBuffs(null);
+    if (!characterId) return undefined;
+    loadHouseBuffs(characterId);
+    const id = window.setInterval(() => loadHouseBuffs(characterId), REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [characterId]);
+
   const refresh = () => {
     if (!characterId) return;
     dispatch(fetchRestStatus(characterId));
@@ -105,6 +130,11 @@ const RestStatusPanel = () => {
   }
 
   const modifiers = Object.entries(satiety?.modifiers ?? {}).filter(([, v]) => v !== 0);
+  // Expired blessings drop out locally until the next refetch
+  const activeHouseBuffs = (houseBuffs?.buffs ?? []).filter(
+    (b) => (parseServerDate(b.expires_at)?.getTime() ?? 0) > now,
+  );
+  const trophyBonus = houseBuffs?.trophy_bonus ?? 0;
 
   return (
     <div className="flex flex-col gap-2 w-full min-w-0 text-sm">
@@ -162,6 +192,33 @@ const RestStatusPanel = () => {
         </div>
       )}
 
+      {(activeHouseBuffs.length > 0 || trophyBonus > 0) && (
+        <div className="flex flex-col gap-1 rounded-card bg-white/[0.05] px-3 py-2 min-w-0">
+          <span className="flex items-center gap-1.5 gold-text text-xs font-medium uppercase tracking-[0.06em]">
+            <Home size={12} className="text-gold" aria-hidden="true" />
+            Дом
+          </span>
+          <ul className="flex flex-col gap-1 text-xs">
+            {activeHouseBuffs.map((b) => {
+              const Icon = b.source === 'library' ? LibraryBig : Flame;
+              return (
+                <li key={`${b.source}-${b.kind}`} className="flex items-start gap-1.5 text-white">
+                  <Icon size={12} className="mt-0.5 shrink-0 text-gold" aria-hidden="true" />
+                  <span className="break-words min-w-0">{buffText(b)}</span>
+                </li>
+              );
+            })}
+            {trophyBonus > 0 && (
+              <li className="flex items-start gap-1.5 text-white">
+                <Trophy size={12} className="mt-0.5 shrink-0 text-site-blue" aria-hidden="true" />
+                <span className="break-words min-w-0">Трофеи: +{percentText(trophyBonus)} % опыта за бои</span>
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
+      {houseError && <p className="text-site-red text-xs">{houseError}</p>}
       {restError && <p className="text-site-red text-xs">{restError}</p>}
     </div>
   );

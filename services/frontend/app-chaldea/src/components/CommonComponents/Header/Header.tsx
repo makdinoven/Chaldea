@@ -56,6 +56,8 @@ const Header = () => {
   const userLinks: DropdownLink[] = [
     { label: 'Мой профиль', path: '/user-profile' },
     { label: 'Персонаж', path: '/profile' },
+    { label: 'Мои дома', path: '/houses' },
+    { label: 'Продажа домов', path: '/houses/market' },
     { label: 'Сообщения', path: '/messages' },
     { label: 'Настройки', path: '/settings' },
     { label: 'Выход', path: '/', onClick: handleLogout },

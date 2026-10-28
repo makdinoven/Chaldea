@@ -36,6 +36,7 @@ import useGatheringLock from '../../../hooks/useGatheringLock';
 import useActivityLock from '../../../hooks/useActivityLock';
 import GatheringLockBanner from '../../CommonComponents/GatheringLockBanner';
 import GatheringSection from './GatheringSection/GatheringSection';
+import HousesSection from './HousesSection';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -772,6 +773,13 @@ const LocationPage = () => {
         />
       )}
 
+      {/* FEAT-180: plots and houses of this location — hidden when none */}
+      <HousesSection
+        locationId={location.id}
+        characterId={character?.id ?? null}
+        isCharacterHere={isCharacterHere}
+      />
+
       {/* Body grid: chronicle (posts) + sidebar; sidebar above posts on <lg.
           Both the track template and the sidebar wrapper are conditional (§3.7)
           — with no ground loot the posts span the full container width. */}
@@ -897,14 +905,18 @@ const LocationPage = () => {
             ) : activityLock.locked ? (
               <div className="bg-site-bg backdrop-blur-sm rounded-card border border-rarity-epic/30 flex items-center gap-3.5 p-4 sm:px-5">
                 <span className="w-11 h-11 shrink-0 flex items-center justify-center rounded-[11px] bg-rarity-epic/15 border border-rarity-epic/35 text-xl" aria-hidden>
-                  {activityLock.reason === 'dungeon' ? '🏰' : '💫'}
+                  {activityLock.reason === 'dungeon' ? '🏰' : activityLock.reason === 'asleep' ? '💤' : activityLock.reason === 'reading' ? '📖' : '💫'}
                 </span>
                 <div className="flex flex-col gap-0.5 min-w-0">
                   <span className="text-white text-sm font-medium">{activityLock.message}</span>
                   <span className="text-white/55 text-xs">
                     {activityLock.reason === 'dungeon'
                       ? 'Написание постов будет доступно после выхода из подземелья.'
-                      : 'Написание постов будет доступно, когда персонаж очнётся.'}
+                      : activityLock.reason === 'asleep'
+                        ? 'Написание постов будет доступно, когда персонаж проснётся.'
+                        : activityLock.reason === 'reading'
+                          ? 'Написание постов будет доступно, когда персонаж закончит чтение.'
+                          : 'Написание постов будет доступно, когда персонаж очнётся.'}
                   </span>
                 </div>
               </div>

@@ -24,6 +24,7 @@ const ITEM_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'recipe', label: 'Рецепт' },
   { value: 'gem', label: 'Камень' },
   { value: 'rune', label: 'Руна' },
+  { value: 'furniture', label: 'Мебель' },
 ];
 
 const RARITY_OPTIONS: { value: string; label: string }[] = [

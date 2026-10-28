@@ -48,6 +48,31 @@ interface DistrictPositionData {
   locations: { id: number; name: string; map_x: number | null; map_y: number | null }[];
 }
 
+/** FEAT-180: a house plot drawn on the region map (percent coordinates). */
+export interface HouseMarker {
+  id: number;
+  name: string;
+  map_x: number;
+  map_y: number;
+  location_id: number;
+  /** Someone already lives there (otherwise the plot is for sale). */
+  owned: boolean;
+  /** Stage 4: the owner sells the house on the board for this price. */
+  salePrice?: number | null;
+  /** Stage 4: frozen for an unpaid tax. */
+  frozen?: boolean;
+}
+
+/** Tooltip of a house marker. */
+const houseMarkerTitle = (house: HouseMarker): string => {
+  if (!house.owned) return `${house.name} — продаётся`;
+  const notes = [
+    house.salePrice != null && `продаётся за ${house.salePrice.toLocaleString('ru-RU')} золота`,
+    house.frozen && 'заморожен',
+  ].filter(Boolean);
+  return notes.length ? `${house.name} — ${notes.join(', ')}` : house.name;
+};
+
 interface RegionInteractiveMapProps {
   mapImageUrl: string;
   mapItems: MapItem[];
@@ -59,6 +84,8 @@ interface RegionInteractiveMapProps {
   onDistrictClick: (districtId: number) => void;
   onArrowClick?: (targetRegionId: number) => void;
   isCityMap?: boolean;
+  houseMarkers?: HouseMarker[];
+  onHouseClick?: (marker: HouseMarker) => void;
 }
 
 const MARKER_COLORS: Record<string, string> = {
@@ -113,6 +140,8 @@ const RegionInteractiveMap = ({
   onDistrictClick,
   onArrowClick,
   isCityMap = false,
+  houseMarkers = [],
+  onHouseClick,
 }: RegionInteractiveMapProps) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -684,6 +713,28 @@ const RegionInteractiveMap = ({
               </div>
             );
           })}
+          {/* FEAT-180: house plots — small markers under the location icons */}
+          {houseMarkers.map((house) => (
+            <div
+              key={`house-${house.id}`}
+              className="absolute z-[5]"
+              style={{ left: `${house.map_x}%`, top: `${house.map_y}%`, transform: 'translate(-50%, -50%)' }}
+            >
+              <button
+                type="button"
+                title={houseMarkerTitle(house)}
+                aria-label={house.name}
+                onClick={() => onHouseClick?.(house)}
+                className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center bg-black/60 border border-gold/60 hover:border-gold hover:scale-110 transition-transform duration-200 ease-site cursor-pointer p-0"
+              >
+                <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${house.frozen ? 'text-site-blue' : house.owned && house.salePrice == null ? 'text-gold' : 'text-stat-energy'}`} fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 10.5 12 3l9 7.5" />
+                  <path d="M5 9.5V21h14V9.5" />
+                  <path d="M10 21v-6h4v6" />
+                </svg>
+              </button>
+            </div>
+          ))}
         </>
       )}
 

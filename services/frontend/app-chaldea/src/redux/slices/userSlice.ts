@@ -18,6 +18,13 @@ interface CharacterData {
     name: string;
   } | null;
   travel_cooldown_until?: string | null;
+  /** FEAT-180 stage 7: the house room the character stands in (header «back to the house» link). */
+  current_house?: {
+    house_id: number;
+    house_name: string;
+    room_id: number;
+    room_name: string;
+  } | null;
   [key: string]: unknown;
 }
 

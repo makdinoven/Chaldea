@@ -33,7 +33,9 @@ import HierarchyTree from './HierarchyTree/HierarchyTree';
 import GameTimeWidget from './GameTimeWidget';
 import InteractiveMap from './InteractiveMap/InteractiveMap';
 import RegionInteractiveMap from './RegionInteractiveMap/RegionInteractiveMap';
-import type { MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
+import type { HouseMarker, MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
+import { plotsInRegion } from '../../api/houses';
+import { apiErrorMessage } from '../../api/errors';
 import { hasRecommendedLevel } from '../../utils/recommendedLevel';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
@@ -97,6 +99,36 @@ const WorldPage = () => {
     if (params.areaId) return Number(params.areaId);
     return null;
   }, [params.areaId, params.countryId, params.regionId]);
+
+  // FEAT-180: house plots placed on the region map
+  const [houseMarkers, setHouseMarkers] = useState<HouseMarker[]>([]);
+  useEffect(() => {
+    setHouseMarkers([]);
+    if (viewLevel !== 'region' || entityId == null) return undefined;
+    let cancelled = false;
+    plotsInRegion(entityId)
+      .then((plots) => {
+        if (cancelled) return;
+        setHouseMarkers(plots
+          .filter((p) => p.map_x != null && p.map_y != null)
+          .map((p) => ({
+            id: p.id,
+            name: p.house?.name ?? p.name,
+            map_x: p.map_x as number,
+            map_y: p.map_y as number,
+            location_id: p.location_id,
+            owned: p.house !== null,
+            salePrice: p.house?.sale_price ?? null,
+            frozen: p.house?.status === 'frozen',
+          })));
+      })
+      .catch((e) => {
+        if (!cancelled) toast.error(apiErrorMessage(e, 'Не удалось загрузить дома региона'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewLevel, entityId]);
 
   // Show error toast
   useEffect(() => {
@@ -823,6 +855,8 @@ const WorldPage = () => {
                 onLocationClick={handleLocationClick}
                 onDistrictClick={handleDistrictClick}
                 onArrowClick={handleArrowClick}
+                houseMarkers={houseMarkers}
+                onHouseClick={(house) => navigate(`/location/${house.location_id}`)}
               />
             </div>
           ) : (

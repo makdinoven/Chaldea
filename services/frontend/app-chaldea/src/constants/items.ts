@@ -6,7 +6,7 @@
 export const ITEM_TYPES = [
   'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
   'weapon', 'consumable', 'resource',
-  'scroll', 'misc', 'recipe', 'gem', 'rune', 'gathering_tool',
+  'scroll', 'misc', 'recipe', 'gem', 'rune', 'gathering_tool', 'furniture',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
@@ -28,11 +28,12 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
   gem: 'Камень',
   rune: 'Руна',
   gathering_tool: 'Инструмент сбора',
+  furniture: 'Мебель',
 };
 
 /* ── Categories (admin item catalogue) ── */
 
-export type ItemCategoryKey = 'equipment' | 'jewelry' | 'consumables' | 'craft' | 'tools' | 'misc';
+export type ItemCategoryKey = 'equipment' | 'jewelry' | 'consumables' | 'craft' | 'tools' | 'furniture' | 'misc';
 
 export interface ItemCategory {
   key: ItemCategoryKey;
@@ -46,6 +47,7 @@ export const ITEM_CATEGORIES: readonly ItemCategory[] = [
   { key: 'consumables', label: 'Расходуемое', types: ['consumable', 'scroll'] },
   { key: 'craft', label: 'Крафт', types: ['resource', 'recipe', 'gem', 'rune'] },
   { key: 'tools', label: 'Инструменты сбора', types: ['gathering_tool'] },
+  { key: 'furniture', label: 'Мебель', types: ['furniture'] },
   { key: 'misc', label: 'Разное', types: ['misc'] },
 ];
 

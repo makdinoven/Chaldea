@@ -14,6 +14,9 @@ import ItemArtwork from '../../CommonComponents/ItemArtwork';
 import ItemTypeLine from '../../CommonComponents/ItemTypeLine';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import { describeItemBattleLines, describeXpBuffLines } from '../../../utils/itemEffects';
+import { furnitureItemSummary } from '../../../utils/furniture';
+import { seedItemSummary } from '../../../utils/seeds';
+import { houseItemSummary } from '../../../utils/houseItems';
 
 /** Modifier field keys that are numeric on ItemData */
 const MODIFIER_FIELDS = [
@@ -341,6 +344,21 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
                   <div className="mb-4">
                     <p className="text-white/80 text-sm leading-relaxed">{item.description}</p>
                   </div>
+                )}
+
+                {/* Furniture (FEAT-180): its room and bonus */}
+                {furnitureItemSummary(item) && (
+                  <p className="mb-4 text-gold-light text-sm">{furnitureItemSummary(item)}</p>
+                )}
+
+                {/* Seeds (FEAT-180 stage 6a): where and how long they grow */}
+                {seedItemSummary(item) && (
+                  <p className="mb-4 text-gold-light text-sm">{seedItemSummary(item)}</p>
+                )}
+
+                {/* Elite trophy / home teleport scroll (FEAT-180 stage 6b) */}
+                {houseItemSummary(item) && (
+                  <p className="mb-4 text-gold-light text-sm">{houseItemSummary(item)}</p>
                 )}
 
                 {/* Battle effects (FEAT-168) */}

@@ -10,6 +10,8 @@ import {
   WEAPON_SUBCLASS_LABELS,
   itemHasRarity,
 } from '../../constants/items';
+import { FURNITURE_GROUP_LABEL } from '../../api/houses';
+import { isFurnitureGroup } from '../../utils/furniture';
 
 interface ItemTypeLineProps {
   item: {
@@ -20,6 +22,7 @@ interface ItemTypeLineProps {
     armor_subclass?: string | null;
     is_food?: boolean;
     is_backpack?: boolean;
+    furniture_room_type?: string | null;
   };
 }
 
@@ -45,6 +48,9 @@ const ItemTypeLine = ({ item }: ItemTypeLineProps) => {
           ? 'Походный рюкзак'
           : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
     segments.push({ text: typeLabel, className: 'text-white/80' });
+    if (item.item_type === 'furniture' && isFurnitureGroup(item.furniture_room_type)) {
+      segments.push({ text: FURNITURE_GROUP_LABEL[item.furniture_room_type], className: 'text-white' });
+    }
     if (ARMOR_SUBCLASS_TYPES.includes(item.item_type) && item.armor_subclass) {
       segments.push({ text: ARMOR_SUBCLASS_LABELS[item.armor_subclass] ?? item.armor_subclass, className: 'text-white' });
     }

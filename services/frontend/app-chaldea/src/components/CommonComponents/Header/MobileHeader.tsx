@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   Bell,
   ChevronDown,
+  Home,
   MapPin,
   Menu,
   MessageCircle,
@@ -234,7 +235,19 @@ const MobileHeader = ({ userLinks }: MobileHeaderProps) => {
                 <span className="text-white text-[13px] font-medium leading-none truncate">
                   {character.name}
                 </span>
-                {character.current_location && (
+                {character.current_house ? (
+                  <Link
+                    to={`/houses/${character.current_house.house_id}/room/${character.current_house.room_id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Вернуться в дом"
+                    className="flex items-center gap-1 text-gold-light hover:text-gold transition-colors duration-200 ease-site leading-none min-w-0"
+                  >
+                    <Home size={12} className="flex-shrink-0" />
+                    <span className="text-[11px] font-medium truncate">
+                      {character.current_house.house_name} · {character.current_house.room_name}
+                    </span>
+                  </Link>
+                ) : character.current_location && (
                   <Link
                     to={`/location/${character.current_location.id}`}
                     onClick={(e) => e.stopPropagation()}

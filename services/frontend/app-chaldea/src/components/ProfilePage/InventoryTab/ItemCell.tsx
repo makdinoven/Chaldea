@@ -12,6 +12,9 @@ import { useInventoryCharacterId } from './dnd/InventoryDndContext';
 import type { DragItemData } from './dnd/InventoryDndContext';
 import useClickHandler from './dnd/useClickHandler';
 import { describeXpBuffLines, itemBattleSummary } from '../../../utils/itemEffects';
+import { furnitureItemSummary } from '../../../utils/furniture';
+import { seedItemSummary } from '../../../utils/seeds';
+import { houseItemSummary } from '../../../utils/houseItems';
 
 interface ItemCellProps {
   inventoryItem?: InventoryItem;
@@ -124,6 +127,9 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
     isForbidden ? `${item.name} — недоступно для вашего класса/подкласса` : item.name,
     battleSummary,
     xpSummary,
+    isUnidentified ? '' : furnitureItemSummary(item),
+    isUnidentified ? '' : seedItemSummary(item),
+    isUnidentified ? '' : houseItemSummary(item),
   ]
     .filter(Boolean)
     .join('\n');

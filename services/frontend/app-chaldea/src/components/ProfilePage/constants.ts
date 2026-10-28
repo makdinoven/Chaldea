@@ -28,6 +28,7 @@ export const ITEM_TYPE_ICONS: Record<string, string> = {
   recipe: scrollIcon,
   gem: resourceIcon,
   rune: resourceIcon,
+  furniture: bagIcon,
 };
 
 export const CATEGORY_LIST = [
@@ -47,6 +48,7 @@ export const CATEGORY_LIST = [
   { key: 'recipe', label: 'Рецепты', icon: scrollIcon },
   { key: 'gem', label: 'Камни', icon: resourceIcon },
   { key: 'rune', label: 'Руны', icon: resourceIcon },
+  { key: 'furniture', label: 'Мебель', icon: bagIcon },
 ] as const;
 
 // Shields are ordinary weapons of a shield kind (buckler/targe/tower_shield), no own slot.

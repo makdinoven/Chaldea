@@ -35,6 +35,7 @@ import {
   DEFAULT_TOOL_DURABILITY,
   FOOD_HINT,
   BACKPACK_HINT,
+  FURNITURE_HALL_HINT,
   IDENTIFY_LEVEL_OPTIONS,
   RARITY_CAP_MESSAGE,
   RECOVERY_FIELDS,
@@ -48,11 +49,18 @@ import {
   isRawSubcategory,
   isResourceSubcategory,
   rulesFor,
+  SEED_FIELDS,
   validateBattleConfig,
+  validateSeed,
+  validateHouseFlags,
+  ELITE_TROPHY_HINT,
+  HOME_TELEPORT_HINT,
   validateXpBuffs,
   type ModDef,
 } from "./itemFormRules";
 import ItemEffectSections from "./ItemEffectSections";
+import { FURNITURE_GROUP_LABEL, FURNITURE_GROUPS } from "../../api/houses";
+import SeedSection from "./SeedSection";
 import ItemXpBuffsEditor from "./ItemXpBuffsEditor";
 import {
   normalizeAction,
@@ -97,6 +105,8 @@ const initialState = (itemType: string): ItemFormState => {
     is_unique: false,
     is_food: false,
     is_backpack: false,
+    is_elite_trophy: false,
+    is_home_teleport: false,
     description: "",
     fast_slot_bonus: 0,
     socket_count: 0,
@@ -117,6 +127,16 @@ const initialState = (itemType: string): ItemFormState => {
     gather_double_chance_bonus: 0,
     gather_speed_bonus_pct: 0,
     gather_stamina_bonus_pct: 0,
+    furniture_room_type: null,
+    furniture_sleep_bonus: 0,
+    furniture_storage_stacks: 0,
+    furniture_xp_bonus_pct: 0,
+    furniture_refine_bonus_pct: 0,
+    seed_result_item_id: null,
+    seed_result_quantity: null,
+    seed_grow_hours: null,
+    seed_room_type: null,
+    seed_herbalism_xp: null,
     // Battle effects (FEAT-168): replace-all lists sent with the item
     effects: [] as ItemEffect[],
     damage_entries: [] as ItemDamageEntry[],
@@ -271,8 +291,20 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       if (resetRarity) next.item_rarity = "common";
       if (nextType !== "consumable") next.is_food = false;
       if (nextType !== "cloak") next.is_backpack = false;
+      if (nextType !== "resource") next.is_elite_trophy = false;
+      if (nextType !== "scroll") next.is_home_teleport = false;
       if (DEFAULT_DURABILITY_TYPES.includes(nextType) && Number(st.max_durability) === 0) {
         next.max_durability = DEFAULT_DURABILITY;
+      }
+      if (nextType !== "furniture") {
+        next.furniture_room_type = null;
+        next.furniture_sleep_bonus = 0;
+        next.furniture_storage_stacks = 0;
+        next.furniture_xp_bonus_pct = 0;
+        next.furniture_refine_bonus_pct = 0;
+      }
+      if (nextType !== "resource") {
+        for (const key of SEED_FIELDS) next[key] = null;
       }
       if (nextType === "gathering_tool") {
         if (Number(st.max_durability) === 0) next.max_durability = DEFAULT_TOOL_DURABILITY;
@@ -323,6 +355,20 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
     e.preventDefault();
     if (!rarityAllowed) {
       toast.error(RARITY_CAP_MESSAGE);
+      return;
+    }
+    if (rules.furniture && !item.furniture_room_type) {
+      toast.error("Выберите, для какой комнаты эта мебель");
+      return;
+    }
+    const seedError = rules.resource ? validateSeed(item, targetId) : null;
+    if (seedError) {
+      toast.error(seedError);
+      return;
+    }
+    const houseFlagError = validateHouseFlags(item);
+    if (houseFlagError) {
+      toast.error(houseFlagError);
       return;
     }
     if (rules.battleEffects) {
@@ -396,6 +442,8 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       })),
     [item.item_type],
   );
+
+  const furnitureRoom = rules.furniture ? ((item.furniture_room_type as string | null) ?? null) : null;
 
   /* ── Render helpers ── */
 
@@ -673,6 +721,24 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
         </fieldset>
       )}
 
+      {/* ── Home teleport scroll (FEAT-180 stage 6b) ── */}
+      {item.item_type === "scroll" && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Свиток возвращения</legend>
+          <label className="flex items-center gap-3 mt-2">
+            <input
+              type="checkbox"
+              name="is_home_teleport"
+              checked={Boolean(item.is_home_teleport)}
+              onChange={handleChange}
+              className="w-5 h-5 accent-site-blue shrink-0"
+            />
+            <span className="text-sm text-white">Свиток возвращения домой</span>
+          </label>
+          {Boolean(item.is_home_teleport) && <p className="text-white/40 text-xs mt-3">{HOME_TELEPORT_HINT}</p>}
+        </fieldset>
+      )}
+
       {rules.identify && (
         <Section title="Опознание" hint="Опознаёт предметы до указанной редкости. Пустое значение — свиток не опознаёт.">
           <Field label="Уровень опознания">
@@ -698,7 +764,11 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
             <select
               name="resource_subcategory"
               value={subcategory ?? ""}
-              onChange={handleNullableSelect}
+              onChange={(e) => {
+                handleNullableSelect(e);
+                // Only a trophy may be elite (FEAT-180 stage 6b)
+                if (e.target.value !== "trophy") setField("is_elite_trophy", false);
+              }}
               className="input-underline"
             >
               <option value="" className={optionClass}>{RESOURCE_SUBCATEGORY_NONE_LABEL}</option>
@@ -713,6 +783,22 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
               ))}
             </select>
           </Field>
+
+          {subcategory === "trophy" && (
+            <div className="sm:col-span-2 lg:col-span-3 min-w-0">
+              <label className="flex items-center gap-3 mt-1">
+                <input
+                  type="checkbox"
+                  name="is_elite_trophy"
+                  checked={Boolean(item.is_elite_trophy)}
+                  onChange={handleChange}
+                  className="w-5 h-5 accent-site-blue shrink-0"
+                />
+                <span className="text-sm text-white">Элитный трофей</span>
+              </label>
+              <p className="text-white/40 text-xs mt-2">{ELITE_TROPHY_HINT}</p>
+            </div>
+          )}
 
           {subcategory === "repair_kit" && (
             <Field label="Сила ремонта">
@@ -766,6 +852,8 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
         </Section>
       )}
 
+      {rules.resource && <SeedSection item={item} ownId={targetId} setField={setField} />}
+
       {conversionsSubcategory && (
         <ItemConversionsEditor
           itemId={selected}
@@ -794,6 +882,54 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
           <Field label="Бонус шанса дубля, %">{numberInput("gather_double_chance_bonus", { min: 0, max: 50, step: 0.5 })}</Field>
           <Field label="Бонус скорости, %">{numberInput("gather_speed_bonus_pct", { min: 0, max: 50, step: 0.5 })}</Field>
           <Field label="Экономия стамины, %">{numberInput("gather_stamina_bonus_pct", { min: 0, max: 50, step: 0.5 })}</Field>
+        </Section>
+      )}
+
+      {/* ── Furniture (FEAT-180) ── */}
+      {rules.furniture && (
+        <Section
+          title="Мебель"
+          hint={
+            furnitureRoom === "hall"
+              ? FURNITURE_HALL_HINT
+              : "Мебель ставится в комнаты своей группы: кладовая — и в погреб, мастерская — в любую мастерскую профессии " +
+                "(кузница, лаборатория, кухня…). В комнату помещается столько предметов, каков её уровень."
+          }
+        >
+          <Field label="Комната">
+            <select
+              name="furniture_room_type"
+              value={furnitureRoom ?? ""}
+              onChange={handleNullableSelect}
+              required
+              className="input-underline"
+            >
+              <option value="" className={optionClass}>— выберите —</option>
+              {FURNITURE_GROUPS.map((t) => (
+                <option key={t} value={t} className={optionClass}>{FURNITURE_GROUP_LABEL[t]}</option>
+              ))}
+            </select>
+          </Field>
+          {furnitureRoom === "bedroom" && (
+            <Field label="Бонус ко сну (+к множителю)">
+              {numberInput("furniture_sleep_bonus", { min: 0, max: 10, step: 0.05 })}
+            </Field>
+          )}
+          {furnitureRoom === "storage" && (
+            <Field label="Доп. ячейки кладовой">
+              {numberInput("furniture_storage_stacks", { min: 0, max: 1000, step: 1 })}
+            </Field>
+          )}
+          {furnitureRoom === "workshop" && (
+            <>
+              <Field label="Опыт профессии, %">
+                {numberInput("furniture_xp_bonus_pct", { min: 0, max: 100, step: 0.5 })}
+              </Field>
+              <Field label="Шанс удвоения при переработке, %">
+                {numberInput("furniture_refine_bonus_pct", { min: 0, max: 100, step: 0.5 })}
+              </Field>
+            </>
+          )}
         </Section>
       )}
 

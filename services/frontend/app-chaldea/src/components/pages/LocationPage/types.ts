@@ -8,6 +8,8 @@ export interface Player {
   race_name: string | null;
   character_title?: string;
   character_title_rarity?: string;
+  /** FEAT-180 stage 7: the player stands inside a house on this location (the room is not disclosed). */
+  in_house?: { house_id: number; house_name: string } | null;
 }
 
 export interface NeighborLocation {
