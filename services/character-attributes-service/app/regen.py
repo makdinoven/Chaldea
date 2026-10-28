@@ -68,6 +68,19 @@ _GATHERING_INTERVALS_SQL = sa_text(
 )
 
 _IS_NPC_SQL = sa_text("SELECT is_npc FROM characters WHERE id = :cid")
+# FEAT-180: sleeping in a house bedroom multiplies rest. The columns belong to
+# character-service; locations-service sets them and settles regen before
+# both falling asleep and waking up, so the whole stretch since the anchor
+# (or since falling asleep) is sleep.
+_SLEEP_SQL = sa_text("SELECT asleep_since, sleep_regen_factor FROM characters WHERE id = :cid")
+# FEAT-180 stage 6b: a shrine's 'regen' blessing (locations-service `house_buffs`)
+# multiplies rest by (1 + value) until it expires. locations-service settles regen
+# before every prayer, so the blessing covers the whole stretch since the anchor
+# up to its expiry.
+_SHRINE_REGEN_SQL = sa_text(
+    "SELECT expires_at, value FROM house_buffs "
+    "WHERE character_id = :cid AND source = 'shrine' AND kind = 'regen'"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +228,52 @@ def negate_modifiers(modifiers) -> dict:
 # Settle
 # ---------------------------------------------------------------------------
 
+def get_sleep(db: Session, character_id: int) -> Tuple[Optional[datetime], float]:
+    """When the character fell asleep in a house bedroom and the rest multiplier
+    there, or (None, 1.0). Stand-in `characters` tables without the columns read as awake."""
+    try:
+        row = db.execute(_SLEEP_SQL, {"cid": character_id}).fetchone()
+    except Exception:
+        return None, 1.0
+    if not row or row[0] is None:
+        return None, 1.0
+    return to_datetime(row[0]), max(1.0, float(row[1] or 1.0))
+
+
+def get_shrine_regen(db: Session, character_id: int) -> Tuple[Optional[datetime], float]:
+    """When the character's shrine regen blessing expires and its bonus (a fraction), or
+    (None, 0.0). Stand-in schemas without `house_buffs` read as no blessing."""
+    try:
+        row = db.execute(_SHRINE_REGEN_SQL, {"cid": character_id}).fetchone()
+    except Exception:
+        return None, 0.0
+    if not row or row[0] is None:
+        return None, 0.0
+    return to_datetime(row[0]), max(0.0, float(row[1] or 0.0))
+
+
+def _effective_hours(anchor: datetime, now: datetime, busy, satiety_end: Optional[datetime],
+                     satiety_bonus: float, asleep_since: Optional[datetime], sleep_factor: float,
+                     shrine_end: Optional[datetime] = None, shrine_bonus: float = 0.0) -> float:
+    """Rest hours in [anchor, now], each stretch weighted by satiety, sleep and a shrine blessing."""
+    cuts = {anchor, now}
+    for t in (satiety_end, asleep_since, shrine_end):
+        if t is not None and anchor < t < now:
+            cuts.add(t)
+    points = sorted(cuts)
+    total = 0.0
+    for a, b in zip(points, points[1:]):
+        weight = 1.0
+        if satiety_end is not None and b <= satiety_end:
+            weight *= 1.0 + satiety_bonus
+        if asleep_since is not None and a >= asleep_since:
+            weight *= sleep_factor
+        if shrine_end is not None and b <= shrine_end:
+            weight *= 1.0 + shrine_bonus
+        total += _rest_hours(a, b, busy) * weight
+    return total
+
+
 def _credit_regen(attr, bonus_hours: float, plain_hours: float, regen_bonus: float) -> None:
     for resource in REGEN_RESOURCES:
         cur_name = f"current_{resource}"
@@ -290,15 +349,17 @@ def settle_regen(db: Session, attr, now: Optional[datetime] = None) -> bool:
                     busy = None
                 if busy is not None:
                     if satiety is not None:
-                        expires = to_datetime(satiety.expires_at)
-                        t1 = min(max(expires, anchor), now)
+                        satiety_end = min(max(to_datetime(satiety.expires_at), anchor), now)
                         regen_bonus = float(satiety.regen_bonus or 0.0)
                     else:
-                        t1 = anchor
-                        regen_bonus = 0.0
-                    bonus_hours = _rest_hours(anchor, t1, busy)
-                    plain_hours = _rest_hours(t1, now, busy)
-                    _credit_regen(attr, bonus_hours, plain_hours, regen_bonus)
+                        satiety_end, regen_bonus = None, 0.0
+                    asleep_since, sleep_factor = get_sleep(db, character_id)
+                    shrine_end, shrine_bonus = get_shrine_regen(db, character_id)
+                    if shrine_end is not None:
+                        shrine_end = min(max(shrine_end, anchor), now)
+                    hours = _effective_hours(anchor, now, busy, satiety_end, regen_bonus,
+                                             asleep_since, sleep_factor, shrine_end, shrine_bonus)
+                    _credit_regen(attr, hours, 0.0, 0.0)
                     attr.regen_anchor_at = now
 
     # Expiry: subtract the satiety modifiers exactly once (row deleted in the

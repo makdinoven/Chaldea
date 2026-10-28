@@ -511,6 +511,12 @@ def get_rest_status(
     if satiety is not None:
         regen_rate = REGEN_PERCENT_PER_HOUR * (1.0 + float(satiety.regen_bonus or 0.0))
         satiety_info = _build_satiety_info(satiety, now)
+    asleep_since, sleep_factor = regen.get_sleep(db, character_id)
+    regen_rate *= sleep_factor
+    shrine_until, shrine_bonus = regen.get_shrine_regen(db, character_id)
+    if shrine_until is None or shrine_until <= now:
+        shrine_until, shrine_bonus = None, 0.0
+    regen_rate *= 1.0 + shrine_bonus
 
     return schemas.RestStatusResponse(
         character_id=character_id,
@@ -519,6 +525,9 @@ def get_rest_status(
         base_regen_percent_per_hour=REGEN_PERCENT_PER_HOUR,
         regen_percent_per_hour=regen_rate,
         satiety=satiety_info,
+        asleep_since=asleep_since,
+        shrine_regen_bonus=shrine_bonus,
+        shrine_regen_until=shrine_until,
     )
 
 
@@ -610,7 +619,7 @@ def apply_satiety(
             regen_bonus=SATIETY_REGEN_BONUS_BY_RARITY[payload.rarity],
             modifiers=modifiers,
             started_at=now,
-            expires_at=regen.satiety_expires_at(now, SATIETY_DURATION_HOURS),
+            expires_at=regen.satiety_expires_at(now, payload.duration_hours),
         )
         db.add(satiety)
         db.commit()

@@ -55,6 +55,9 @@ CLASS_MAIN_ATTRIBUTE = {1: "strength", 2: "agility", 3: "intelligence"}
 # FEAT-164: passive regen in rest + satiety (food effect)
 REGEN_PERCENT_PER_HOUR = 5.0            # % of max per real hour, all 4 resources
 SATIETY_DURATION_HOURS = 24
+# FEAT-180 6a: a house kitchen makes food last longer; the caller sends the hours within these bounds.
+SATIETY_MIN_DURATION_HOURS = 1
+SATIETY_MAX_DURATION_HOURS = 72
 # Regen bonus by food rarity (fraction: 0.5 = +50%). Food is capped at legendary.
 SATIETY_REGEN_BONUS_BY_RARITY = {"common": 0.5, "rare": 1.0, "epic": 1.5, "legendary": 2.0}
 REGEN_RESOURCES = ("health", "mana", "energy", "stamina")

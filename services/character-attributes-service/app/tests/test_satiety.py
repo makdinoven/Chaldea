@@ -267,6 +267,23 @@ class TestApplySatiety:
         # satiety started now → no bonus for past time
         assert attr.regen_anchor_at >= now_s() - timedelta(seconds=5)
 
+    def test_duration_hours_from_a_house_kitchen(self, client, db):
+        """FEAT-180 6a: inventory-service sends longer hours when a house kitchen is at hand."""
+        seed(db)
+        resp = client.post(SATIETY_URL, json=payload(duration_hours=48), headers=INTERNAL_HEADERS)
+        assert resp.status_code == 201, resp.text
+        sat = resp.json()["satiety"]
+        expires = datetime.fromisoformat(sat["expires_at"])
+        assert expires - datetime.fromisoformat(sat["started_at"]) == timedelta(hours=48)
+        assert 48 * 3600 - 5 <= sat["remaining_seconds"] <= 48 * 3600
+
+    @pytest.mark.parametrize("hours", [0, 73, -5])
+    def test_duration_hours_out_of_bounds_rejected(self, client, db, hours):
+        seed(db)
+        resp = client.post(SATIETY_URL, json=payload(duration_hours=hours), headers=INTERNAL_HEADERS)
+        assert resp.status_code == 422
+        assert regen.get_satiety(db, CID) is None
+
 
 # ---------------------------------------------------------------------------
 # GET /attributes/{id}/rest-status
@@ -285,6 +302,9 @@ class TestRestStatus:
             "base_regen_percent_per_hour": 5.0,
             "regen_percent_per_hour": 5.0,
             "satiety": None,
+            "asleep_since": None,
+            "shrine_regen_bonus": 0.0,
+            "shrine_regen_until": None,
         }
 
     def test_with_satiety_rate_and_info(self, client, db):

@@ -321,6 +321,9 @@ class CumulativeStatsIncrement(BaseModel):
 # FEAT-164: passive regen in rest + satiety
 # ---------------------------------------------------------------------------
 from pydantic import validator, conlist  # noqa: E402
+from constants import (  # noqa: E402
+    SATIETY_DURATION_HOURS, SATIETY_MAX_DURATION_HOURS, SATIETY_MIN_DURATION_HOURS,
+)
 
 
 class SatietyInfo(BaseModel):
@@ -341,6 +344,11 @@ class RestStatusResponse(BaseModel):
     base_regen_percent_per_hour: float
     regen_percent_per_hour: float
     satiety: Optional[SatietyInfo] = None
+    # FEAT-180: asleep in a house bedroom since (naive UTC); the rate above includes the sleep multiplier.
+    asleep_since: Optional[datetime] = None
+    # FEAT-180 stage 6b: a shrine's regen blessing (fraction) and its end; included in the rate above.
+    shrine_regen_bonus: float = 0.0
+    shrine_regen_until: Optional[datetime] = None
 
 
 class SatietyRecovery(BaseModel):
@@ -356,6 +364,9 @@ class SatietyApplyRequest(BaseModel):
     rarity: str
     modifiers: Dict[str, float] = {}
     recovery: SatietyRecovery = SatietyRecovery()
+    # FEAT-180 6a: how long the satiety lasts (inventory-service: longer with a house kitchen)
+    duration_hours: int = Field(SATIETY_DURATION_HOURS, ge=SATIETY_MIN_DURATION_HOURS,
+                                le=SATIETY_MAX_DURATION_HOURS)
 
 
 class SatietyApplyResponse(BaseModel):
