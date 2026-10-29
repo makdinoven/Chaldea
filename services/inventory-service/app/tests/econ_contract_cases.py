@@ -135,7 +135,7 @@ SEED_SQL: List[Tuple[str, Dict[str, object]]] = [
     ("INSERT INTO econ_settings (id, currency_name, currency_genitive, currency_one, currency_few, currency_many, "
      "currency_short, country_tax_rate) VALUES (1, :name, :genitive, :one, :few, :many, :short, 0.1)",
      {"name": "Марки", "genitive": "марок", "one": "марка", "few": "марки", "many": "марок",
-      "short": "мар."}),
+      "short": "ṃ"}),
 ]
 
 CHARACTER_BALANCE_SQL = "SELECT currency_balance FROM characters WHERE id = :id"
@@ -509,5 +509,5 @@ ITEM_GROUP_CASES: List[Tuple[Tuple[Optional[str], Optional[str], bool, Optional[
 # (n, short, expected) with econ_core.DEFAULT_FORMS
 FORMAT_CASES: List[Tuple[int, bool, str]] = [
     (1, False, "1 марка"), (3, False, "3 марки"), (5, False, "5 марок"), (21, False, "21 марка"),
-    (7, True, "7 мар."),
+    (7, True, "7 ṃ"),
 ]

@@ -7,7 +7,7 @@ import { formatCurrency, pluralRu, type CurrencyForms } from '../utils/currency'
  * Currency word forms from the server (defaults until loaded) and a formatter
  * bound to them. Components re-render when the forms arrive.
  *
- * `format(1500)` → «1 500 марок»; `format(1500, true)` → «1 500 мар.»;
+ * `format(1500)` → «1 500 марок»; `format(1500, true)` → «1 500 ṃ»;
  * `word(3)` → «марки» (when the number is rendered separately).
  */
 export const useCurrency = (): {

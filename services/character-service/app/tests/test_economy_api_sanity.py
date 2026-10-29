@@ -72,7 +72,7 @@ def test_public_currency(econ_db):
     resp = TestClient(app).get("/characters/economy/currency")
     assert resp.status_code == 200
     assert resp.json() == {"name": "Марки", "genitive": "марок", "one": "марка", "few": "марки",
-                           "many": "марок", "short": "мар."}
+                           "many": "марок", "short": "ṃ"}
 
 
 def test_admin_requires_auth_and_permission(econ_db):

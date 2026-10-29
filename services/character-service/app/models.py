@@ -449,7 +449,7 @@ class EconSettings(Base):
     currency_one = Column(String(50), nullable=False, default="марка")
     currency_few = Column(String(50), nullable=False, default="марки")
     currency_many = Column(String(50), nullable=False, default="марок")
-    currency_short = Column(String(20), nullable=False, default="мар.")
+    currency_short = Column(String(20), nullable=False, default="ṃ")
     country_tax_rate = Column(Numeric(5, 4), nullable=False, default=0.1)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     updated_by_user_id = Column(Integer, nullable=True)

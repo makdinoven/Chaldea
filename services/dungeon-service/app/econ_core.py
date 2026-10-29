@@ -248,7 +248,7 @@ class CurrencyForms:
     one: str           # 1, 21, 101: «марка»
     few: str           # 2-4, 22-24: «марки»
     many: str          # 0, 5-20, 25: «марок»
-    short: str         # «мар.»
+    short: str         # «ṃ»
 
     def as_dict(self) -> Dict[str, str]:
         return {
@@ -258,7 +258,7 @@ class CurrencyForms:
 
 
 DEFAULT_FORMS = CurrencyForms(
-    name="Марки", genitive="марок", one="марка", few="марки", many="марок", short="мар.",
+    name="Марки", genitive="марок", one="марка", few="марки", many="марок", short="ṃ",
 )
 
 
@@ -375,7 +375,7 @@ def plural_ru(n: int, one: str, few: str, many: str) -> str:
 
 
 def format_currency(n: int, forms: CurrencyForms = DEFAULT_FORMS, short: bool = False) -> str:
-    """«1 марка», «3 марки», short=True -> «3 мар.»."""
+    """«1 марка», «3 марки», short=True -> «3 ṃ»."""
     n = int(n)
     word = forms.short if short else plural_ru(n, forms.one, forms.few, forms.many)
     return f"{n} {word}"

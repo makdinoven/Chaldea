@@ -18,7 +18,7 @@ const FIELDS: { key: keyof CurrencyForms; label: string; hint: string }[] = [
   { key: 'one', label: 'Счёт: 1', hint: '«1 марка», «21 марка»' },
   { key: 'few', label: 'Счёт: 2–4', hint: '«3 марки»' },
   { key: 'many', label: 'Счёт: 5–20', hint: '«5 марок», «11 марок»' },
-  { key: 'short', label: 'Сокращение', hint: '«100 мар.» — для тесных мест' },
+  { key: 'short', label: 'Сокращение', hint: '«100 ṃ» — для тесных мест' },
 ];
 
 const fieldError = (key: keyof CurrencyForms, value: string): string | null => {

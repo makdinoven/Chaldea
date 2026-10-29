@@ -25,7 +25,7 @@ EXTRA_DDL = [
 
 ALL_PERMS = ["economy:read", "economy:emit", "economy:adjust", "economy:settings"]
 CURRENCY = {"name": "Марки", "genitive": "марок", "one": "марка", "few": "марки", "many": "марок",
-            "short": "мар."}
+            "short": "ṃ"}
 GOOD_SETTINGS = {"currency": {"name": "Крона", "genitive": "крон", "one": "крона", "few": "кроны",
                               "many": "крон", "short": "кр."}, "country_tax_rate": 0.2}
 

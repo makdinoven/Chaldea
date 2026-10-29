@@ -52,7 +52,7 @@ def test_format_currency_custom_forms_and_short():
 
 def test_default_forms_match_the_design():
     assert core.DEFAULT_FORMS.as_dict() == {"name": "Марки", "genitive": "марок", "one": "марка",
-                                            "few": "марки", "many": "марок", "short": "мар."}
+                                            "few": "марки", "many": "марок", "short": "ṃ"}
 
 
 # ---------------------------------------------------------------------------
