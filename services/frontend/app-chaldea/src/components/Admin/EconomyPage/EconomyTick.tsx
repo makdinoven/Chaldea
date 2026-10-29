@@ -6,7 +6,10 @@ import { fetchEconomySim, postEconomySimRun, putEconomySim } from '../../../api/
 import { apiErrorMessage } from '../../../api/errors';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type { EconSimParams, EconSimState, EconTickRun, EconTickStatus, EconTickTrigger } from '../../../types/economy';
+import { useCurrency } from '../../../hooks/useCurrency';
 import { formatDateTime } from './economyLabels';
+import { GuideIntro } from './GuideLink';
+import { SimParamHint } from './ParamHint';
 
 /** Poll the state while a run is going so progress and the final status appear by themselves. */
 const RUNNING_POLL_MS = 5000;
@@ -23,6 +26,8 @@ interface ParamDef {
   /** Defaults of `econ_sim.SimParams` — shown in the hint and used by «Вернуть по умолчанию». */
   def: number;
   integer?: boolean;
+  /** A rate per day — also shown as «% в день» (and per week / per term). */
+  ratePerDay?: boolean;
 }
 
 interface ParamSection {
@@ -111,6 +116,33 @@ const SECTIONS: ParamSection[] = [
     ],
   },
   {
+    title: 'Банки',
+    intro:
+      'Банк региона: вклады и займы игроков, вклады и займы жителей. Ставки — доля в день; ставки вкладов банк сам снижает, если мало зарабатывает на займах. Проценты платятся только из денег банка.',
+    params: [
+      { key: 'bank_demand_rate_day', label: 'Ставка вклада до востребования', hint: 'Базовая ставка в день (банк умножает её на свой коэффициент).', min: 0, max: 0.05, def: 0.001, ratePerDay: true },
+      { key: 'bank_term_rate_day_7', label: 'Ставка срочного вклада, 7 дней', hint: 'Базовая ставка в день; фиксируется при открытии вклада.', min: 0, max: 0.05, def: 0.002, ratePerDay: true },
+      { key: 'bank_term_rate_day_14', label: 'Ставка срочного вклада, 14 дней', hint: 'Базовая ставка в день; фиксируется при открытии вклада.', min: 0, max: 0.05, def: 0.0025, ratePerDay: true },
+      { key: 'bank_term_rate_day_28', label: 'Ставка срочного вклада, 28 дней', hint: 'Базовая ставка в день; фиксируется при открытии вклада.', min: 0, max: 0.05, def: 0.003, ratePerDay: true },
+      { key: 'bank_loan_rate_day', label: 'Ставка займа', hint: 'Ставка в день для игроков и жителей; фиксируется при выдаче займа.', min: 0, max: 0.1, def: 0.005, ratePerDay: true },
+      { key: 'bank_penalty_rate_day', label: 'Пени за просрочку', hint: 'Добавляется к ставке займа после срока возврата.', min: 0, max: 0.1, def: 0.01, ratePerDay: true },
+      { key: 'bank_debt_cap_mult', label: 'Предел долга, × суммы займа', hint: 'Проценты и пени перестают расти, когда долг достигает суммы займа × это число.', min: 1, max: 10, def: 2 },
+      { key: 'bank_loan_cap_base', label: 'Потолок займа: база', hint: 'Потолок займа = база + надбавка за уровень × уровень персонажа.', min: 0, max: 1_000_000_000, def: 500, integer: true },
+      { key: 'bank_loan_cap_per_level', label: 'Потолок займа: за уровень', hint: 'Сколько добавляет к потолку займа каждый уровень персонажа.', min: 0, max: 1_000_000_000, def: 250, integer: true },
+      { key: 'bank_min_amount', label: 'Минимальная сумма операции', hint: 'Меньше нельзя положить, снять, перевести, занять или погасить (погасить весь остаток можно всегда).', min: 1, max: 1_000_000, def: 10, integer: true },
+      { key: 'bank_transfer_fee_rate', label: 'Комиссия перевода, доля', hint: 'Доля суммы перевода, уходящая в казну (0,02 = 2 %, округление вверх).', min: 0, max: 0.5, def: 0.02 },
+      { key: 'bank_transfer_fee_min', label: 'Минимальная комиссия', hint: 'Комиссия перевода не меньше этой суммы.', min: 0, max: 1_000_000, def: 1, integer: true },
+      { key: 'bank_start_capital', label: 'Стартовый капитал', hint: 'Сколько банк берёт из казны региона при первом открытии (не больше, чем есть в казне).', min: 0, max: 1_000_000_000, def: 20000, integer: true },
+      { key: 'bank_reserve_ratio', label: 'Резерв от вкладов жителей', hint: 'Доля вкладов жителей, которую банк не выдаёт в займы и не тратит на проценты.', min: 0, max: 1, def: 0.2 },
+      { key: 'bank_rate_cover', label: 'Запас доходности', hint: 'Банк хочет, чтобы доход от займов был не меньше расходов на вклады × это число.', min: 0.5, max: 5, def: 1.25 },
+      { key: 'bank_rate_factor_min', label: 'Нижний предел коэффициента ставок', hint: 'Ниже этой доли базовой ставки банк ставки по вкладам не опустит.', min: 0, max: 1, def: 0.2 },
+      { key: 'bank_rate_smoothing', label: 'Скорость изменения ставок', hint: 'Доля пути до целевого коэффициента, которую ставки проходят за шаг.', min: 0, max: 1, def: 0.25 },
+      { key: 'bank_resident_deposit_share', label: 'Вклады жителей, доля сбережений', hint: 'Какую долю сбережений (кошелёк + вклады) жители держат в банке.', min: 0, max: 0.9, def: 0.2 },
+      { key: 'bank_resident_loan_share', label: 'Займы жителей, доля кошелька', hint: 'Целевой долг жителей перед банком как доля их кошелька.', min: 0, max: 0.9, def: 0.1 },
+      { key: 'bank_resident_adjust', label: 'Скорость движения жителей', hint: 'Какую долю разрыва до целевых вкладов и займов жители проходят за шаг.', min: 0, max: 1, def: 0.25 },
+    ],
+  },
+  {
     title: 'Служебное',
     intro: 'Менять только осознанно.',
     params: [
@@ -136,8 +168,28 @@ type FormState = Record<ParamKey, string>;
 
 const fmtNum = (n: number) => String(n).replace('.', ',');
 
+/** A backend without a param yet (deploy order) falls back to its default instead of «undefined». */
 const toForm = (params: EconSimParams): FormState =>
-  Object.fromEntries(ALL_PARAMS.map((p) => [p.key, fmtNum(params[p.key])])) as FormState;
+  Object.fromEntries(ALL_PARAMS.map((p) => [p.key, fmtNum(params[p.key] ?? p.def)])) as FormState;
+
+const PERCENT = 100;
+const DAYS_IN_WEEK = 7;
+const DAYS_IN_MONTH = 30;
+const TERM_DAYS: Partial<Record<ParamKey, number>> = {
+  bank_term_rate_day_7: 7,
+  bank_term_rate_day_14: 14,
+  bank_term_rate_day_28: 28,
+};
+
+/** Percent with up to 3 decimals, Russian comma: 0.0025 → «0,25». */
+const fmtPercent = (share: number) => fmtNum(Math.round(share * PERCENT * 1000) / 1000);
+
+/** «0,1 % в день · 0,7 % в неделю · ≈ 3 % в месяц» / «0,25 % в день · 3,5 % за 14 дней · …» for a daily rate param. */
+const ratePerDayText = (key: ParamKey, rate: number): string => {
+  const term = TERM_DAYS[key];
+  const longer = term ? `${fmtPercent(rate * term)} % за ${term} дней` : `${fmtPercent(rate * DAYS_IN_WEEK)} % в неделю`;
+  return `${fmtPercent(rate)} % в день · ${longer} · ≈ ${fmtPercent(rate * DAYS_IN_MONTH)} % в месяц`;
+};
 
 const parseNum = (raw: string): number => {
   const v = raw.trim().replace(',', '.');
@@ -195,6 +247,28 @@ const MerchantsCell = ({ run }: { run: EconTickRun }) => {
         торговля: {ops}
       </span>
       {failures > 0 && <span className="text-site-red"> · сбоев {failures}</span>}
+    </span>
+  );
+};
+
+/** Bank counters of a run (FEAT-184): banks processed, failed bank steps, loans collected. */
+const BanksCell = ({ run }: { run: EconTickRun }) => {
+  const processed = run.banks_processed ?? run.bank_ops_posted ?? 0;
+  const failures = run.bank_failures ?? 0;
+  const collected = run.loans_collected ?? 0;
+  if (processed === 0 && failures === 0 && collected === 0) return <span className="text-white/30">—</span>;
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-white/80" title="Банков пересчитано">
+        банков: {processed}
+      </span>
+      {failures > 0 && <span className="text-site-red"> · сбоев {failures}</span>}
+      {collected > 0 && (
+        <span className="text-gold" title="Займов, по которым взыскан долг">
+          {' '}
+          · взыскано {collected}
+        </span>
+      )}
     </span>
   );
 };
@@ -284,8 +358,8 @@ const RunConfirm = ({ nextSlotAt, onClose, onDone, onConflict }: RunConfirmProps
         <p>
           Это <span className="text-white">настоящий шаг мира</span>, такой же, как по расписанию. В каждом регионе в
           симуляции будут произведены и потреблены товары, изменятся запасы и цены, стабильность и достаток; жители
-          заплатят налог, казна выплатит жалованье, страны раздадут дотации, а торговцы-НПС продадут жителям товар и
-          пополнят склады.
+          заплатят налог, казна выплатит жалованье, страны раздадут дотации, торговцы-НПС продадут жителям товар и
+          пополнят склады, а банки начислят проценты и взыщут просроченные долги.
         </p>
         <p>Отменить шаг нельзя. Он попадёт в журнал операций и в список пересчётов как ручной.</p>
         <p className="text-white/50">
@@ -313,6 +387,7 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
   const [togglingTick, setTogglingTick] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [lastResult, setLastResult] = useState<EconTickRun | null>(null);
+  const { format } = useCurrency();
 
   const load = useCallback((opts?: { silent?: boolean; resetForm?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -407,6 +482,11 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
 
   return (
     <div className="flex flex-col gap-6">
+      <GuideIntro section="tick">
+        Здесь — расписание пересчёта мира (каждые 6 часов), ручной шаг и общие параметры симуляции: цены, производство,
+        деньги жителей, стабильность, достаток, торговцы и банки. У каждого параметра есть «?» с объяснением.
+      </GuideIntro>
+
       {/* ---------------------------------------------------------------- status */}
       <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-4 min-w-0">
         <div className="flex flex-wrap items-center gap-3">
@@ -526,6 +606,21 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                 )}
               </span>
             )}
+            {lastResult.banks_processed !== undefined && (
+              <span className="text-white/60">
+                Банков: {lastResult.banks_processed}, выплачено процентов: {format(lastResult.bank_interest_paid ?? 0)},
+                просрочено займов: {lastResult.loans_overdue ?? 0}, взыскано по займам: {lastResult.loans_collected ?? 0}{' '}
+                ({format(lastResult.collected_amount ?? 0)})
+                {(lastResult.banks_closed ?? 0) > 0 && <>, закрыто банков удалённых регионов: {lastResult.banks_closed}</>}
+                {(lastResult.bank_failures ?? 0) > 0 && (
+                  <span className="text-site-red">
+                    , сбой банков в регионах: {lastResult.bank_failures}
+                    {lastResult.bank_failed_region_ids && lastResult.bank_failed_region_ids.length > 0 &&
+                      ` (№ ${lastResult.bank_failed_region_ids.join(', ')})`}
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         )}
       </section>
@@ -547,6 +642,7 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                     <th className="py-2 pr-3 font-normal">Длительность</th>
                     <th className="py-2 pr-3 font-normal">Регионы</th>
                     <th className="py-2 pr-3 font-normal">Торговцы</th>
+                    <th className="py-2 pr-3 font-normal">Банки</th>
                     <th className="py-2 pr-3 font-normal">Статус</th>
                     <th className="py-2 font-normal">Ошибка</th>
                   </tr>
@@ -568,6 +664,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                       </td>
                       <td className="py-2 pr-3 text-xs">
                         <MerchantsCell run={r} />
+                      </td>
+                      <td className="py-2 pr-3 text-xs">
+                        <BanksCell run={r} />
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap">
                         <StatusText status={r.status} />
@@ -597,6 +696,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                   </span>
                   <span className="text-xs text-white/50">
                     Торговцы: <MerchantsCell run={r} />
+                  </span>
+                  <span className="text-xs text-white/50">
+                    Банки: <BanksCell run={r} />
                   </span>
                   {r.error && <span className="text-site-red text-xs break-words">{r.error}</span>}
                 </li>
@@ -632,9 +734,16 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                   const err = errors[p.key];
                   return (
                     <div key={p.key} className="flex flex-col gap-1 min-w-0">
-                      <label htmlFor={`econ-sim-${p.key}`} className="text-white/70 text-xs">
-                        {p.label}
-                      </label>
+                      <span className="flex items-center gap-1 min-w-0">
+                        <label htmlFor={`econ-sim-${p.key}`} className="text-white/70 text-xs">
+                          {p.label}
+                        </label>
+                        <SimParamHint
+                          param={p.key}
+                          label={p.label}
+                          numbers={{ def: p.def, min: p.min, max: p.max, ratePerDay: p.ratePerDay }}
+                        />
+                      </span>
                       <input
                         id={`econ-sim-${p.key}`}
                         type="text"
@@ -645,6 +754,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                         maxLength={12}
                         onChange={(e) => setForm({ ...form, [p.key]: e.target.value })}
                       />
+                      {!err && p.ratePerDay && (
+                        <p className="text-gold/80 text-xs">{ratePerDayText(p.key, parseNum(form[p.key]))}</p>
+                      )}
                       {err ? (
                         <p className="text-site-red text-xs">{err}</p>
                       ) : (

@@ -10,6 +10,7 @@ import { CLASS_NAMES } from '../constants';
 import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
 import AvatarEquipmentGrid from './AvatarEquipmentGrid';
 import FastSlots from '../EquipmentPanel/FastSlots';
+import BankSummary from './BankSummary';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 import { useCurrency } from '../../../hooks/useCurrency';
 
@@ -148,6 +149,9 @@ const CharacterPanel = () => {
               </div>
             </div>
           )}
+
+          {/* FEAT-184: deposits / loan summary (hidden when there are none) */}
+          {profile && <BankSummary />}
 
           {/* Fast slots 5×2 */}
           <FastSlots />

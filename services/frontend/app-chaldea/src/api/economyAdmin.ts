@@ -29,6 +29,14 @@ import type {
   EconMerchantFundResult,
   EconMerchantsParams,
   EconMerchantsResponse,
+  EconBankAdminDetail,
+  EconBankAdminItem,
+  EconBankCapitalBody,
+  EconBankCapitalResult,
+  EconBankDebtor,
+  EconBankFlagBody,
+  EconBankLoan,
+  EconBanksResponse,
 } from '../types/economy';
 
 /** Admin «Экономика» API (FEAT-181, character-service). Auth header comes from axiosSetup. */
@@ -185,5 +193,43 @@ export const fetchEconomyMerchants = async (params: EconMerchantsParams = {}): P
 /** «Пополнить кассы торговцев» — needs economy:settings + economy:emit; re-click emits 0. */
 export const postEconomyMerchantsFund = async (body: EconMerchantFundBody): Promise<EconMerchantFundResult> => {
   const { data } = await axios.post<EconMerchantFundResult>(`${BASE}/merchants/fund`, body);
+  return data;
+};
+
+/* ---------------------------------------------- FEAT-184 — banks (feature file 3.10) */
+
+export const fetchEconomyBanks = async (): Promise<EconBanksResponse> => {
+  const { data } = await axios.get<EconBanksResponse>(`${BASE}/banks`);
+  return data;
+};
+
+export const fetchEconomyBank = async (regionId: number): Promise<EconBankAdminDetail> => {
+  const { data } = await axios.get<EconBankAdminDetail>(`${BASE}/banks/${regionId}`);
+  return data;
+};
+
+export const fetchEconomyBankDebtors = async (): Promise<EconBankDebtor[]> => {
+  const { data } = await axios.get<EconBankDebtor[] | { items: EconBankDebtor[] }>(`${BASE}/banks/debtors`);
+  return unwrapList(data);
+};
+
+/** «Банк есть»: creates the bank row; the first switch-on seeds the start capital from the treasury once. */
+export const putEconomyBankFlag = async (regionId: number, body: EconBankFlagBody): Promise<EconBankAdminItem> => {
+  const { data } = await axios.put<EconBankAdminItem>(`${BASE}/banks/${regionId}`, body);
+  return data;
+};
+
+/** «Капитал из казны» (`in`) / «Вернуть капитал в казну» (`out`). */
+export const postEconomyBankCapital = async (
+  regionId: number,
+  body: EconBankCapitalBody,
+): Promise<EconBankCapitalResult> => {
+  const { data } = await axios.post<EconBankCapitalResult>(`${BASE}/banks/${regionId}/capital`, body);
+  return data;
+};
+
+/** «Списать долг» — the bank's loss, no money moves. */
+export const postEconomyBankLoanWriteOff = async (loanId: number, comment: string): Promise<EconBankLoan> => {
+  const { data } = await axios.post<EconBankLoan>(`${BASE}/banks/loans/${loanId}/write-off`, { comment });
   return data;
 };

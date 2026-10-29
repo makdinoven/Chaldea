@@ -13,6 +13,8 @@ import type {
   EconTemplateUpdate,
 } from '../../../types/economy';
 import { formatPercent } from './economyLabels';
+import { FieldHint } from './ParamHint';
+import type { FieldHintKey } from './paramHints';
 
 /* Bounds of `PUT /admin/economy/templates/{code}` (feature file 3.7; same limits as the region editor). */
 const NAME_MAX = 100;
@@ -86,10 +88,22 @@ const textValid = (text: string, min: number, max: number) => {
   return t.length >= min && t.length <= max && !/[<>]/.test(t);
 };
 
-const FieldLabel = ({ htmlFor, children }: { htmlFor: string; children: string }) => (
-  <label htmlFor={htmlFor} className="text-white/60 text-xs uppercase tracking-[0.06em]">
-    {children}
-  </label>
+interface FieldLabelProps {
+  htmlFor: string;
+  children: string;
+  /** «?» hint of the field (FEAT-185). */
+  hint?: FieldHintKey;
+  /** Hint title when the label is abbreviated. */
+  hintTitle?: string;
+}
+
+const FieldLabel = ({ htmlFor, children, hint, hintTitle }: FieldLabelProps) => (
+  <span className="flex items-center gap-1 min-w-0">
+    <label htmlFor={htmlFor} className="text-white/60 text-xs uppercase tracking-[0.06em] truncate">
+      {children}
+    </label>
+    {hint && <FieldHint field={hint} label={hintTitle ?? children} />}
+  </span>
 );
 
 interface TemplateEditorProps {
@@ -198,13 +212,13 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
           </div>
           <div className="grid grid-cols-2 gap-5">
             <div className="flex flex-col gap-1 min-w-0">
-              <FieldLabel htmlFor="econ-tpl-population">Население</FieldLabel>
+              <FieldLabel htmlFor="econ-tpl-population" hint="template_population">Население</FieldLabel>
               {numberInput('econ-tpl-population', draft.population, (v) => setDraft({ ...draft, population: v }), populationValid,
                 { min: 0, max: MAX_POPULATION, step: 100 })}
               {!populationValid && <p className="text-site-red text-xs">Целое от 0 до 10 000 000</p>}
             </div>
             <div className="flex flex-col gap-1 min-w-0">
-              <FieldLabel htmlFor="econ-tpl-tax">Налог, %</FieldLabel>
+              <FieldLabel htmlFor="econ-tpl-tax" hint="template_tax" hintTitle="Налог с жителей">Налог, %</FieldLabel>
               {numberInput('econ-tpl-tax', draft.taxPercent, (v) => setDraft({ ...draft, taxPercent: v }), taxValid,
                 { min: 0, max: MAX_TAX_PERCENT, step: 0.5 })}
               {!taxValid && <p className="text-site-red text-xs">От 0 до {MAX_TAX_PERCENT}%</p>}
@@ -296,12 +310,16 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
               <li key={g.code} className="grid grid-cols-[minmax(0,1fr)_6.5rem_5rem] items-end gap-3 border-b border-white/[0.07] pb-2">
                 <span className="text-white text-sm break-words pb-1.5">{g.name}</span>
                 <div className="flex flex-col gap-1 min-w-0">
-                  <FieldLabel htmlFor={`econ-tpl-${g.code}-prod`}>Произв.</FieldLabel>
+                  <FieldLabel htmlFor={`econ-tpl-${g.code}-prod`} hint="template_production" hintTitle="Производство на 1000 жителей">
+                    Произв.
+                  </FieldLabel>
                   {numberInput(`econ-tpl-${g.code}-prod`, d.production, (v) => setGoods(g.code, { production: v }), prodOk,
                     { min: 0, max: MAX_PRODUCTION, step: 1 })}
                 </div>
                 <div className="flex flex-col gap-1 min-w-0">
-                  <FieldLabel htmlFor={`econ-tpl-${g.code}-cons`}>Потр. ×</FieldLabel>
+                  <FieldLabel htmlFor={`econ-tpl-${g.code}-cons`} hint="template_consumption" hintTitle="Множитель потребления">
+                    Потр. ×
+                  </FieldLabel>
                   {numberInput(`econ-tpl-${g.code}-cons`, d.consumption, (v) => setGoods(g.code, { consumption: v }), consOk,
                     { min: 0, max: MAX_CONSUMPTION_MULT, step: 0.1 })}
                 </div>

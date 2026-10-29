@@ -1,4 +1,4 @@
-/** Small shared pieces of the «Регионы» tab (FEAT-182): 0–100 bars, hunger badge, price multiplier. */
+/** Small shared pieces of the «Регионы» tab (FEAT-182): 0–100 bars, hunger badge, price multiplier, bank badge. */
 import { formatDecimal } from './economyLabels';
 
 /** Same thresholds as the player card: fed < 0.03 ≤ tight < 0.15 ≤ hunger. */
@@ -61,4 +61,14 @@ export const priceMultClass = (mult: number): string => {
 
 export const PriceMult = ({ mult }: { mult: number }) => (
   <span className={priceMultClass(mult)}>×{formatDecimal(mult, 2)}</span>
+);
+
+/** «Банк» marker of a region with an enabled bank (FEAT-184). */
+export const BankBadge = ({ className = '' }: { className?: string }) => (
+  <span
+    title="В регионе есть банк"
+    className={`inline-flex rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-gold text-[10px] uppercase tracking-[0.06em] whitespace-nowrap ${className}`}
+  >
+    Банк
+  </span>
 );

@@ -21,6 +21,10 @@ import type {
 } from '../../../types/economy';
 import { formatDateTime, formatDecimal, formatPercent } from './economyLabels';
 import { HungerBadge, PriceMult, ScaleBar } from './regionBits';
+import RegionBankPanel from './RegionBankPanel';
+import { FieldHint } from './ParamHint';
+import { GuideIntro } from './GuideLink';
+import type { FieldHintKey } from './paramHints';
 
 const HISTORY_LIMIT = 40;
 const MAX_POPULATION = 10_000_000;
@@ -78,10 +82,30 @@ interface RegionEconomyEditorProps {
   onChanged: () => void;
 }
 
-const FieldLabel = ({ htmlFor, children }: { htmlFor: string; children: string }) => (
-  <label htmlFor={htmlFor} className="text-white/60 text-xs uppercase tracking-[0.06em]">
+interface FieldLabelProps {
+  htmlFor: string;
+  children: string;
+  /** «?» hint of the field (FEAT-185). */
+  hint?: FieldHintKey;
+  /** Hint title when the label is abbreviated. */
+  hintTitle?: string;
+}
+
+const FieldLabel = ({ htmlFor, children, hint, hintTitle }: FieldLabelProps) => (
+  <span className="flex items-center gap-1 min-w-0">
+    <label htmlFor={htmlFor} className="text-white/60 text-xs uppercase tracking-[0.06em] truncate">
+      {children}
+    </label>
+    {hint && <FieldHint field={hint} label={hintTitle ?? children} />}
+  </span>
+);
+
+/** Table header with a «?» hint (FEAT-185). */
+const HintHeader = ({ children, hint, hintTitle }: { children: string; hint: FieldHintKey; hintTitle: string }) => (
+  <span className="inline-flex items-center gap-1">
     {children}
-  </label>
+    <FieldHint field={hint} label={hintTitle} />
+  </span>
 );
 
 const HistoryDetails = ({ row, groupNames }: { row: EconRegionHistoryRow; groupNames: Record<string, string> }) => (
@@ -145,6 +169,13 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
   }, [regionId, loadHistory]);
 
   useEffect(load, [load]);
+
+  /** The bank flag moves treasury money: refresh the shown numbers but keep the admin's unsaved draft. */
+  const refreshNumbers = () => {
+    fetchEconomyRegion(regionId)
+      .then(setDetail)
+      .catch((e) => toast.error(apiErrorMessage(e, 'Не удалось обновить экономику региона')));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -318,6 +349,11 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
         </button>
       </div>
 
+      <GuideIntro section="regions">
+        Один регион: шаблон, население, налог, товары и банк. Стабильность, достаток, запасы и цены дальше двигает
+        пересчёт каждые 6 часов. «?» у поля объясняет, что оно меняет.
+      </GuideIntro>
+
       {/* State overview */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-site-bg rounded-card border border-white/[0.07] p-3 flex flex-col gap-1.5 min-w-0">
@@ -361,7 +397,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
         <h3 className="gold-text text-lg font-medium uppercase tracking-[0.06em]">Параметры</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
           <div className="flex flex-col gap-1 min-w-0 lg:col-span-1">
-            <FieldLabel htmlFor="econ-region-template">Шаблон</FieldLabel>
+            <FieldLabel htmlFor="econ-region-template" hint="region_template">Шаблон</FieldLabel>
             <select
               id="econ-region-template"
               className="input-underline w-full"
@@ -378,7 +414,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
             </select>
           </div>
           <div className="flex flex-col gap-1 min-w-0">
-            <FieldLabel htmlFor="econ-region-population">Население</FieldLabel>
+            <FieldLabel htmlFor="econ-region-population" hint="region_population">Население</FieldLabel>
             {numberInput('econ-region-population', draft.population, (v) => setDraft({ ...draft, population: v }), populationValid, {
               min: 0,
               max: MAX_POPULATION,
@@ -387,7 +423,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
             {!populationValid && <p className="text-site-red text-xs">Целое от 0 до 10 000 000</p>}
           </div>
           <div className="flex flex-col gap-1 min-w-0">
-            <FieldLabel htmlFor="econ-region-tax">Налог с жителей, %</FieldLabel>
+            <FieldLabel htmlFor="econ-region-tax" hint="region_tax">Налог с жителей, %</FieldLabel>
             {numberInput('econ-region-tax', draft.taxPercent, (v) => setDraft({ ...draft, taxPercent: v }), taxValid, {
               min: 0,
               max: MAX_TAX_PERCENT,
@@ -396,7 +432,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
             {!taxValid && <p className="text-site-red text-xs">От 0 до {MAX_TAX_PERCENT}%</p>}
           </div>
           <div className="flex flex-col gap-1 min-w-0">
-            <FieldLabel htmlFor="econ-region-stability">Стабильность</FieldLabel>
+            <FieldLabel htmlFor="econ-region-stability" hint="region_stability">Стабильность</FieldLabel>
             {numberInput('econ-region-stability', draft.stability, (v) => setDraft({ ...draft, stability: v }), stabilityValid, {
               min: 0,
               max: 100,
@@ -405,7 +441,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
             {!stabilityValid && <p className="text-site-red text-xs">От 0 до 100</p>}
           </div>
           <div className="flex flex-col gap-1 min-w-0">
-            <FieldLabel htmlFor="econ-region-prosperity">Достаток</FieldLabel>
+            <FieldLabel htmlFor="econ-region-prosperity" hint="region_prosperity">Достаток</FieldLabel>
             {numberInput('econ-region-prosperity', draft.prosperity, (v) => setDraft({ ...draft, prosperity: v }), prosperityValid, {
               min: 0,
               max: 100,
@@ -444,15 +480,18 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
             >
               Применить шаблон
             </button>
-            <label className="flex items-center gap-2 text-sm text-white/70 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={resetStocks}
-                onChange={(e) => setResetStocks(e.target.checked)}
-                className="w-4 h-4 shrink-0 accent-gold"
-              />
-              запасы — к норме
-            </label>
+            <span className="flex items-center gap-1">
+              <label className="flex items-center gap-2 text-sm text-white/70 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={resetStocks}
+                  onChange={(e) => setResetStocks(e.target.checked)}
+                  className="w-4 h-4 shrink-0 accent-gold"
+                />
+                запасы — к норме
+              </label>
+              <FieldHint field="region_reset_stocks" label="Запасы — к норме" />
+            </span>
           </div>
         ) : (
           <p className="field-hint">Изменять экономику региона может только администратор с правом «economy:settings».</p>
@@ -478,9 +517,15 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
                 <thead>
                   <tr className="text-white/50 text-xs uppercase tracking-[0.06em] text-left border-b border-white/10">
                     <th className="py-2 pr-3 font-normal">Группа</th>
-                    <th className="py-2 pr-3 font-normal">Произв./1000</th>
-                    <th className="py-2 pr-3 font-normal">Потребл. ×</th>
-                    <th className="py-2 pr-3 font-normal">Запас</th>
+                    <th className="py-2 pr-3 font-normal">
+                      <HintHeader hint="goods_production" hintTitle="Производство на 1000 жителей">Произв./1000</HintHeader>
+                    </th>
+                    <th className="py-2 pr-3 font-normal">
+                      <HintHeader hint="goods_consumption" hintTitle="Множитель потребления">Потребл. ×</HintHeader>
+                    </th>
+                    <th className="py-2 pr-3 font-normal">
+                      <HintHeader hint="goods_stock" hintTitle="Запас на складе региона">Запас</HintHeader>
+                    </th>
                     <th className="py-2 pr-3 font-normal text-right">Норма</th>
                     <th className="py-2 pr-3 font-normal text-right">Цена</th>
                     <th className="py-2 pr-3 font-normal text-right">Произв.</th>
@@ -539,17 +584,23 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1 min-w-0">
-                        <FieldLabel htmlFor={`econ-gm-${g.group_code}-prod`}>Произв.</FieldLabel>
+                        <FieldLabel htmlFor={`econ-gm-${g.group_code}-prod`} hint="goods_production" hintTitle="Производство на 1000 жителей">
+                          Произв.
+                        </FieldLabel>
                         {numberInput(`econ-gm-${g.group_code}-prod`, d.production, (v) => setGoods(g.group_code, { production: v }),
                           inRange(d.production, 0, MAX_PRODUCTION), { min: 0, max: MAX_PRODUCTION, step: 1 })}
                       </div>
                       <div className="flex flex-col gap-1 min-w-0">
-                        <FieldLabel htmlFor={`econ-gm-${g.group_code}-cons`}>Потр. ×</FieldLabel>
+                        <FieldLabel htmlFor={`econ-gm-${g.group_code}-cons`} hint="goods_consumption" hintTitle="Множитель потребления">
+                          Потр. ×
+                        </FieldLabel>
                         {numberInput(`econ-gm-${g.group_code}-cons`, d.consumption, (v) => setGoods(g.group_code, { consumption: v }),
                           inRange(d.consumption, 0, MAX_CONSUMPTION_MULT), { min: 0, max: MAX_CONSUMPTION_MULT, step: 0.1 })}
                       </div>
                       <div className="flex flex-col gap-1 min-w-0">
-                        <FieldLabel htmlFor={`econ-gm-${g.group_code}-stock`}>Запас</FieldLabel>
+                        <FieldLabel htmlFor={`econ-gm-${g.group_code}-stock`} hint="goods_stock" hintTitle="Запас на складе региона">
+                          Запас
+                        </FieldLabel>
                         {numberInput(`econ-gm-${g.group_code}-stock`, d.stock, (v) => setGoods(g.group_code, { stock: v, stockTouched: true }),
                           inRange(d.stock, 0, Number.MAX_SAFE_INTEGER), { min: 0, step: 1 })}
                       </div>
@@ -574,6 +625,16 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
           </>
         )}
       </section>
+
+      <RegionBankPanel
+        regionId={regionId}
+        regionName={detail.name ?? `Регион #${detail.region_id}`}
+        canEdit={canEdit}
+        onChanged={() => {
+          refreshNumbers();
+          onChanged();
+        }}
+      />
 
       {/* History */}
       <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-3 min-w-0">

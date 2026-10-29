@@ -9,6 +9,8 @@ import { selectPermissions } from '../../../redux/slices/userSlice';
 import { hasPermission } from '../../../utils/permissions';
 import type { EconGoodsGroup, EconGoodsGroupUpdate } from '../../../types/economy';
 import { formatDecimal } from './economyLabels';
+import { FieldHint } from './ParamHint';
+import type { FieldHintKey } from './paramHints';
 
 /* Bounds of `PUT /admin/economy/goods-groups/{code}` (feature file 3.7). */
 const NAME_MAX = 100;
@@ -66,10 +68,22 @@ const reaches = (graph: Record<string, string[]>, start: string, target: string)
   return false;
 };
 
-const FieldLabel = ({ htmlFor, children }: { htmlFor: string; children: string }) => (
-  <label htmlFor={htmlFor} className="text-white/60 text-xs uppercase tracking-[0.06em]">
-    {children}
-  </label>
+/** «?» hints of the group editor fields (FEAT-185), by input id. */
+const GROUP_FIELD_HINT: Record<string, FieldHintKey> = {
+  'econ-gg-price': 'group_base_price',
+  'econ-gg-norm': 'group_norm',
+  'econ-gg-days': 'group_norm_days',
+  'econ-gg-pe': 'group_prosperity_elasticity',
+  'econ-gg-ce': 'group_price_elasticity',
+};
+
+const FieldLabel = ({ htmlFor, children, hint }: { htmlFor: string; children: string; hint?: FieldHintKey }) => (
+  <span className="flex items-center gap-1 min-w-0">
+    <label htmlFor={htmlFor} className="text-white/60 text-xs uppercase tracking-[0.06em]">
+      {children}
+    </label>
+    {hint && <FieldHint field={hint} label={children} />}
+  </span>
 );
 
 interface GroupEditorProps {
@@ -165,7 +179,9 @@ const GroupEditor = ({ group, groups, canEdit, onBack, onSaved }: GroupEditorPro
     opts: { min: number; max: number; step: number },
   ) => (
     <div className="flex flex-col gap-1 min-w-0">
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <FieldLabel htmlFor={id} hint={GROUP_FIELD_HINT[id]}>
+        {label}
+      </FieldLabel>
       <input
         id={id}
         type="number"
@@ -264,7 +280,9 @@ const GroupEditor = ({ group, groups, canEdit, onBack, onSaved }: GroupEditorPro
                 </div>
                 <div className="flex items-end gap-3">
                   <div className="flex flex-col gap-1 min-w-0 w-32">
-                    <FieldLabel htmlFor={`econ-gg-ratio-${idx}`}>Ед. на 1</FieldLabel>
+                    <FieldLabel htmlFor={`econ-gg-ratio-${idx}`} hint="group_input_ratio">
+                      Ед. на 1
+                    </FieldLabel>
                     <input
                       id={`econ-gg-ratio-${idx}`}
                       type="number"

@@ -29,6 +29,14 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   treasury_closed: 'Закрытие казны',
   region_tick: 'Пересчёт региона',
   merchant_trade: 'Торговля с жителями',
+  bank_deposit: 'Вклад в банк',
+  bank_withdraw: 'Снятие со вклада',
+  bank_transfer: 'Банковский перевод',
+  bank_tick: 'Банк: проценты и жители',
+  bank_capital: 'Капитал банка',
+  loan_issue: 'Выдача займа',
+  loan_repay: 'Погашение займа',
+  loan_collect: 'Взыскание долга',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
@@ -43,14 +51,20 @@ export const ACCOUNT_KIND_LABELS: Record<EconAccountKind, string> = {
   emission: 'Эмиссия',
   adjustment: 'Корректировки',
   population_purse: 'Кошелёк жителей',
+  bank: 'Банк региона',
+  bank_deposits: 'Вклады игроков',
 };
 
 export const accountKindLabel = (kind: string | null | undefined): string =>
   (kind && ACCOUNT_KIND_LABELS[kind as EconAccountKind]) || 'Счёт';
 
+/** Region-owned accounts that are named after their region (prefixed with the kind in lists). */
+const REGION_PREFIXED_KINDS: ReadonlySet<string> = new Set<EconAccountKind>(['population_purse', 'bank', 'bank_deposits']);
+
 /**
- * Display name of an account. A population purse carries its region's name, so it is prefixed
- * («Кошелёк жителей — Эльмирия») to tell it apart from the region treasury with the same name.
+ * Display name of an account. A population purse and the two bank accounts carry their region's name, so they
+ * are prefixed («Кошелёк жителей — Эльмирия», «Банк региона — Эльмирия») to tell them apart from the region
+ * treasury with the same name.
  */
 export const accountDisplayName = (account: {
   kind: string | null | undefined;
@@ -58,7 +72,9 @@ export const accountDisplayName = (account: {
   account_id: number;
 }): string => {
   const base = account.name ?? `#${account.account_id}`;
-  return account.kind === 'population_purse' ? `${ACCOUNT_KIND_LABELS.population_purse} — ${base}` : base;
+  return account.kind && REGION_PREFIXED_KINDS.has(account.kind)
+    ? `${ACCOUNT_KIND_LABELS[account.kind as EconAccountKind]} — ${base}`
+    : base;
 };
 
 export const LEG_TYPE_LABELS: Record<EconLegType, string> = {
@@ -67,6 +83,7 @@ export const LEG_TYPE_LABELS: Record<EconLegType, string> = {
   commission: 'комиссия',
   tax: 'налог',
   trade_tax: 'налог с выручки',
+  interest: 'проценты',
 };
 
 /** Account kinds an admin emission may target (backend rule). */
@@ -97,6 +114,8 @@ export const ALL_ACCOUNT_KINDS: EconAccountKind[] = [
   'auction_storage',
   'emission',
   'adjustment',
+  'bank',
+  'bank_deposits',
 ];
 
 /** Op type the journal hides by default: one per simulated region every 6 hours. */
@@ -127,7 +146,7 @@ export const formatDateTime = (iso: string): string => {
 /** Why an NPC merchant is not living (FEAT-183, `econ_core.merchant_status`) — shared by the shop editor and «Торговцы». */
 export const MERCHANT_REASON_LABELS: Record<EconMerchantReason, string> = {
   not_npc: 'персонаж не является НПС',
-  dead: 'НПС мёртв',
+  dead: 'НПС мёртв — лавка закрыта',
   no_location: 'НПС не стоит ни в одной локации',
   dungeon: 'НПС находится в подземелье',
   no_region: 'локация НПС не относится ни к одному региону',

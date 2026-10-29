@@ -54,16 +54,19 @@ const phraseTone = (phrase: string, card: RegionCardData): string => {
 
 const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   const [card, setCard] = useState<RegionCardData | null>(null);
+  const [hasBank, setHasBank] = useState(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setCard(null);
+    setHasBank(false);
     setFailed(false);
     fetchRegionEconomyCard(regionId)
       .then((data) => {
         if (cancelled) return;
         setCard(data.participating ? data : null);
+        setHasBank(data.has_bank === true);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -78,7 +81,16 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   if (failed) {
     return <p className="text-site-red/80 text-xs text-center mb-3">{ERROR_TEXT}</p>;
   }
-  if (!card) return null;
+  const bankLine = hasBank && (
+    <p className="text-xs text-center text-white/60 mt-2">
+      <span aria-hidden="true">🏦 </span>
+      В регионе есть банк — вклады и займы у банкира
+    </p>
+  );
+
+  if (!card) {
+    return bankLine ? <section aria-label="Банк региона" className="mx-auto mb-4 w-full max-w-3xl px-1 sm:px-0">{bankLine}</section> : null;
+  }
 
   return (
     <section
@@ -121,6 +133,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
           </ul>
         </div>
       )}
+      {bankLine}
     </section>
   );
 };

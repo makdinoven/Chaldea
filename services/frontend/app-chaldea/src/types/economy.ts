@@ -13,9 +13,12 @@ export type EconAccountKind =
   | 'auction_storage'
   | 'emission'
   | 'adjustment'
-  | 'population_purse';
+  | 'population_purse'
+  /** FEAT-184: the bank's own money and the vault of player deposits (ref = region id) */
+  | 'bank'
+  | 'bank_deposits';
 
-export type EconLegType = 'main' | 'refund' | 'commission' | 'tax' | 'trade_tax';
+export type EconLegType = 'main' | 'refund' | 'commission' | 'tax' | 'trade_tax' | 'interest';
 
 export interface EconTotals {
   issued: number;
@@ -29,6 +32,9 @@ export interface EconTotals {
   world_treasury: number;
   /** FEAT-182: all population purses (already counted in `held`) */
   population_purses?: number;
+  /** FEAT-184: own money of all banks (`bank` accounts) and the vaults of player deposits (`bank_deposits`) */
+  banks?: number;
+  bank_deposits?: number;
 }
 
 export interface EconDriftingCharacter {
@@ -45,6 +51,9 @@ export interface EconInvariant {
   escrow_actual: number;
   storage_expected: number;
   storage_actual: number;
+  /** FEAT-184: Σ open deposit rows (amount + interest_accrued) vs Σ vault balances — part of `ok` */
+  bank_deposits_expected?: number;
+  bank_deposits_actual?: number;
   drifting_characters: EconDriftingCharacter[];
 }
 
@@ -188,6 +197,8 @@ export interface EconRegionItem {
   last_grant: number;
   last_tick_at: string | null;
   simulated: boolean;
+  /** FEAT-184: «Банк есть» (an enabled `econ_banks` row) */
+  bank_enabled?: boolean;
 }
 
 export interface EconRegionGoods {
@@ -237,6 +248,8 @@ export interface EconFillBody {
   fund_purses?: boolean;
   /** Also top up each region treasury to its wage reserve (backend default true) */
   treasury_to_reserve?: boolean;
+  /** FEAT-184: open banks in capitals and ports (one-time capital seed after the treasury top-up; backend default true) */
+  open_banks?: boolean;
   comment: string;
 }
 
@@ -251,6 +264,8 @@ export interface EconFillResult {
   emitted_treasuries: number;
   /** Regions with population 0: goods filled, no money */
   skipped_no_population: number[];
+  /** FEAT-184: regions whose bank this fill switched on */
+  banks_opened?: number[];
 }
 
 /** Per-group snapshot inside a history row. */
@@ -418,6 +433,27 @@ export interface EconSimParams {
   merchant_cash_target_mult: number;
   merchant_cash_cap_mult: number;
   merchant_cash_release: number;
+  /* FEAT-184 banks */
+  bank_demand_rate_day: number;
+  bank_term_rate_day_7: number;
+  bank_term_rate_day_14: number;
+  bank_term_rate_day_28: number;
+  bank_loan_rate_day: number;
+  bank_penalty_rate_day: number;
+  bank_debt_cap_mult: number;
+  bank_loan_cap_base: number;
+  bank_loan_cap_per_level: number;
+  bank_min_amount: number;
+  bank_transfer_fee_rate: number;
+  bank_transfer_fee_min: number;
+  bank_start_capital: number;
+  bank_reserve_ratio: number;
+  bank_rate_cover: number;
+  bank_rate_factor_min: number;
+  bank_rate_smoothing: number;
+  bank_resident_deposit_share: number;
+  bank_resident_loan_share: number;
+  bank_resident_adjust: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -450,6 +486,16 @@ export interface EconTickRun {
   merchant_items_restocked?: number;
   merchant_failed_region_ids?: number[];
   shop_rows_purged?: number;
+  /** FEAT-184: bank pass counters — the run-now summary has all of them; the runs list may derive only some */
+  banks_processed?: number;
+  bank_ops_posted?: number;
+  bank_failures?: number;
+  bank_failed_region_ids?: number[];
+  bank_interest_paid?: number;
+  loans_overdue?: number;
+  loans_collected?: number;
+  collected_amount?: number;
+  banks_closed?: number;
 }
 
 export interface EconSimState {
@@ -555,3 +601,156 @@ export interface EconMerchantFundResult {
 
 /* The public player card (`GET /characters/economy/regions/{id}/card`) is typed next to its fetch in
  * `api/regionEconomy.ts` (task F4). */
+
+/* ---------------------------------------------- FEAT-184 — banks (feature file 3.10 / 3.11) */
+
+export interface EconBankTermRate {
+  term_days: number;
+  rate_day: number;
+}
+
+/** A living banker of the region (when the backend lists them instead of a count). */
+export interface EconBankBanker {
+  npc_id: number;
+  name: string | null;
+}
+
+/** Counters of the last bank pass (`econ_bank.bank_step` stats); unknown keys are shown as is. */
+export type EconBankStats = Record<string, number | string | boolean | null>;
+
+export interface EconBankAdminItem {
+  region_id: number;
+  region_name: string | null;
+  country_name: string | null;
+  /** «Банк есть» */
+  enabled: boolean;
+  /** the region's economy is simulated (residents use the bank) */
+  simulated: boolean;
+  /** living NPC bankers of the region — a count or a list (contract 3.10 does not fix the shape) */
+  bankers: number | EconBankBanker[];
+  /** balance of the `bank` account */
+  own_funds: number;
+  /** balance of the `bank_deposits` account */
+  vault: number;
+  /** Σ amount + interest_accrued of the open player deposit rows */
+  deposits_sum: number;
+  vault_ok: boolean;
+  deposits_count: number;
+  term_count: number;
+  resident_deposits: number;
+  resident_loans: number;
+  reserve: number;
+  lendable: number;
+  loans_count: number;
+  loans_debt: number;
+  overdue_count: number;
+  rate_factor: number;
+  demand_rate_day: number;
+  term_rates: EconBankTermRate[];
+  capital_seeded_at: string | null;
+  last_tick_at: string | null;
+  last_stats: EconBankStats | null;
+}
+
+export interface EconBanksTotals {
+  banks: number;
+  enabled: number;
+  own_funds: number;
+  player_deposits: number;
+  resident_deposits: number;
+  player_loans_debt: number;
+  resident_loans: number;
+  debtors: number;
+}
+
+export interface EconBanksResponse {
+  items: EconBankAdminItem[];
+  totals: EconBanksTotals;
+}
+
+export type EconBankDepositKind = 'demand' | 'term';
+export type EconBankLoanStatus = 'active' | 'overdue' | 'closed' | 'written_off';
+
+export interface EconBankAdminDeposit {
+  id: number;
+  character_id: number;
+  character_name: string | null;
+  status: string;
+  region_id: number;
+  region_name: string | null;
+  kind: EconBankDepositKind | string;
+  amount: number;
+  interest_accrued: number;
+  interest_total: number;
+  rate_day: number | null;
+  term_days: number | null;
+  opened_at: string;
+  matures_at: string | null;
+  matured: boolean;
+}
+
+export interface EconBankLoan {
+  id: number;
+  region_id: number;
+  region_name: string | null;
+  status: EconBankLoanStatus | string;
+  principal: number;
+  /** projected to now */
+  debt: number;
+  interest_total: number;
+  penalty_total: number;
+  paid_total: number;
+  collected_total: number;
+  rate_day: number;
+  penalty_rate_day: number;
+  term_days: number;
+  issued_at: string;
+  due_at: string;
+  overdue: boolean;
+}
+
+export interface EconBankAdminLoan extends EconBankLoan {
+  character_id: number;
+  character_name: string | null;
+}
+
+export interface EconBankAdminDetail {
+  item: EconBankAdminItem;
+  /** open deposits, at most 500 newest */
+  deposits: EconBankAdminDeposit[];
+  /** open loans */
+  loans: EconBankAdminLoan[];
+}
+
+export interface EconBankDebtor {
+  loan_id: number;
+  character_id: number;
+  character_name: string | null;
+  region_id: number;
+  region_name: string | null;
+  debt: number;
+  principal: number;
+  due_at: string;
+  overdue_days: number;
+  penalty_total: number;
+}
+
+export interface EconBankFlagBody {
+  is_enabled: boolean;
+  /** first switch-on takes the start capital from the region treasury once */
+  seed_capital?: boolean;
+}
+
+export type EconBankCapitalDirection = 'in' | 'out';
+
+export interface EconBankCapitalBody {
+  direction: EconBankCapitalDirection;
+  amount: number;
+  comment: string;
+}
+
+export interface EconBankCapitalResult {
+  operation_id: number;
+  bank_balance: number;
+  treasury_balance: number;
+}

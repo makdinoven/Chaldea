@@ -8,7 +8,7 @@ import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type { EconFillResult, EconRegionItem } from '../../../types/economy';
 import RegionEconomyEditor from './RegionEconomyEditor';
 import { formatDateTime } from './economyLabels';
-import { HungerBadge, ScaleBar } from './regionBits';
+import { BankBadge, HungerBadge, ScaleBar } from './regionBits';
 
 const COMMENT_MIN = 3;
 const COMMENT_MAX = 500;
@@ -34,6 +34,7 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
   const [resetStocks, setResetStocks] = useState(true);
   const [fundPurses, setFundPurses] = useState(true);
   const [treasuryToReserve, setTreasuryToReserve] = useState(true);
+  const [openBanks, setOpenBanks] = useState(true);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -48,6 +49,7 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
         reset_stocks: resetStocks,
         fund_purses: fundPurses,
         treasury_to_reserve: treasuryToReserve,
+        open_banks: openBanks,
         comment: trimmed,
       });
       onDone(result);
@@ -86,6 +88,13 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
       set: setTreasuryToReserve,
       label: 'Пополнить казну до резерва жалованья',
       hint: 'Без резерва жалованье жителям начнётся только через ~неделю, пока казна не наберётся из налогов.',
+    },
+    {
+      id: 'econ-fill-banks',
+      checked: openBanks,
+      set: setOpenBanks,
+      label: 'Открыть банки в столицах и портах',
+      hint: 'Банк включается регионам с шаблоном «Столица» или «Порт»; стартовый капитал берётся из казны один раз. Остальным регионам банк включают вручную.',
     },
   ];
 
@@ -288,6 +297,13 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
               Без денег из-за нулевого населения: {fillResult.skipped_no_population.map(regionLabel).join(', ')}
             </span>
           )}
+          {fillResult.banks_opened !== undefined && (
+            <span className="block text-white/50 mt-1">
+              {fillResult.banks_opened.length > 0
+                ? `Открыты банки (${fillResult.banks_opened.length}): ${fillResult.banks_opened.map(regionLabel).join(', ')}`
+                : 'Новых банков не открыто.'}
+            </span>
+          )}
         </p>
       )}
 
@@ -321,7 +337,10 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                     className="border-b border-white/[0.07] last:border-b-0 cursor-pointer hover:bg-white/[0.04] transition-colors duration-200 ease-site"
                   >
                     <td className="py-2 pr-3">
-                      <span className="block text-white break-words">{regionTitle(r)}</span>
+                      <span className="block text-white break-words">
+                        {regionTitle(r)}
+                        {r.bank_enabled && <BankBadge className="ml-2 align-middle" />}
+                      </span>
                       <span className="block text-white/40 text-xs">{r.country_name ?? 'Без страны'}</span>
                     </td>
                     <td className="py-2 pr-3 text-white/80">{r.template_name ?? <span className="text-white/30">—</span>}</td>
@@ -357,7 +376,10 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                 >
                   <span className="flex items-start gap-2">
                     <span className="flex-1 min-w-0">
-                      <span className="block text-white text-sm font-medium break-words">{regionTitle(r)}</span>
+                      <span className="block text-white text-sm font-medium break-words">
+                        {regionTitle(r)}
+                        {r.bank_enabled && <BankBadge className="ml-2 align-middle" />}
+                      </span>
                       <span className="block text-white/40 text-xs break-words">
                         {r.country_name ?? 'Без страны'} · {r.template_name ?? 'без шаблона'}
                         {r.population > 0 && ` · ${r.population.toLocaleString('ru-RU')} жит.`}
@@ -399,8 +421,9 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
           onDone={(result) => {
             setFillOpen(false);
             setFillResult(result);
+            const banksText = result.banks_opened?.length ? `. Открыто банков: ${result.banks_opened.length}` : '';
             toast.success(
-              `Регионы заполнены: ${result.regions}. Жителям: ${format(result.emitted_purses)}, в казны: ${format(result.emitted_treasuries)}`,
+              `Регионы заполнены: ${result.regions}. Жителям: ${format(result.emitted_purses)}, в казны: ${format(result.emitted_treasuries)}${banksText}`,
             );
             load();
             onMoneyChanged();

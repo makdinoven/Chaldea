@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Info } from 'lucide-react';
+import { CircleHelp, Info } from 'lucide-react';
 
 /*
   A small contextual tooltip in the design system's `site-tooltip` look.
@@ -49,8 +49,11 @@ const useTooltip = (content: ReactNode) => {
     const w = tip.offsetWidth;
     const h = tip.offsetHeight;
     const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
     const above = r.top - GAP - h;
-    const top = above >= EDGE ? above : r.bottom + GAP;
+    const below = above >= EDGE ? above : r.bottom + GAP;
+    // A tall bubble below a low anchor is pulled back up so it stays inside the viewport.
+    const top = Math.max(EDGE, Math.min(below, vh - h - EDGE));
     const left = Math.min(Math.max(r.left + r.width / 2 - w / 2, EDGE), Math.max(EDGE, vw - w - EDGE));
     setPos({ top, left });
   }, []);
@@ -167,10 +170,12 @@ interface InfoTooltipProps {
   label?: string;
   className?: string;
   size?: number;
+  /** «i» (default) or «?» — the latter for help on a form field. */
+  icon?: 'info' | 'help';
 }
 
-/** A round «i» button that shows `content` on hover, focus or tap. */
-export const InfoTooltip = ({ content, label = 'Подробнее', className = '', size = 14 }: InfoTooltipProps) => {
+/** A round «i» (or «?») button that shows `content` on hover, focus or tap. */
+export const InfoTooltip = ({ content, label = 'Подробнее', className = '', size = 14, icon = 'info' }: InfoTooltipProps) => {
   const { open, setOpen, anchorRef, id, bubble, pointerHandlers, onFocus, toggleByClick } = useTooltip(content);
   if (isEmpty(content)) return null;
   return (
@@ -191,7 +196,7 @@ export const InfoTooltip = ({ content, label = 'Подробнее', className =
         toggleByClick();
       }}
     >
-      <Info size={size} />
+      {icon === 'help' ? <CircleHelp size={size} /> : <Info size={size} />}
       {bubble}
     </button>
   );

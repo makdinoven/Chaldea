@@ -23,6 +23,8 @@ export interface RegionCardGroup {
 interface RegionCardHidden {
   region_id: number;
   participating: false;
+  /** FEAT-184: the region has an enabled bank */
+  has_bank?: boolean;
 }
 
 export interface RegionCardData {
@@ -38,6 +40,8 @@ export interface RegionCardData {
   surpluses: string[];
   phrases: string[];
   groups: RegionCardGroup[];
+  /** FEAT-184: the region has an enabled bank */
+  has_bank?: boolean;
 }
 
 export type RegionCardResponse = RegionCardHidden | RegionCardData;

@@ -9,6 +9,7 @@ import NpcDialogueModal from './NpcDialogueModal';
 import NpcShopModal from './NpcShopModal';
 import NpcQuestsModal from './NpcQuestsModal';
 import NpcAuctionModal from './NpcAuctionModal';
+import BankModal from './BankModal/BankModal';
 import TeleportMenu from './TeleportMenu';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
@@ -42,6 +43,7 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   const [hasQuests, setHasQuests] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
   const [auctionOpen, setAuctionOpen] = useState(false);
+  const [bankOpen, setBankOpen] = useState(false);
   /** The teleport dialog sits on top of this one and owns Escape while open. */
   const [teleportOpen, setTeleportOpen] = useState(false);
   const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
@@ -115,6 +117,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   }, [npcId, characterId]);
 
   const roleLabel = npc?.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
+
+  if (bankOpen && npc) {
+    return (
+      <BankModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setBankOpen(false)}
+      />
+    );
+  }
 
   if (auctionOpen && npc) {
     return (
@@ -295,6 +308,26 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l3 9a5.002 5.002 0 01-6.001 0M18 7l-3 9m-3-6v10" />
               </svg>
               Аукцион
+            </button>
+          )}
+
+          {/* Bank button — banker NPCs, character in the same location (FEAT-184) */}
+          {npc.npc_role === 'banker' && isCharacterHere && characterId && (
+            <button
+              onClick={() => setBankOpen(true)}
+              className="
+                mt-2 w-full px-6 py-3 rounded-card
+                border border-gold/50 bg-gold/10
+                text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                hover:bg-gold/20 hover:border-gold/80
+                transition-all duration-200
+                flex items-center justify-center gap-2
+              "
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 10l9-6 9 6M5 10v8m4-8v8m6-8v8m4-8v8M3 20h18" />
+              </svg>
+              Банк
             </button>
           )}
 

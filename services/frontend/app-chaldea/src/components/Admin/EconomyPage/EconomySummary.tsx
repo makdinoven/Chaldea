@@ -94,6 +94,12 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
     { label: 'Казны стран', value: totals.country_treasuries },
     { label: 'Казна Скитальцев', value: totals.world_treasury },
   ];
+  // FEAT-184: shown once the backend reports banks (older responses have no such fields).
+  if (totals.banks !== undefined) cards.push({ label: 'Банки (свои средства)', value: totals.banks });
+  if (totals.bank_deposits !== undefined) cards.push({ label: 'Вклады игроков', value: totals.bank_deposits });
+
+  const hasBankCheck = invariant.bank_deposits_expected !== undefined && invariant.bank_deposits_actual !== undefined;
+  const bankVaultOk = !hasBankCheck || invariant.bank_deposits_expected === invariant.bank_deposits_actual;
 
   return (
     <div className="flex flex-col gap-6">
@@ -112,6 +118,14 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
         <span className="text-white/50 text-sm">
           Налог регионов в казну страны: {Math.round(summary.settings.country_tax_rate * 1000) / 10}%
         </span>
+        {hasBankCheck && (
+          <span
+            className={`text-sm ${bankVaultOk ? 'text-white/50' : 'text-site-red'}`}
+            title="Сумма открытых вкладов игроков должна совпадать с деньгами в хранилищах банков"
+          >
+            Вклады = хранилище: {bankVaultOk ? 'сходится' : 'расхождение'}
+          </span>
+        )}
         <button
           type="button"
           onClick={onRefresh}
@@ -135,6 +149,12 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
           <p className="text-white">
             Хранилище аукциона: счёт {format(invariant.storage_actual)}, по записям {format(invariant.storage_expected)}
           </p>
+          {hasBankCheck && (
+            <p className={bankVaultOk ? 'text-white' : 'text-site-red'}>
+              Вклады игроков: хранилища банков {format(invariant.bank_deposits_actual ?? 0)}, по вкладам{' '}
+              {format(invariant.bank_deposits_expected ?? 0)}
+            </p>
+          )}
           {invariant.drifting_characters.length > 0 && (
             <div className="flex flex-col gap-1">
               <p className="text-white/60">Баланс персонажа не совпадает с журналом:</p>
