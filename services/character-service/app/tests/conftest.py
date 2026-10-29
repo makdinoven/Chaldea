@@ -49,6 +49,35 @@ from fastapi.testclient import TestClient  # noqa: E402
 from unittest.mock import MagicMock  # noqa: E402
 
 import models  # noqa: E402
+from tests.econ_contract_cases import SQLITE_DDL as _ECON_SQLITE_DDL  # noqa: E402
+
+
+# FEAT-181: the ledger resolves location -> region -> country through the locations-service
+# tables (Locations / Districts / Regions / Countries), which have no ORM model here. Every
+# SQLite create_all() of the character-service metadata also creates their portable DDL,
+# so money flows that touch a location work in any test database.
+_HIERARCHY_DDL = [ddl for ddl in _ECON_SQLITE_DDL
+                  if any(f"EXISTS {name} " in ddl for name in ("Countries", "Regions", "Districts", "Locations"))]
+
+
+@event.listens_for(models.Base.metadata, "after_create")
+def _create_world_hierarchy(target, connection, **kw):
+    if connection.dialect.name != "sqlite":
+        return
+    for ddl in _HIERARCHY_DDL:
+        connection.exec_driver_sql(ddl)
+
+
+@event.listens_for(models.Base.metadata, "after_drop")
+def _drop_world_hierarchy(target, connection, **kw):
+    # Dropped with the metadata so the next create_all() gets the full shape even if a test
+    # created a reduced copy of one of these tables in between.
+    if connection.dialect.name != "sqlite":
+        return
+    for name in ("Locations", "Districts", "Regions", "Countries"):
+        connection.exec_driver_sql(f'DROP TABLE IF EXISTS "{name}"')
+
+
 from auth_http import get_admin_user, get_current_user_via_http, OAUTH2_SCHEME, UserRead  # noqa: E402
 from main import app, get_db  # noqa: E402
 

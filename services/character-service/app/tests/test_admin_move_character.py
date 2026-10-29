@@ -84,7 +84,9 @@ MODERATOR_USER = UserRead(
 # whether or not another test module has already declared them on Base.
 _FOREIGN_TABLES_DDL = (
     'CREATE TABLE IF NOT EXISTS "Locations" '
-    '(id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL)',
+    '(id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, '
+    # FEAT-181: the ledger's region resolution reads these three columns too.
+    'district_id BIGINT NULL, region_id BIGINT NULL, parent_id BIGINT NULL)',
     "CREATE TABLE IF NOT EXISTS battles "
     "(id INTEGER PRIMARY KEY, status VARCHAR(20))",
     "CREATE TABLE IF NOT EXISTS battle_participants "

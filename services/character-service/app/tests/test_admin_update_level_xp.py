@@ -39,6 +39,8 @@ _ADMIN_USER = UserRead(
     permissions=[
         "characters:create", "characters:read", "characters:update",
         "characters:delete", "characters:approve",
+        # FEAT-181: a changed currency_balance additionally needs economy:adjust.
+        "economy:adjust",
     ],
 )
 

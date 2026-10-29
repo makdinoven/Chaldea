@@ -27,6 +27,8 @@ import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy import text as _sql
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
@@ -41,6 +43,7 @@ from sqlalchemy import (
 
 import database
 from database import Base
+import econ_ledger
 import models
 import crud
 from main import app, get_db
@@ -75,6 +78,10 @@ class _LocationsTable(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
+    # FEAT-181: the ledger resolves location -> region through these columns.
+    district_id = Column(BigInteger, nullable=True)
+    region_id = Column(BigInteger, nullable=True)
+    parent_id = Column(BigInteger, nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -278,14 +285,13 @@ def admin_client(db_session):
 
 class TestTeleportSuccess:
     def test_teleport_success_path(self, player_client, db_session, world):
-        """Gold deducted, location moved, last_teleport_at set, gold tx logged."""
+        """Gold deducted, location moved, last_teleport_at set, teleport posted to the ledger."""
         before_balance = world["player"].currency_balance
 
-        with patch.object(crud, "log_gold_transaction", wraps=crud.log_gold_transaction) as spy:
-            resp = player_client.post(
-                f"/characters/npcs/{world['npc_a'].id}/teleport",
-                json={"link_id": world["link_ab"].id},
-            )
+        resp = player_client.post(
+            f"/characters/npcs/{world['npc_a'].id}/teleport",
+            json={"link_id": world["link_ab"].id},
+        )
 
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -294,11 +300,6 @@ class TestTeleportSuccess:
         assert body["currency_balance"] == before_balance - 100
         assert body["last_teleport_at"] is not None
 
-        # log_gold_transaction must have been called once with negative amount
-        assert spy.called
-        kwargs = spy.call_args.kwargs
-        assert kwargs["amount"] == -100
-        assert kwargs["transaction_type"] == "teleport"
 
         # DB-level assertions
         db_session.expire_all()
@@ -307,13 +308,16 @@ class TestTeleportSuccess:
         assert player.currency_balance == before_balance - 100
         assert player.last_teleport_at is not None
 
-        tx = (
-            db_session.query(models.GoldTransaction)
-            .filter_by(character_id=player.id, transaction_type="teleport")
-            .first()
-        )
-        assert tx is not None
-        assert tx.amount == -100
+        # FEAT-181 C4: one `teleport` operation, player -> treasury of the source NPC's
+        # location (no region in this fixture -> «Казна Скитальцев»); nothing in gold_transactions.
+        legs = db_session.execute(_sql(
+            "SELECT o.op_type, fa.kind, fa.ref_id, ta.kind, p.amount FROM econ_postings p"
+            " JOIN econ_operations o ON o.id = p.operation_id"
+            " JOIN econ_accounts fa ON fa.id = p.from_account_id"
+            " JOIN econ_accounts ta ON ta.id = p.to_account_id"
+        )).fetchall()
+        assert [tuple(r) for r in legs] == [("teleport", "character", player.id, "world_treasury", 100)]
+        assert db_session.query(models.GoldTransaction).count() == 0
 
 
 # ===========================================================================
@@ -322,9 +326,10 @@ class TestTeleportSuccess:
 
 class TestTeleportErrors:
     def test_insufficient_gold_returns_402(self, player_client, db_session, world):
-        # Drain the player's gold
-        world["player"].currency_balance = 10
-        db_session.commit()
+        # Drain the player's gold (fixture seeding, bypasses the ledger guard on purpose)
+        with econ_ledger.allow_direct_balance_write(db_session):
+            world["player"].currency_balance = 10
+            db_session.commit()
 
         resp = player_client.post(
             f"/characters/npcs/{world['npc_a'].id}/teleport",
@@ -700,8 +705,9 @@ class TestTeleportLeavesNoGatesBehind:
     ):
         """A refused teleport leaves the character where they are, so their
         gates there must stay alive."""
-        world["player"].currency_balance = 1
-        db_session.commit()
+        with econ_ledger.allow_direct_balance_write(db_session):
+            world["player"].currency_balance = 1
+            db_session.commit()
 
         resp = player_client.post(
             f"/characters/npcs/{world['npc_a'].id}/teleport",

@@ -13,12 +13,14 @@ from sqlalchemy.orm import Session
 from models import (
     CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
     MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
-    MobKill, CharacterLog, GoldTransaction, TeleportLink,
+    MobKill, CharacterLog, TeleportLink,
     MobPack, MobPackMember, ActiveMobPack,
 )
 from datetime import datetime, timedelta
 from typing import NamedTuple, Optional
 from fastapi import HTTPException
+import econ_core
+import econ_ledger
 import logging
 
 logger = logging.getLogger("character-service.crud")
@@ -434,12 +436,14 @@ def resolve_character_avatar(db: Session, character_request: models.CharacterReq
     return ""
 
 
-def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0,
+def create_preliminary_character(db: Session, character_request: models.CharacterRequest,
                                  auto_commit: bool = True, granted_kit: Optional[dict] = None,
                                  starting_attributes: Optional[dict] = None):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
-    currency_balance задаётся из стартового набора класса.
+    Персонаж создаётся с нулевым балансом: золото стартового набора начисляется
+    проводкой `starter_kit` (FEAT-181 C1, `post_starter_kit`) после разрешения
+    стартовой локации.
     При auto_commit=False вызывает flush вместо commit (для использования в транзакции).
 
     FEAT-154: сюда же переносится момент «вступления в Скитальцы» — проставляется
@@ -470,7 +474,7 @@ def create_preliminary_character(db: Session, character_request: models.Characte
         id_class=character_request.id_class,
         sex=character_request.sex,
         appearance=character_request.appearance,
-        currency_balance=currency_balance,
+        currency_balance=0,
         # FEAT-154: паспортные поля «Регистрации Скитальца»
         origin_id=getattr(character_request, "origin_id", None),
         skitaltsy_since_year=getattr(character_request, "skitaltsy_since_year", None),
@@ -805,6 +809,7 @@ def delete_character(db: Session, character_id: int):
     """
     db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if db_character:
+        post_character_deletion(db, db_character)  # FEAT-181 C8
         db.delete(db_character)
         db.commit()
         return True
@@ -2345,41 +2350,132 @@ def get_pack_roster(db: Session, active_pack_id: int):
 
 
 # ============================================================
-# Gold Transaction Logging (FEAT-102)
+# Economy writers (FEAT-181 B2)
 # ============================================================
+# Every gold change of a character goes through econ_ledger.post_operation (double entry,
+# see docs/services/character-service.md «Economy ledger»). gold_transactions is frozen:
+# character-service no longer writes it.
 
-def log_gold_transaction(
-    db: Session,
-    character_id: int,
-    amount: int,
-    balance_after: int,
-    transaction_type: str,
-    source: str = None,
-    metadata: dict = None,
-):
+ECON_SOURCE_SERVICE = "character-service"
+
+# add_rewards: which op types a caller may ask for, and who pays.
+REWARD_GOLD_OP_TYPES = frozenset({
+    econ_core.OP_BATTLE_REWARD, econ_core.OP_BATTLE_PASS_REWARD, econ_core.OP_DUNGEON_REWARD,
+})
+PAYER_LOCATION = "location"
+PAYER_WORLD = "world"
+REWARD_PAYERS = frozenset({PAYER_LOCATION, PAYER_WORLD})
+
+# /internal/deduct-gold: player -> treasury spends only.
+DEDUCT_GOLD_OP_TYPES = frozenset({
+    econ_core.OP_DUNGEON_EXPENSE, econ_core.OP_TELEPORT, econ_core.OP_NPC_SHOP_BUY,
+    econ_core.OP_HOUSE_PURCHASE, econ_core.OP_HOUSE_BUILD, econ_core.OP_HOUSE_TAX,
+})
+
+ADMIN_CARD_ADJUST_COMMENT = "Правка в карточке персонажа"
+NPC_FORM_ADJUST_COMMENT = "Правка золота НПС"
+
+
+def currency_forms(db: Session) -> econ_ledger.CurrencyForms:
+    """Currency word forms from econ_settings (60 s cache, defaults on failure)."""
+    return econ_ledger.get_currency_forms(db)
+
+
+def insufficient_funds_message(db: Session) -> str:
+    return f"Недостаточно {currency_forms(db).genitive}"
+
+
+def operation_exists(db: Session, idempotency_key: str) -> bool:
+    """True when an econ operation with this idempotency key was already posted."""
+    row = db.execute(sa_text(econ_core.SQL_SELECT_OPERATION_BY_KEY), {"key": idempotency_key}).first()
+    return row is not None
+
+
+def payer_account(db: Session, location_id: Optional[int]) -> econ_ledger.AccountRef:
+    """Region treasury of the location, else «Казна Скитальцев»."""
+    return econ_ledger.treasury_for_location(db, location_id)
+
+
+def post_starter_kit(db: Session, character_id: int, amount: int, location_id: Optional[int],
+                     metadata: Optional[dict] = None) -> None:
+    """C1: starter-kit gold, start-location treasury -> new character. No-op for amount <= 0."""
+    if not amount or amount <= 0:
+        return
+    econ_ledger.post_operation(
+        db,
+        op_type=econ_core.OP_STARTER_KIT,
+        legs=[econ_ledger.Leg(payer_account(db, location_id), econ_ledger.AccountRef.character(character_id),
+                              int(amount))],
+        source_service=ECON_SOURCE_SERVICE,
+        location_id=location_id,
+        metadata=metadata,
+        idempotency_key=f"starter_kit:c:{character_id}",
+    )
+
+
+def admin_set_balance(db: Session, character_id: int, target: int, *, actor_user_id: Optional[int],
+                      comment: str, metadata: Optional[dict] = None):
+    """C5/C6: bring a balance to an absolute value as an `admin_adjust` posting.
+
+    The delta is computed under the character row lock, so a concurrent spend/credit in
+    another service cannot be overwritten. Returns (old_balance, new_balance), or None when
+    the character does not exist. Never commits.
     """
-    Insert a record into gold_transactions.
-    Called after every currency_balance modification so that
-    battle-pass earn_gold / spend_gold missions can query totals.
-    """
-    try:
-        tx = GoldTransaction(
-            character_id=character_id,
-            amount=amount,
-            balance_after=balance_after,
-            transaction_type=transaction_type,
-            source=source,
-            metadata_=metadata,
+    locked = econ_ledger.lock_characters(db, [character_id])
+    if character_id not in locked:
+        return None
+    old_balance = locked[character_id]
+    delta = int(target) - old_balance
+    if delta == 0:
+        return old_balance, old_balance
+    char_ref = econ_ledger.AccountRef.character(character_id)
+    adj_ref = econ_ledger.AccountRef.adjustment()
+    leg = (econ_ledger.Leg(adj_ref, char_ref, delta) if delta > 0
+           else econ_ledger.Leg(char_ref, adj_ref, -delta))
+    result = econ_ledger.post_operation(
+        db,
+        op_type=econ_core.OP_ADMIN_ADJUST,
+        legs=[leg],
+        source_service=ECON_SOURCE_SERVICE,
+        actor_user_id=actor_user_id,
+        comment=comment,
+        metadata={**(metadata or {}), "old_balance": old_balance, "new_balance": int(target)},
+        apply_tax=False,
+    )
+    return old_balance, result.balances.get(character_id, int(target))
+
+
+def post_character_deletion(db: Session, character: Character) -> int:
+    """C8: before deleting a character, move its whole balance to the treasury of its current
+    location (else «Казна Скитальцев») and deactivate its account. Same transaction as the
+    delete; never commits. Returns the amount moved."""
+    character_id = character.id
+    locked = econ_ledger.lock_characters(db, [character_id])
+    balance = locked.get(character_id, 0)
+    if balance > 0:
+        econ_ledger.post_operation(
+            db,
+            op_type=econ_core.OP_CHARACTER_DELETED,
+            legs=[econ_ledger.Leg(econ_ledger.AccountRef.character(character_id),
+                                  payer_account(db, character.current_location_id), balance)],
+            source_service=ECON_SOURCE_SERVICE,
+            location_id=character.current_location_id,
+            metadata={"character_id": character_id, "name": character.name, "is_npc": bool(character.is_npc)},
+            idempotency_key=f"character_deleted:c:{character_id}",
         )
-        db.add(tx)
-        db.flush()
-    except Exception as e:
-        logger.warning(f"Failed to log gold transaction for character {character_id}: {e}")
+    econ_ledger.deactivate_account(db, econ_ledger.AccountRef.character(character_id))
+    return balance
 
 
 # ============================================================
 # Rewards (Phase 4)
 # ============================================================
+
+class RewardResult(NamedTuple):
+    new_balance: int
+    new_xp: Optional[int]
+    duplicate: bool = False
+
 
 def add_rewards_to_character(
     db: Session,
@@ -2388,10 +2484,15 @@ def add_rewards_to_character(
     gold: int,
     xp_source: str = XP_SOURCE_BATTLE,
     xp_multiplier: Optional[float] = None,
+    *,
+    gold_op_type: str = econ_core.OP_BATTLE_REWARD,
+    location_id: Optional[int] = None,
+    payer: str = PAYER_LOCATION,
+    idempotency_key: Optional[str] = None,
 ):
     """
-    Adds gold to character's currency_balance and XP via shared DB (character_attributes table).
-    Returns (new_balance, new_xp) or None if character not found.
+    Adds gold (ledger posting) and XP (character_attributes in the shared DB) to a character.
+    Returns RewardResult(new_balance, new_xp, duplicate) or None if character not found.
 
     FEAT-168 #6: `xp_source` says which XP book applies. It defaults to battle
     XP — the source this helper was written for — so every caller written before
@@ -2400,6 +2501,12 @@ def add_rewards_to_character(
     `xp_multiplier` is resolved by the caller, before any DB work (see the
     ordering rule above). `None` simply means «no book» and awards the base XP —
     this function never makes a network call of its own.
+
+    FEAT-181 C2: gold is posted as `gold_op_type` from the payer — `payer="world"` →
+    «Казна Скитальцев»; `payer="location"` → treasury of `location_id`, else of the
+    character's current location, else the world treasury. A repeated `idempotency_key`
+    returns duplicate=True and adds neither XP nor gold. The key only exists once an
+    operation was written, i.e. it guards rewards with gold > 0.
     """
     from sqlalchemy import text as sa_text
 
@@ -2410,16 +2517,31 @@ def add_rewards_to_character(
     if not character:
         return None
 
-    # Add gold directly
-    character.currency_balance = (character.currency_balance or 0) + gold
-    db.flush()
+    if idempotency_key is not None and operation_exists(db, idempotency_key):
+        return RewardResult(int(character.currency_balance or 0), None, True)
 
-    # Log gold transaction
-    if gold != 0:
-        log_gold_transaction(
-            db, character_id, gold, character.currency_balance,
-            "battle_reward", source="battle-service",
-        )
+    if gold > 0:
+        if payer == PAYER_WORLD:
+            src = econ_ledger.AccountRef.world()
+            payer_location = location_id
+        else:
+            payer_location = location_id if location_id is not None else character.current_location_id
+            src = payer_account(db, payer_location)
+        try:
+            econ_ledger.post_operation(
+                db,
+                op_type=gold_op_type,
+                legs=[econ_ledger.Leg(src, econ_ledger.AccountRef.character(character_id), int(gold))],
+                source_service=ECON_SOURCE_SERVICE,
+                location_id=payer_location,
+                metadata={"xp": xp, "xp_source": xp_source, "payer": payer},
+                idempotency_key=idempotency_key,
+            )
+        except econ_ledger.DuplicateOperation:
+            # Lost a race with the same key between the check above and the insert.
+            db.rollback()
+            db.refresh(character)
+            return RewardResult(int(character.currency_balance or 0), None, True)
 
     # Add XP via shared DB — directly update character_attributes table
     new_xp = None
@@ -2444,13 +2566,13 @@ def add_rewards_to_character(
 
     db.commit()
     db.refresh(character)
-    new_balance = character.currency_balance
+    new_balance = int(character.currency_balance or 0)
 
     # Check and update level based on new XP
     if new_xp is not None:
         check_and_update_level(db, character_id, new_xp)
 
-    return new_balance, new_xp
+    return RewardResult(new_balance, new_xp, False)
 
 
 def get_mob_reward_data(db: Session, character_id: int):
@@ -3618,28 +3740,36 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
         )
 
     balance = character.currency_balance or 0
-    if balance < link.cost_gold:
-        raise HTTPException(
+
+    def _insufficient(current_balance: int) -> HTTPException:
+        return HTTPException(
             status_code=402,
             detail={
                 "error": "insufficient_gold",
-                "message": "Недостаточно золота",
+                "message": insufficient_funds_message(db),
                 "required": link.cost_gold,
-                "balance": balance,
+                "balance": current_balance,
             },
         )
 
-    character.currency_balance = balance - link.cost_gold
-    db.flush()
-    log_gold_transaction(
-        db,
-        character_id=character.id,
-        amount=-link.cost_gold,
-        balance_after=character.currency_balance,
-        transaction_type="teleport",
-        source="character-service",
-        metadata={"link_id": link.id, "from_npc_id": source.id, "to_npc_id": target.id},
-    )
+    if balance < link.cost_gold:
+        raise _insufficient(balance)
+
+    # FEAT-181 C4: the fare goes to the treasury of the source NPC's region. The character
+    # row is already locked above; the posting's conditional debit is the final guard.
+    try:
+        econ_ledger.post_operation(
+            db,
+            op_type=econ_core.OP_TELEPORT,
+            legs=[econ_ledger.Leg(econ_ledger.AccountRef.character(character.id),
+                                  payer_account(db, source.current_location_id), int(link.cost_gold or 0))],
+            source_service=ECON_SOURCE_SERVICE,
+            location_id=source.current_location_id,
+            metadata={"link_id": link.id, "from_npc_id": source.id, "to_npc_id": target.id},
+        )
+    except econ_ledger.InsufficientFunds:
+        db.rollback()
+        raise _insufficient(balance)
 
     # FEAT-162 task #6: remember where the character is leaving FROM — the
     # cleanup below must be told the *pre*-teleport location, and the field is

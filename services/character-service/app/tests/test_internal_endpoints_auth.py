@@ -428,8 +428,8 @@ class TestDeductPoints:
 # (no auth)".
 #
 # It grants **gold and XP**, so every rejected call is also checked against the
-# database: currency_balance, passive_experience and the gold-transaction
-# ledger must all be exactly where they were.
+# database: currency_balance, passive_experience and the economy ledger
+# (FEAT-181: postings into the character's account) must all be exactly where they were.
 
 
 class TestAddRewardsIsInternalOnly:
@@ -473,9 +473,12 @@ class TestAddRewardsIsInternalOnly:
                  " WHERE character_id = :cid"),
             {"cid": character_id},
         ).scalar()
-        transactions = db_session.query(models.GoldTransaction).filter_by(
-            character_id=character_id,
-        ).count()
+        transactions = db_session.execute(
+            text("SELECT COUNT(*) FROM econ_postings p JOIN econ_accounts a"
+                 " ON a.id = p.to_account_id"
+                 " WHERE a.kind = 'character' AND a.ref_id = :cid"),
+            {"cid": character_id},
+        ).scalar()
         return char.currency_balance, xp, transactions
 
     # -- rejected ----------------------------------------------------------

@@ -1108,6 +1108,10 @@ class SpawnDungeonMobsResponse(BaseModel):
 class DeductGoldRequest(BaseModel):
     character_id: int
     amount: int
+    # FEAT-181 C3 (optional, backward compatible): where the money goes and replay protection.
+    location_id: Optional[int] = None
+    op_type: str = "dungeon_expense"
+    idempotency_key: Optional[str] = Field(None, min_length=1, max_length=128)
 
     @validator("amount")
     def validate_positive(cls, v):
@@ -1115,10 +1119,18 @@ class DeductGoldRequest(BaseModel):
             raise ValueError("amount должен быть положительным числом")
         return v
 
+    @validator("op_type")
+    def validate_op_type(cls, v):
+        from crud import DEDUCT_GOLD_OP_TYPES
+        if v not in DEDUCT_GOLD_OP_TYPES:
+            raise ValueError("Недопустимый тип операции")
+        return v
+
 
 class DeductGoldResponse(BaseModel):
     ok: bool
     new_balance: int
+    duplicate: bool = False
 
 
 class MobInLocation(BaseModel):
@@ -1266,11 +1278,32 @@ class AddRewardsRequest(BaseModel):
     # опыт за бои: именно для боёв эндпоинт и писался, старые клиенты (battle-service,
     # dungeon-service) поля не шлют и работают как раньше.
     xp_source: str = "character_xp_battle_bonus"
+    # FEAT-181 C2 (optional, backward compatible): op type of the gold posting, who pays
+    # ("location" — treasury of location_id / the character's location; "world" — «Казна
+    # Скитальцев») and replay protection (a repeated key adds neither XP nor gold).
+    gold_op_type: str = "battle_reward"
+    location_id: Optional[int] = None
+    payer: str = "location"
+    idempotency_key: Optional[str] = Field(None, min_length=1, max_length=128)
 
     @validator("xp", "gold")
     def validate_non_negative(cls, v):
         if v < 0:
             raise ValueError("Значение награды не может быть отрицательным")
+        return v
+
+    @validator("gold_op_type")
+    def validate_gold_op_type(cls, v):
+        from crud import REWARD_GOLD_OP_TYPES
+        if v not in REWARD_GOLD_OP_TYPES:
+            raise ValueError("Недопустимый тип операции")
+        return v
+
+    @validator("payer")
+    def validate_payer(cls, v):
+        from crud import REWARD_PAYERS
+        if v not in REWARD_PAYERS:
+            raise ValueError("Недопустимый плательщик")
         return v
 
     @validator("xp_source")
@@ -1286,6 +1319,7 @@ class AddRewardsResponse(BaseModel):
     ok: bool
     new_balance: int
     new_xp: Optional[int] = None
+    duplicate: bool = False
 
 
 class MobLootTableEntryResponse(BaseModel):
@@ -1593,3 +1627,223 @@ class LevelThresholdsUpdate(BaseModel):
                 raise ValueError(f"Уровень {t.level_number}: опыта должно быть больше, чем для предыдущего")
             prev_xp = t.required_experience
         return ordered
+
+
+# ===========================================================================
+# FEAT-181 world economy — economy API (app/economy_api.py)
+# ===========================================================================
+
+from datetime import date as _date  # noqa: E402
+from pydantic import StrictInt  # noqa: E402
+
+ECON_MAX_ADMIN_AMOUNT = 10 ** 12           # upper bound of one admin emission / adjustment
+ECON_COMMENT_MIN = 3
+ECON_COMMENT_MAX = 500
+ECON_FORM_MAX = 50                         # econ_settings.currency_* VARCHAR(50)
+ECON_SHORT_MAX = 20                        # econ_settings.currency_short VARCHAR(20)
+ECON_MAX_TAX_RATE = 0.5
+ECON_FORBIDDEN_FORM_CHARS = set("<>")
+
+
+def _econ_comment(v):
+    if not isinstance(v, str):
+        raise ValueError("Комментарий обязателен")
+    v = v.strip()
+    if len(v) < ECON_COMMENT_MIN:
+        raise ValueError(f"Комментарий — не короче {ECON_COMMENT_MIN} символов")
+    if len(v) > ECON_COMMENT_MAX:
+        raise ValueError(f"Комментарий — не длиннее {ECON_COMMENT_MAX} символов")
+    return v
+
+
+class EconCurrencyForms(BaseModel):
+    """Currency word forms. Also the public `GET /characters/economy/currency` response."""
+    name: str
+    genitive: str
+    one: str
+    few: str
+    many: str
+    short: str
+
+    @validator("name", "genitive", "one", "few", "many", "short", pre=True)
+    def _form(cls, v, field):
+        if not isinstance(v, str):
+            raise ValueError("Ожидается строка")
+        v = v.strip()
+        limit = ECON_SHORT_MAX if field.name == "short" else ECON_FORM_MAX
+        if not v:
+            raise ValueError("Поле не может быть пустым")
+        if len(v) > limit:
+            raise ValueError(f"Не длиннее {limit} символов")
+        if any(ch in ECON_FORBIDDEN_FORM_CHARS for ch in v) or any(ord(ch) < 32 for ch in v):
+            raise ValueError("Недопустимые символы")
+        return v
+
+
+class EconSettingsBody(BaseModel):
+    """GET/PUT /characters/admin/economy/settings."""
+    currency: EconCurrencyForms
+    country_tax_rate: float
+
+    @validator("country_tax_rate", pre=True)
+    def _rate(cls, v):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError("Ставка налога — число от 0 до 0.5")
+        if not 0 <= v <= ECON_MAX_TAX_RATE:
+            raise ValueError("Ставка налога — от 0 до 0.5")
+        return round(float(v), 4)
+
+
+class EconEmissionRequest(BaseModel):
+    account_id: StrictInt
+    amount: StrictInt
+    comment: str
+
+    @validator("amount")
+    def _amount(cls, v):
+        if not 1 <= v <= ECON_MAX_ADMIN_AMOUNT:
+            raise ValueError("Сумма — от 1 до 1 000 000 000 000")
+        return v
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+
+class EconAdjustRequest(BaseModel):
+    account_id: StrictInt
+    delta: StrictInt
+    comment: str
+
+    @validator("delta")
+    def _delta(cls, v):
+        if v == 0:
+            raise ValueError("Изменение не может быть нулевым")
+        if abs(v) > ECON_MAX_ADMIN_AMOUNT:
+            raise ValueError("Изменение — не больше 1 000 000 000 000 по модулю")
+        return v
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+
+class EconActionResponse(BaseModel):
+    operation_id: Optional[int]
+    account_id: int
+    balance: int
+
+
+class EconAccountItem(BaseModel):
+    account_id: int
+    kind: str
+    ref_id: int
+    name: Optional[str]
+    balance: int
+    is_active: bool
+
+
+class EconAccountsPage(BaseModel):
+    items: List[EconAccountItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class EconPostingAccount(BaseModel):
+    account_id: int
+    kind: Optional[str]
+    ref_id: Optional[int]
+    name: Optional[str]
+
+
+class EconPostingItem(BaseModel):
+    from_: EconPostingAccount = Field(..., alias="from")
+    to: EconPostingAccount
+    amount: int
+    leg_type: str
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class EconOperationItem(BaseModel):
+    id: int
+    op_type: str
+    created_at: datetime
+    source_service: str
+    location_id: Optional[int]
+    region_id: Optional[int]
+    actor_user_id: Optional[int]
+    comment: Optional[str]
+    metadata: Optional[Dict[str, Any]]
+    postings: List[EconPostingItem]
+
+
+class EconOperationsPage(BaseModel):
+    items: List[EconOperationItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class EconTotals(BaseModel):
+    issued: int
+    held: int
+    players: int
+    npcs: int
+    escrow: int
+    auction_storage: int
+    region_treasuries: int
+    country_treasuries: int
+    world_treasury: int
+
+
+class EconDriftingCharacter(BaseModel):
+    character_id: int
+    name: Optional[str]
+    balance: int
+    ledger: int
+
+
+class EconInvariant(BaseModel):
+    ok: bool
+    ledger_sum: int
+    escrow_expected: int
+    escrow_actual: int
+    storage_expected: int
+    storage_actual: int
+    drifting_characters: List[EconDriftingCharacter]
+
+
+class EconRegionTreasury(BaseModel):
+    account_id: int
+    region_id: int
+    name: Optional[str]
+    balance: int
+    is_active: bool
+
+
+class EconCountryTreasury(BaseModel):
+    account_id: Optional[int]          # None only for the «Без страны» group of orphan regions
+    country_id: Optional[int]
+    name: Optional[str]
+    balance: int
+    is_active: bool
+    regions: List[EconRegionTreasury]
+
+
+class EconSystemAccount(BaseModel):
+    account_id: int
+    kind: str
+    name: Optional[str]
+    balance: int
+
+
+class EconSummarySettings(BaseModel):
+    country_tax_rate: float
+
+
+class EconSummary(BaseModel):
+    currency: Dict[str, str]
+    totals: EconTotals
+    invariant: EconInvariant
+    countries: List[EconCountryTreasury]
+    system_accounts: List[EconSystemAccount]
+    settings: EconSummarySettings

@@ -177,7 +177,9 @@ def db_session(seed_fk_data):
     ))
     session.execute(text(
         "CREATE TABLE IF NOT EXISTS Locations ("
-        " id BIGINT PRIMARY KEY, name VARCHAR(255) NOT NULL)"
+        " id BIGINT PRIMARY KEY, name VARCHAR(255) NOT NULL,"
+        # FEAT-181: the ledger's region resolution reads these three columns too.
+        " district_id BIGINT NULL, region_id BIGINT NULL, parent_id BIGINT NULL)"
     ))
     session.commit()
     try:

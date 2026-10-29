@@ -448,26 +448,15 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         logger.info(f"Сгенерированы атрибуты для подрасы {db_request.id_subrace}")
         starting_attributes_snapshot = crud.normalize_starting_attributes(attributes)
 
-        # 3) Создаем предварительную запись персонажа с currency_balance (flush, не commit)
+        # 3) Создаем предварительную запись персонажа с нулевым балансом (flush, не commit).
+        #    Золото набора начисляется проводкой starter_kit перед единым коммитом (FEAT-181 C1).
         new_character = crud.create_preliminary_character(
             db, db_request,
-            currency_balance=currency_amount,
             auto_commit=False,
             granted_kit=granted_kit_snapshot,
             starting_attributes=starting_attributes_snapshot,
         )
-        logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
-
-        # Log starter kit gold transaction
-        if currency_amount > 0:
-            crud.log_gold_transaction(
-                db, new_character.id,
-                amount=currency_amount,
-                balance_after=currency_amount,
-                transaction_type="starter_kit",
-                source="character_creation",
-                metadata={"class_id": class_id, "origin_id": origin_id},
-            )
+        logger.info(f"Создан персонаж с ID {new_character.id}, золото набора к начислению: {currency_amount}")
 
         # 4) Атрибуты уже разрешены на шаге 2.5 — второй раз резолвер не зовём.
 
@@ -546,7 +535,15 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             db.rollback()
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
 
-        # Единый commit для шагов 3, 8, 9 — после успешного выполнения всех критических шагов
+        # 10.5) FEAT-181 C1: золото стартового набора — проводка из казны региона стартовой
+        #       локации (без локации — «Казна Скитальцев»). Последний шаг перед коммитом:
+        #       строка казны не держится открытой через HTTP-вызовы выше.
+        crud.post_starter_kit(
+            db, new_character.id, currency_amount, current_location_id,
+            metadata={"class_id": class_id, "origin_id": origin_id, "request_id": request_id},
+        )
+
+        # Единый commit для шагов 3, 8, 9, 10.5 — после успешного выполнения всех критических шагов
         db.commit()
         logger.info("Все изменения в БД зафиксированы единым коммитом")
 
@@ -686,6 +683,16 @@ async def _evaluate_titles_with_book(db: Session, character_id: int):
     )
 
 
+ECONOMY_ADJUST_PERMISSION = "economy:adjust"
+
+
+def _require_balance_permission(user) -> None:
+    """FEAT-181: changing a character's or NPC's gold needs economy:adjust on top of the
+    route's own permission (403 otherwise)."""
+    if ECONOMY_ADJUST_PERMISSION not in (getattr(user, "permissions", None) or []):
+        raise HTTPException(status_code=403, detail="Недостаточно прав для изменения баланса")
+
+
 @router.put("/admin/{character_id}")
 async def admin_update_character(
     character_id: int,
@@ -713,11 +720,20 @@ async def admin_update_character(
     if "stat_points" in update_data and update_data["stat_points"] < 0:
         raise HTTPException(status_code=400, detail="Очки характеристик должны быть >= 0")
     if "currency_balance" in update_data and update_data["currency_balance"] < 0:
-        raise HTTPException(status_code=400, detail="Баланс валюты должен быть >= 0")
+        raise HTTPException(status_code=400, detail="Баланс не может быть отрицательным")
 
     old_level = character.level
     old_stat_points = character.stat_points
     old_currency_balance = character.currency_balance
+
+    # FEAT-181 C5: the balance is never set through the ORM. A changed value needs
+    # economy:adjust and becomes an admin_adjust posting (delta computed under the row lock).
+    # The admin card always sends the balance, so an unchanged value is simply ignored.
+    target_balance = update_data.pop("currency_balance", None)
+    if target_balance is not None and target_balance != old_currency_balance:
+        _require_balance_permission(current_user)
+    else:
+        target_balance = None
 
     for field, value in update_data.items():
         setattr(character, field, value)
@@ -735,12 +751,25 @@ async def admin_update_character(
             character.stat_points = old_stat_points + level_diff * 10
 
     try:
+        if target_balance is not None:
+            adjusted = crud.admin_set_balance(
+                db, character_id, target_balance,
+                actor_user_id=current_user.id,
+                comment=crud.ADMIN_CARD_ADJUST_COMMENT,
+                metadata={"source": "admin_character_card"},
+            )
+            if adjusted is not None:
+                old_currency_balance = adjusted[0]
         db.commit()
         db.refresh(character)
     except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Error updating character {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+    except crud.econ_ledger.EconomyError as e:
+        db.rollback()
+        logger.error(f"Balance adjustment failed for character {character_id}: {e}")
+        raise HTTPException(status_code=400, detail="Не удалось изменить баланс")
 
     # Log admin changes to character log
     try:
@@ -752,18 +781,10 @@ async def admin_update_character(
             crud.create_character_log(db, character_id, "admin_stat_change",
                 f"Очки характеристик изменены администратором: {old_stat_points} → {character.stat_points}",
                 {"old_value": old_stat_points, "new_value": character.stat_points, "field": "stat_points", "admin_action": True})
-        if "currency_balance" in update_data and character.currency_balance != old_currency_balance:
+        if target_balance is not None and character.currency_balance != old_currency_balance:
             crud.create_character_log(db, character_id, "admin_currency_change",
                 f"Баланс изменён администратором: {old_currency_balance} → {character.currency_balance}",
                 {"old_value": old_currency_balance, "new_value": character.currency_balance, "admin_action": True})
-            crud.log_gold_transaction(
-                db, character_id,
-                amount=character.currency_balance - old_currency_balance,
-                balance_after=character.currency_balance,
-                transaction_type="admin_adjust",
-                source="admin_panel",
-                metadata={"old_balance": old_currency_balance, "admin_action": True},
-            )
     except Exception as e:
         logger.warning(f"Failed to log admin changes for character {character_id}: {e}")
 
@@ -1440,6 +1461,9 @@ async def delete_character(
     # 0. Delete the character row FIRST — see the docstring. Everything below is
     #    best-effort cleanup that must not run unless the character is really gone.
     try:
+        # FEAT-181 C8: золото персонажа уходит проводкой в казну его локации
+        # (иначе «Казна Скитальцев») в той же транзакции, что и удаление строки.
+        crud.post_character_deletion(db, character)
         db.delete(character)
         db.commit()
     except Exception as e:
@@ -2926,7 +2950,16 @@ async def admin_create_npc(
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("npcs:create")),
 ):
-    """Create a new NPC character (is_npc=True, user_id=None, request_id=None)."""
+    """Create a new NPC character (is_npc=True, user_id=None, request_id=None).
+
+    FEAT-181 C6: the NPC is inserted with 0 gold; a non-zero `currency_balance` needs
+    economy:adjust and is posted as admin_adjust in the same commit.
+    """
+    initial_gold = data.currency_balance or 0
+    if initial_gold < 0:
+        raise HTTPException(status_code=400, detail="Баланс не может быть отрицательным")
+    if initial_gold:
+        _require_balance_permission(current_user)
     try:
         new_npc = models.Character(
             name=data.name,
@@ -2945,7 +2978,7 @@ async def admin_create_npc(
             avatar=data.avatar,
             level=data.level,
             stat_points=data.stat_points,
-            currency_balance=data.currency_balance,
+            currency_balance=0,
             current_location_id=data.current_location_id,
             is_npc=True,
             user_id=None,
@@ -2964,6 +2997,14 @@ async def admin_create_npc(
         else:
             logger.warning(f"Failed to create attributes for NPC {new_npc.id}, continuing without attributes")
 
+        if initial_gold:
+            crud.admin_set_balance(
+                db, new_npc.id, initial_gold,
+                actor_user_id=current_user.id,
+                comment=crud.NPC_FORM_ADJUST_COMMENT,
+                metadata={"source": "admin_npc_create"},
+            )
+
         db.commit()
         db.refresh(new_npc)
 
@@ -2975,7 +3016,7 @@ async def admin_create_npc(
             "current_location_id": new_npc.current_location_id,
             "detail": "NPC создан",
         }
-    except SQLAlchemyError as e:
+    except (SQLAlchemyError, crud.econ_ledger.EconomyError) as e:
         db.rollback()
         logger.error(f"Error creating NPC: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при создании NPC")
@@ -3049,6 +3090,16 @@ async def admin_update_npc(
     old_subrace_id = npc.id_subrace
     old_role = npc.npc_role
 
+    # FEAT-181 C6: gold is not an ORM field here — a changed value needs economy:adjust and
+    # becomes an admin_adjust posting in the same commit.
+    target_balance = update_data.pop("currency_balance", None)
+    if target_balance is not None and target_balance < 0:
+        raise HTTPException(status_code=400, detail="Баланс не может быть отрицательным")
+    if target_balance is not None and target_balance != npc.currency_balance:
+        _require_balance_permission(current_user)
+    else:
+        target_balance = None
+
     for field, value in update_data.items():
         setattr(npc, field, value)
 
@@ -3062,9 +3113,16 @@ async def admin_update_npc(
         crud.purge_teleport_links_for_npc(db, npc.id)
 
     try:
+        if target_balance is not None:
+            crud.admin_set_balance(
+                db, npc.id, target_balance,
+                actor_user_id=current_user.id,
+                comment=crud.NPC_FORM_ADJUST_COMMENT,
+                metadata={"source": "admin_npc_update"},
+            )
         db.commit()
         db.refresh(npc)
-    except SQLAlchemyError as e:
+    except (SQLAlchemyError, crud.econ_ledger.EconomyError) as e:
         db.rollback()
         logger.error(f"Error updating NPC {npc_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении NPC")
@@ -3142,11 +3200,12 @@ async def admin_delete_npc(
     except Exception as e:
         logger.warning(f"Error clearing attributes for NPC {npc_id}: {e}")
 
-    # Delete the NPC row
+    # Delete the NPC row (FEAT-181 C8: its gold is posted to the location treasury first)
     try:
+        crud.post_character_deletion(db, npc)
         db.delete(npc)
         db.commit()
-    except SQLAlchemyError as e:
+    except (SQLAlchemyError, crud.econ_ledger.EconomyError) as e:
         db.rollback()
         logger.error(f"Error deleting NPC {npc_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при удалении NPC")
@@ -3814,18 +3873,25 @@ def add_rewards(
         crud.get_character_xp_multiplier(character_id, data.xp_source)
         if data.xp > 0 else None
     )
+    # FEAT-181 C2: золото — проводка из казны (payer/location_id), повтор
+    # idempotency_key → duplicate=true без опыта и золота. Старые клиенты новых
+    # полей не шлют и получают прежнее поведение (battle_reward из казны локации).
     result = crud.add_rewards_to_character(
         db, character_id, data.xp, data.gold,
         xp_source=data.xp_source, xp_multiplier=xp_multiplier,
+        gold_op_type=data.gold_op_type,
+        location_id=data.location_id,
+        payer=data.payer,
+        idempotency_key=data.idempotency_key,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
 
-    new_balance, new_xp = result
     return schemas.AddRewardsResponse(
         ok=True,
-        new_balance=new_balance,
-        new_xp=new_xp,
+        new_balance=result.new_balance,
+        new_xp=result.new_xp,
+        duplicate=result.duplicate,
     )
 
 
@@ -4143,12 +4209,16 @@ def deduct_gold_endpoint(
     _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint — deducts gold from a character's currency_balance.
+    Internal endpoint — charges a character (player → treasury posting).
     Called by dungeon-service for merchant purchases, rest costs, revive costs.
     Returns 400 if insufficient gold.
 
     FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
     отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
+
+    FEAT-181 C3: `op_type` (default dungeon_expense) is posted to the treasury of
+    `location_id`, else of the character's current location, else «Казна Скитальцев».
+    A repeated `idempotency_key` charges nothing and returns duplicate=true.
     """
     character = db.query(models.Character).filter(
         models.Character.id == req.character_id
@@ -4156,31 +4226,54 @@ def deduct_gold_endpoint(
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
 
-    current_balance = character.currency_balance or 0
-    if current_balance < req.amount:
-        raise HTTPException(
+    if req.idempotency_key and crud.operation_exists(db, req.idempotency_key):
+        return schemas.DeductGoldResponse(ok=True, new_balance=character.currency_balance, duplicate=True)
+
+    forms = crud.currency_forms(db)
+    current_balance = crud.econ_ledger.lock_characters(db, [req.character_id]).get(req.character_id, 0)
+
+    def _insufficient() -> HTTPException:
+        return HTTPException(
             status_code=400,
-            detail=f"Недостаточно золота (имеется {current_balance}, нужно {req.amount})",
+            detail=(
+                f"Недостаточно {forms.genitive} (имеется "
+                f"{crud.econ_ledger.format_currency(current_balance, forms)}, нужно "
+                f"{crud.econ_ledger.format_currency(req.amount, forms)})"
+            ),
         )
 
-    character.currency_balance = current_balance - req.amount
-    db.flush()
+    if current_balance < req.amount:
+        db.rollback()
+        raise _insufficient()
 
-    # Log the gold transaction
-    crud.log_gold_transaction(
-        db,
-        character_id=req.character_id,
-        amount=-req.amount,
-        balance_after=character.currency_balance,
-        transaction_type="dungeon_expense",
-        source="dungeon-service",
-    )
+    location_id = req.location_id if req.location_id is not None else character.current_location_id
+    try:
+        result = crud.econ_ledger.post_operation(
+            db,
+            op_type=req.op_type,
+            legs=[crud.econ_ledger.Leg(
+                crud.econ_ledger.AccountRef.character(req.character_id),
+                crud.payer_account(db, location_id),
+                req.amount,
+            )],
+            source_service=crud.ECON_SOURCE_SERVICE,
+            location_id=location_id,
+            metadata={"caller": "internal/deduct-gold"},
+            idempotency_key=req.idempotency_key,
+        )
+    except crud.econ_ledger.DuplicateOperation:
+        db.rollback()
+        db.refresh(character)
+        return schemas.DeductGoldResponse(ok=True, new_balance=character.currency_balance, duplicate=True)
+    except crud.econ_ledger.InsufficientFunds:
+        db.rollback()
+        raise _insufficient()
 
     db.commit()
 
     return schemas.DeductGoldResponse(
         ok=True,
-        new_balance=character.currency_balance,
+        new_balance=result.balances.get(req.character_id, current_balance - req.amount),
     )
 
 
@@ -4460,4 +4553,8 @@ def set_travel_cooldown(
     }
 
 
+# FEAT-181: economy API. Included BEFORE the main router so its static paths
+# (/characters/economy/..., /characters/admin/economy/...) win over /characters/{character_id}/... routes.
+from economy_api import router as economy_router  # noqa: E402
+app.include_router(economy_router)
 app.include_router(router)

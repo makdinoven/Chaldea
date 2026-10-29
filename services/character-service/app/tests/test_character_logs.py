@@ -58,6 +58,10 @@ class _LocationTable(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
+    # FEAT-181: the ledger resolves location -> region through these columns.
+    district_id = Column(BigInteger, nullable=True)
+    region_id = Column(BigInteger, nullable=True)
+    parent_id = Column(BigInteger, nullable=True)
 
 
 # ---------------------------------------------------------------------------

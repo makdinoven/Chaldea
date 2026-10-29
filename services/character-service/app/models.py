@@ -1,6 +1,8 @@
-from sqlalchemy import Column, Integer, SmallInteger, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime
+from sqlalchemy import Column, Integer, SmallInteger, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime, Numeric, CheckConstraint
 from sqlalchemy.orm import relationship
 from database import Base
+from sqlalchemy.dialects import mysql as mysql_types
+import econ_ledger
 
 class CharacterRequest(Base):
     __tablename__ = "character_requests"
@@ -43,7 +45,8 @@ class Character(Base):
     personality = Column(Text, nullable=True)
     id_class = Column(Integer, nullable=False)
     id_attributes = Column(Integer, nullable=True)  # Поле для атрибутов
-    currency_balance = Column(Integer, default=0)
+    # FEAT-181: BIGINT; changed ONLY through econ_ledger.post_operation (see the balance guard at the end).
+    currency_balance = Column(BigInteger, nullable=False, default=0, server_default="0")
     request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=True)  # Ссылка на заявку (nullable for NPCs)
     user_id = Column(Integer, nullable=True)  # Добавляем поле user_id
     appearance = Column(Text, nullable=False)
@@ -425,3 +428,106 @@ class GoldTransaction(Base):
         Index('idx_gold_tx_character_created', 'character_id', 'created_at'),
         Index('idx_gold_tx_type', 'transaction_type'),
     )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-181 world economy: double-entry ledger (migration 027_world_economy).
+# Balances move ONLY through econ_ledger.post_operation (raw SQL in the caller's
+# transaction); these models exist for reads (admin API) and for create_all in tests.
+# ---------------------------------------------------------------------------
+
+# BIGINT in MySQL, INTEGER in SQLite (only INTEGER PRIMARY KEY autoincrements there).
+_EconId = BigInteger().with_variant(Integer, "sqlite")
+
+
+class EconSettings(Base):
+    __tablename__ = "econ_settings"
+
+    id = Column(SmallInteger, primary_key=True, autoincrement=False)  # always 1
+    currency_name = Column(String(50), nullable=False, default="Золото")
+    currency_genitive = Column(String(50), nullable=False, default="золота")
+    currency_one = Column(String(50), nullable=False, default="золотой")
+    currency_few = Column(String(50), nullable=False, default="золотых")
+    currency_many = Column(String(50), nullable=False, default="золотых")
+    currency_short = Column(String(20), nullable=False, default="зол.")
+    country_tax_rate = Column(Numeric(5, 4), nullable=False, default=0.1)
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_by_user_id = Column(Integer, nullable=True)
+
+
+class EconAccount(Base):
+    __tablename__ = "econ_accounts"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    kind = Column(String(32), nullable=False)
+    ref_id = Column(BigInteger, nullable=False, default=0, server_default="0")
+    name = Column(String(255), nullable=True)
+    balance = Column(BigInteger, nullable=False, default=0, server_default="0")  # unused (0) for kind='character'
+    allow_negative = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("kind", "ref_id", name="uq_econ_accounts_kind_ref"),
+        Index("ix_econ_accounts_kind", "kind"),
+    )
+
+
+class EconOperation(Base):
+    __tablename__ = "econ_operations"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    op_type = Column(String(50), nullable=False)
+    idempotency_key = Column(String(128), nullable=True)
+    location_id = Column(BigInteger, nullable=True)
+    region_id = Column(BigInteger, nullable=True)
+    actor_user_id = Column(Integer, nullable=True)
+    source_service = Column(String(32), nullable=False)
+    comment = Column(String(500), nullable=True)
+    metadata_ = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime().with_variant(mysql_types.DATETIME(fsp=6), "mysql"),
+                        nullable=False, server_default=func.now())
+
+    postings = relationship("EconPosting", back_populates="operation", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_econ_operations_idem"),
+        Index("ix_econ_operations_created", "created_at"),
+        Index("ix_econ_operations_type_created", "op_type", "created_at"),
+        Index("ix_econ_operations_region_created", "region_id", "created_at"),
+    )
+
+
+class EconPosting(Base):
+    __tablename__ = "econ_postings"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    operation_id = Column(BigInteger, ForeignKey("econ_operations.id", name="fk_econ_postings_operation"),
+                          nullable=False)
+    from_account_id = Column(BigInteger, ForeignKey("econ_accounts.id", name="fk_econ_postings_from"),
+                             nullable=False)
+    to_account_id = Column(BigInteger, ForeignKey("econ_accounts.id", name="fk_econ_postings_to"),
+                           nullable=False)
+    amount = Column(BigInteger, nullable=False)
+    leg_type = Column(String(32), nullable=False, default="main", server_default="main")
+    created_at = Column(DateTime().with_variant(mysql_types.DATETIME(fsp=6), "mysql"),
+                        nullable=False, server_default=func.now())
+
+    operation = relationship("EconOperation", back_populates="postings")
+
+    __table_args__ = (
+        Index("ix_econ_postings_operation", "operation_id"),
+        Index("ix_econ_postings_from_created", "from_account_id", "created_at"),
+        Index("ix_econ_postings_to_created", "to_account_id", "created_at"),
+        CheckConstraint("amount > 0", name="ck_econ_postings_amount"),
+        CheckConstraint("from_account_id <> to_account_id", name="ck_econ_postings_distinct"),
+    )
+
+
+# Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
+# ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
+# change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance
+# directly wrap the write in econ_ledger.allow_direct_balance_write(session).
+BALANCE_GUARD_STRICT = True
+econ_ledger.install_balance_guard(Character, "currency_balance", strict=BALANCE_GUARD_STRICT)
