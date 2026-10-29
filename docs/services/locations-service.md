@@ -365,7 +365,7 @@ character-attributes-service, inventory-service и skills-service:
 
 | Метод | Путь | Контракт |
 |-------|------|----------|
-| GET | `/locations/npcs/{npc_id}/shop` | **Без `character_id`** — публичная витрина: состав лавки, базовые `buy_price` / `sell_price`, карточка предмета, поля `discounted_buy_price` в ответе нет (гость видит именно это). **С `character_id`** — персональный прайс: гейт владельца **до** обращения к атрибутам, только после него считается скидка от харизмы |
+| GET | `/locations/npcs/{npc_id}/shop` | **Без `character_id`** — публичная витрина: состав лавки, текущие `buy_price` / `sell_price` (FEAT-183, см. «Торговцы НПС»), карточка предмета, поля `discounted_buy_price` в ответе нет (гость видит именно это). **С `character_id`** — персональный прайс: гейт владельца **до** обращения к атрибутам, только после него считается скидка от харизмы |
 | GET | `/locations/npcs/{npc_id}/quests` | `player_status` — это прогресс конкретного персонажа. Гейт владельца |
 | GET | `/locations/quests/active` | Журнал заданий и прогресс целей. Гейт владельца |
 | GET | `/locations/action-gate/status` | Открытые гейты персонажа на локации (какие посты-намерения он уже написал). Раньше маршрут был помечен «Public (FEAT-145 v2)» — теперь гейт владельца |
@@ -484,6 +484,7 @@ Country -> Region -> District -> Location
   - `updated_at` проставляется явно в `crud` (`datetime.now(timezone.utc)`), без MySQL `ON UPDATE` — чтобы порядок вытеснения был детерминированным и тестируемым.
   - **Вытеснение:** после каждой вставки `evict_drafts` оставляет персонажу 10 самых свежих строк по `updated_at`, остальные удаляет. Вытеснить может и живой черновик другой локации — это корректно: он по определению самый давно не трогавшийся из десяти.
   - Удаление локации уносит её черновики каскадом; удаление персонажа — через D7 (FK на `characters` в этом сервисе нет ни у одной таблицы).
+- **npc_shop_items** - id, npc_id (cross-service, без FK), item_id (без FK), buy_price, sell_price, stock (NULL = без ограничений), is_active, created_at, **restock_target**, **origin** (admin/player), **updated_at**; `UNIQUE (npc_id, item_id)` (FEAT-183, миграция 053 — см. «Торговцы НПС»)
 - **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood/ingredient; ingredient — FEAT-165, миграция 043), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
 - **gathering_sessions** (FEAT-128) - id, node_id (FK gathering_nodes CASCADE), character_id, tool_inventory_item_id (nullable, no FK), tool_item_id, tool_durability_at_start, started_at, complete_at, effective_speed/double/stamina_bonus_pct (snapshot), stamina_paid, base_quantity, skill_slug, status enum(active/completed/cancelled/interrupted_by_battle/inventory_full), finished_at, result_quantity, xp_awarded, rank_up_to
 
@@ -554,8 +555,8 @@ dungeon-service; CI `econ-contract-copies`). Правила вызывающих
 
 | Поток | Операция | Ноги | Транзакция |
 |---|---|---|---|
-| Покупка у НПС | `npc_shop_buy` | персонаж → регион локации НПС | коммит до HTTP в inventory; при сбое — компенсирующая `npc_shop_buy_refund` = зеркало всех ног покупки (`crud.reverse_operation`: регион → персонаж и налог страна → регион, без нового налога) — обе казны возвращаются точно к исходному |
-| Продажа НПС | `npc_shop_sell` | регион локации НПС → персонаж | после удаления предмета по HTTP (остаточный риск, см. ISSUES) |
+| Покупка у НПС | `npc_shop_buy` | обычный торговец: персонаж → регион локации НПС; **живой** (FEAT-183): персонаж → НПС (`main`) + НПС → регион (`trade_tax`, ставка региона) | остаток списывается условно **в той же транзакции до оплаты**; коммит до HTTP в inventory; при сбое — остаток назад + компенсирующая `npc_shop_buy_refund` = зеркало всех ног покупки (`crud.reverse_operation`, без нового налога); если кассы НПС уже не хватает — возврат из казны места (`metadata.fallback = true`) |
+| Продажа НПС | `npc_shop_sell` | обычный: регион локации НПС → персонаж; **живой**: НПС → персонаж (касса) | после удаления предмета по HTTP; при сбое зачисления предмет возвращается внутренней выдачей (см. «Торговцы НПС») |
 | Сдача квеста | `quest_reward`, ключ `quest_reward:cq:<id>` | регион локации квестодателя (иначе игрока) → персонаж | сначала условное `active → completed` (`complete_quest_record` → bool), потом проводка и опыт, **один коммит**; повторная/параллельная сдача ничего не платит |
 | Покупка дома/участка | `house_purchase` | персонаж → регион участка (`house_plots.region_id`) | вместе с домом |
 | Стройка/слой/клетка/улучшение | `house_build` | персонаж → регион участка | вместе с материалами и комнатой |
@@ -569,6 +570,106 @@ dungeon-service; CI `econ-contract-copies`). Правила вызывающих
 `tests/test_econ_locations_flows.py::TestTreasuryClosing` (удаление региона/страны, в т.ч. с кошельком жителей).
 Кошелёк жителей региона (FEAT-182) наполняет и тратит тик экономики в character-service; locations-service
 только закрывает его при удалении региона.
+
+## Торговцы НПС (FEAT-183, этап 3 экономики, миграция 053)
+
+Склад торговца — строки `npc_shop_items` (владелец — этот сервис). Фоновая торговля с жителями и докупка у
+региона идут в 6-часовом тике character-service (он пишет `npc_shop_items.stock` SQL-строками из `econ_core`).
+Контракт цен и «живого» торговца — общий `econ_core` (раздел «NPC merchants» в
+`docs/services/character-service.md`); сервис **не считает цены сам**, только через функции оттуда.
+
+**Миграция `053_npc_shop_market`:**
+1. Дедупликация `(npc_id, item_id)`: из повторов остаётся **активная строка с меньшим id** (если активных нет —
+   просто меньший id); остальные удаляются, число пишется в лог миграции (`WARNING`). Удалённые при откате не
+   возвращаются (до беты потеря допустима).
+2. Чистка старого невалидированного ввода: `buy_price < 1 → 1`, `sell_price < 0 → 0`, `stock < 0 → 0`.
+3. Новые колонки: `restock_target INT NOT NULL DEFAULT 0` («норма склада», заполнена `COALESCE(stock, 10)`),
+   `origin VARCHAR(16) NOT NULL DEFAULT 'admin'` (`admin` | `player` — куплено у игроков, только перепродаётся),
+   `updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`.
+4. `UNIQUE (npc_id, item_id)` = `uq_npc_shop_items_npc_item`.
+Откат: снимает уникальный ключ и три колонки (FK на таблице нет — ключ снимается безопасно).
+
+Смысл полей: `buy_price` / `sell_price` — **базовые** цены при множителе региона 1 (`sell_price = 0` — «не
+покупает»); `stock NULL` = без ограничений **только у обычного (legacy) торговца**, у живого `NULL` считается 0.
+
+**`crud.merchant_market(session, npc_id) -> MerchantMarket`** — статус торговца на каждый запрос (без
+блокировок, снимок последнего тика): `SQL_NPC_PLACE` → `econ_ledger.resolve_location` → `SQL_REGION_ECON` →
+`econ_core.merchant_status`. Поля: `living`, `reason` (`not_npc | dead | no_location | dungeon | no_region |
+not_simulated`), `location_id`, `region_id` (и у legacy, если место резолвится в регион), `tax_rate`
+(`econ_regions.tax_rate`, `None` без строки), а только у живого — `mults {группа: price_mult}`,
+`group_base {группа: base_price}` (`SQL_REGION_MARKET`) и `bid_share` (`merchant_bid_share` из
+`econ_sim_settings.params`, по умолчанию 0,5). Рядом:
+- `get_item_markets(session, ids)` → `{item_id: econ_core.ItemMarket}` (эффективная группа, `items.price`);
+- `price_shop_row(market, item, buy_price, sell_price)` → `{group, off_market, market, mult, ask, bid,
+  price_level}`: множитель региона у живого торговца для товара на рынке, иначе 1; `bid` ограничен самой
+  дешёвой ценой продажи (`floor(ask × 0,5)`), в том числе у legacy;
+- `merchant_buy_groups(session, market)` — группы, которые живой торговец скупает у игроков вне своего списка
+  (эффективные группы его активных строк `origin='admin'` на рынке); у legacy — `[]`.
+
+**Админка лавки** (`get_admin_user` = admin + moderator, как раньше):
+
+| Метод | Путь | Контракт |
+|---|---|---|
+| POST | `/locations/admin/npc-shop/{npc_id}/items` | `{item_id ≥ 1, buy_price 1..1e9, sell_price 0..1e9 = 0, stock: null \| 0..100000, restock_target 0..100000 = 10}` → строка (`NpcShopItemAdminRead`); `origin='admin'`. 404 «НПС не найден» (нет персонажа с `is_npc = 1`), 404 «Предмет не найден», **409 «Этот предмет уже есть в магазине»** (проверка + уникальный ключ на гонку), 422 вне границ |
+| PUT | `/locations/admin/npc-shop/items/{id}` | те же границы, всё необязательно, `stock` можно сбросить в `null`; любая правка строки `origin='player'` делает её `admin`. 404 «Товар в магазине не найден» |
+| GET | `/locations/admin/npc-shop/{npc_id}/items` | все строки (вкл. неактивные и `player`) + `restock_target, origin, updated_at, group, off_market, market, ask, bid` (текущие цены) |
+| GET | `/locations/admin/npc-shop/{npc_id}/market` | `{npc_id, living, reason, region_id, region_name, location_id, tax_rate, cash, buys_groups: [{code, name}]}`; 404 «НПС не найден» для не-НПС |
+| DELETE | `/locations/admin/npc-shop/items/{id}` | без изменений |
+
+Тесты: `tests/test_npc_shop_admin_market.py` (мир `MERCHANT_*` из `econ_contract_cases`: `merchant_market` для
+живого и всех причин legacy, `/market`, цены в списке, кэп скупки, создание/дубль/404/границы, правка строки
+игроков).
+
+### Игровые потоки лавки (FEAT-183 B4)
+
+Гейты не менялись: JWT + владелец + блок активности + пост-намерение «Диалог с НПС» (FEAT-145) + игрок в локации
+НПС. Количество в запросах покупки/продажи — `1..999` (`schemas.SHOP_MAX_QUANTITY`, 422 вне границ; маршрут
+перепроверяет границу — отрицательное `q` в `SQL_SHOP_STOCK_TAKE` прибавило бы остаток, `crud.take_shop_stock`
+тоже отказывает при `q < 1`). Скидка харизмы — `econ_core.charisma_discount_pct` / `discounted_ask` (те же
+числа, что раньше: `min(харизма × 0,2, 50) %`, `ceil`), от **текущей** цены.
+
+| Метод | Путь | Контракт |
+|---|---|---|
+| GET | `/locations/npcs/{npc_id}/shop[?character_id=]` | по-прежнему **список** (кнопка «Магазин» в `NpcProfileModal` = непустой список). Поля строки: `id, npc_id, item_id, buy_price` (текущая цена продажи торговцем), `sell_price` (текущая цена скупки, 0 = не покупает), `base_buy_price, base_sell_price` (база из админки), `stock` (эффективный: у живого `NULL` → 0; `null` = без ограничений только у обычного), `in_stock`, `market` (цена от региона), `price_level` (`low` ≤ 0,85 / `normal` / `high` ≥ 1,2), `living`, `is_active, item_name, item_image, item_rarity, item_type, created_at`; с `character_id` (гейт владельца) ещё `discounted_buy_price`. Строки `origin='player'` с нулевым остатком скрыты, админские с нулём видны (`in_stock = false`). Касса, норма склада, налог не показываются |
+| GET | `/locations/npcs/{npc_id}/shop/sell-offers?character_id=` | JWT (401 без него) + гейт владельца (403 чужой, 404 нет персонажа); 404 «NPC не найден». `[{item_id, item_name, item_image, unit_price, max_quantity}]` — предметы **сумки** (`character_inventory`, экипированное не в счёт), которые торговец купит сейчас, `max_quantity = min(в сумке, 999)`. Кассу не раскрывает: бедный торговец отказывает на самой продаже |
+| POST | `/locations/npcs/{npc_id}/shop/buy` | `{character_id ≥ 1, shop_item_id ≥ 1, quantity 1..999}` → `ShopTransactionResponse` (как раньше). 400 «Недостаточно товара на складе», 400 «Недостаточно <валюты>» |
+| POST | `/locations/npcs/{npc_id}/shop/sell` | `{character_id ≥ 1, item_id ≥ 1, quantity 1..999}` → `ShopTransactionResponse`. 400 «Этот NPC не покупает данный предмет», **409 «У меня сейчас нет на это денег»** (касса живого торговца меньше суммы — предмет не снимается; или касса опустела между проверкой и зачислением — предмет возвращён), 500 «Не удалось завершить продажу» (иной сбой зачисления, предмет возвращён) |
+
+**Что скупает торговец** (`crud.quote_bid`, чистая функция; `quote_bids` — пакетно): есть строка в его лавке →
+только если она активна и `sell_price > 0`, по текущей цене скупки строки; строки нет → живой торговец берёт
+предмет **на рынке** одной из своих групп (`_buys_groups`: эффективные группы активных админских строк на рынке)
+по цене `market_bid(floor(item_base × bid_share), mult, market_ask(item_base, mult))`; обычный торговец — только
+свои строки. Цена скупки всегда ≤ самой дешёвой возможной цены продажи у этого же торговца (кэп 50 %).
+
+**Покупка:** строка → `merchant_market` → цена `discounted_ask(market_ask(...))` → **одна транзакция**: конечный
+остаток (`stock` не `NULL`, у живого всегда) снимается `crud.take_shop_stock` (`SQL_SHOP_STOCK_TAKE`, `rowcount 0` →
+откат, 400, ничего не оплачено) → оплата: живой — `crud.charge_player_to_merchant` (игрок → НПС + НПС → регион
+`trade_tax = floor(сумма × econ_regions.tax_rate)`, книга сама добавляет 10 % регион → страна), обычный —
+`charge_character_op` (игрок → казна места, как раньше) → коммит → HTTP-выдача предмета. Сбой выдачи →
+компенсация: `add_shop_stock` + `reverse_operation`; если обратная проводка упала на `InsufficientFunds` (тик
+успел потратить кассу) — откат и `pay_character` из казны места (`npc_shop_buy_refund`, `fallback: true`).
+Метаданные `npc_shop_buy`: `npc_id, shop_item_id, item_id, quantity, unit_price, discount_pct, ask, living`
+(+ `trade_tax` у живого).
+
+**Продажа:** `quote_bids` → у живого — проверка кассы (`crud.merchant_cash`, обычное чтение) → 409 без вызова
+inventory → коммит (снимок чтения закрыт, через HTTP ничего не держится) → HTTP DELETE предмета (JWT игрока, как
+раньше) → **одна транзакция**: живой — `crud.store_item_bought_from_player` (строка есть — `stock += q`; нет — новая
+строка `origin='player'`, `buy_price = item_base`, `sell_price = floor(item_base × bid_share)`, `restock_target 0`,
+`stock = q`; одновременная вставка той же пары ловится уникальным ключом в SAVEPOINT и превращается в `stock += q`),
+затем `crud.pay_player_from_merchant` (НПС → игрок, без налога); обычный — `pay_character` (казна → игрок, предмет
+уничтожается, остаток не меняется) → коммит. Любое исключение → откат и возврат предмета
+`POST /inventory/internal/characters/{cid}/items` (сервисный токен, `main._return_sold_item`); провал возврата —
+`logger.error` с id (остаточный риск в ISSUES).
+
+**Порядок блокировок (3.5):** строка лавки → `characters` (по возрастанию id, внутри `post_operation`) →
+`econ_accounts`. Строки региона игрок не блокирует: множители и ставка налога читаются без блокировок (снимок
+последнего тика).
+
+Тесты: `tests/test_econ_locations_flows.py` — `TestNpcBuy` / `TestNpcSell` (обычный торговец: казна, кэп скупки,
+границы количества, гонка за последнюю штуку, возврат остатка при сбое выдачи) и `TestLivingMerchant` (ноги
+`main`/`trade_tax`/`tax`, `NULL`-остаток = 0, компенсация и возврат из казны, 409 без вызова inventory, продажа в
+склад и новая строка игроков, чужая группа, возврат предмета при сбое зачисления, витрина и `sell-offers`);
+`test_charisma_discount.py`, `test_feat171_shop_gate.py` — скидка и гейт витрины.
 
 ## Известные проблемы
 

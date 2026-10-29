@@ -572,6 +572,41 @@ Nginx: покрыто существующим `location /characters/` (dev и p
   `GET …/operations?exclude_op_type=<op_type>` (из `OP_TYPES`, иначе 400) — скрыть операции одного типа
   (фронтенд скрывает `region_tick` по умолчанию).
 
+### Контракт этапа 3: торговцы НПС (FEAT-183 B1)
+
+Всё в `econ_core` (4 побайтных копии); это **единственный** способ, которым locations-service (лавка игрока) и
+character-service (тик, вкладка «Торговцы») считают цену торговца. Полное описание торговцев и порядок блокировок —
+в разделе «NPC merchants (FEAT-183)» (задача B6).
+
+- Тип операции `merchant_trade` («Торговля с жителями», ключ `merchant_trade:<run>:r:<region>`, источники трогать
+  нельзя). Тип ноги `trade_tax` («Налог с выручки», `NPC → казна региона`) — передаётся вызывающим (есть и в
+  `LEG_TYPES`, и в `CALLER_LEG_TYPES`); как поступление `character → region` сам облагается 10 % в казну страны.
+  Сгенерированная нога `tax` по-прежнему не передаётся.
+- Константы: `MAX_CHARISMA_DISCOUNT = 0.5`, `DEFAULT_MERCHANT_BID_SHARE = 0.5`, `DEFAULT_RESTOCK_TARGET = 10`,
+  `PRICE_LEVEL_LOW_MULT = 0.85` / `PRICE_LEVEL_HIGH_MULT = 1.2`, `SHOP_ORIGIN_ADMIN|PLAYER`,
+  `MERCHANT_LEGACY_REASONS` = `not_npc, dead, no_location, dungeon, no_region, not_simulated`.
+- Чистые функции (Decimal, игрок платит `ceil`, получает `floor`):
+  `effective_item_group(item_type, subcategory, is_food, rarity, override_group=None, override_off_market=None)`
+  (переопределение поверх автоправила, **нет группы ⇒ вне рынка**), `item_base_price(items_price, group_base)`,
+  `market_mult(living, group, off_market, mults)`, `price_level(mult)`, `market_ask(base_ask, mult)`,
+  `market_bid(base_bid, mult, ask)` (≤ `floor(ask × 0.5)` — перепродажа тому же торговцу не выгодна даже при
+  максимальной харизме; 0 = «не покупает»), `wholesale_price(base_ask, mult, share)`, `charisma_discount_pct(cha)`,
+  `discounted_ask(ask, pct)`, `units_per_item(base, group_base)`, `trade_tax(amount, rate)`, `default_bid(base, share)`,
+  `merchant_bid_share(params_json)`, `merchant_status(npc_row, region_row) -> (living, reason)`.
+- SQL: `SQL_NPC_PLACE` → `merchant_status`; `SQL_RESOLVE_LOCATION` → `SQL_REGION_ECON` (заголовок региона:
+  шаблон, население, налог); `SQL_REGION_MARKET` + `region_goods_from_rows` (`{group: price_mult}`, `{group: base}`);
+  `sql_item_market(ph)` + `item_market_from_row` → `ItemMarket(item_id, name, image, price, group, off_market)`;
+  `SQL_SIM_PARAMS`; `sql_lock_shop_rows(ph, for_update, by="npc_id"|"id")`, `sql_shop_row_by_item(for_update)`
+  (колонки `SHOP_ROW_COLUMNS`), `SQL_SHOP_STOCK_TAKE` (условное списание, `rowcount 0` = не хватает; `NULL` не
+  списывается), `SQL_SHOP_STOCK_ADD`, `SQL_SHOP_STOCK_SET`.
+- `GET …/item-groups` считает и `auto_*`, и итоговые поля через `effective_item_group`: предмет без группы теперь
+  `off_market = true` (раньше `false`).
+- Сценарии в `tests/econ_contract_cases.py`: ноги торговца в `CASES` (покупка с `trade_tax`, нехватка кассы НПС,
+  разворот покупки, запасной возврат из казны, `merchant_trade` с идемпотентностью), `expected_leg_counts`;
+  `PRICING_CASES`, `EFFECTIVE_GROUP_CASES`, `MERCHANT_STATUS_CASES`, `BID_CAP_GRID`; отдельный SQLite-мир торговцев
+  (`MERCHANT_SQLITE_DDL`, `MERCHANT_QUERY_CASES`, `MERCHANT_STATUS_SQL_CASES`, `MERCHANT_STOCK_STEPS`) — все
+  четыре `tests/test_econ_contract.py` их гоняют.
+
 ## Economy simulation (FEAT-182)
 
 ### Пересчёт регионов: тик (`app/econ_tick.py`) и планировщик (`app/econ_scheduler.py`) — B5
@@ -595,7 +630,8 @@ NULL`, `population > 0`, строка `Regions` существует). Реги�
   `кошелёк → казна` (налог; +10 % `казна → страна` добавляет реестр), `страна → казна` (грант),
   `казна → кошелёк` (жалованье); `idempotency_key = region_tick:<run_id>:r:<region_id>`, `region_id`, metadata
   `{run_id, tax, grant, wages, income, hunger}` → строка `econ_region_history` → COMMIT. Порядок блокировок:
-  бизнес-строки → `econ_accounts` по возрастанию id (внутри `post_operation`); `characters` не трогаются. Все ноги
+  бизнес-строки → `econ_accounts` по возрастанию id (внутри `post_operation`); с FEAT-183 между ними — строки лавок
+  и `characters` торговцев региона (см. «NPC merchants (FEAT-183)»). Все ноги
   нулевые → операции нет (регион всё равно посчитан). `DuplicateOperation` = регион уже проведён параллельным
   исполнителем → считается сделанным. Любая другая ошибка → откат региона, `regions_failed += 1`, лог с id региона и
   классом ошибки, остальные регионы идут дальше; итог `done` / `partial` / `failed`, `error` = список регионов.
@@ -613,7 +649,7 @@ NULL`, `population > 0`, строка `Regions` существует). Реги�
 |---|---|
 | `run_tick(session_factory=None, *, trigger='auto'\|'manual', actor_user_id=None, now=None, clock=None) -> RunSummary \| None` | прогон; `None` — авто-слот уже сделан/занят живым процессом; `now` фиксирует часы (тесты) |
 | `run_manual(actor_user_id, session_factory=None) -> RunSummary` | ручной шаг; бросает `RunInProgress(run_id)` |
-| `RunSummary.to_dict()` | `{run_id, trigger, slot, status, resumed, regions_total, regions_done, regions_failed, operations_posted, failed_region_ids, started_at, finished_at}` |
+| `RunSummary.to_dict()` | `{run_id, trigger, slot, status, resumed, regions_total, regions_done, regions_failed, operations_posted, failed_region_ids, merchants_processed, merchant_items_sold, merchant_items_restocked, merchant_ops_posted, merchant_failures, merchant_failed_region_ids, shop_rows_purged, started_at, finished_at}` (поля торговцев — FEAT-183) |
 | `slot_of(now=None)`, `slot_start(slot)` | номер слота / его начало (UTC) — для «следующий пересчёт в …» |
 | `load_params(db)`, `load_groups(db)`, `is_tick_enabled(db)` | параметры `econ_sim_settings`, группы с цепочками, DB-рубильник |
 | `region_state(row)`, `good_state(row)`, `account_balance(db, ref)` | строки ORM → датаклассы `econ_sim`, баланс счёта (0, если счёта нет) |
@@ -647,7 +683,7 @@ NULL`, `population > 0`, строка `Regions` существует). Реги�
 | `GET …/regions/{id}/history?limit=1..200 (40)` | `{items}` новые сверху, `goods = {code: {stock, price_mult, produced, consumed}}` |
 | `GET …/goods-groups`, `PUT …/goods-groups/{code}` | `{items}` / одна группа; цепочка: нельзя сам себе, циклы → 400 «Цепочка производства замыкается в круг» |
 | `GET …/templates`, `PUT …/templates/{code}` | `{items}` / один шаблон с `goods`; переданные строки товаров upsert-ятся |
-| `GET …/item-groups` | `q` (LIKE с экранированием `!`), `item_type` (enum items), `group` (код или `none`), `source` (`auto`/`manual`), `off_market`, `page`, `page_size ≤ 100`. `q`/`item_type` фильтруются в SQL, остальное — после автоправила в Python (каталог предметов маленький). `in_quests` — есть `quest_objectives` `collect`/`deliver` с `target_id = item.id` |
+| `GET …/item-groups` | `q` (LIKE с экранированием `!`), `item_type` (enum items), `group` (код или `none`), `source` (`auto`/`manual`), `off_market`, `page`, `page_size ≤ 100`. `q`/`item_type` фильтруются в SQL, остальное — после автоправила в Python (каталог предметов маленький); группа и «вне рынка» — `econ_core.effective_item_group` (нет группы ⇒ вне рынка, FEAT-183). `in_quests` — есть `quest_objectives` `collect`/`deliver` с `target_id = item.id` |
 | `PUT …/item-groups` | `{item_ids ≤ 500, group_code?, off_market?, reset?}`: отсутствующее поле не меняется, `null` — назад к авто, `reset` удаляет переопределения (нельзя вместе с полями); строка, где оба поля `null`, удаляется; несуществующие id пропускаются; ответ `{updated}` |
 | `GET …/sim`, `PUT …/sim` | состояние (`tick_enabled`, `env_enabled`, `params`, `current_slot_start`, `next_slot_at`, `running`, `runs` — 20 последних); PUT сливает переданные параметры с сохранёнными, границы — `schemas.ECON_SIM_PARAM_BOUNDS`, плюс `price_min < price_max`, `prod_price_min < prod_price_max` |
 | `POST …/sim/run` | «Пересчитать сейчас»: `econ_tick.run_manual`, ждёт окончания; ответ `RunSummary` с `id`/`trigger_kind`; 409 «Пересчёт уже идёт, попробуйте позже» |
@@ -664,3 +700,97 @@ reset_stocks=true, fund_purses=true, treasury_to_reserve=true, comment 3..500}`.
 региону), ключ `econ_fill:r:<region>:p<id последней проводки кошелька>:t<…казны>` — два одновременных одинаковых
 запроса получают один ключ, второй отбрасывается (`DuplicateOperation` → регион пропущен). Ответ:
 `{regions, operation_id (последняя), operation_ids, emitted, emitted_purses, emitted_treasuries, skipped_no_population}`.
+
+## NPC merchants (FEAT-183)
+
+Торговец НПС — персонаж с `is_npc = 1` и активными строками `npc_shop_items` (таблица locations-service, миграция
+`053_npc_shop_market`). Касса = `characters.currency_balance` НПС (счёт вида `character`, в минус уйти не может —
+условное списание реестра). Отдельных таблиц торговцев в character-service нет; все настройки — 9 ключей
+`merchant_*` в `econ_sim_settings.params` (`econ_sim.SimParams`, границы `schemas.ECON_SIM_PARAM_BOUNDS`).
+
+### Контракт чтения этапа 3 (обязателен для обоих сервисов)
+
+Цена торговца считается **только** через `econ_core` (раздел «Контракт этапа 3» выше) — locations-service (лавка
+игрока, `crud.merchant_market`) и character-service (тик, вкладка «Торговцы») используют одни и те же SQL и функции:
+
+1. **Живой или «обычный» (legacy):** `SQL_NPC_PLACE(:id)` → `SQL_RESOLVE_LOCATION(current_location_id)` → регион →
+   `SQL_REGION_ECON(:region_id)` → `merchant_status(npc_row, region_row)`. Живой = НПС жив, есть локация, она не
+   `dungeon`, относится к региону, регион симулируется (`template_code IS NOT NULL AND population > 0`). Иначе
+   причина: `not_npc | dead | no_location | dungeon | no_region | not_simulated`. Статус считается на каждом запросе
+   (переезд НПС / выключение региона действуют сразу).
+2. **Группа предмета:** `sql_item_market(ids)` + `item_market_from_row` → `effective_item_group` (переопределение
+   `econ_item_groups` поверх автоправила; **нет группы ⇒ вне рынка**).
+3. **Множитель:** `SQL_REGION_MARKET(:region_id)` + `region_goods_from_rows` → `market_mult(living, group, off_market,
+   mults)` — `price_mult` группы региона для живого торговца и рыночного предмета, иначе 1.
+4. **Цены:** `ask = market_ask(buy_price, mult)`; игрок платит `discounted_ask(ask, charisma_discount_pct(cha))`;
+   `bid = market_bid(sell_price или default_bid(item_base_price(items.price, group_base), merchant_bid_share), mult,
+   ask)` (≤ `floor(ask × 0.5)`, 0 = не покупает); опт (докупка из региона) `wholesale_price(buy_price, mult,
+   merchant_wholesale_share)`; единицы региона на предмет `units_per_item(buy_price, group_base)`; налог с выручки
+   `trade_tax(amount, econ_regions.tax_rate)`.
+5. **Склад:** `stock NULL` = безлимит **только** у legacy; у живого `NULL` = 0. Строки `origin='player'` — скуплено у
+   игроков, только перепродаются (`restock_target = 0`).
+
+### Единый порядок блокировок (3.5; заменяет FEAT-181/182 для этих потоков)
+
+`econ_regions → econ_region_goods → npc_shop_items (по возрастанию id) → characters (по возрастанию id) →
+econ_accounts (по возрастанию id)`. Тик региона: регион → товары → строки лавок его живых торговцев → их `characters`
+(всё это **до** проводки `region_tick`, чтобы не держать счета в ожидании строк) → счета. Покупка/продажа игрока:
+строка лавки → `characters` игрока и НПС → счета; регионы игрок не блокирует (цены и ставку налога читает без
+блокировок — снимок последнего тика). «Пополнить кассы»: `characters` → счета.
+
+### Шаг торговцев в тике (`app/econ_tick.py`, B6; математика — чистый `app/econ_merchant.py`, B5)
+
+- **Начало прогона** (`_prepare_merchants`, best effort — сбой логируется, регионы тикают без торговцев):
+  удаляются строки лавок удалённых НПС (`npc_id` нет в `characters`) → `RunSummary.shop_rows_purged`; строится карта
+  `{region_id: [npc_id]}` живых торговцев (НПС с активными строками → `merchant_place` → `merchant_status`).
+- **В транзакции региона** после блокировки товаров: `lock_merchants` — строки лавок этих НПС FOR UPDATE, затем
+  `lock_characters` (касса), повторная проверка статуса (НПС, переехавший после построения карты, выпадает с INFO).
+  Сбой чтения → торговцы региона пропущены, `merchant_failures += 1`, регион идёт дальше.
+- **После проводки `region_tick`**, внутри `session.begin_nested()` (SAVEPOINT; перед ним `flush`, это же открывает
+  транзакцию pysqlite в тестах): кошелёк после налога/жалованья → `econ_merchant.merchant_step` → `UPDATE stock`
+  изменённых активных строк (`NULL` живого торговца становится числом) → `DELETE` строк `origin='player'` с остатком
+  ≤ 0 → запас групп `econ_region_goods.stock += delta` (не ниже 0) → **одна** операция `merchant_trade` на регион:
+  ноги на каждого торговца `кошелёк → НПС` (покупки жителей), `НПС → казна` (`trade_tax`, +10 % `казна → страна`
+  добавляет реестр), `НПС → кошелёк` (докупка), `НПС → кошелёк` (содержание сверх 3× нормы кассы); ключ
+  `merchant_trade:<run_id>:r:<region_id>`; metadata `{run_id, sold_value, tax, purse_budget, merchants: {"<npc_id>":
+  {sold_items, sold_value, tax, restock_items, restock_value, upkeep}}}`. Все ноги нулевые → операции нет.
+- **Ошибка в шаге** → откат SAVEPOINT (строки лавок, запасы, деньги — как до шага), ERROR в лог с id региона и
+  классом ошибки, `merchant_failures += 1`, `merchant_failed_region_ids`; регион **коммитится**. В
+  `econ_tick_runs.error` дописывается `торговцы — ошибка в регионах: <ids>` (статус прогона остаётся `done`).
+  Строка `econ_region_history` пишется после шага (запасы и кошелёк уже с учётом торговцев).
+- **Идемпотентность:** наследуется от региона (`last_run_id` + ключ `region_tick`); повтор того же прогона — регион
+  `already`, `merchant_trade` второй раз не проводится (и ключ уникален).
+- Строки торговцев legacy и неактивные строки не трогаются; строки «вне рынка» живого торговца не докупаются и не
+  продаются жителям (остаток ведёт админ).
+
+`RunSummary` (ответ «Пересчитать сейчас»): `merchants_processed`, `merchant_items_sold`, `merchant_items_restocked`,
+`merchant_ops_posted`, `merchant_failures`, `merchant_failed_region_ids`, `shop_rows_purged`. В `GET …/sim` у каждого
+прогона (`runs[]`, `running`) — вычисляемые `merchant_ops_posted` (операции `merchant_trade:<id>:r:%`) и
+`merchant_failures` (разбор `error`; миграции у `econ_tick_runs` нет).
+
+### API торговцев (`app/economy_api.py` + `app/economy_merchants_crud.py`)
+
+| Метод и путь | Права | Что делает |
+|---|---|---|
+| `GET /characters/admin/economy/merchants?region_id=&living=` | `economy:read` | все НПС со строками лавок (включая неактивные строки и legacy) |
+| `POST /characters/admin/economy/merchants/fund` | `economy:settings` **и** `economy:emit` | «Пополнить кассы торговцев» |
+
+Ответ списка: `{items: [{npc_id, name, location_id, region_id, region_name, living, reason, tax_rate, cash,
+cash_target, rows: [{row_id, item_id, item_name, group, off_market, origin, is_active, base_buy, base_sell, ask, bid,
+market, stock, restock_target}], stock_value, last_trade}], totals: {merchants, living, cash}}`. `ask`/`bid` — текущие
+цены (без харизмы); `stock` у живого — число (`NULL` → 0), у legacy `null` = безлимит; `cash_target` =
+`econ_merchant.cash_target` (живые; у legacy 0); `stock_value` = Σ остаток × ask по активным строкам; `last_trade` —
+из последних 10 операций `merchant_trade` региона, где есть этот НПС: `{operation_id, run_id, at, sold_items,
+sold_value, tax, restock_items, restock_value, upkeep}` или `null`. Удалённый НПС до чистки тиком — `name: null`,
+`reason: not_npc`.
+
+Пополнение: тело `{region_ids?: [int] ≤ 500, npc_ids?: [int] ≤ 500, comment 3..500}` (без фильтров — все живые).
+Блокирует `characters` живых торговцев (по возрастанию), сумма `max(0, cash_target − касса)` новыми деньгами;
+**одна операция `admin_emission` на регион** (`эмиссия → НПС`, `apply_tax=False`, `region_id`, комментарий и
+`actor_user_id`, metadata `{merchant_fund: true, targets}`), ключ
+`merchant_fund:r:<region>:m<id последней проводки по счетам этих НПС>:h<crc32 набора НПС>` — повторный клик
+эмитирует 0, два одновременных одинаковых — второй `DuplicateOperation` → регион пропущен. Ответ `{merchants (живых
+рассмотрено), funded, operation_ids, emitted, skipped: [{npc_id, reason}]}`; причины пропуска: `at_target` (касса уже
+≥ нормы), `no_target` (нет рыночных админских строк — норма 0), а для явно перечисленных `npc_ids` ещё
+`not_merchant` (нет активных строк), `region_filtered` и причины legacy (`dungeon`, `not_simulated`, …). Отдельная
+правка денег одного НПС — как раньше, в карточке НПС (`economy:adjust`).
