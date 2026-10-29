@@ -1294,3 +1294,145 @@ class TestPostsHistoryPermission:
             with pytest.raises(HTTPException) as exc_info:
                 require_permission(db, user, POSTS_HISTORY)
             assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 12. FEAT-181: economy permissions (migration 0032)
+# ---------------------------------------------------------------------------
+#
+# Seeded explicitly: TestAdminAutoPermissions works on this file's synthetic
+# seed and never reads the migration tree, so a new `permissions` row is not
+# covered by it automatically.
+
+ECONOMY_PERMISSIONS = [
+    ("economy", "read"),
+    ("economy", "emit"),
+    ("economy", "adjust"),
+    ("economy", "settings"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0032. Admin (4) is absent on purpose —
+# it receives every row of `permissions`. Editor (2) gets nothing.
+ECONOMY_ROLE_ACTIONS = {
+    3: ["read"],  # Moderator — view-only economy access
+}
+
+
+def _seed_economy_permissions(db):
+    """Seed the 4 economy permissions and their role grants (mirrors 0032)."""
+    perm_objects = []
+    for module, action in ECONOMY_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Economy: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()
+
+    for perm in perm_objects:
+        for role_id, actions in ECONOMY_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_economy(rbac_db):
+    """Base RBAC seed + economy permissions from migration 0032."""
+    _seed_economy_permissions(rbac_db)
+    return rbac_db
+
+
+class TestEconomyPermissions:
+    """FEAT-181 Q4: economy:read/emit/adjust/settings."""
+
+    def test_seed_mirrors_the_migration(self):
+        """The mirror above must match migration 0032 — otherwise this suite
+        tests a different permission set than production gets."""
+        import importlib.util
+        from pathlib import Path
+        path = (Path(__file__).resolve().parents[1] / "alembic" / "versions"
+                / "0032_add_economy_permissions.py")
+        spec = importlib.util.spec_from_file_location("mig_0032", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        assert [(m, a) for m, a, _ in mig.PERMISSIONS] == ECONOMY_PERMISSIONS
+        assert mig.ROLE_ACTIONS == ECONOMY_ROLE_ACTIONS
+        assert mig.revision == "0032" and mig.down_revision == "0031"
+
+    def test_exactly_four_economy_permissions(self, rbac_db_with_economy):
+        db = rbac_db_with_economy
+        assert db.query(models.Permission).filter(
+            models.Permission.module == "economy").count() == 4
+
+    def test_admin_gets_all_four(self, rbac_db_with_economy):
+        db = rbac_db_with_economy
+        admin = _make_user(db, id=600, username="ecadmin", email="ecadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in ECONOMY_PERMISSIONS:
+            assert f"{module}:{action}" in perms
+        # 8 base + 4 economy = 12
+        assert len(perms) == 12
+
+    def test_moderator_gets_only_read(self, rbac_db_with_economy):
+        db = rbac_db_with_economy
+        mod = _make_user(db, id=601, username="ecmod", email="ecmod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert [p for p in perms if p.startswith("economy:")] == ["economy:read"]
+        # 4 base items:* + economy:read = 5
+        assert len(perms) == 5
+
+    def test_editor_gets_none(self, rbac_db_with_economy):
+        db = rbac_db_with_economy
+        editor = _make_user(db, id=602, username="eceditor", email="eceditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert not any(p.startswith("economy:") for p in perms)
+        assert len(perms) == 2  # base *:read, unchanged
+
+    def test_regular_user_gets_none(self, rbac_db_with_economy):
+        db = rbac_db_with_economy
+        user = _make_user(db, id=603, username="ecuser", email="ecuser@test.com",
+                          role_id=1, role_str="user")
+        assert get_effective_permissions(db, user) == []
+
+    def test_require_permission_matrix(self, rbac_db_with_economy):
+        """Admin passes all four; moderator only read; editor/user nothing."""
+        db = rbac_db_with_economy
+        admin = _make_user(db, id=604, username="ecadmin2", email="ecadmin2@test.com",
+                           role_id=4, role_str="admin")
+        mod = _make_user(db, id=605, username="ecmod2", email="ecmod2@test.com",
+                         role_id=3, role_str="moderator")
+        editor = _make_user(db, id=606, username="eceditor2", email="eceditor2@test.com",
+                            role_id=2, role_str="editor")
+        user = _make_user(db, id=607, username="ecuser2", email="ecuser2@test.com",
+                          role_id=1, role_str="user")
+
+        for module, action in ECONOMY_PERMISSIONS:
+            perm = f"{module}:{action}"
+            require_permission(db, admin, perm)
+            if action == "read":
+                require_permission(db, mod, perm)
+            else:
+                with pytest.raises(HTTPException) as exc_info:
+                    require_permission(db, mod, perm)
+                assert exc_info.value.status_code == 403
+            for blocked in (editor, user):
+                with pytest.raises(HTTPException) as exc_info:
+                    require_permission(db, blocked, perm)
+                assert exc_info.value.status_code == 403
+
+    def test_delegated_adjust_to_moderator(self, rbac_db_with_economy):
+        """economy:adjust can be granted per person via user_permissions."""
+        db = rbac_db_with_economy
+        mod = _make_user(db, id=608, username="ecmod3", email="ecmod3@test.com",
+                         role_id=3, role_str="moderator")
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == "economy",
+            models.Permission.action == "adjust",
+        ).one()
+        db.add(models.UserPermission(user_id=mod.id, permission_id=perm.id, granted=True))
+        db.commit()
+        require_permission(db, mod, "economy:adjust")  # must not raise
