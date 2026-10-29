@@ -758,17 +758,11 @@ async def buy_house(
                                 workshop_profession_id=professions.get(t.room_type)))
     await db.flush()
     house_id = house.id
-    # deduct_currency commits the house together with the payment; without
-    # enough gold nothing is committed and the house stays for sale.
-    balance = await crud.deduct_currency(
-        db, body.character_id, plot.price, transaction_type="house_purchase",
-        source=f"house plot #{plot.id}", metadata={"plot_id": plot.id, "house_id": house_id},
-    ) if plot.price > 0 else 0
-    if balance is None:
-        await db.rollback()
-        raise HTTPException(400, "Не хватает золота")
-    if plot.price == 0:
-        await db.commit()
+    # FEAT-181: the payment goes to the plot's region treasury in the same transaction as the
+    # house; without enough gold nothing is committed and the house stays for sale.
+    balance = await _charge(db, body.character_id, plot.price, plot, "house_purchase",
+                            {"plot_id": plot.id, "house_id": house_id})
+    await db.commit()
     return {"house_id": house_id, "gold": balance}
 
 
@@ -1246,18 +1240,29 @@ async def _take_materials(db: AsyncSession, character_id: int, items: List[dict]
                 left = 0
 
 
-async def _pay_for_build(db: AsyncSession, character_id: int, cost: dict, what: str) -> None:
+async def _charge(db: AsyncSession, character_id: int, amount: int, plot: models.HousePlot, op_type: str,
+                  metadata: dict, short: Optional[str] = None) -> int:
+    """FEAT-181: the character pays `amount` into the plot's region treasury (no commit).
+    Not enough gold -> rollback + 400. Returns the new balance."""
+    balance = await crud.charge_character(db, character_id, amount, op_type=op_type,
+                                          location_id=plot.location_id, region_id=plot.region_id,
+                                          metadata=metadata)
+    if balance is None:
+        await db.rollback()
+        message = await crud.not_enough_gold_message(db)
+        if short:
+            message = f"{message}: {short} {await crud.format_gold(db, amount)}"
+        raise HTTPException(400, message)
+    return balance
+
+
+async def _pay_for_build(db: AsyncSession, character_id: int, cost: dict, plot: models.HousePlot,
+                         what: str) -> None:
     """Takes the materials and the gold together with the pending room change; commits, or rolls back with 400."""
     await _take_materials(db, character_id, cost["items"])
     await db.flush()
-    if cost["gold"] > 0:
-        balance = await crud.deduct_currency(db, character_id, cost["gold"], transaction_type="house_build",
-                                             source=what)
-        if balance is None:
-            await db.rollback()
-            raise HTTPException(400, "Не хватает золота")
-    else:
-        await db.commit()
+    await _charge(db, character_id, cost["gold"], plot, "house_build", {"plot_id": plot.id, "what": what})
+    await db.commit()
 
 
 async def _builder(db: AsyncSession, house_id: int, character_id: int, user: UserRead):
@@ -1308,7 +1313,7 @@ async def build_room(
         await db.rollback()
         raise HTTPException(409, "Это место уже занято")
     room_id = room.id
-    await _pay_for_build(db, body.character_id, cost, f"house #{house_id} build {body.room_type}")
+    await _pay_for_build(db, body.character_id, cost, plot, f"house #{house_id} build {body.room_type}")
     await _settle_rooms(db, house_id)
     return {"room_id": room_id}
 
@@ -1334,7 +1339,7 @@ async def unlock_layer(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, "Этот слой уже открыт")
-    await _pay_for_build(db, body.character_id, {"gold": entry["unlock_price"], "items": []},
+    await _pay_for_build(db, body.character_id, {"gold": entry["unlock_price"], "items": []}, plot,
                          f"house #{house_id} layer {layer}")
     return {"ok": True}
 
@@ -1363,7 +1368,7 @@ async def unlock_cell(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, "Это место уже ваше")
-    await _pay_for_build(db, body.character_id, {"gold": plot.extension_price or 0, "items": []},
+    await _pay_for_build(db, body.character_id, {"gold": plot.extension_price or 0, "items": []}, plot,
                          f"house #{house_id} extension cell #{cell_id}")
     return {"ok": True}
 
@@ -1376,7 +1381,7 @@ async def upgrade_room(
     db: AsyncSession = Depends(get_db),
     user: UserRead = Depends(get_current_user_via_http),
 ):
-    await _builder(db, house_id, body.character_id, user)
+    _house_row, plot = await _builder(db, house_id, body.character_id, user)
     room = await _room(db, room_id)
     if room.house_id != house_id:
         raise HTTPException(404, "Комната не найдена")
@@ -1390,7 +1395,7 @@ async def upgrade_room(
     room.upgrade_to_level = target
     room.upgrade_complete_at = now + timedelta(hours=cost["build_hours"])
     await db.flush()
-    await _pay_for_build(db, body.character_id, cost, f"house #{house_id} room #{room_id} to level {target}")
+    await _pay_for_build(db, body.character_id, cost, plot, f"house #{house_id} room #{room_id} to level {target}")
     await _settle_rooms(db, house_id)
     return {"ok": True}
 
@@ -2205,15 +2210,9 @@ async def pay_tax(
     house.tax_paid_through = period
     house.status = "active"
     await db.flush()
-    if state["due"] > 0:
-        balance = await crud.deduct_currency(db, body.character_id, state["due"], transaction_type="house_tax",
-                                             source=f"house #{house_id}",
-                                             metadata={"house_id": house_id, "periods": state["owed_periods"]})
-        if balance is None:
-            await db.rollback()
-            raise HTTPException(400, f"Не хватает золота: налог {state['due']}")
-    else:
-        await db.commit()
+    await _charge(db, body.character_id, state["due"], plot, "house_tax",
+                  {"house_id": house_id, "periods": state["owed_periods"]}, short="налог")
+    await db.commit()
     return {"paid": state["due"]}
 
 
@@ -2275,7 +2274,11 @@ async def buy_listed_house(
     from main import check_not_activity_locked, check_not_in_battle
 
     character = await _own_character(db, body.character_id, user)
-    house = await _house(db, house_id)
+    await _house(db, house_id)  # 404 for an unknown house
+    # FEAT-181: lock the house row so two buyers cannot both take it (business row first, then gold).
+    house = (await db.execute(
+        select(models.House).where(models.House.id == house_id).with_for_update()
+        .execution_options(populate_existing=True))).scalar_one()
     if house.sale_price is None or house.status != "active":
         raise HTTPException(409, "Дом не продаётся")
     if house.owner_character_id == body.character_id:
@@ -2289,15 +2292,15 @@ async def buy_listed_house(
     await _write_out_residents(db, house)
     house.owner_character_id = body.character_id
     await db.flush()
-    balance = await crud.deduct_currency(db, body.character_id, price, transaction_type="house_purchase",
-                                         source=f"house #{house_id} from character #{seller}",
-                                         metadata={"house_id": house_id, "seller": seller})
+    # FEAT-181: buyer -> seller as ONE house_resale operation, committed with the ownership change.
+    balance = await crud.transfer_between_characters(
+        db, body.character_id, seller, price, op_type="house_resale", location_id=plot.location_id,
+        metadata={"house_id": house_id, "seller": seller, "buyer": body.character_id},
+    )
     if balance is None:
         await db.rollback()
-        raise HTTPException(400, "Не хватает золота")
-    await crud.add_currency(db, seller, price, transaction_type="house_sale",
-                            source=f"house #{house_id} to character #{body.character_id}",
-                            metadata={"house_id": house_id, "buyer": body.character_id})
+        raise HTTPException(400, await crud.not_enough_gold_message(db))
+    await db.commit()
     return {"house_id": house_id, "gold": balance}
 
 

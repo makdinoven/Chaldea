@@ -47,8 +47,10 @@ os.environ.setdefault("DB_PASSWORD", "testpass")
 os.environ.setdefault("DB_DATABASE", "testdb")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import crud  # noqa: E402
+import econ_contract_cases  # noqa: E402
 import main  # noqa: E402
 import schemas  # noqa: E402
 from models import CharacterQuest, CharacterQuestProgress, Quest, QuestObjective  # noqa: E402
@@ -85,22 +87,14 @@ _CROSS_SERVICE_DDL = (
     """CREATE TABLE characters (
            id INTEGER PRIMARY KEY,
            user_id INTEGER,
-           currency_balance INTEGER NOT NULL DEFAULT 0
+           currency_balance INTEGER NOT NULL DEFAULT 0,
+           current_location_id INTEGER,
+           is_npc INTEGER NOT NULL DEFAULT 0
        )""",
     """CREATE TABLE character_attributes (
            character_id INTEGER PRIMARY KEY,
            passive_experience INTEGER NOT NULL DEFAULT 0,
            active_experience INTEGER NOT NULL DEFAULT 0
-       )""",
-    """CREATE TABLE gold_transactions (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           character_id INTEGER NOT NULL,
-           amount INTEGER NOT NULL,
-           balance_after INTEGER NOT NULL,
-           transaction_type TEXT NOT NULL,
-           source TEXT,
-           metadata TEXT,
-           created_at TIMESTAMP
        )""",
 )
 
@@ -132,6 +126,9 @@ async def session():
         await conn.run_sync(CharacterQuest.__table__.create)
         await conn.run_sync(CharacterQuestProgress.__table__.create)
         for ddl in _CROSS_SERVICE_DDL:
+            await conn.execute(text(ddl))
+        # FEAT-181 ledger + world hierarchy (CREATE IF NOT EXISTS: `characters` above wins)
+        for ddl in econ_contract_cases.SQLITE_DDL:
             await conn.execute(text(ddl))
 
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -358,6 +355,37 @@ class TestGoldBearingQuest:
         assert result["reward_currency"] == 50
         assert result["new_balance"] == START_GOLD + 50
         assert result["reward_exp"] == 135
+
+    @pytest.mark.asyncio
+    async def test_gold_is_paid_once_and_balanced_by_the_treasury(self, session):
+        """FEAT-181: the reward is one quest_reward posting (world treasury here — the
+        quest giver has no location), and a second completion pays nothing."""
+        await _seed_quest(session, reward_exp=0, reward_currency=50)
+        await _complete(session)
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException):
+            await _complete(session)
+        assert await _read_gold(session) == START_GOLD + 50
+        ops = (await session.execute(text(
+            "SELECT op_type, idempotency_key FROM econ_operations"))).fetchall()
+        assert [tuple(o) for o in ops] == [("quest_reward", "quest_reward:cq:1")]
+        world = (await session.execute(text(
+            "SELECT balance FROM econ_accounts WHERE kind = 'world_treasury'"))).first()[0]
+        assert world == -50
+
+    @pytest.mark.asyncio
+    async def test_a_quest_taken_concurrently_pays_nothing(self, session):
+        """FEAT-181: the completion is claimed first; if another request already took the
+        row, the posting never happens."""
+        await _seed_quest(session, reward_exp=100, reward_currency=50)
+        with patch.object(crud, "complete_quest_record", AsyncMock(return_value=False)):
+            from fastapi import HTTPException
+            with pytest.raises(HTTPException) as excinfo:
+                await _complete(session)
+        assert excinfo.value.status_code == 404
+        assert await _read_gold(session) == START_GOLD
+        assert await _read_xp(session) == START_XP
 
     @pytest.mark.asyncio
     async def test_gold_is_never_multiplied_by_an_xp_book(self, session):

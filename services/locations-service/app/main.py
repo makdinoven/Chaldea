@@ -15,6 +15,7 @@ import models
 import httpx
 import schemas
 import crud
+import econ_ledger
 import visibility
 import activity_lock
 from database import get_db
@@ -2838,17 +2839,37 @@ async def buy_from_npc(
         discounted_unit_price = shop_item.buy_price
     total_price = discounted_unit_price * body.quantity
 
-    # 5. Atomically deduct currency
-    new_balance = await crud.deduct_currency(
+    # 5. FEAT-181: the character pays the treasury of the NPC's region (npc_shop_buy) and the
+    # payment is committed before the HTTP call — a transaction is never held across it.
+    buy_meta = {"npc_id": npc_id, "shop_item_id": body.shop_item_id,
+                "item_id": shop_item.item_id, "quantity": body.quantity,
+                "unit_price": discounted_unit_price, "discount_pct": discount_pct}
+    charged = await crud.charge_character_op(
         session, body.character_id, total_price,
-        transaction_type="charisma_shop_buy",
-        source=f"NPC shop buy (npc_id={npc_id})",
-        metadata={"npc_id": npc_id, "shop_item_id": body.shop_item_id,
-                  "item_id": shop_item.item_id, "quantity": body.quantity,
-                  "unit_price": discounted_unit_price, "discount_pct": discount_pct},
+        op_type="npc_shop_buy", location_id=npc_location, metadata=buy_meta,
     )
-    if new_balance is None:
-        raise HTTPException(status_code=400, detail="Недостаточно валюты")
+    new_balance, buy_operation_id = charged if charged is not None else (None, None)
+    if charged is None:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=await crud.not_enough_gold_message(session, "Недостаточно"))
+    await session.commit()
+
+    async def _refund(reason: str) -> None:
+        """Compensating operation npc_shop_buy_refund: mirrors every leg of the purchase
+        (region -> character and the country's tax back to the region), so both treasuries
+        end exactly as before the purchase."""
+        if buy_operation_id is None:
+            return
+        try:
+            await crud.reverse_operation(
+                session, buy_operation_id, op_type="npc_shop_buy_refund",
+                metadata={**buy_meta, "reason": reason},
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception("NPC shop refund failed for character %s (npc %s, %s)",
+                              body.character_id, npc_id, total_price)
 
     # 6. Add item to inventory via inventory-service.
     # FEAT-167: internal-only route + internal token (оплата уже списана выше).
@@ -2865,13 +2886,7 @@ async def buy_from_npc(
             )
             if add_resp.status_code != 200:
                 # Compensate: refund currency
-                await crud.add_currency(
-                    session, body.character_id, total_price,
-                    transaction_type="shop_buy_refund",
-                    source=f"Refund: inventory add failed (npc_id={npc_id})",
-                    metadata={"npc_id": npc_id, "item_id": shop_item.item_id,
-                              "quantity": body.quantity},
-                )
+                await _refund("inventory add failed")
                 detail = "Не удалось добавить предмет в инвентарь"
                 try:
                     detail = add_resp.json().get("detail", detail)
@@ -2880,13 +2895,7 @@ async def buy_from_npc(
                 raise HTTPException(status_code=500, detail=detail)
     except httpx.HTTPError:
         # Compensate: refund currency
-        await crud.add_currency(
-            session, body.character_id, total_price,
-            transaction_type="shop_buy_refund",
-            source=f"Refund: inventory service unavailable (npc_id={npc_id})",
-            metadata={"npc_id": npc_id, "item_id": shop_item.item_id,
-                      "quantity": body.quantity},
-        )
+        await _refund("inventory service unavailable")
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
 
     # 7. Decrement stock if limited
@@ -2976,14 +2985,14 @@ async def sell_to_npc(
     except httpx.HTTPError:
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
 
-    # 5. Add currency to character
-    new_balance = await crud.add_currency(
+    # 5. FEAT-181: the treasury of the NPC's region pays the character (npc_shop_sell)
+    new_balance = await crud.pay_character(
         session, body.character_id, total_price,
-        transaction_type="charisma_shop_sell",
-        source=f"NPC shop sell (npc_id={npc_id})",
+        op_type="npc_shop_sell", location_id=npc_location,
         metadata={"npc_id": npc_id, "item_id": body.item_id,
                   "quantity": body.quantity, "sell_price": sell_price},
     )
+    await session.commit()
 
     item_name = await crud.get_item_name(session, body.item_id)
 
@@ -3150,44 +3159,60 @@ async def complete_quest(
     if not quest:
         raise HTTPException(status_code=404, detail="Квест не найден")
 
-    # Award currency
-    new_balance = None
-    if quest.reward_currency > 0:
-        new_balance = await crud.add_currency(
-            session, body.character_id, quest.reward_currency,
-            transaction_type="quest_reward",
-            source=f"Quest completion (quest_id={quest_id})",
-            metadata={"quest_id": quest_id},
-        )
+    cq_id = check["character_quest_id"]
 
-    # Award experience
     # FEAT-168 #6: книга «опыт за задания» может увеличить награду — игроку
-    # показываем фактически начисленный опыт, а не базовый.
-    awarded_exp = quest.reward_exp
+    # показываем фактически начисленный опыт, а не базовый. Множитель спрашиваем
+    # ДО того, как заберём строку квеста под блокировку (FEAT-181): между
+    # отметкой о сдаче и коммитом HTTP-запросов нет. Спрашиваем только у квестов,
+    # которые вообще дают опыт (ревью #3).
+    #
+    # ОСОЗНАННЫЙ РАЗМЕН (ревью #4): выше уже были SELECT-ы (проверка владения,
+    # проверка квеста), поэтому соединение БД удерживается на время этого запроса,
+    # до 5 с. «Починить» это откатом сессии НЕЛЬЗЯ: откат протухает уже
+    # загруженный квест, и обработчик падает с MissingGreenlet на чтении своих же
+    # полей (см. запись про battle-pass в docs/ISSUES.md).
+    xp_multiplier = None
     if quest.reward_exp > 0:
-        # FEAT-168 #6: книга «опыт за задания» спрашивается только у квестов,
-        # которые вообще дают опыт (ревью #3). Вызов асинхронный, event loop не
-        # блокируется.
-        #
-        # ОСОЗНАННЫЙ РАЗМЕН (ревью #4): сюда мы попадаем уже с открытой
-        # транзакцией — выше были SELECT-ы (проверка владения, проверка квеста,
-        # начисление валюты), поэтому соединение БД удерживается на время этого
-        # запроса, до 5 с. Ветка редкая (сдача квеста с наградой опытом), и это
-        # дешевле, чем спрашивать множитель на каждом запросе заранее.
-        # «Починить» это откатом сессии НЕЛЬЗЯ: откат протухает уже загруженный
-        # квест, и обработчик падает с MissingGreenlet на чтении своих же полей —
-        # ровно та ловушка, о которой предупреждает запись про battle-pass в
-        # docs/ISSUES.md. Если понадобится убрать удержание — выносить начисление
-        # за пределы транзакции, а не откатывать её.
         xp_multiplier = await crud.get_character_xp_multiplier(
             body.character_id, crud.XP_SOURCE_QUEST,
         )
+
+    # FEAT-181: conditional completion FIRST (status 'active' -> 'completed'); a
+    # concurrent second completion finds no active row and gets nothing. The gold
+    # posting (idempotency key per character quest) and the XP go into the same
+    # transaction and are committed together.
+    if not await crud.complete_quest_record(session, cq_id):
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="Активный квест не найден")
+
+    # Award currency: treasury of the quest giver's region (else the player's) -> character
+    new_balance = None
+    if quest.reward_currency > 0:
+        reward_location = await crud.get_npc_location(session, quest.npc_id) if quest.npc_id else None
+        if reward_location is None:
+            reward_location = await crud.get_character_location(session, body.character_id)
+        try:
+            new_balance = await crud.pay_character(
+                session, body.character_id, quest.reward_currency,
+                op_type="quest_reward", location_id=reward_location,
+                metadata={"quest_id": quest_id, "character_quest_id": cq_id},
+                idempotency_key=f"quest_reward:cq:{cq_id}",
+            )
+        except econ_ledger.DuplicateOperation:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Награда за этот квест уже получена")
+
+    # Award experience (add_experience commits — together with the completion and the gold)
+    awarded_exp = quest.reward_exp
+    if quest.reward_exp > 0:
         awarded_exp = await crud.add_experience(
             session, body.character_id, quest.reward_exp,
             xp_multiplier=xp_multiplier,
         )
+    await session.commit()
 
-    # Award items via inventory-service
+    # Award items via inventory-service (after the commit: no transaction across HTTP)
     if quest.reward_items:
         for reward_item in quest.reward_items:
             item_id = reward_item.get("item_id")
@@ -3213,9 +3238,6 @@ async def complete_quest(
                         )
             except httpx.HTTPError as e:
                 logger.warning(f"Inventory service error for quest reward: {e}")
-
-    # Mark quest as completed
-    await crud.complete_quest_record(session, check["character_quest_id"])
 
     # Track cumulative stats: quests_completed + gold earned from quest
     quest_increments = {"quests_completed": 1}

@@ -16,6 +16,9 @@ from sqlalchemy import text, delete, func as sa_func
 from sqlalchemy.exc import IntegrityError
 import os
 from config import settings
+import econ_core
+import econ_ledger
+from econ_ledger import AccountRef, InsufficientFunds, Leg
 
 
 # FEAT-162 §3.4: shared secret for service-to-service calls into character-service's
@@ -2343,6 +2346,10 @@ async def delete_region(session: AsyncSession, region_id: int, commit: bool = Tr
     )
     districts = districts_result.scalars().all()
 
+    # FEAT-181: the region treasury is closed into its country's treasury in this same transaction.
+    await _close_treasury(session, AccountRef.region(region_id), AccountRef.country(region.country_id),
+                          {"region_id": region_id, "country_id": region.country_id})
+
     for d in districts:
         await delete_district(session, d.id, commit=False)
 
@@ -2375,6 +2382,10 @@ async def delete_country(session: AsyncSession, country_id: int):
     regions = regions_result.scalars().all()
     for r in regions:
         await delete_region(session, r.id, commit=False)
+
+    # FEAT-181: regions were closed into this country above; the country treasury goes to the world.
+    await _close_treasury(session, AccountRef.country(country_id), AccountRef.world(),
+                          {"country_id": country_id})
 
     # Удаляем страну
     await session.execute(
@@ -4373,128 +4384,195 @@ async def get_shop_item_by_id(session: AsyncSession, shop_item_id: int) -> Optio
     return result.scalars().first()
 
 
-async def _log_gold_transaction(
+# ---------------------------------------------------------------------------
+# FEAT-181 world economy: every gold change is a double-entry posting through
+# econ_ledger (character <-> region/world treasury). These wrappers NEVER commit:
+# the caller commits the payment together with its business rows.
+# ---------------------------------------------------------------------------
+
+ECON_SOURCE_SERVICE = "locations-service"
+
+
+async def _treasury(session: AsyncSession, location_id: Optional[int], region_id: Optional[int]) -> AccountRef:
+    """Region treasury (explicit region first, else the location's), else «Казна Скитальцев»."""
+    if region_id:
+        return AccountRef.region(int(region_id))
+    return await econ_ledger.treasury_for_location(session, location_id)
+
+
+async def _character_balance(session: AsyncSession, character_id: int) -> Optional[int]:
+    row = (await session.execute(
+        text("SELECT currency_balance FROM characters WHERE id = :cid"), {"cid": character_id},
+    )).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+async def charge_character_op(
     session: AsyncSession,
     character_id: int,
     amount: int,
-    balance_after: int,
-    transaction_type: str,
-    source: Optional[str] = None,
+    *,
+    op_type: str,
+    location_id: Optional[int] = None,
+    region_id: Optional[int] = None,
     metadata: Optional[dict] = None,
-) -> None:
-    """
-    Insert a row into gold_transactions for audit/tracking.
-    Wrapped in try/except so logging never breaks existing functionality.
-    """
+    idempotency_key: Optional[str] = None,
+) -> Optional[Tuple[Optional[int], Optional[int]]]:
+    """Like charge_character, but returns (new_balance, operation_id) so the caller can
+    reverse the payment later (reverse_operation); None when the gold is not enough."""
+    if amount <= 0:
+        return await _character_balance(session, character_id), None
+    payee = await _treasury(session, location_id, region_id)
     try:
-        await session.execute(
-            text("""
-                INSERT INTO gold_transactions
-                    (character_id, amount, balance_after, transaction_type, source, metadata)
-                VALUES
-                    (:character_id, :amount, :balance_after, :transaction_type, :source, :metadata)
-            """),
-            {
-                "character_id": character_id,
-                "amount": amount,
-                "balance_after": balance_after,
-                "transaction_type": transaction_type,
-                "source": source,
-                "metadata": json.dumps(metadata) if metadata else None,
-            },
+        result = await econ_ledger.post_operation(
+            session, op_type=op_type, legs=[Leg(AccountRef.character(character_id), payee, int(amount))],
+            source_service=ECON_SOURCE_SERVICE, location_id=location_id,
+            region_id=payee.ref_id if payee.kind == econ_core.KIND_REGION_TREASURY else None,
+            metadata=metadata, idempotency_key=idempotency_key,
         )
-        await session.commit()
-    except Exception:
-        logger.exception("Failed to log gold transaction for character %s", character_id)
-
-
-async def deduct_currency(
-    session: AsyncSession,
-    character_id: int,
-    amount: int,
-    transaction_type: str = "shop_purchase",
-    source: Optional[str] = None,
-    metadata: Optional[dict] = None,
-) -> Optional[int]:
-    """
-    Atomically deduct currency from character. Returns new balance or None if insufficient.
-    Uses direct SQL UPDATE with WHERE check for atomicity in the shared DB.
-    Logs the transaction into gold_transactions.
-    """
-    result = await session.execute(
-        text("""
-            UPDATE characters
-            SET currency_balance = currency_balance - :amount
-            WHERE id = :cid AND currency_balance >= :amount
-        """),
-        {"cid": character_id, "amount": amount},
-    )
-    if result.rowcount == 0:
+    except InsufficientFunds:
         return None
-    await session.commit()
+    return result.balances.get(character_id), result.operation_id
 
-    # Fetch new balance
-    bal_result = await session.execute(
-        text("SELECT currency_balance FROM characters WHERE id = :cid"),
-        {"cid": character_id},
+
+async def reverse_operation(
+    session: AsyncSession,
+    operation_id: int,
+    *,
+    op_type: str,
+    metadata: Optional[dict] = None,
+) -> econ_ledger.PostingResult:
+    """Post a new operation that mirrors every leg of `operation_id` (dst -> src, incl. its tax
+    legs), without new tax: every account ends exactly where it was before. No commit."""
+    head = (await session.execute(
+        text("SELECT location_id, region_id FROM econ_operations WHERE id = :i"), {"i": operation_id},
+    )).fetchone()
+    if head is None:
+        raise econ_ledger.EconomyError(f"operation {operation_id} not found")
+    rows = (await session.execute(text(
+        "SELECT fa.kind, fa.ref_id, ta.kind, ta.ref_id, p.amount FROM econ_postings p "
+        "JOIN econ_accounts fa ON fa.id = p.from_account_id "
+        "JOIN econ_accounts ta ON ta.id = p.to_account_id "
+        "WHERE p.operation_id = :i ORDER BY p.id"), {"i": operation_id})).fetchall()
+    legs = [Leg(AccountRef(r[2], int(r[3])), AccountRef(r[0], int(r[1])), int(r[4]), econ_core.LEG_REFUND)
+            for r in rows]
+    return await econ_ledger.post_operation(
+        session, op_type=op_type, legs=legs, source_service=ECON_SOURCE_SERVICE,
+        location_id=head[0], region_id=head[1], apply_tax=False,
+        metadata={**(metadata or {}), "reverses_operation_id": operation_id},
     )
-    row = bal_result.fetchone()
-    new_balance = row[0] if row else None
-
-    # Log gold transaction (negative amount = spend)
-    if new_balance is not None:
-        await _log_gold_transaction(
-            session,
-            character_id=character_id,
-            amount=-amount,
-            balance_after=new_balance,
-            transaction_type=transaction_type,
-            source=source,
-            metadata=metadata,
-        )
-
-    return new_balance
 
 
-async def add_currency(
+async def charge_character(
     session: AsyncSession,
     character_id: int,
     amount: int,
-    transaction_type: str = "shop_sell",
-    source: Optional[str] = None,
+    *,
+    op_type: str,
+    location_id: Optional[int] = None,
+    region_id: Optional[int] = None,
+    metadata: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
+) -> Optional[int]:
+    """Character pays `amount` into the treasury of the place. Returns the new balance, or None
+    when the character has not enough gold (nothing is moved; the caller rolls back). No commit."""
+    if amount <= 0:
+        return await _character_balance(session, character_id)
+    payee = await _treasury(session, location_id, region_id)
+    try:
+        result = await econ_ledger.post_operation(
+            session, op_type=op_type, legs=[Leg(AccountRef.character(character_id), payee, int(amount))],
+            source_service=ECON_SOURCE_SERVICE, location_id=location_id,
+            region_id=payee.ref_id if payee.kind == econ_core.KIND_REGION_TREASURY else None,
+            metadata=metadata, idempotency_key=idempotency_key,
+        )
+    except InsufficientFunds:
+        return None
+    return result.balances.get(character_id)
+
+
+async def pay_character(
+    session: AsyncSession,
+    character_id: int,
+    amount: int,
+    *,
+    op_type: str,
+    location_id: Optional[int] = None,
+    region_id: Optional[int] = None,
+    metadata: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
+) -> Optional[int]:
+    """The treasury of the place pays `amount` to the character (a treasury may go negative in
+    stage 1). Returns the new balance. Raises DuplicateOperation for a reused key. No commit."""
+    if amount <= 0:
+        return await _character_balance(session, character_id)
+    payer = await _treasury(session, location_id, region_id)
+    result = await econ_ledger.post_operation(
+        session, op_type=op_type, legs=[Leg(payer, AccountRef.character(character_id), int(amount))],
+        source_service=ECON_SOURCE_SERVICE, location_id=location_id,
+        region_id=payer.ref_id if payer.kind == econ_core.KIND_REGION_TREASURY else None,
+        metadata=metadata, idempotency_key=idempotency_key,
+    )
+    return result.balances.get(character_id)
+
+
+async def transfer_between_characters(
+    session: AsyncSession,
+    from_character_id: int,
+    to_character_id: int,
+    amount: int,
+    *,
+    op_type: str,
+    location_id: Optional[int] = None,
     metadata: Optional[dict] = None,
 ) -> Optional[int]:
-    """Add currency to character. Returns new balance. Logs the transaction."""
-    await session.execute(
-        text("""
-            UPDATE characters
-            SET currency_balance = currency_balance + :amount
-            WHERE id = :cid
-        """),
-        {"cid": character_id, "amount": amount},
-    )
-    await session.commit()
-
-    bal_result = await session.execute(
-        text("SELECT currency_balance FROM characters WHERE id = :cid"),
-        {"cid": character_id},
-    )
-    row = bal_result.fetchone()
-    new_balance = row[0] if row else None
-
-    # Log gold transaction (positive amount = earn)
-    if new_balance is not None:
-        await _log_gold_transaction(
-            session,
-            character_id=character_id,
-            amount=amount,
-            balance_after=new_balance,
-            transaction_type=transaction_type,
-            source=source,
-            metadata=metadata,
+    """Direct player -> player transfer (one operation). Returns the payer's new balance, or None
+    when the payer has not enough gold. No commit."""
+    if amount <= 0:
+        return await _character_balance(session, from_character_id)
+    try:
+        result = await econ_ledger.post_operation(
+            session, op_type=op_type,
+            legs=[Leg(AccountRef.character(from_character_id), AccountRef.character(to_character_id), int(amount))],
+            source_service=ECON_SOURCE_SERVICE, location_id=location_id, metadata=metadata,
         )
+    except InsufficientFunds:
+        return None
+    return result.balances.get(from_character_id)
 
-    return new_balance
+
+async def not_enough_gold_message(session: AsyncSession, verb: str = "Не хватает") -> str:
+    """«Не хватает золота» with the configured currency name."""
+    forms = await econ_ledger.get_currency_forms(session)
+    return f"{verb} {forms.genitive}"
+
+
+async def format_gold(session: AsyncSession, amount: int) -> str:
+    """«3 золотых» with the configured currency forms."""
+    return econ_ledger.format_currency(amount, await econ_ledger.get_currency_forms(session))
+
+
+async def _close_treasury(session: AsyncSession, source: AccountRef, target: AccountRef, metadata: dict) -> None:
+    """`treasury_closed`: move the whole balance of `source` (either sign) to `target`, deactivate `source`."""
+    lock = " FOR UPDATE" if session.get_bind().dialect.name != "sqlite" else ""
+    row = (await session.execute(
+        text("SELECT balance FROM econ_accounts WHERE kind = :kind AND ref_id = :ref_id" + lock),
+        {"kind": source.kind, "ref_id": source.ref_id},
+    )).fetchone()
+    balance = int(row[0]) if row and row[0] is not None else 0
+    if balance > 0:
+        legs = [Leg(source, target, balance)]
+    elif balance < 0:
+        legs = [Leg(target, source, -balance)]
+    else:
+        legs = []
+    if legs:
+        await econ_ledger.post_operation(
+            session, op_type=econ_core.OP_TREASURY_CLOSED, legs=legs,
+            source_service=ECON_SOURCE_SERVICE, metadata=metadata,
+        )
+    if row is not None:
+        await econ_ledger.deactivate_account(session, source)
 
 
 async def get_character_location(session: AsyncSession, character_id: int) -> Optional[int]:
@@ -5013,17 +5091,21 @@ async def check_quest_completable(session: AsyncSession, character_id: int, ques
     }
 
 
-async def complete_quest_record(session: AsyncSession, character_quest_id: int) -> None:
-    """Mark a character_quest as completed."""
-    await session.execute(
+async def complete_quest_record(session: AsyncSession, character_quest_id: int) -> bool:
+    """Mark an ACTIVE character_quest as completed (conditional, no commit).
+
+    FEAT-181: returns False when the row is no longer active — a concurrent completion
+    already took it — so the caller pays nothing. The caller commits.
+    """
+    result = await session.execute(
         text("""
             UPDATE character_quests
             SET status = 'completed', completed_at = NOW()
-            WHERE id = :cqid
+            WHERE id = :cqid AND status = 'active'
         """),
         {"cqid": character_quest_id},
     )
-    await session.commit()
+    return result.rowcount > 0
 
 
 async def auto_progress_quests(

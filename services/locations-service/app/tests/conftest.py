@@ -44,7 +44,13 @@ from database import get_db  # noqa: E402
 
 
 async def _fake_get_db():
-    yield MagicMock()
+    # Routes commit / roll back explicitly (FEAT-181: money helpers never commit),
+    # so those must be awaitable on the mock session.
+    db = MagicMock()
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    db.flush = AsyncMock()
+    yield db
 
 
 @pytest.fixture()

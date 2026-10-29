@@ -19,8 +19,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import crud  # noqa: E402
+import econ_contract_cases  # noqa: E402
 import episodes  # noqa: E402
 import houses  # noqa: E402
 import main  # noqa: E402
@@ -84,8 +86,10 @@ def api(tmp_path, monkeypatch):
         conn.execute(text("CREATE TABLE battles (id INTEGER PRIMARY KEY, status TEXT)"))
         conn.execute(text("CREATE TABLE battle_participants (battle_id INTEGER, character_id INTEGER, "
                           "dropped_out_at TIMESTAMP)"))
-        conn.execute(text("CREATE TABLE gold_transactions (id INTEGER PRIMARY KEY, character_id INTEGER, "
-                          "amount INTEGER, balance_after INTEGER, transaction_type TEXT, source TEXT, metadata TEXT)"))
+        # FEAT-181 ledger tables (characters / Regions / Districts / Locations already exist above)
+        for ddl in econ_contract_cases.SQLITE_DDL:
+            conn.execute(text(ddl))
+        conn.execute(text("INSERT INTO Countries (id, name) VALUES (1, 'Держава')"))
         # inventory-service tables the building and storage checks read
         conn.execute(text(
             "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, image TEXT, item_type TEXT DEFAULT 'resource', "
