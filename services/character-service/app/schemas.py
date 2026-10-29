@@ -1864,7 +1864,7 @@ from pydantic import Extra, StrictBool  # noqa: E402
 
 import econ_core as _econ_core  # noqa: E402
 
-ECON_MAX_POPULATION = 10_000_000
+ECON_MAX_POPULATION = 1_000_000_000        # lore population (FEAT-186); econ_regions.population INT
 ECON_MAX_PRODUCTION = 100_000
 ECON_MAX_CONSUMPTION_MULT = 10
 ECON_MAX_STOCK = 10 ** 12                  # econ_region_goods.stock DECIMAL(16,3)
@@ -1944,10 +1944,13 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "bank_resident_deposit_share": (0.0, 0.9),
     "bank_resident_loan_share": (0.0, 0.9),
     "bank_resident_adjust": (0.0, 1.0),
+    # FEAT-186 population scale: the sim uses lore population / scale
+    "population_scale": (1, 10_000),
 }
 ECON_SIM_INT_PARAMS = frozenset({
     "treasury_release_ticks", "history_retention_days",
     "bank_loan_cap_base", "bank_loan_cap_per_level", "bank_min_amount", "bank_transfer_fee_min", "bank_start_capital",
+    "population_scale",
 })
 
 
@@ -2081,6 +2084,9 @@ class EconFillRequest(BaseModel):
     treasury_to_reserve: StrictBool = True
     # FEAT-184: open banks (one-time capital seed after the treasury top-up) in capital / port regions
     open_banks: StrictBool = True
+    # FEAT-186 «Привести к масштабу»: return the purse / treasury part above the fill targets to emission
+    return_purse_excess: StrictBool = False
+    return_treasury_excess: StrictBool = False
     comment: str
 
     _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
@@ -2285,6 +2291,7 @@ class EconSimParamsIn(BaseModel):
     bank_resident_deposit_share: Optional[float] = None
     bank_resident_loan_share: Optional[float] = None
     bank_resident_adjust: Optional[float] = None
+    population_scale: Optional[int] = None
 
     class Config:
         extra = Extra.forbid

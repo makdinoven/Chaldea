@@ -36,6 +36,9 @@ import econ_tick
 import models
 from tests.econ_contract_cases import MERCHANT_SQLITE_DDL
 
+# FEAT-186: stored populations are lore numbers; the 028 seed numbers are simulated ones (x scale = lore).
+SCALE = econ_sim.DEFAULT_PARAMS.population_scale
+
 MIGRATION_PATH = os.path.join(os.path.dirname(__file__), "..", "alembic", "versions", "028_econ_living_regions.py")
 _spec = importlib.util.spec_from_file_location("migration_028_for_tick_merchants", MIGRATION_PATH)
 mig = importlib.util.module_from_spec(_spec)
@@ -101,7 +104,8 @@ def factory():
             db.add(models.EconGroupInput(group_code=group_code, input_code=input_code, ratio=ratio))
     for i, t in enumerate(mig.TEMPLATES, 1):
         db.add(models.EconRegionTemplate(code=t[0], name=t[1], description=t[2], settlement_noun=t[3],
-                                         noun_gender=t[4], default_population=t[5], tax_rate=t[6], sort_order=i))
+                                         noun_gender=t[4], default_population=t[5] * SCALE, tax_rate=t[6],
+                                         sort_order=i))
     db.flush()
     for t in mig.TEMPLATES:
         for group_code, prod, cmult in mig.template_goods(t[0]):
@@ -124,9 +128,10 @@ def _add_region(factory, region_id, template="rural"):
                    {"i": region_id, "n": f"Регион {region_id}"})
         groups = econ_tick.load_groups(db)
         tpl = db.get(models.EconRegionTemplate, template)
-        pop = tpl.default_population
+        pop = tpl.default_population // SCALE                                  # simulated population (FEAT-186)
         goods = econ_sim.starting_goods(groups, {g: (p, c) for g, p, c in mig.template_goods(template)}, pop)
-        db.add(models.EconRegion(region_id=region_id, template_code=template, population=pop, tax_rate=tpl.tax_rate))
+        db.add(models.EconRegion(region_id=region_id, template_code=template, population=pop * SCALE,
+                                 tax_rate=tpl.tax_rate))
         db.flush()
         for code, g in goods.items():
             db.add(models.EconRegionGood(region_id=region_id, group_code=code,

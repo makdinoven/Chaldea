@@ -24,6 +24,9 @@ import econ_sim
 import econ_tick
 import models
 
+# FEAT-186: stored populations are lore numbers; the 028 seed numbers are simulated ones (x scale = lore).
+SCALE = econ_sim.DEFAULT_PARAMS.population_scale
+
 MIGRATION_PATH = os.path.join(os.path.dirname(__file__), "..", "alembic", "versions", "028_econ_living_regions.py")
 _spec = importlib.util.spec_from_file_location("migration_028_for_tick", MIGRATION_PATH)
 mig = importlib.util.module_from_spec(_spec)
@@ -52,7 +55,8 @@ def factory():
             db.add(models.EconGroupInput(group_code=group_code, input_code=input_code, ratio=ratio))
     for i, t in enumerate(mig.TEMPLATES, 1):
         db.add(models.EconRegionTemplate(code=t[0], name=t[1], description=t[2], settlement_noun=t[3],
-                                         noun_gender=t[4], default_population=t[5], tax_rate=t[6], sort_order=i))
+                                         noun_gender=t[4], default_population=t[5] * SCALE, tax_rate=t[6],
+                                         sort_order=i))
     db.flush()
     for t in mig.TEMPLATES:
         for group_code, prod, cmult in mig.template_goods(t[0]):
@@ -78,10 +82,10 @@ def _add_region(factory, region_id, *, template="rural", population=None, countr
                        {"i": region_id, "n": f"Регион {region_id}", "c": country_id})
         groups = econ_tick.load_groups(db)
         tpl = db.get(models.EconRegionTemplate, template)
-        pop = tpl.default_population if population is None else population
+        pop = tpl.default_population // SCALE if population is None else population   # simulated population
         tgoods = {g: (p, c) for g, p, c in mig.template_goods(template)}
         goods = econ_sim.starting_goods(groups, tgoods, pop)
-        db.add(models.EconRegion(region_id=region_id, template_code=template, population=pop,
+        db.add(models.EconRegion(region_id=region_id, template_code=template, population=pop * SCALE,
                                  tax_rate=tpl.tax_rate))
         db.flush()
         for code, g in goods.items():
@@ -377,7 +381,7 @@ def test_failing_region_is_isolated_and_run_is_partial(factory, monkeypatch):
     purse_before = _balance(factory, "population_purse", 2)
     stock_before = _rows(factory, "SELECT group_code, stock FROM econ_region_goods WHERE region_id = 2 "
                                   "ORDER BY group_code")
-    _fail_region(monkeypatch, {2501})
+    _fail_region(monkeypatch, {2501 * SCALE})
 
     summary = econ_tick.run_tick(factory, trigger="manual", now=T0)
     assert summary.status == "partial"
@@ -401,7 +405,7 @@ def test_failing_region_is_isolated_and_run_is_partial(factory, monkeypatch):
 def test_all_regions_failing_marks_the_run_failed(factory, monkeypatch):
     _add_region(factory, 1, population=2500)
     _add_region(factory, 2, population=2501)
-    _fail_region(monkeypatch, {2500, 2501})
+    _fail_region(monkeypatch, {2500 * SCALE, 2501 * SCALE})
     summary = econ_tick.run_tick(factory, trigger="manual", now=T0)
     assert summary.status == "failed" and summary.regions_failed == 2 and summary.regions_done == 0
     assert _run_row(factory, summary.run_id)[0] == "failed"

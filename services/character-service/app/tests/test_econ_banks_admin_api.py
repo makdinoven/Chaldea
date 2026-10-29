@@ -627,3 +627,27 @@ def test_manual_run_reports_bank_counters_and_the_runs_list(api, engine):
     assert again["loans_collected"] == 0 and again["bank_failures"] == 0
     assert _q(engine, "SELECT COUNT(*) FROM econ_operations WHERE op_type = 'loan_collect'") == 1
     _ok_summary(api)
+
+
+def test_banks_live_in_regions_with_lore_populations(api, engine):
+    """FEAT-186: lore populations (4 000 000 / 1 500 000 / 120 000) at scale 100 — fill opens the banks, residents
+    deposit and borrow at simulated size, bank passes run without failures and the invariant holds."""
+    with engine.begin() as conn:
+        for region_id, population in ((10, 4_000_000), (20, 1_500_000), (30, 120_000)):
+            conn.execute(text("UPDATE econ_regions SET population = :p WHERE region_id = :r"),
+                         {"p": population, "r": region_id})
+    assert api.post(f"{BASE}/regions/fill", json=FILL).json()["banks_opened"] == [10, 20]
+    _add_deposit(engine, amount=1_000)
+    for _ in range(2):
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE econ_banks SET accrued_at = :t"),
+                         {"t": bank_crud.now_utc() - timedelta(hours=6)})
+        run = api.post(f"{BASE}/sim/run").json()
+        assert run["status"] == "done" and run["banks_processed"] == 2 and run["bank_failures"] == 0, run
+        _ok_summary(api)
+    purse = _bal(engine, "population_purse", 10)
+    deposits = int(_q(engine, "SELECT resident_deposits FROM econ_banks WHERE region_id = 10"))
+    assert purse > 0 and 0 < deposits < purse                     # residents keep a share of savings in the bank
+    assert _bal(engine, "bank", 10) >= 0 and _bal(engine, "bank", 20) >= 0
+    summary = _ok_summary(api)
+    assert summary["invariant"]["bank_deposits_expected"] == summary["invariant"]["bank_deposits_actual"]

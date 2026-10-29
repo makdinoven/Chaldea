@@ -21,6 +21,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import econ_core as core
+import econ_sim
 import econ_tick
 import economy_api
 import models
@@ -28,10 +29,18 @@ from auth_http import UserRead, get_current_user_via_http
 from main import app
 from schemas import ECON_SIM_PARAM_BOUNDS, ECON_SIM_INT_PARAMS
 
+# FEAT-186: stored populations are lore numbers; the 028 seed numbers are simulated ones (x scale = lore).
+SCALE = econ_sim.DEFAULT_PARAMS.population_scale
+
 MIGRATION_PATH = os.path.join(os.path.dirname(__file__), "..", "alembic", "versions", "028_econ_living_regions.py")
 _spec = importlib.util.spec_from_file_location("migration_028_for_regions_api", MIGRATION_PATH)
 mig = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mig)
+
+_spec032 = importlib.util.spec_from_file_location(
+    "migration_032_for_regions_api", MIGRATION_PATH.replace("028_econ_living_regions", "032_econ_population_scale"))
+mig032 = importlib.util.module_from_spec(_spec032)
+_spec032.loader.exec_module(mig032)
 
 BASE = "/characters/admin/economy"
 ALL_PERMS = ["economy:read", "economy:emit", "economy:adjust", "economy:settings"]
@@ -80,7 +89,8 @@ def engine():
             db.add(models.EconGroupInput(group_code=group_code, input_code=input_code, ratio=ratio))
     for i, t in enumerate(mig.TEMPLATES, 1):
         db.add(models.EconRegionTemplate(code=t[0], name=t[1], description=t[2], settlement_noun=t[3],
-                                         noun_gender=t[4], default_population=t[5], tax_rate=t[6], sort_order=i))
+                                         noun_gender=t[4], default_population=t[5] * SCALE, tax_rate=t[6],
+                                         sort_order=i))
     db.flush()
     for t in mig.TEMPLATES:
         for group_code, prod, cmult in mig.template_goods(t[0]):
@@ -128,8 +138,9 @@ def api(engine):
 
 @pytest.fixture
 def world(api):
-    """Region 10 fortress (3000), 20 rural with population 0, 30 agrarian (8000); 40 has no economy row."""
-    for region_id, template, population in ((10, "fortress", 3000), (20, "rural", 0), (30, "agrarian", 8000)):
+    """Region 10 fortress (lore 300 000 = sim 3000), 20 rural with population 0, 30 agrarian (lore 800 000);
+    40 has no economy row."""
+    for region_id, template, population in ((10, "fortress", 300_000), (20, "rural", 0), (30, "agrarian", 800_000)):
         resp = api.put(f"{BASE}/regions/{region_id}",
                        json={"template_code": template, "population": population, "tax_rate": 0.1})
         assert resp.status_code == 200, resp.text
@@ -183,7 +194,7 @@ GROUP_BODY = {"name": "Продовольствие", "base_price": 3, "norm_per
               "prosperity_elasticity": 0, "price_elasticity": 0.1, "inputs": []}
 TEMPLATE_BODY = {"name": "Сельская округа", "description": "Деревни", "settlement_noun": "Округа",
                  "noun_gender": "f", "default_population": 2500, "tax_rate": 0.06, "goods": []}
-REGION_BODY = {"template_code": "rural", "population": 1000, "tax_rate": 0.1}
+REGION_BODY = {"template_code": "rural", "population": 100_000, "tax_rate": 0.1}
 
 ENDPOINTS = [
     ("get", f"{BASE}/regions", None, "economy:read"),
@@ -266,7 +277,7 @@ def test_public_card_needs_no_auth(world):
 REGION_KEYS = {"region_id", "name", "country_id", "country_name", "template_code", "template_name", "population",
                "tax_rate", "stability", "prosperity", "hunger", "satisfaction", "purse", "treasury",
                "treasury_target", "last_income", "last_tax", "last_wages", "last_grant", "last_tick_at",
-               "simulated", "bank_enabled"}
+               "simulated", "bank_enabled", "sim_population"}
 GOOD_KEYS = {"group_code", "name", "production_per_1000", "consumption_mult", "stock", "norm_stock", "price_mult",
              "prev_price_mult", "last_produced", "last_consumed", "last_demand", "last_spoiled"}
 
@@ -284,6 +295,8 @@ def test_regions_list_shape_includes_every_world_region(world):
     assert items[20]["simulated"] is False                                  # population 0
     assert items[40]["simulated"] is False and items[40]["template_code"] is None
     assert items[40]["population"] == 0 and items[40]["purse"] == 0
+    assert items[10]["population"] == 300_000 and items[10]["sim_population"] == 3000   # FEAT-186 lore / scale
+    assert items[40]["sim_population"] == 0
 
 
 def test_region_detail_shape_and_404(world):
@@ -303,7 +316,7 @@ def test_region_detail_shape_and_404(world):
 def test_region_put_partial_goods_keeps_the_others(world):
     before = _goods(_region(world, 10))
     resp = world.put(f"{BASE}/regions/10", json={
-        "template_code": "fortress", "population": 3000, "tax_rate": 0.2, "stability": 40, "prosperity": 30,
+        "template_code": "fortress", "population": 300_000, "tax_rate": 0.2, "stability": 40, "prosperity": 30,
         "goods": [{"group_code": "food", "production_per_1000": 1, "consumption_mult": 2, "stock": 5}]})
     assert resp.status_code == 200, resp.text
     detail = resp.json()
@@ -320,7 +333,7 @@ def test_region_put_partial_goods_keeps_the_others(world):
 
 def test_region_put_template_change_does_not_overwrite_goods(world):
     before = _goods(_region(world, 10))
-    resp = world.put(f"{BASE}/regions/10", json={"template_code": "magic", "population": 3000, "tax_rate": 0.1})
+    resp = world.put(f"{BASE}/regions/10", json={"template_code": "magic", "population": 300_000, "tax_rate": 0.1})
     assert resp.status_code == 200
     after = _goods(resp.json())
     assert resp.json()["template_code"] == "magic"
@@ -341,7 +354,7 @@ def test_region_put_unknown_region_and_template(api):
 
 
 @pytest.mark.parametrize("patch", [
-    {"population": -1}, {"population": 10_000_001}, {"population": 1.5}, {"population": "много"},
+    {"population": -1}, {"population": 1_000_000_001}, {"population": 1.5}, {"population": "много"},
     {"population": True}, {"tax_rate": -0.01}, {"tax_rate": 0.51}, {"stability": 101}, {"stability": -1},
     {"prosperity": 100.5}, {"template_code": "<script>alert(1)</script>"},
     {"goods": [{"group_code": "gold", "production_per_1000": 1, "consumption_mult": 1}]},
@@ -358,7 +371,7 @@ def test_region_put_validation_422(world, patch):
 
 
 def test_region_put_bounds_inclusive(world):
-    resp = world.put(f"{BASE}/regions/10", json={"template_code": "fortress", "population": 10_000_000,
+    resp = world.put(f"{BASE}/regions/10", json={"template_code": "fortress", "population": 1_000_000_000,
                                                  "tax_rate": 0.5, "stability": 100, "prosperity": 0})
     assert resp.status_code == 200, resp.text
 
@@ -366,7 +379,7 @@ def test_region_put_bounds_inclusive(world):
 # --------------------------------------------------------------------------------------------- apply-template
 
 def test_apply_template_resets_stocks_and_tax(world):
-    world.put(f"{BASE}/regions/10", json={"template_code": "fortress", "population": 3000, "tax_rate": 0.3,
+    world.put(f"{BASE}/regions/10", json={"template_code": "fortress", "population": 300_000, "tax_rate": 0.3,
                                           "goods": [{"group_code": "food", "production_per_1000": 1,
                                                      "consumption_mult": 1, "stock": 1}]})
     resp = world.post(f"{BASE}/regions/10/apply-template", json={"reset_stocks": True})
@@ -377,11 +390,11 @@ def test_apply_template_resets_stocks_and_tax(world):
     assert food["production_per_1000"] == pytest.approx(tgoods["food"][0], abs=0.001)
     assert food["stock"] == pytest.approx(food["norm_stock"], abs=0.01)
     assert detail["tax_rate"] == pytest.approx(0.06)
-    assert detail["population"] == 3000                                     # kept
+    assert detail["population"] == 300_000                                  # kept
 
 
 def test_apply_template_keeps_stocks_when_asked(world):
-    world.put(f"{BASE}/regions/10", json={"template_code": "fortress", "population": 3000, "tax_rate": 0.1,
+    world.put(f"{BASE}/regions/10", json={"template_code": "fortress", "population": 300_000, "tax_rate": 0.1,
                                           "goods": [{"group_code": "food", "production_per_1000": 1,
                                                      "consumption_mult": 1, "stock": 1}]})
     resp = world.post(f"{BASE}/regions/10/apply-template", json={"reset_stocks": False})
@@ -408,7 +421,10 @@ def test_fill_shape_and_idempotent_top_up(world, engine):
     assert resp.status_code == 200, resp.text
     first = resp.json()
     assert set(first) == {"regions", "operation_id", "operation_ids", "emitted", "emitted_purses",
-                          "emitted_treasuries", "skipped_no_population", "banks_opened"}
+                          "emitted_treasuries", "skipped_no_population", "banks_opened", "returned",
+                          "returned_purses", "returned_treasuries", "resident_deposits_out",
+                          "resident_loans_repaid"}
+    assert first["returned"] == first["returned_purses"] == first["returned_treasuries"] == 0
     assert first["regions"] == 3
     assert first["skipped_no_population"] == [20]
     assert len(first["operation_ids"]) == 2 and first["operation_id"] == first["operation_ids"][-1]
@@ -456,6 +472,56 @@ def test_fill_tops_up_only_the_missing_amount(world, engine):
     _assert_ledger_closes(engine, world)
 
 
+def _set_scale(api, scale):
+    resp = api.put(f"{BASE}/sim", json={"tick_enabled": True, "params": {"population_scale": scale}})
+    assert resp.status_code == 200, resp.text
+
+
+def test_fill_brings_an_old_scale_world_to_the_new_scale(world, engine):
+    """FEAT-186 «Привести к масштабу»: a world filled at scale 1 (prod before the feature) shrinks to scale 100."""
+    _set_scale(world, 1)
+    world.post(f"{BASE}/regions/fill", json=FILL)
+    old_target = _balance(engine, "population_purse", 10)                       # the scale-1 purse target
+    world.post(f"{BASE}/sim/run")
+    old_norm = _goods(_region(world, 10))["food"]["norm_stock"]
+    old_purse = _balance(engine, "population_purse", 10)
+    issued_before = -_balance(engine, "emission", 0)
+    _set_scale(world, 100)
+
+    # without the flags the excess stays (old behaviour)
+    plain = world.post(f"{BASE}/regions/fill", json={**FILL, "region_ids": [10]}).json()
+    assert plain["returned"] == 0 and _balance(engine, "population_purse", 10) >= old_purse
+
+    body = {**FILL, "return_purse_excess": True, "return_treasury_excess": True}
+    resp = world.post(f"{BASE}/regions/fill", json=body)
+    assert resp.status_code == 200, resp.text
+    res = resp.json()
+    assert res["returned_purses"] > 0 and res["returned_treasuries"] > 0
+    assert res["returned"] == res["returned_purses"] + res["returned_treasuries"]
+    detail = _region(world, 10)
+    food = _goods(detail)["food"]
+    assert food["norm_stock"] == pytest.approx(old_norm / 100, rel=0.01)       # norms for the scaled population
+    assert food["stock"] == pytest.approx(food["norm_stock"], abs=0.01)
+    assert abs(_balance(engine, "population_purse", 10) - old_target / 100) <= 1  # purse at the new target
+    assert _balance(engine, "region_treasury", 10) == detail["treasury_target"]
+    assert -_balance(engine, "emission", 0) == issued_before + plain["emitted"] + res["emitted"] - res["returned"]
+    legs = _q(engine, "SELECT COUNT(*) FROM econ_postings p JOIN econ_accounts a ON a.id = p.to_account_id "
+                      "JOIN econ_operations o ON o.id = p.operation_id "
+                      "WHERE a.kind = 'emission' AND o.op_type = 'admin_emission'")
+    assert legs >= 2                                                              # purse and treasury -> emission
+    _assert_ledger_closes(engine, world)
+
+    again = world.post(f"{BASE}/regions/fill", json=body).json()                 # safe to press twice
+    assert again["returned"] == 0 and again["emitted"] == 0 and again["operation_ids"] == []
+    _assert_ledger_closes(engine, world)
+
+
+def test_fill_return_flags_validation(world):
+    for bad in ("yes", 1, None):
+        resp = world.post(f"{BASE}/regions/fill", json={**FILL, "return_purse_excess": bad})
+        assert resp.status_code == 422
+
+
 def test_fill_without_treasury_reserve(world, engine):
     resp = world.post(f"{BASE}/regions/fill", json={**FILL, "treasury_to_reserve": False})
     assert resp.status_code == 200, resp.text
@@ -477,8 +543,8 @@ def test_fill_population_from_template_only_for_empty_rows(world, engine):
     resp = world.post(f"{BASE}/regions/fill", json={**FILL, "population_from_template": True})
     assert resp.status_code == 200, resp.text
     assert resp.json()["skipped_no_population"] == []
-    assert _region(world, 20)["population"] == 2500                         # rural default
-    assert _region(world, 10)["population"] == 3000                         # kept
+    assert _region(world, 20)["population"] == 250_000                      # rural default (lore)
+    assert _region(world, 10)["population"] == 300_000                      # kept
     assert _balance(engine, "population_purse", 20) > 0
     _assert_ledger_closes(engine, world)
 
@@ -591,7 +657,8 @@ def test_templates_list_shape(api):
     items = api.get(f"{BASE}/templates").json()["items"]
     assert [t["code"] for t in items] == [t[0] for t in mig.TEMPLATES]
     assert set(items[0]) == {"code", "name", "description", "settlement_noun", "noun_gender", "default_population",
-                             "tax_rate", "sort_order", "updated_at", "goods"}
+                             "tax_rate", "sort_order", "updated_at", "goods", "default_sim_population"}
+    assert items[0]["default_sim_population"] == items[0]["default_population"] / SCALE
     assert [g["group_code"] for g in items[0]["goods"]] == list(core.GOODS_GROUPS)
 
 
@@ -616,7 +683,7 @@ def test_template_unknown_404(api):
 @pytest.mark.parametrize("patch", [
     {"name": "<script>alert(1)</script>"}, {"description": "<b>жирный</b>"}, {"settlement_noun": "Город>"},
     {"settlement_noun": ""}, {"settlement_noun": "x" * 51}, {"noun_gender": "x"}, {"noun_gender": None},
-    {"default_population": -1}, {"default_population": 10_000_001}, {"default_population": 2.5},
+    {"default_population": -1}, {"default_population": 1_000_000_001}, {"default_population": 2.5},
     {"tax_rate": 0.51}, {"tax_rate": -0.1}, {"description": "x" * 501},
     {"goods": [{"group_code": "gold", "production_per_1000": 1, "consumption_mult": 1}]},
     {"goods": [{"group_code": "food", "production_per_1000": 1, "consumption_mult": 10.5}]},
@@ -936,7 +1003,7 @@ def test_card_shape_has_no_money_numbers(world):
 
 
 def test_card_participating_false(world):
-    world.put(f"{BASE}/regions/30", json={"template_code": None, "population": 8000, "tax_rate": 0.1})
+    world.put(f"{BASE}/regions/30", json={"template_code": None, "population": 800_000, "tax_rate": 0.1})
     client = TestClient(app)
     for region_id in (20, 30, 40, 999, 0, -5):                # pop 0, no template, no row, unknown, bad ids
         resp = client.get(f"/characters/economy/regions/{region_id}/card")
@@ -949,3 +1016,246 @@ def test_card_before_any_tick(world):
     card = TestClient(app).get("/characters/economy/regions/30/card").json()
     assert card["participating"] is True and card["updated_at"] is None
     assert card["food"]["label"] == "Край сыт"                               # agrarian noun, masculine
+
+
+# --------------------------------------------------------------------------------------------- FEAT-186 Q1: prod rescale
+
+# Lore populations as they are on prod (120 000 … 4 000 000).
+LORE_WORLD = ((10, "capital", 4_000_000), (20, "port", 1_500_000), (30, "rural", 120_000))
+RESCALE = {**FILL, "reset_stocks": True, "return_purse_excess": True, "return_treasury_excess": True}
+
+
+def _lore_world(api):
+    for region_id, template, population in LORE_WORLD:
+        resp = api.put(f"{BASE}/regions/{region_id}",
+                       json={"template_code": template, "population": population, "tax_rate": 0.1})
+        assert resp.status_code == 200, resp.text
+
+
+def _run_ok(api):
+    resp = api.post(f"{BASE}/sim/run")
+    assert resp.status_code == 200, resp.text
+    run = resp.json()
+    assert run["status"] == "done" and run["regions_failed"] == 0, run
+    return run
+
+
+def _money(engine, region_id):
+    return _balance(engine, "population_purse", region_id), _balance(engine, "region_treasury", region_id)
+
+
+def _op_legs(engine, operation_ids):
+    with engine.connect() as conn:
+        return [tuple(r) for op_id in operation_ids for r in conn.execute(text(
+            "SELECT fa.kind, ta.kind FROM econ_postings p JOIN econ_accounts fa ON fa.id = p.from_account_id "
+            "JOIN econ_accounts ta ON ta.id = p.to_account_id WHERE p.operation_id = :o"), {"o": op_id}).fetchall()]
+
+
+def test_prod_rescale_scale_1_world_to_scale_100(world, engine):
+    """Prod before FEAT-186: lore populations ticked at scale 1 (purses and norms x100). The admin switches the scale
+    to 100 and presses «Заполнить» with «Привести к масштабу»: everything lands on the scale-100 targets."""
+    _set_scale(world, 1)
+    _lore_world(world)
+    world.post(f"{BASE}/regions/fill", json=FILL)
+    old = {rid: (_money(engine, rid)[0], _goods(_region(world, rid))) for rid, _t, _p in LORE_WORLD}
+    for _ in range(3):
+        _run_ok(world)
+    huge = {rid: _money(engine, rid) for rid, _t, _p in LORE_WORLD}
+    _assert_ledger_closes(engine, world)
+
+    _set_scale(world, 100)
+    regions = {r["region_id"]: r for r in world.get(f"{BASE}/regions").json()["items"]}
+    for rid, _t, pop in LORE_WORLD:
+        assert regions[rid]["population"] == pop and regions[rid]["sim_population"] == pop / 100
+    issued = -_balance(engine, "emission", 0)
+    resp = world.post(f"{BASE}/regions/fill", json=RESCALE)
+    assert resp.status_code == 200, resp.text
+    res = resp.json()
+    assert res["regions"] == 3 and res["skipped_no_population"] == [] and len(res["operation_ids"]) == 3
+    assert res["returned_purses"] > 0 and res["returned_treasuries"] > 0
+    assert res["returned"] == res["returned_purses"] + res["returned_treasuries"]
+    assert -_balance(engine, "emission", 0) == issued + res["emitted"] - res["returned"]
+    for rid, _t, _p in LORE_WORLD:
+        purse, treasury = _money(engine, rid)
+        old_purse, old_goods = old[rid]
+        detail = _region(world, rid)
+        assert purse < huge[rid][0] and abs(purse - old_purse / 100) <= max(2, old_purse * 1e-4), rid
+        assert treasury == detail["treasury_target"] >= 0
+        for code, good in _goods(detail).items():
+            assert good["stock"] == pytest.approx(good["norm_stock"], abs=0.01)
+            assert good["price_mult"] == pytest.approx(1.0)
+            assert good["norm_stock"] == pytest.approx(old_goods[code]["norm_stock"] / 100, rel=0.01, abs=0.02)
+    _assert_ledger_closes(engine, world)
+
+    again = world.post(f"{BASE}/regions/fill", json=RESCALE).json()          # a second click moves nothing
+    assert (again["emitted"], again["returned"], again["operation_ids"]) == (0, 0, [])
+    settled = {rid: _money(engine, rid) for rid, _t, _p in LORE_WORLD}
+
+    for _ in range(4):                                                        # the world keeps living at scale 100
+        _run_ok(world)
+        _assert_ledger_closes(engine, world)
+    for rid, _t, _p in LORE_WORLD:
+        detail = _region(world, rid)
+        assert detail["hunger"] <= 0.2, (rid, detail["hunger"])
+        purse, treasury = _money(engine, rid)
+        assert 0 < purse < 3 * settled[rid][0] and treasury >= 0, (rid, purse, settled[rid])
+
+
+def test_rescale_flags_alone_only_return_and_world_sum_stays_zero(world, engine):
+    _set_scale(world, 1)
+    _lore_world(world)
+    world.post(f"{BASE}/regions/fill", json=FILL)
+    _run_ok(world)
+    _set_scale(world, 100)
+    body = {**FILL, "fund_purses": False, "treasury_to_reserve": False, "open_banks": False,
+            "return_purse_excess": True, "return_treasury_excess": True}
+    res = world.post(f"{BASE}/regions/fill", json=body).json()
+    assert res["emitted"] == 0 and res["returned"] > 0
+    legs = _op_legs(engine, res["operation_ids"])
+    assert legs and all(to == "emission" and src in ("population_purse", "region_treasury") for src, to in legs)
+    _assert_ledger_closes(engine, world)
+    assert world.post(f"{BASE}/regions/fill", json=body).json()["operation_ids"] == []
+
+
+def test_return_flags_do_not_touch_a_region_below_its_target(world, engine):
+    """Already at scale 100 and poorer than the targets: «Привести к масштабу» only tops up, never returns."""
+    world.post(f"{BASE}/regions/fill", json={**FILL, "fund_purses": False, "treasury_to_reserve": False})
+    res = world.post(f"{BASE}/regions/fill", json=RESCALE).json()
+    assert res["returned"] == 0 and res["emitted_purses"] > 0
+    assert all(to != "emission" for _src, to in _op_legs(engine, res["operation_ids"]))
+    _assert_ledger_closes(engine, world)
+
+
+def test_population_scale_change_at_runtime(world, engine):
+    world.post(f"{BASE}/regions/fill", json=FILL)
+    _run_ok(world)
+    produced_100 = _goods(_region(world, 10))["food"]["last_produced"]
+    _set_scale(world, 200)
+    assert world.get(f"{BASE}/sim").json()["params"]["population_scale"] == 200
+    assert _region(world, 10)["sim_population"] == 300_000 / 200
+    _run_ok(world)
+    produced_200 = _goods(_region(world, 10))["food"]["last_produced"]
+    assert 0 < produced_200 < produced_100 * 0.75                              # the economy shrank right away
+    _assert_ledger_closes(engine, world)
+
+
+@pytest.mark.parametrize("bad", [0, -1, 10_001, 1.5, "сто", True])
+def test_population_scale_bad_values_422_and_nothing_stored(api, bad):
+    resp = api.put(f"{BASE}/sim", json={"tick_enabled": True, "params": {"population_scale": bad}})
+    assert resp.status_code == 422, (bad, resp.text)
+    assert api.get(f"{BASE}/sim").json()["params"]["population_scale"] == 100
+
+
+def test_population_scale_null_keeps_the_stored_value(api):
+    """``null`` in a partial params update means «not sent» (like every other knob): the stored scale stays."""
+    _set_scale(api, 250)
+    resp = api.put(f"{BASE}/sim", json={"tick_enabled": True, "params": {"population_scale": None}})
+    assert resp.status_code == 200 and resp.json()["params"]["population_scale"] == 250
+
+
+@pytest.mark.parametrize("population", [1, 50, 99])
+def test_region_below_one_simulated_inhabitant_fills_and_ticks(world, engine, population):
+    world.put(f"{BASE}/regions/30", json={"template_code": "rural", "population": population, "tax_rate": 0.1})
+    resp = world.post(f"{BASE}/regions/fill", json=RESCALE)
+    assert resp.status_code == 200, resp.text
+    assert 30 not in resp.json()["skipped_no_population"]
+    assert _region(world, 30)["sim_population"] == population / 100
+    for _ in range(3):
+        _run_ok(world)
+    detail = _region(world, 30)
+    assert 0 <= detail["hunger"] <= 1 and 0 <= detail["stability"] <= 100
+    assert all(g["stock"] >= 0 and g["norm_stock"] >= 0 for g in detail["goods"])
+    _assert_ledger_closes(engine, world)
+    card = TestClient(app).get("/characters/economy/regions/30/card")
+    assert card.status_code == 200 and card.json()["participating"] is True
+
+
+@pytest.mark.parametrize("key", ["return_purse_excess", "return_treasury_excess"])
+@pytest.mark.parametrize("bad", ["true", 1, 0, None, [], {}])
+def test_fill_return_flags_strict_bool(world, engine, key, bad):
+    assert world.post(f"{BASE}/regions/fill", json={**FILL, key: bad}).status_code == 422
+    assert _ops(engine) == 0
+
+
+@pytest.mark.parametrize("perms", [["economy:settings"], ["economy:emit"], ["economy:read"], []])
+def test_rescale_fill_keeps_the_settings_and_emit_rbac(world, engine, perms):
+    _as_user(perms)
+    resp = TestClient(app).post(f"{BASE}/regions/fill", json=RESCALE)
+    assert resp.status_code == 403 and resp.json()["detail"] == "Недостаточно прав"
+    assert _ops(engine) == 0
+    app.dependency_overrides.pop(get_current_user_via_http, None)
+    assert TestClient(app).post(f"{BASE}/regions/fill", json=RESCALE).status_code == 401
+    assert _ops(engine) == 0
+
+
+def _region_templates(engine):
+    """Templates as migration 032 leaves untouched ones: «… регион», noun «Регион» (m)."""
+    with engine.begin() as conn:
+        for code, (_old, new) in mig032.TEMPLATE_TEXTS.items():
+            conn.execute(text("UPDATE econ_region_templates SET name = :n, description = :d, settlement_noun = :s, "
+                              "noun_gender = :g WHERE code = :c"),
+                         {"n": new[0], "d": new[1], "s": new[2], "g": new[3], "c": code})
+
+
+def test_card_phrases_say_region_with_lore_populations(world, engine):
+    _region_templates(engine)
+    _lore_world(world)
+    world.post(f"{BASE}/regions/fill", json=FILL)
+    client = TestClient(app)
+    for rid, _t, _p in LORE_WORLD:
+        card = client.get(f"/characters/economy/regions/{rid}/card").json()
+        assert card["food"]["label"] == "Регион сыт", card
+        assert card["prosperity"]["label"].endswith("регион")
+        assert "population" not in str(card)
+    _run_ok(world)
+    for rid, _t, _p in LORE_WORLD:
+        label = client.get(f"/characters/economy/regions/{rid}/card").json()["food"]["label"]
+        assert label.startswith("Регион") and "Город" not in label
+    templates = {t["code"]: t for t in world.get(f"{BASE}/templates").json()["items"]}
+    assert templates["capital"]["name"] == "Столичный регион"
+    assert templates["capital"]["default_population"] == 2_500_000
+    assert templates["capital"]["default_sim_population"] == 25_000
+
+
+def _age_banks(engine, hours=6):
+    """Pretend ``hours`` passed for the banks (residents move savings once per period)."""
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE econ_banks SET accrued_at = :t"),
+                     {"t": econ_tick._utcnow() - __import__("datetime").timedelta(hours=hours)})
+
+
+def _resident(engine, region_id):
+    with engine.connect() as conn:
+        return tuple(int(v) for v in conn.execute(text(
+            "SELECT resident_deposits, resident_loans FROM econ_banks WHERE region_id = :r"), {"r": region_id}).one())
+
+
+def test_prod_rescale_with_living_banks(world, engine):
+    """FEAT-184 banks in a lore world ticked at scale 1: residents keep a share of their (x100) savings in the bank.
+    After «Привести к масштабу» the purse is at the scale-100 target; the next bank periods must not pour the old
+    x100 resident deposits back into the purse (hunger / prices stay sane, money is conserved)."""
+    _set_scale(world, 1)
+    _lore_world(world)
+    assert world.post(f"{BASE}/regions/fill", json=FILL).json()["banks_opened"] == [10, 20]
+    for _ in range(3):
+        _age_banks(engine)
+        _run_ok(world)
+    big_deposits = _resident(engine, 10)[0]
+    assert big_deposits > 0
+    _set_scale(world, 100)
+    res = world.post(f"{BASE}/regions/fill", json=RESCALE).json()
+    target = _money(engine, 10)[0]
+    assert res["resident_deposits_out"] > 0
+    deposits_after = _resident(engine, 10)[0]
+    assert deposits_after < big_deposits and deposits_after <= target       # residents' bank savings rescaled too
+    _assert_ledger_closes(engine, world)
+    again = world.post(f"{BASE}/regions/fill", json=RESCALE).json()             # idempotent
+    assert again["resident_deposits_out"] == again["resident_loans_repaid"] == again["returned"] == 0
+    assert again["operation_ids"] == []
+    for _ in range(4):
+        _age_banks(engine)
+        _run_ok(world)
+        _assert_ledger_closes(engine, world)
+    purse = _money(engine, 10)[0]
+    assert _region(world, 10)["hunger"] <= 0.2
+    assert purse <= 3 * target, (purse, target, big_deposits, _resident(engine, 10))

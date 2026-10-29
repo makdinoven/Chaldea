@@ -505,3 +505,19 @@ def test_fund_with_xss_comment_is_stored_verbatim(api, engine):
     resp = api.post(FUND_URL, json={"comment": payload, "region_ids": [20]})
     assert resp.status_code == 200
     assert _q(engine, "SELECT comment FROM econ_operations WHERE id = :i", i=resp.json()["operation_ids"][0]) == payload
+
+
+def test_merchants_trade_in_regions_with_lore_populations(api, engine):
+    """FEAT-186: residents of lore-sized regions (300 000 / 250 000 at scale 100) still buy from the merchants."""
+    for region_id, template, population in ((10, "fortress", 300_000), (20, "rural", 250_000)):
+        resp = api.put(f"{BASE}/regions/{region_id}",
+                       json={"template_code": template, "population": population, "tax_rate": 0.1})
+        assert resp.status_code == 200, resp.text
+    assert api.post(f"{BASE}/regions/fill", json={"comment": "Заполнение для теста"}).status_code == 200
+    assert api.post(FUND_URL, json=FUND).status_code == 200
+    summary = econ_tick.run_tick(engine.factory, trigger="manual")
+    assert summary.status == "done" and summary.merchant_ops_posted >= 1
+    trade = _items(api.get(LIST_URL))[31]["last_trade"]
+    assert trade is not None and trade["sold_items"] > 0 and trade["sold_value"] > 0
+    assert _q(engine, "SELECT COUNT(*) FROM characters WHERE currency_balance < 0") == 0
+    _assert_invariant(engine, api)

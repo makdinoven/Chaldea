@@ -42,10 +42,13 @@ def _template_goods(code):
 
 
 def _fresh(code, population=None):
-    """(region, goods, purse) of a freshly applied template: stock = norm, prices x1, purse = 7 days of needs."""
+    """(region, goods, purse) of a freshly applied template: stock = norm, prices x1, purse = 7 days of needs.
+
+    ``population`` / the 028 seed are simulated populations; the region carries the lore number (x scale, FEAT-186).
+    """
     pop = population if population is not None else TEMPLATES[code]["pop"]
     goods = S.starting_goods(GROUPS, _template_goods(code), pop)
-    region = S.RegionState(population=pop, tax_rate=TEMPLATES[code]["tax"])
+    region = S.RegionState(population=pop * P.population_scale, tax_rate=TEMPLATES[code]["tax"])
     return region, goods, S.starting_purse(GROUPS, goods, pop)
 
 
@@ -56,10 +59,11 @@ def _finite(*values):
 # --------------------------------------------------------------------------------------------- params / seed
 
 def test_default_params_match_the_migration_seed():
-    # FEAT-183 merchant / FEAT-184 bank keys are newer than the 028 seed (no migration): missing keys use the
-    # SimParams defaults.
+    # FEAT-183 merchant / FEAT-184 bank / FEAT-186 population_scale keys are newer than the 028 seed (no
+    # migration): missing keys use the SimParams defaults.
     defaults = S.SimParams().to_dict()
-    seeded = {k: v for k, v in defaults.items() if not k.startswith(("merchant_", "bank_"))}
+    seeded = {k: v for k, v in defaults.items()
+              if not k.startswith(("merchant_", "bank_")) and k != "population_scale"}
     assert seeded == pytest.approx(mig.DEFAULT_PARAMS)
     assert S.SimParams.from_mapping(mig.DEFAULT_PARAMS) == S.SimParams()
 
@@ -143,13 +147,13 @@ def test_starting_goods_have_stock_at_norm_and_neutral_prices():
 # --------------------------------------------------------------------------------------------- production chains
 
 def _rich_purse(region, goods):
-    return int(S.needs_cost_day(GROUPS, goods, region.population, params=P, base_prices=True) * 100)
+    return int(S.needs_cost_day(GROUPS, goods, S.sim_population(region.population), params=P, base_prices=True) * 100)
 
 
 def test_chain_production_is_limited_by_input_stock():
     region, goods, _purse = _fresh("fortress")
     goods["ore_metal"].stock = 1.5                                       # enough for half a weapon
-    potential_weapons = goods["weapons"].production_per_1000 * region.population / 1000 * P.dt
+    potential_weapons = goods["weapons"].production_per_1000 * S.sim_population(region.population) / 1000 * P.dt
     assert potential_weapons > 0.5
     goods["armor"].production_per_1000 = 0.0
     goods["jewelry"].production_per_1000 = 0.0
@@ -220,7 +224,7 @@ def test_full_purse_and_stock_means_no_hunger():
 
 def test_half_affordability_shows_as_hunger():
     region, goods, _purse = _fresh("port")
-    cost = S.needs_cost_day(GROUPS, goods, region.population, region.prosperity, P)
+    cost = S.needs_cost_day(GROUPS, goods, S.sim_population(region.population), region.prosperity, P)
     result = S.simulate_region(region, goods, GROUPS, purse=int(cost * 0.5), treasury=0)
     assert result.affordability == pytest.approx(0.5, abs=1e-3)
     assert result.region.hunger == pytest.approx(0.5, abs=0.01)

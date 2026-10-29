@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 import econ_core as core
 import econ_ledger
+import econ_bank
 import econ_sim
 import econ_tick
 import economy_bank_crud
@@ -98,13 +99,16 @@ def _round(value: float, scale: int):
 
 
 def _recompute_norms(goods_rows: Dict[str, "models.EconRegionGood"], groups: Dict[str, econ_sim.GroupDef],
-                     population: int, reset_stocks: bool = False) -> None:
-    """Norm stock of every row from the current production/consumption; ``reset_stocks`` → stock = norm, price ×1."""
+                     population: int, params: econ_sim.SimParams, reset_stocks: bool = False) -> None:
+    """Norm stock of every row from the current production/consumption; ``reset_stocks`` → stock = norm, price ×1.
+
+    ``population`` is the lore number; norms are computed for the simulated one (FEAT-186 ``population_scale``)."""
+    sim_pop = econ_sim.sim_population(population, params)
     states = {code: econ_tick.good_state(row) for code, row in goods_rows.items() if code in groups}
     for code, row in goods_rows.items():
         if code not in groups:
             continue
-        norm = econ_sim.norm_stock(code, groups, states, population)
+        norm = econ_sim.norm_stock(code, groups, states, sim_pop)
         row.norm_stock = _round(norm, _SCALE_STOCK)
         if reset_stocks:
             row.stock = _round(norm, _SCALE_STOCK)
@@ -113,8 +117,8 @@ def _recompute_norms(goods_rows: Dict[str, "models.EconRegionGood"], groups: Dic
 
 
 def _apply_template_goods(db: Session, region: "models.EconRegion", groups: Dict[str, econ_sim.GroupDef],
-                          template_goods: Dict[str, Tuple[float, float]], reset_stocks: bool
-                          ) -> Dict[str, "models.EconRegionGood"]:
+                          template_goods: Dict[str, Tuple[float, float]], reset_stocks: bool,
+                          params: econ_sim.SimParams) -> Dict[str, "models.EconRegionGood"]:
     """Copy production/consumption of the template into all 12 goods rows (rows created when missing)."""
     rows = _goods_rows(db, int(region.region_id))
     for code in groups:
@@ -128,7 +132,7 @@ def _apply_template_goods(db: Session, region: "models.EconRegion", groups: Dict
             rows[code] = row
         row.production_per_1000 = _round(production, 3)
         row.consumption_mult = _round(cmult, 3)
-    _recompute_norms(rows, groups, _i(region.population), reset_stocks=reset_stocks)
+    _recompute_norms(rows, groups, _i(region.population), params, reset_stocks=reset_stocks)
     db.flush()
     return rows
 
@@ -167,7 +171,8 @@ LEFT JOIN econ_region_templates t ON t.code = e.template_code
 """
 
 
-def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int], banks: Iterable[int] = ()) -> dict:
+def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int], banks: Iterable[int] = (),
+                 params: econ_sim.SimParams = econ_sim.DEFAULT_PARAMS) -> dict:
     region_id = int(row[0])
     has_econ = row[6] is not None
     population = _i(row[6])
@@ -178,7 +183,8 @@ def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int], banks:
         "country_name": row[3],
         "template_code": row[4],
         "template_name": row[5],
-        "population": population,
+        "population": population,                 # lore number (FEAT-186)
+        "sim_population": round(econ_sim.sim_population(population, params), 2),   # what the sim computes with
         "tax_rate": _f(row[7]) if has_econ else 0.1,
         "stability": _f(row[8]) if has_econ else 70.0,
         "prosperity": _f(row[9]) if has_econ else 50.0,
@@ -202,7 +208,8 @@ def list_regions(db: Session) -> List[dict]:
     treasuries = _balances(db, core.KIND_REGION_TREASURY)
     rows = db.execute(text(SQL_REGIONS + " ORDER BY co.name, r.name, r.id")).fetchall()
     banks = economy_bank_crud.enabled_bank_ids(db)
-    return [_region_item(row, purses, treasuries, banks) for row in rows]
+    params = econ_tick.load_params(db)
+    return [_region_item(row, purses, treasuries, banks, params) for row in rows]
 
 
 def get_region(db: Session, region_id: int) -> dict:
@@ -212,7 +219,7 @@ def get_region(db: Session, region_id: int) -> dict:
     purse = econ_tick.account_balance(db, core.AccountRef.purse(region_id))
     treasury = econ_tick.account_balance(db, core.AccountRef.region(region_id))
     item = _region_item(row, {region_id: purse}, {region_id: treasury},
-                        economy_bank_crud.enabled_bank_ids(db, [region_id]))
+                        economy_bank_crud.enabled_bank_ids(db, [region_id]), econ_tick.load_params(db))
     groups = econ_tick.load_groups(db)
     rows = _goods_rows(db, region_id)
     order = list(groups) + sorted(code for code in rows if code not in groups)
@@ -260,8 +267,10 @@ def update_region(db: Session, region_id: int, body) -> dict:
     db.flush()
 
     rows = _goods_rows(db, region_id)
+    params = econ_tick.load_params(db)
     if not rows and body.template_code is not None:
-        rows = _apply_template_goods(db, region, groups, _template_goods(db, body.template_code), reset_stocks=True)
+        rows = _apply_template_goods(db, region, groups, _template_goods(db, body.template_code), reset_stocks=True,
+                                     params=params)
 
     for good in body.goods or []:
         row = rows.get(good.group_code)
@@ -275,7 +284,7 @@ def update_region(db: Session, region_id: int, body) -> dict:
         row.consumption_mult = _round(good.consumption_mult, 3)
         if good.stock is not None:
             row.stock = _round(good.stock, _SCALE_STOCK)
-    _recompute_norms(rows, groups, int(region.population))
+    _recompute_norms(rows, groups, int(region.population), params)
     db.flush()
     return get_region(db, region_id)
 
@@ -290,7 +299,8 @@ def apply_template(db: Session, region_id: int, reset_stocks: bool) -> dict:
     if template is None:
         raise EconomyApiError(400, ERR_TEMPLATE_UNKNOWN)
     region.tax_rate = template.tax_rate
-    _apply_template_goods(db, region, econ_tick.load_groups(db), _template_goods(db, template.code), reset_stocks)
+    _apply_template_goods(db, region, econ_tick.load_groups(db), _template_goods(db, template.code), reset_stocks,
+                          econ_tick.load_params(db))
     return get_region(db, region_id)
 
 
@@ -321,13 +331,22 @@ def region_history(db: Session, region_id: int, limit: int) -> List[dict]:
 
 def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_from_template: bool,
                  reset_stocks: bool, fund_purses: bool, treasury_to_reserve: bool, comment: str,
-                 actor_user_id: Optional[int], open_banks: bool = False) -> dict:
+                 actor_user_id: Optional[int], open_banks: bool = False, return_purse_excess: bool = False,
+                 return_treasury_excess: bool = False) -> dict:
     """Apply template goods (stocks → norm), optionally population from the template (rows with population 0), and
     top up money via admin emission: the population purse to ``starting_purse`` and (``treasury_to_reserve``, added
     by B6) the region treasury to its wage reserve target. Top-up = ``max(0, target − balance)``, so a re-click emits 0.
 
     One ``admin_emission`` operation per region (tagged with the region, so the journal filters by region), key
     ``econ_fill:r:<region>:p<last purse posting>:t<last treasury posting>`` — stable for a given account state.
+
+    FEAT-186 «Привести к масштабу»: ``return_purse_excess`` / ``return_treasury_excess`` move the part of the purse /
+    region treasury above the same targets back into ``emission`` (legs ``purse → emission`` / ``treasury → emission``
+    of the same ``admin_emission`` operation). With ``return_purse_excess`` the residents' positions in an existing
+    bank are first brought to the scaled targets (``econ_bank.resident_rescale``: deposits above target ``bank → purse``,
+    loans above target repaid ``purse → bank``, netted into one leg of that operation; player deposits / the vault are
+    not touched). Together with the top-up the balance ends exactly at the target, so a
+    second click moves nothing; the world sum stays 0 (money only leaves through the source account).
     """
     lock_sql = "SELECT region_id FROM econ_regions WHERE "
     params: dict = {}
@@ -360,12 +379,16 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
     templates = _templates(db)
     country_tax_rate = float(econ_ledger.get_economy_settings(db).country_tax_rate)
     bank_targets = _bank_targets(targets, templates, population_from_template) if open_banks else []
-    # FEAT-184 lock order: econ_banks before any account the fill's postings lock.
-    bank_rows = economy_bank_crud.lock_banks(db, bank_targets)
+    # FEAT-184 lock order: econ_banks before any account the fill's postings lock. FEAT-186: the rescale also
+    # touches the residents' positions of every target region's existing bank.
+    lock_ids = set(bank_targets) | ({int(r.region_id) for r in targets} if return_purse_excess else set())
+    bank_rows = economy_bank_crud.lock_banks(db, lock_ids)
 
     processed, skipped = 0, []
     operation_ids: List[int] = []
     emitted_purses = emitted_treasuries = 0
+    returned_purses = returned_treasuries = 0
+    returned_bank_deposits = repaid_bank_loans = 0
     for region in targets:
         template = templates.get(region.template_code)
         if template is None:
@@ -373,7 +396,8 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
         region_id = int(region.region_id)
         if population_from_template and _i(region.population) == 0:
             region.population = int(template.default_population)
-        rows = _apply_template_goods(db, region, groups, _template_goods(db, template.code), reset_stocks)
+        rows = _apply_template_goods(db, region, groups, _template_goods(db, template.code), reset_stocks,
+                                     sim_params)
         processed += 1
         population = _i(region.population)
         if population <= 0:
@@ -381,7 +405,8 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
             continue
 
         goods = {code: econ_tick.good_state(row) for code, row in rows.items() if code in groups}
-        purse_target = econ_sim.starting_purse(groups, goods, population, sim_params)
+        purse_target = econ_sim.starting_purse(groups, goods, econ_sim.sim_population(population, sim_params),
+                                               sim_params)
         # Dry run of one tick from the filled state: its treasury_target is the wage reserve the tick will use.
         probe = econ_sim.simulate_region(econ_tick.region_state(region), goods, groups, purse=purse_target,
                                          treasury=0, grant=0, country_tax_rate=country_tax_rate, params=sim_params)
@@ -389,14 +414,40 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
         region.treasury_target = treasury_target
 
         purse_ref, treasury_ref = core.AccountRef.purse(region_id), core.AccountRef.region(region_id)
-        purse_amount = max(0, purse_target - econ_tick.account_balance(db, purse_ref)) if fund_purses else 0
-        treasury_amount = (max(0, treasury_target - econ_tick.account_balance(db, treasury_ref))
-                           if treasury_to_reserve else 0)
+        purse_balance = econ_tick.account_balance(db, purse_ref)
+        treasury_balance = econ_tick.account_balance(db, treasury_ref)
+        # FEAT-186: residents' bank positions first (their savings / debts belong to the purse side).
+        rescale = None
+        bank = bank_rows.get(region_id) if return_purse_excess else None
+        if bank is not None:
+            rescale = econ_bank.resident_rescale(
+                purse=purse_balance, bank_balance=economy_bank_crud.bank_account_balance(db, region_id),
+                deposits=_i(bank.resident_deposits), loans=_i(bank.resident_loans), purse_target=purse_target,
+                enabled=bool(bank.is_enabled), params=sim_params)
+            purse_balance += rescale.net_to_purse
+        purse_amount = max(0, purse_target - purse_balance) if fund_purses else 0
+        treasury_amount = max(0, treasury_target - treasury_balance) if treasury_to_reserve else 0
+        purse_back = max(0, purse_balance - purse_target) if return_purse_excess else 0
+        treasury_back = max(0, treasury_balance - max(0, treasury_target)) if return_treasury_excess else 0
         legs = []
+        if rescale is not None and rescale.net_to_purse > 0:
+            legs.append(core.Leg(core.AccountRef.bank(region_id), purse_ref, rescale.net_to_purse))
+        elif rescale is not None and rescale.net_to_purse < 0:
+            legs.append(core.Leg(purse_ref, core.AccountRef.bank(region_id), -rescale.net_to_purse))
         if purse_amount > 0:
             legs.append(core.Leg(core.AccountRef.emission(), purse_ref, purse_amount))
         if treasury_amount > 0:
             legs.append(core.Leg(core.AccountRef.emission(), treasury_ref, treasury_amount))
+        if purse_back > 0:
+            legs.append(core.Leg(purse_ref, core.AccountRef.emission(), purse_back))
+        if treasury_back > 0:
+            legs.append(core.Leg(treasury_ref, core.AccountRef.emission(), treasury_back))
+        if rescale is not None and (rescale.deposits_out or rescale.loans_repaid):
+            # the row moves with the money: when the posting fails the whole request rolls back
+            bank.resident_deposits = rescale.deposits_after
+            bank.resident_loans = rescale.loans_after
+            returned_bank_deposits += rescale.deposits_out
+            repaid_bank_loans += rescale.loans_repaid
         if not legs:
             continue
         key = (f"econ_fill:r:{region_id}:p{_last_posting_id(db, purse_ref)}"
@@ -405,15 +456,22 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
             result = econ_ledger.post_operation(
                 db, op_type=core.OP_ADMIN_EMISSION, legs=legs, source_service=SOURCE_SERVICE, region_id=region_id,
                 actor_user_id=actor_user_id, comment=comment, idempotency_key=key, apply_tax=False,
-                metadata={"fill": True, "purse_target": purse_target, "treasury_target": treasury_target},
+                metadata={"fill": True, "purse_target": purse_target, "treasury_target": treasury_target,
+                          "returned_purse": purse_back, "returned_treasury": treasury_back,
+                          "resident_deposits_out": rescale.deposits_out if rescale else 0,
+                          "resident_loans_repaid": rescale.loans_repaid if rescale else 0},
             )
         except core.DuplicateOperation:
             logger.info("economy fill: region %s already topped up by a concurrent request", region_id)
             continue
+        except core.InsufficientFunds:
+            raise EconomyApiError(409, "Баланс региона изменился во время заполнения, повторите")
         if result.operation_id is not None:
             operation_ids.append(int(result.operation_id))
             emitted_purses += purse_amount
             emitted_treasuries += treasury_amount
+            returned_purses += purse_back
+            returned_treasuries += treasury_back
     banks_opened = _open_banks(db, bank_targets, bank_rows, sim_params, actor_user_id)
     db.flush()
     return {
@@ -423,6 +481,11 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
         "emitted": emitted_purses + emitted_treasuries,
         "emitted_purses": emitted_purses,
         "emitted_treasuries": emitted_treasuries,
+        "returned": returned_purses + returned_treasuries,     # FEAT-186: excess moved back into emission
+        "returned_purses": returned_purses,
+        "returned_treasuries": returned_treasuries,
+        "resident_deposits_out": returned_bank_deposits,    # FEAT-186: residents' bank deposits -> purse
+        "resident_loans_repaid": repaid_bank_loans,         # FEAT-186: residents' bank loans repaid from the purse
         "skipped_no_population": skipped,
         "banks_opened": banks_opened,
     }
@@ -540,13 +603,15 @@ def update_goods_group(db: Session, code: str, body) -> dict:
 # Templates
 # ---------------------------------------------------------------------------
 
-def _template_dict(db: Session, row: "models.EconRegionTemplate", order: List[str]) -> dict:
+def _template_dict(db: Session, row: "models.EconRegionTemplate", order: List[str],
+                   params: econ_sim.SimParams = econ_sim.DEFAULT_PARAMS) -> dict:
     goods = _template_goods(db, row.code)
     codes = [c for c in order if c in goods] + sorted(c for c in goods if c not in order)
     return {
         "code": row.code, "name": row.name, "description": row.description,
         "settlement_noun": row.settlement_noun, "noun_gender": row.noun_gender,
         "default_population": _i(row.default_population), "tax_rate": _f(row.tax_rate),
+        "default_sim_population": round(econ_sim.sim_population(_i(row.default_population), params), 2),
         "sort_order": _i(row.sort_order), "updated_at": row.updated_at,
         "goods": [{"group_code": c, "production_per_1000": goods[c][0], "consumption_mult": goods[c][1]}
                   for c in codes],
@@ -560,7 +625,8 @@ def _group_order(db: Session) -> List[str]:
 
 def list_templates(db: Session) -> List[dict]:
     order = _group_order(db)
-    return [_template_dict(db, row, order) for row in _templates(db).values()]
+    params = econ_tick.load_params(db)
+    return [_template_dict(db, row, order, params) for row in _templates(db).values()]
 
 
 def update_template(db: Session, code: str, body) -> dict:
@@ -584,7 +650,7 @@ def update_template(db: Session, code: str, body) -> dict:
         target.consumption_mult = _round(good.consumption_mult, 3)
     db.flush()
     db.refresh(row)
-    return _template_dict(db, row, _group_order(db))
+    return _template_dict(db, row, _group_order(db), econ_tick.load_params(db))
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +834,7 @@ def region_card(db: Session, region_id: int) -> dict:
     treasury = econ_tick.account_balance(db, core.AccountRef.region(region_id))
     card = econ_sim.region_card(
         econ_tick.region_state(region), goods, groups, treasury=treasury,
-        noun=template.settlement_noun if template is not None else "Город",
+        noun=template.settlement_noun if template is not None else "Регион",
         gender=template.noun_gender if template is not None else "m",
         group_order=list(groups),
     )

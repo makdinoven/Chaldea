@@ -7,6 +7,13 @@ deterministic and side-effect free so it can be unit-tested without SQL.
 Units: goods are "units", production / norms are given per 1000 inhabitants per day, one tick advances
 ``params.dt`` days (0.25 = 6 h). Money is integer gold (floored).
 
+Population (FEAT-186): ``econ_regions.population`` / ``RegionState.population`` is the lore number (up to millions).
+The math runs on the *simulated* population = lore / ``params.population_scale`` (:func:`sim_population`, default
+scale 100). :func:`simulate_region` scales ``region.population`` itself; every other function that takes a
+``population`` argument (``norm_stock``, ``demand_tick``, ``needs_cost_day``, ``starting_purse``, ``starting_goods``,
+``household_demand_day``) expects the already scaled simulated population. :func:`country_grants` splits by the lore
+numbers — proportions do not depend on the scale.
+
 Card helpers (``food_state`` … ``region_card``) turn the stored state into the qualitative player card of
 3.7 — no balances or raw numbers leave this module through them.
 """
@@ -117,6 +124,8 @@ class SimParams:
     bank_resident_deposit_share: float = 0.2  # residents keep this share of their savings in the bank
     bank_resident_loan_share: float = 0.1     # residents' loan target as a share of the purse
     bank_resident_adjust: float = 0.25        # per 6 h residents move this share of the gap to their targets
+    # FEAT-186: the sim runs on lore population / scale (4 000 000 inhabitants -> 40 000 at 100). Not in a seed.
+    population_scale: int = 100
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":
@@ -175,7 +184,7 @@ class GoodState:
 class RegionState:
     """The simulated part of one ``econ_regions`` row."""
 
-    population: int
+    population: int     # lore number; the math uses sim_population(population, params)
     tax_rate: float
     stability: float = 70.0
     prosperity: float = 50.0
@@ -226,7 +235,19 @@ def price_mult(stock: float, norm: float, params: SimParams = DEFAULT_PARAMS) ->
     return _clamp(ratio ** (-params.price_exponent), params.price_min, params.price_max)
 
 
-def household_demand_day(group: GroupDef, consumption_mult: float, population: int) -> float:
+def sim_population(population, params: SimParams = DEFAULT_PARAMS) -> float:
+    """Simulated population of a region: lore ``population`` / ``params.population_scale`` (FEAT-186).
+
+    Negative / missing population -> 0; the scale is floored at 1 (no division by zero). The result may be fractional
+    (lore 50 at scale 100 -> 0.5: a tiny region, all formulas are linear in it). A lore population that is a multiple
+    of the scale gives the exact float of the quotient, so a world migrated x100 at scale 100 computes bit-identically.
+    """
+    pop = max(0, int(population or 0))
+    scale = max(1, int(params.population_scale))
+    return pop / scale
+
+
+def household_demand_day(group: GroupDef, consumption_mult: float, population: float) -> float:
     """Household consumption per day at prosperity 50 and price x1."""
     return float(group.norm_per_1000) * float(consumption_mult) * population / 1000.0
 
@@ -235,7 +256,7 @@ def norm_stock(
     code: str,
     groups: Mapping[str, GroupDef],
     goods: Mapping[str, GoodState],
-    population: int,
+    population: float,
 ) -> float:
     """Norm stock of ``code`` (3.4 step 6): norm_days x (household demand/day + input use of processing/day)."""
     group = groups[code]
@@ -257,7 +278,7 @@ def norm_stock(
 def demand_tick(
     group: GroupDef,
     good: GoodState,
-    population: int,
+    population: float,
     prosperity: float,
     params: SimParams = DEFAULT_PARAMS,
 ) -> float:
@@ -272,7 +293,7 @@ def demand_tick(
 def needs_cost_day(
     groups: Mapping[str, GroupDef],
     goods: Mapping[str, GoodState],
-    population: int,
+    population: float,
     prosperity: float = 50.0,
     params: SimParams = DEFAULT_PARAMS,
     base_prices: bool = False,
@@ -296,7 +317,7 @@ def needs_cost_day(
 def starting_purse(
     groups: Mapping[str, GroupDef],
     goods: Mapping[str, GoodState],
-    population: int,
+    population: float,
     params: SimParams = DEFAULT_PARAMS,
 ) -> int:
     """Purse target for «Заполнить регионы по шаблонам»: ``purse_start_days`` of needs at base prices."""
@@ -307,7 +328,7 @@ def starting_purse(
 def starting_goods(
     groups: Mapping[str, GroupDef],
     template_goods: Mapping[str, Tuple[float, float]],
-    population: int,
+    population: float,
 ) -> Dict[str, GoodState]:
     """Goods rows of a freshly applied template: stock = norm, prices x1.
 
@@ -391,7 +412,7 @@ def simulate_region(
     region, ``country_tax_rate`` the rate the ledger applies on purse -> region inflows.
     """
     dt = params.dt
-    pop = max(0, int(region.population))
+    pop = sim_population(region.population, params)
     pop_k = pop / 1000.0
     purse = max(0, int(purse))
     treasury = int(treasury)
@@ -529,8 +550,8 @@ def food_state(hunger: float) -> str:
     return "hunger"
 
 
-def food_label(state: str, noun: str = "Город", gender: str = "m") -> str:
-    """«Город сыт», «Крепость сыта», «Округа голодает»."""
+def food_label(state: str, noun: str = "Регион", gender: str = "m") -> str:
+    """«Регион сыт», «Крепость сыта», «Округа голодает»."""
     return f"{noun} {_GENDER_ENDINGS[state][_gender_index(gender)]}"
 
 
@@ -569,8 +590,8 @@ def prosperity_state(prosperity: float) -> str:
     return "poor"
 
 
-def prosperity_label(state: str, noun: str = "Город", gender: str = "m") -> str:
-    """«Зажиточный край», «Бедная крепость»."""
+def prosperity_label(state: str, noun: str = "Регион", gender: str = "m") -> str:
+    """«Зажиточный регион», «Бедная крепость»."""
     return f"{_PROSPERITY_ADJ[state][_gender_index(gender)]} {_lower_first(noun)}"
 
 
@@ -627,7 +648,7 @@ def region_card(
     groups: Mapping[str, GroupDef],
     *,
     treasury: int,
-    noun: str = "Город",
+    noun: str = "Регион",
     gender: str = "m",
     group_order: Optional[Sequence[str]] = None,
 ) -> Dict:

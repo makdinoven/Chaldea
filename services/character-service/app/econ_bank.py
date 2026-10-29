@@ -192,6 +192,48 @@ def lendable(bank_balance: int, resident_deposits: int, params: SimParams = DEFA
     return max(0, int(bank_balance) - reserve(resident_deposits, params.bank_reserve_ratio))
 
 
+@dataclass(frozen=True)
+class ResidentRescale:
+    """FEAT-186 «Привести к масштабу»: residents' bank positions brought to the scaled purse target."""
+
+    deposits_target: int
+    loans_target: int
+    deposits_out: int        # bank -> purse (residents take back the part of their deposits above the target)
+    loans_repaid: int        # purse -> bank (residents repay the part of their loans above the target)
+    deposits_after: int
+    loans_after: int
+
+    @property
+    def net_to_purse(self) -> int:
+        return self.deposits_out - self.loans_repaid
+
+
+def resident_rescale(*, purse: int, bank_balance: int, deposits: int, loans: int, purse_target: int,
+                     enabled: bool, params: SimParams = DEFAULT_PARAMS) -> ResidentRescale:
+    """Targets = the steady state of the residents' step for a purse at ``purse_target`` (enabled bank):
+    deposits ``D* = floor(P* x s / (1 - s))`` (so ``floor((P* + D*) x s) ≈ D*``), loans ``L* = floor(P* x loan_share)``;
+    a disabled bank -> 0 / 0 (the tick winds them down anyway). The excess deposits and the excess loans are first set
+    off against each other (no cash needed: the residents repay with their own deposits); what is left is paid in
+    cash — extra deposits from the bank's whole balance (the reserve exists for exactly this; the bank never goes
+    negative — what it cannot pay stays owed and the tick returns it later), extra loans from the purse (never below
+    0). Already at/below the targets -> nothing moves (idempotent).
+    """
+    purse, bank_balance = max(0, int(purse)), max(0, int(bank_balance))
+    deposits, loans, target = max(0, int(deposits)), max(0, int(loans)), max(0, int(purse_target))
+    if enabled:
+        share = min(_p(params, "bank_resident_deposit_share"), Decimal("0.99"))
+        d_target = _floor(Decimal(target) * share / (Decimal(1) - share))
+        l_target = _floor(Decimal(target) * _p(params, "bank_resident_loan_share"))
+    else:
+        d_target = l_target = 0
+    want_out, want_repay = max(0, deposits - d_target), max(0, loans - l_target)
+    offset = min(want_out, want_repay)
+    out = offset + min(want_out - offset, bank_balance)
+    repaid = offset + min(want_repay - offset, purse)
+    return ResidentRescale(deposits_target=d_target, loans_target=l_target, deposits_out=out, loans_repaid=repaid,
+                           deposits_after=deposits - out, loans_after=loans - repaid)
+
+
 def loan_cap(level: Optional[int], params: SimParams = DEFAULT_PARAMS) -> int:
     """Largest loan a character of ``level`` may take (level < 1 counts as 1)."""
     lvl = max(1, int(level or 0))
