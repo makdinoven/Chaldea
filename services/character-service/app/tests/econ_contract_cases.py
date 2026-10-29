@@ -16,7 +16,7 @@ Byte-identical in character-, inventory-, locations- and dungeon-service (CI
        expected_postings with the *_SQL queries below, and world_sum() == 0.
 
 RESOLVE_CASES check resolve_location() / treasury_for_location() on the seeded world;
-PLURAL_CASES / FORMAT_CASES check econ_core directly.
+PLURAL_CASES / FORMAT_CASES / ITEM_GROUP_CASES check econ_core directly.
 
 Only econ_core is imported here, so this module is identical in every service.
 """
@@ -157,6 +157,7 @@ R10, R20 = AccountRef.region(10), AccountRef.region(20)
 K1, K2 = AccountRef.country(1), AccountRef.country(2)
 WORLD, ESCROW, STORAGE = AccountRef.world(), AccountRef.escrow(), AccountRef.storage()
 EMISSION, ADJUSTMENT = AccountRef.emission(), AccountRef.adjustment()
+P10, P20 = AccountRef.purse(10), AccountRef.purse(20)
 
 
 def _fund(*pairs: Tuple[AccountRef, int]) -> "Step":
@@ -309,6 +310,124 @@ CASES: List[ContractCase] = [
         steps=[_fund((C1, 10)), Step("teleport", [Leg(C1, R10, 5, "tax")], error="EconomyError")],
         expected_characters={1: 10},
     ),
+    # --- FEAT-182: population purse + region_tick ---------------------------------------------
+    ContractCase(
+        name="emission_into_population_purse",
+        steps=[_fund((P10, 5000))],
+        expected_accounts={("population_purse", 10): 5000, ("emission", 0): -5000},
+        expected_operations=1, expected_postings=1, expected_tax_legs=0,
+    ),
+    ContractCase(
+        name="region_tick_purse_to_region_is_taxed_to_country",
+        steps=[_fund((P10, 1000)),
+               Step("region_tick", [Leg(P10, R10, 205), Leg(K1, R10, 7), Leg(R10, P10, 100)],
+                    {"region_id": 10, "idempotency_key": "region_tick:1:r:10"})],
+        # tax = floor(205 * 0.1) = 20 (only the purse inflow is taxed; the grant country -> region is not)
+        expected_accounts={("population_purse", 10): 895, ("region_treasury", 10): 92,
+                           ("country_treasury", 1): 13},
+        expected_operations=2, expected_postings=5, expected_tax_legs=1,
+    ),
+    ContractCase(
+        name="population_purse_cannot_go_negative",
+        steps=[_fund((P20, 50)),
+               Step("region_tick", [Leg(P20, R20, 51)], {"region_id": 20}, error="InsufficientFunds")],
+        expected_accounts={("population_purse", 20): 50},
+        expected_operations=1, expected_postings=1, expected_tax_legs=0,
+    ),
+    ContractCase(
+        name="region_tick_may_not_touch_emission",
+        steps=[Step("region_tick", [Leg(EMISSION, P10, 5)], {"region_id": 10}, error="EconomyError")],
+        expected_operations=0, expected_postings=0,
+    ),
+    ContractCase(
+        name="purse_closed_into_country_is_not_taxed",
+        steps=[_fund((P10, 300)),
+               Step("treasury_closed", [Leg(P10, K1, 300)])],
+        expected_accounts={("population_purse", 10): 0, ("country_treasury", 1): 300},
+        expected_tax_legs=0,
+    ),
+    # --- FEAT-182 Q1: purse edge cases ---------------------------------------------------------
+    ContractCase(
+        name="purse_inflow_taxed_like_player_inflow",
+        steps=[_fund((C1, 100), (P10, 100)),
+               Step("teleport", [Leg(C1, R10, 100)], {"location_id": 1000}),
+               Step("region_tick", [Leg(P10, R10, 100)], {"region_id": 10})],
+        # both inflows: floor(100 * 0.1) = 10 to country 1
+        expected_characters={1: 0},
+        expected_accounts={("population_purse", 10): 0, ("region_treasury", 10): 180,
+                           ("country_treasury", 1): 20},
+        expected_operations=3, expected_postings=6, expected_tax_legs=2,
+    ),
+    ContractCase(
+        name="population_purse_can_be_drained_to_exactly_zero",
+        steps=[_fund((P20, 50)),
+               Step("region_tick", [Leg(P20, R20, 50)], {"region_id": 20})],
+        expected_accounts={("population_purse", 20): 0, ("region_treasury", 20): 45, ("country_treasury", 2): 5},
+        expected_operations=2, expected_postings=3, expected_tax_legs=1,
+    ),
+    ContractCase(
+        name="region_tick_purse_debit_covered_by_wages_in_same_operation",
+        steps=[_fund((P10, 60)),
+               Step("region_tick", [Leg(R10, P10, 100), Leg(P10, R10, 150)], {"region_id": 10})],
+        # purse nets -50 (has 60) -> ok; region -100 +150 -15 tax
+        expected_accounts={("population_purse", 10): 10, ("region_treasury", 10): 35, ("country_treasury", 1): 15},
+        expected_operations=2, expected_postings=4, expected_tax_legs=1,
+    ),
+    ContractCase(
+        name="region_tick_grant_and_wages_are_not_taxed",
+        steps=[Step("region_tick", [Leg(K1, R10, 40), Leg(R10, P10, 30), Leg(WORLD, P10, 5)], {"region_id": 10})],
+        expected_accounts={("country_treasury", 1): -40, ("region_treasury", 10): 10, ("population_purse", 10): 35,
+                           ("world_treasury", 0): -5},
+        expected_operations=1, expected_postings=3, expected_tax_legs=0,
+    ),
+    ContractCase(
+        name="region_tick_idempotency_key_posts_once",
+        steps=[_fund((P10, 1000)),
+               Step("region_tick", [Leg(P10, R10, 100)], {"region_id": 10, "idempotency_key": "region_tick:7:r:10"}),
+               Step("region_tick", [Leg(P10, R10, 100)], {"region_id": 10, "idempotency_key": "region_tick:7:r:10"},
+                    error="DuplicateOperation")],
+        expected_accounts={("population_purse", 10): 900, ("region_treasury", 10): 90, ("country_treasury", 1): 10},
+        expected_operations=2, expected_postings=3, expected_tax_legs=1,
+    ),
+    ContractCase(
+        name="region_tick_may_not_touch_adjustment",
+        steps=[_fund((P10, 100)),
+               Step("region_tick", [Leg(P10, ADJUSTMENT, 5)], {"region_id": 10}, error="EconomyError"),
+               Step("region_tick", [Leg(ADJUSTMENT, P10, 5)], {"region_id": 10}, error="EconomyError")],
+        expected_accounts={("population_purse", 10): 100},
+        expected_operations=1, expected_postings=1,
+    ),
+    ContractCase(
+        name="region_tick_into_emission_is_rejected",
+        steps=[_fund((P10, 100)),
+               Step("region_tick", [Leg(P10, EMISSION, 5)], {"region_id": 10}, error="EconomyError")],
+        expected_accounts={("population_purse", 10): 100, ("emission", 0): -100},
+        expected_operations=1, expected_postings=1,
+    ),
+    ContractCase(
+        name="admin_adjust_on_purse_respects_non_negative",
+        steps=[_fund((P10, 100)),
+               Step("admin_adjust", [Leg(P10, ADJUSTMENT, 101)], {"comment": "fix", "apply_tax": False},
+                    error="InsufficientFunds"),
+               Step("admin_adjust", [Leg(P10, ADJUSTMENT, 40)], {"comment": "fix", "apply_tax": False}),
+               Step("admin_adjust", [Leg(ADJUSTMENT, P10, 15)], {"comment": "fix", "apply_tax": False})],
+        expected_accounts={("population_purse", 10): 75, ("adjustment", 0): 25},
+        expected_operations=3, expected_postings=3, expected_tax_legs=0,
+    ),
+    ContractCase(
+        name="purse_needs_a_positive_region_id",
+        steps=[Step("region_tick", [Leg(AccountRef("population_purse", 0), R10, 1)], error="EconomyError")],
+        expected_operations=0, expected_postings=0,
+    ),
+    ContractCase(
+        name="injected_or_unknown_op_type_is_rejected",
+        steps=[_fund((P10, 100)),
+               Step("region_tick'; DROP TABLE econ_postings; --", [Leg(P10, R10, 1)], error="EconomyError"),
+               Step("REGION_TICK", [Leg(P10, R10, 1)], error="EconomyError"),
+               Step("region_tick OR 1=1", [Leg(P10, R10, 1)], error="EconomyError")],
+        expected_accounts={("population_purse", 10): 100},
+        expected_operations=1, expected_postings=1,
+    ),
 ]
 
 # location_id -> (region_id, country_id)
@@ -326,6 +445,65 @@ RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] =
 PLURAL_CASES: List[Tuple[int, str]] = [
     (0, "c"), (1, "a"), (2, "b"), (4, "b"), (5, "c"), (11, "c"), (12, "c"), (14, "c"),
     (21, "a"), (22, "b"), (25, "c"), (101, "a"), (111, "c"), (112, "c"), (1001, "a"), (-1, "a"), (-3, "b"),
+]
+
+# ((item_type, resource_subcategory, is_food, item_rarity), (group_code, off_market)) for
+# econ_core.auto_item_group (FEAT-182 3.6).
+ITEM_GROUP_CASES: List[Tuple[Tuple[Optional[str], Optional[str], bool, Optional[str]], Tuple[Optional[str], bool]]] = [
+    (("consumable", None, True, "common"), ("food", False)),
+    (("consumable", None, False, "rare"), ("potions", False)),
+    (("resource", "ore", False, "common"), ("ore_metal", False)),
+    (("resource", "ingot", False, "common"), ("ore_metal", False)),
+    (("resource", "wood", False, "common"), ("wood", False)),
+    (("resource", "herb", False, "common"), ("herbs", False)),
+    (("resource", "reagent", False, "common"), ("herbs", False)),
+    (("resource", "ingredient", False, "common"), ("food", False)),
+    (("resource", "trophy", False, "common"), ("hides_textiles", False)),
+    (("resource", "magic_dust", False, "common"), ("magic", False)),
+    (("resource", "essence", False, "epic"), ("magic", False)),
+    (("resource", "material", False, "common"), ("magic", False)),
+    (("resource", "whetstone", False, "common"), ("tools", False)),
+    (("resource", "repair_kit", False, "common"), ("tools", False)),
+    (("resource", None, True, "common"), ("food", False)),
+    (("resource", None, False, "common"), (None, False)),
+    (("resource", "ore", False, "legendary"), ("ore_metal", True)),
+    (("weapon", None, False, "epic"), ("weapons", False)),
+    (("weapon", None, False, "divine"), ("weapons", True)),
+    (("head", None, False, "common"), ("armor", False)),
+    (("body", None, False, "common"), ("armor", False)),
+    (("cloak", None, False, "common"), ("armor", False)),
+    (("belt", None, False, "common"), ("armor", False)),
+    (("ring", None, False, "common"), ("jewelry", False)),
+    (("necklace", None, False, "rare"), ("jewelry", False)),
+    (("bracelet", None, False, "common"), ("jewelry", False)),
+    (("gem", None, False, "mythical"), ("jewelry", True)),
+    (("rune", None, False, "common"), ("magic", False)),
+    (("gathering_tool", None, False, "common"), ("tools", False)),
+    (("furniture", None, False, "demonic"), ("household", True)),
+    (("misc", None, False, "common"), (None, False)),
+    (("scroll", None, False, "common"), (None, True)),
+    (("recipe", None, False, "common"), (None, True)),
+    ((None, None, False, None), (None, False)),
+    # FEAT-182 Q1 edge cases
+    (("consumable", None, True, "legendary"), ("food", True)),
+    (("consumable", None, False, "demonic"), ("potions", True)),
+    (("consumable", "herb", False, "common"), ("potions", False)),       # subcategory ignored outside resources
+    (("consumable", None, None, None), ("potions", False)),
+    (("resource", "ore", True, "common"), ("ore_metal", False)),         # is_food ignored when subcategory set
+    (("resource", "ingredient", True, "mythical"), ("food", True)),
+    (("resource", "", True, "common"), ("food", False)),                 # empty subcategory == NULL
+    (("resource", None, 1, None), ("food", False)),
+    (("resource", None, 0, None), (None, False)),
+    (("resource", None, None, "rare"), (None, False)),
+    (("resource", "unknown_sub", True, "common"), (None, False)),
+    (("weapon", None, False, None), ("weapons", False)),
+    (("weapon", None, False, "unknown_rarity"), ("weapons", False)),
+    (("shield", None, False, "common"), (None, False)),                  # unknown item type
+    (("", None, True, "common"), (None, False)),
+    (("misc", None, True, "mythical"), (None, True)),
+    (("scroll", None, False, "legendary"), (None, True)),
+    (("recipe", "ore", True, "common"), (None, True)),
+    ((None, None, False, "divine"), (None, True)),
 ]
 
 # (n, short, expected) with econ_core.DEFAULT_FORMS

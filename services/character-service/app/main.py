@@ -4558,3 +4558,13 @@ def set_travel_cooldown(
 from economy_api import router as economy_router  # noqa: E402
 app.include_router(economy_router)
 app.include_router(router)
+
+
+# FEAT-182: living-regions tick. Starts a daemon thread only when ECON_TICK_ENABLED is truthy
+# (never under pytest); the slot claim in econ_tick keeps --reload restarts / replicas single-run.
+import econ_scheduler  # noqa: E402
+
+
+@app.on_event("startup")
+def start_econ_tick_scheduler():
+    econ_scheduler.start_scheduler()

@@ -1793,6 +1793,7 @@ class EconTotals(BaseModel):
     region_treasuries: int
     country_treasuries: int
     world_treasury: int
+    population_purses: int = 0               # FEAT-182: all population purses (already part of `held`)
 
 
 class EconDriftingCharacter(BaseModel):
@@ -1818,6 +1819,8 @@ class EconRegionTreasury(BaseModel):
     name: Optional[str]
     balance: int
     is_active: bool
+    purse_account_id: Optional[int] = None   # FEAT-182: the region's population purse, if it exists
+    purse_balance: Optional[int] = None
 
 
 class EconCountryTreasury(BaseModel):
@@ -1847,3 +1850,367 @@ class EconSummary(BaseModel):
     countries: List[EconCountryTreasury]
     system_accounts: List[EconSystemAccount]
     settings: EconSummarySettings
+
+
+# ===========================================================================
+# FEAT-182 living regions — economy simulation API (app/economy_api.py, contract 3.7)
+# ===========================================================================
+
+from pydantic import Extra, StrictBool  # noqa: E402
+
+import econ_core as _econ_core  # noqa: E402
+
+ECON_MAX_POPULATION = 10_000_000
+ECON_MAX_PRODUCTION = 100_000
+ECON_MAX_CONSUMPTION_MULT = 10
+ECON_MAX_STOCK = 10 ** 12                  # econ_region_goods.stock DECIMAL(16,3)
+ECON_MAX_BASE_PRICE = 1_000_000
+ECON_MAX_NORM_PER_1000 = 100_000
+ECON_MIN_NORM_DAYS, ECON_MAX_NORM_DAYS = 0.5, 365
+ECON_MAX_ELASTICITY = 3
+ECON_MIN_RATIO, ECON_MAX_RATIO = 0.001, 100
+ECON_NAME_MAX = 100
+ECON_DESCRIPTION_MAX = 500
+ECON_NOUN_MAX = 50
+ECON_NOUN_GENDERS = ("m", "f", "n")
+ECON_MAX_BULK_IDS = 500
+ECON_MAX_ID = 2 ** 63 - 1
+
+# Bounds of every econ_sim.SimParams key (PUT /admin/economy/sim). Integer keys are listed in ECON_SIM_INT_PARAMS.
+# Cross-field rules (economy_sim_crud): price_min < price_max, prod_price_min < prod_price_max.
+ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
+    "dt": (0.05, 1.0),
+    "price_min": (0.05, 1.0),
+    "price_max": (1.0, 20.0),
+    "price_exponent": (0.05, 5.0),
+    "stock_cap_mult": (1.0, 20.0),
+    "prod_price_elasticity": (0.0, 2.0),
+    "prod_price_min": (0.1, 1.0),
+    "prod_price_max": (1.0, 5.0),
+    "full_stability": (1.0, 100.0),
+    "hunger_prod_penalty": (0.0, 1.0),
+    "afford_days": (0.1, 30.0),
+    "treasury_reserve_days": (0.0, 60.0),
+    "treasury_release_ticks": (1, 100),
+    "country_grant_share": (0.0, 1.0),
+    "purse_start_days": (0.0, 60.0),
+    "stab_base": (0.0, 100.0),
+    "stab_hunger_w": (0.0, 500.0),
+    "stab_goods_w": (0.0, 500.0),
+    "stab_free_tax": (0.0, 0.5),
+    "stab_tax_w": (0.0, 1000.0),
+    "stab_debt_penalty": (0.0, 100.0),
+    "stab_rate_up": (0.0, 1.0),
+    "stab_rate_down": (0.0, 1.0),
+    "prosp_rate": (0.0, 1.0),
+    "prosp_w_sat": (0.0, 1.0),
+    "prosp_w_liq": (0.0, 1.0),
+    "prosp_w_stab": (0.0, 1.0),
+    "prosp_hunger_w": (0.0, 500.0),
+    "prosp_liq_days": (0.1, 60.0),
+    "history_retention_days": (1, 365),
+}
+ECON_SIM_INT_PARAMS = frozenset({"treasury_release_ticks", "history_retention_days"})
+
+
+def _econ_number(v, lo, hi, label: str, integer: bool = False):
+    """Number within [lo, hi]; bools and non-numeric strings are rejected with a Russian message."""
+    if isinstance(v, bool):
+        raise ValueError(f"{label}: ожидается число")
+    if isinstance(v, str):
+        try:
+            v = float(v.strip())
+        except ValueError:
+            raise ValueError(f"{label}: ожидается число")
+    if not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
+        raise ValueError(f"{label}: ожидается число")
+    if integer:
+        if float(v) != int(v):
+            raise ValueError(f"{label}: ожидается целое число")
+        v = int(v)
+    if not lo <= v <= hi:
+        raise ValueError(f"{label}: от {lo} до {hi}")
+    return v
+
+
+def _econ_text(v, max_len: int, label: str, optional: bool = False):
+    """Stripped text without '<', '>' and control characters."""
+    if v is None and optional:
+        return None
+    if not isinstance(v, str):
+        raise ValueError(f"{label}: ожидается строка")
+    v = v.strip()
+    if optional and not v:
+        return None
+    if not v:
+        raise ValueError(f"{label}: не может быть пустым")
+    if len(v) > max_len:
+        raise ValueError(f"{label}: не длиннее {max_len} символов")
+    if any(ch in ECON_FORBIDDEN_FORM_CHARS for ch in v) or any(ord(ch) < 32 for ch in v):
+        raise ValueError(f"{label}: недопустимые символы")
+    return v
+
+
+def _econ_group_code(v):
+    if not isinstance(v, str) or v not in _econ_core.GOODS_GROUPS:
+        raise ValueError("Неизвестная группа товаров")
+    return v
+
+
+def _econ_unique_codes(items, attr: str, label: str):
+    codes = [getattr(item, attr) for item in items]
+    if len(codes) != len(set(codes)):
+        raise ValueError(f"{label}: группа указана дважды")
+    return items
+
+
+def _econ_bulk_ids(v, label: str):
+    if not v:
+        raise ValueError(f"Не выбрано ни одного: {label}")
+    if len(v) > ECON_MAX_BULK_IDS:
+        raise ValueError(f"Не больше {ECON_MAX_BULK_IDS} за раз ({label})")
+    if any(not 1 <= i <= ECON_MAX_ID for i in v):
+        raise ValueError(f"Некорректный id ({label})")
+    return sorted(set(v))
+
+
+class EconRegionGoodsIn(BaseModel):
+    group_code: str
+    production_per_1000: float
+    consumption_mult: float
+    stock: Optional[float] = None
+
+    _code = validator("group_code", pre=True, allow_reuse=True)(_econ_group_code)
+
+    @validator("production_per_1000", pre=True)
+    def _prod(cls, v):
+        return _econ_number(v, 0, ECON_MAX_PRODUCTION, "Производство на 1000 жителей")
+
+    @validator("consumption_mult", pre=True)
+    def _cmult(cls, v):
+        return _econ_number(v, 0, ECON_MAX_CONSUMPTION_MULT, "Множитель потребления")
+
+    @validator("stock", pre=True)
+    def _stock(cls, v):
+        return None if v is None else _econ_number(v, 0, ECON_MAX_STOCK, "Запас")
+
+
+class EconRegionUpdateRequest(BaseModel):
+    template_code: Optional[str] = None
+    population: int
+    tax_rate: float
+    stability: Optional[float] = None
+    prosperity: Optional[float] = None
+    goods: Optional[List[EconRegionGoodsIn]] = None
+
+    @validator("template_code", pre=True)
+    def _template(cls, v):
+        if v is None or v == "":
+            return None
+        return _econ_text(v, 32, "Шаблон")
+
+    @validator("population", pre=True)
+    def _population(cls, v):
+        return _econ_number(v, 0, ECON_MAX_POPULATION, "Население", integer=True)
+
+    @validator("tax_rate", pre=True)
+    def _tax(cls, v):
+        return _econ_number(v, 0, ECON_MAX_TAX_RATE, "Ставка налога")
+
+    @validator("stability", "prosperity", pre=True)
+    def _percent(cls, v, field):
+        label = "Стабильность" if field.name == "stability" else "Достаток"
+        return None if v is None else _econ_number(v, 0, 100, label)
+
+    @validator("goods")
+    def _goods(cls, v):
+        if v is None:
+            return v
+        return _econ_unique_codes(v, "group_code", "Товары")
+
+
+class EconApplyTemplateRequest(BaseModel):
+    reset_stocks: StrictBool = True
+
+
+class EconFillRequest(BaseModel):
+    region_ids: Optional[List[StrictInt]] = None
+    population_from_template: StrictBool = False
+    reset_stocks: StrictBool = True
+    fund_purses: StrictBool = True
+    # Added by B6: also top up each region treasury to its wage reserve target (otherwise wages stay 0 until the
+    # treasury fills from taxes, ~a week, and purses only shrink after a fill).
+    treasury_to_reserve: StrictBool = True
+    comment: str
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+    @validator("region_ids")
+    def _ids(cls, v):
+        return None if v is None else _econ_bulk_ids(v, "регионы")
+
+
+class EconGroupInputIn(BaseModel):
+    input_code: str
+    ratio: float
+
+    _code = validator("input_code", pre=True, allow_reuse=True)(_econ_group_code)
+
+    @validator("ratio", pre=True)
+    def _ratio(cls, v):
+        return _econ_number(v, ECON_MIN_RATIO, ECON_MAX_RATIO, "Расход сырья")
+
+
+class EconGoodsGroupUpdateRequest(BaseModel):
+    name: str
+    base_price: int
+    norm_per_1000: float
+    norm_days: float
+    prosperity_elasticity: float
+    price_elasticity: float
+    inputs: List[EconGroupInputIn] = []
+
+    @validator("name", pre=True)
+    def _name(cls, v):
+        return _econ_text(v, ECON_NAME_MAX, "Название")
+
+    @validator("base_price", pre=True)
+    def _price(cls, v):
+        return _econ_number(v, 1, ECON_MAX_BASE_PRICE, "Базовая цена", integer=True)
+
+    @validator("norm_per_1000", pre=True)
+    def _norm(cls, v):
+        return _econ_number(v, 0, ECON_MAX_NORM_PER_1000, "Норма потребления")
+
+    @validator("norm_days", pre=True)
+    def _days(cls, v):
+        return _econ_number(v, ECON_MIN_NORM_DAYS, ECON_MAX_NORM_DAYS, "Запас в днях")
+
+    @validator("prosperity_elasticity", "price_elasticity", pre=True)
+    def _elasticity(cls, v):
+        return _econ_number(v, 0, ECON_MAX_ELASTICITY, "Эластичность")
+
+    @validator("inputs")
+    def _inputs(cls, v):
+        return _econ_unique_codes(v, "input_code", "Сырьё")
+
+
+class EconTemplateGoodsIn(BaseModel):
+    group_code: str
+    production_per_1000: float
+    consumption_mult: float
+
+    _code = validator("group_code", pre=True, allow_reuse=True)(_econ_group_code)
+
+    @validator("production_per_1000", pre=True)
+    def _prod(cls, v):
+        return _econ_number(v, 0, ECON_MAX_PRODUCTION, "Производство на 1000 жителей")
+
+    @validator("consumption_mult", pre=True)
+    def _cmult(cls, v):
+        return _econ_number(v, 0, ECON_MAX_CONSUMPTION_MULT, "Множитель потребления")
+
+
+class EconTemplateUpdateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    settlement_noun: str
+    noun_gender: str
+    default_population: int
+    tax_rate: float
+    goods: List[EconTemplateGoodsIn] = []
+
+    @validator("name", pre=True)
+    def _name(cls, v):
+        return _econ_text(v, ECON_NAME_MAX, "Название")
+
+    @validator("description", pre=True)
+    def _description(cls, v):
+        return _econ_text(v, ECON_DESCRIPTION_MAX, "Описание", optional=True)
+
+    @validator("settlement_noun", pre=True)
+    def _noun(cls, v):
+        return _econ_text(v, ECON_NOUN_MAX, "Слово для поселения")
+
+    @validator("noun_gender", pre=True)
+    def _gender(cls, v):
+        if v not in ECON_NOUN_GENDERS:
+            raise ValueError("Род: m, f или n")
+        return v
+
+    @validator("default_population", pre=True)
+    def _population(cls, v):
+        return _econ_number(v, 0, ECON_MAX_POPULATION, "Население по умолчанию", integer=True)
+
+    @validator("tax_rate", pre=True)
+    def _tax(cls, v):
+        return _econ_number(v, 0, ECON_MAX_TAX_RATE, "Ставка налога")
+
+    @validator("goods")
+    def _goods(cls, v):
+        return _econ_unique_codes(v, "group_code", "Товары")
+
+
+class EconItemGroupsUpdateRequest(BaseModel):
+    """Fields left out stay unchanged (see ``__fields_set__``); ``null`` = back to the auto rule."""
+    item_ids: List[StrictInt]
+    group_code: Optional[str] = None
+    off_market: Optional[StrictBool] = None
+    reset: StrictBool = False
+
+    @validator("item_ids")
+    def _ids(cls, v):
+        return _econ_bulk_ids(v, "предметы")
+
+    @validator("group_code", pre=True)
+    def _group(cls, v):
+        return None if v is None else _econ_group_code(v)
+
+
+class EconSimParamsIn(BaseModel):
+    """Simulation params; a missing key keeps the stored value. Bounds: ECON_SIM_PARAM_BOUNDS."""
+    dt: Optional[float] = None
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None
+    price_exponent: Optional[float] = None
+    stock_cap_mult: Optional[float] = None
+    prod_price_elasticity: Optional[float] = None
+    prod_price_min: Optional[float] = None
+    prod_price_max: Optional[float] = None
+    full_stability: Optional[float] = None
+    hunger_prod_penalty: Optional[float] = None
+    afford_days: Optional[float] = None
+    treasury_reserve_days: Optional[float] = None
+    treasury_release_ticks: Optional[int] = None
+    country_grant_share: Optional[float] = None
+    purse_start_days: Optional[float] = None
+    stab_base: Optional[float] = None
+    stab_hunger_w: Optional[float] = None
+    stab_goods_w: Optional[float] = None
+    stab_free_tax: Optional[float] = None
+    stab_tax_w: Optional[float] = None
+    stab_debt_penalty: Optional[float] = None
+    stab_rate_up: Optional[float] = None
+    stab_rate_down: Optional[float] = None
+    prosp_rate: Optional[float] = None
+    prosp_w_sat: Optional[float] = None
+    prosp_w_liq: Optional[float] = None
+    prosp_w_stab: Optional[float] = None
+    prosp_hunger_w: Optional[float] = None
+    prosp_liq_days: Optional[float] = None
+    history_retention_days: Optional[int] = None
+
+    class Config:
+        extra = Extra.forbid
+
+    @validator("*", pre=True)
+    def _bounded(cls, v, field):
+        if v is None:
+            return v
+        lo, hi = ECON_SIM_PARAM_BOUNDS[field.name]
+        return _econ_number(v, lo, hi, f"Параметр {field.name}", integer=field.name in ECON_SIM_INT_PARAMS)
+
+
+class EconSimUpdateRequest(BaseModel):
+    tick_enabled: StrictBool
+    params: EconSimParamsIn = EconSimParamsIn()

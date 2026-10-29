@@ -100,6 +100,13 @@ def test_format(n, short, expected):
     assert econ_core.format_currency(n, econ_core.DEFAULT_FORMS, short=short) == expected
 
 
+@pytest.mark.parametrize("args,expected", cc.ITEM_GROUP_CASES)
+def test_auto_item_group(args, expected):
+    group, off_market = econ_core.auto_item_group(*args)
+    assert (group, off_market) == expected
+    assert group is None or group in econ_core.GOODS_GROUPS
+
+
 def test_currency_forms_read_from_settings(contract_db):
     s = contract_db()
     try:

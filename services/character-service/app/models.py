@@ -525,6 +525,193 @@ class EconPosting(Base):
     )
 
 
+# ---------------------------------------------------------------------------
+# FEAT-182 living regions: goods groups, chains, region templates, per-region state,
+# tick runs, history, item -> group overrides, sim settings (migration 028_econ_living_regions).
+# No FK to Regions / items (owned by locations- / inventory-service).
+# ---------------------------------------------------------------------------
+
+class EconGoodsGroup(Base):
+    __tablename__ = "econ_goods_groups"
+
+    code = Column(String(32), primary_key=True)
+    name = Column(String(100), nullable=False)
+    sort_order = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    is_food = Column(Boolean, nullable=False, default=False, server_default="0")
+    base_price = Column(Integer, nullable=False)
+    norm_per_1000 = Column(Numeric(10, 3), nullable=False)
+    norm_days = Column(Numeric(6, 2), nullable=False)
+    prosperity_elasticity = Column(Numeric(5, 3), nullable=False, default=0, server_default="0")
+    price_elasticity = Column(Numeric(5, 3), nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class EconGroupInput(Base):
+    __tablename__ = "econ_group_inputs"
+
+    group_code = Column(String(32), ForeignKey("econ_goods_groups.code", name="fk_egi_group"), primary_key=True)
+    input_code = Column(String(32), ForeignKey("econ_goods_groups.code", name="fk_egi_input"), primary_key=True)
+    ratio = Column(Numeric(6, 3), nullable=False)
+
+    __table_args__ = (
+        Index("ix_econ_group_inputs_input", "input_code"),
+        CheckConstraint("ratio > 0", name="ck_egi_ratio"),
+    )
+
+
+class EconRegionTemplate(Base):
+    __tablename__ = "econ_region_templates"
+
+    code = Column(String(32), primary_key=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    settlement_noun = Column(String(50), nullable=False)          # «Город», «Крепость», «Округа»
+    noun_gender = Column(String(1), nullable=False, default="m", server_default="m")  # m | f | n
+    default_population = Column(Integer, nullable=False)
+    tax_rate = Column(Numeric(5, 4), nullable=False)
+    sort_order = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint("noun_gender IN ('m', 'f', 'n')", name="ck_ert_noun_gender"),
+    )
+
+
+class EconTemplateGood(Base):
+    __tablename__ = "econ_template_goods"
+
+    template_code = Column(String(32), ForeignKey("econ_region_templates.code", name="fk_etg_template",
+                                                  ondelete="CASCADE"), primary_key=True)
+    group_code = Column(String(32), ForeignKey("econ_goods_groups.code", name="fk_etg_group"), primary_key=True)
+    production_per_1000 = Column(Numeric(12, 3), nullable=False, default=0, server_default="0")
+    consumption_mult = Column(Numeric(5, 3), nullable=False, default=1, server_default="1")
+
+    __table_args__ = (
+        Index("ix_etg_group", "group_code"),
+    )
+
+
+class EconRegion(Base):
+    __tablename__ = "econ_regions"
+
+    region_id = Column(BigInteger, primary_key=True, autoincrement=False)  # Regions.id (no FK)
+    template_code = Column(String(32), ForeignKey("econ_region_templates.code", name="fk_econ_regions_template",
+                                                  ondelete="SET NULL"), nullable=True)
+    population = Column(Integer, nullable=False, default=0, server_default="0")
+    tax_rate = Column(Numeric(5, 4), nullable=False, default=0.1, server_default="0.1000")
+    stability = Column(Numeric(5, 2), nullable=False, default=70, server_default="70")
+    prosperity = Column(Numeric(5, 2), nullable=False, default=50, server_default="50")
+    hunger = Column(Numeric(5, 4), nullable=False, default=0, server_default="0")
+    satisfaction = Column(Numeric(5, 4), nullable=False, default=1, server_default="1")
+    treasury_target = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_income = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_tax = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_wages = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_grant = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_run_id = Column(BigInteger, nullable=True)
+    last_tick_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_econ_regions_template", "template_code"),
+    )
+
+
+class EconRegionGood(Base):
+    __tablename__ = "econ_region_goods"
+
+    region_id = Column(BigInteger, ForeignKey("econ_regions.region_id", name="fk_erg_region", ondelete="CASCADE"),
+                       primary_key=True, autoincrement=False)
+    group_code = Column(String(32), ForeignKey("econ_goods_groups.code", name="fk_erg_group"), primary_key=True)
+    production_per_1000 = Column(Numeric(12, 3), nullable=False, default=0, server_default="0")
+    consumption_mult = Column(Numeric(5, 3), nullable=False, default=1, server_default="1")
+    stock = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    norm_stock = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    price_mult = Column(Numeric(6, 3), nullable=False, default=1, server_default="1")
+    prev_price_mult = Column(Numeric(6, 3), nullable=False, default=1, server_default="1")
+    last_produced = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    last_consumed = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    last_demand = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+    last_spoiled = Column(Numeric(14, 3), nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        Index("ix_erg_group", "group_code"),
+    )
+
+
+class EconTickRun(Base):
+    __tablename__ = "econ_tick_runs"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    slot = Column(BigInteger, nullable=True)            # floor(unix / 21600) for auto runs, NULL for manual
+    trigger_kind = Column(String(10), nullable=False)   # auto | manual
+    actor_user_id = Column(Integer, nullable=True)
+    status = Column(String(10), nullable=False)         # running | done | partial | failed
+    grant_plan = Column(JSON, nullable=True)
+    regions_total = Column(Integer, nullable=False, default=0, server_default="0")
+    regions_done = Column(Integer, nullable=False, default=0, server_default="0")
+    regions_failed = Column(Integer, nullable=False, default=0, server_default="0")
+    error = Column(String(500), nullable=True)
+    started_at = Column(DateTime, nullable=False, server_default=func.now())
+    heartbeat_at = Column(DateTime, nullable=False, server_default=func.now())
+    finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("slot", name="uq_econ_tick_runs_slot"),
+        Index("ix_econ_tick_runs_started", "started_at"),
+    )
+
+
+class EconRegionHistory(Base):
+    __tablename__ = "econ_region_history"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    run_id = Column(BigInteger, ForeignKey("econ_tick_runs.id", name="fk_erh_run", ondelete="CASCADE"),
+                    nullable=False)
+    region_id = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    population = Column(Integer, nullable=False)
+    stability = Column(Numeric(5, 2), nullable=False)
+    prosperity = Column(Numeric(5, 2), nullable=False)
+    hunger = Column(Numeric(5, 4), nullable=False)
+    purse = Column(BigInteger, nullable=False)
+    treasury = Column(BigInteger, nullable=False)
+    income = Column(BigInteger, nullable=False)
+    tax = Column(BigInteger, nullable=False)
+    wages = Column(BigInteger, nullable=False)
+    grant_amount = Column(BigInteger, nullable=False)
+    goods = Column(JSON, nullable=False)
+
+    __table_args__ = (
+        Index("ix_erh_run", "run_id"),
+        Index("ix_erh_region_created", "region_id", "created_at"),
+    )
+
+
+class EconItemGroup(Base):
+    __tablename__ = "econ_item_groups"
+
+    item_id = Column(BigInteger, primary_key=True, autoincrement=False)  # items.id (no FK)
+    group_code = Column(String(32), ForeignKey("econ_goods_groups.code", name="fk_eig_group"), nullable=True)
+    off_market = Column(Boolean, nullable=True)  # NULL = auto rule
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_by_user_id = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("ix_eig_group", "group_code"),
+    )
+
+
+class EconSimSettings(Base):
+    __tablename__ = "econ_sim_settings"
+
+    id = Column(SmallInteger, primary_key=True, autoincrement=False)  # always 1
+    tick_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    params = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_by_user_id = Column(Integer, nullable=True)
+
+
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
 # ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
 # change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance

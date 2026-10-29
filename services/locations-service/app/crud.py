@@ -2346,6 +2346,10 @@ async def delete_region(session: AsyncSession, region_id: int, commit: bool = Tr
     )
     districts = districts_result.scalars().all()
 
+    # FEAT-182: the population purse goes to the country first (untaxed: tax only applies to
+    # inflows into a region treasury). A region without a purse is a no-op.
+    await _close_treasury(session, AccountRef.purse(region_id), AccountRef.country(region.country_id),
+                          {"region_id": region_id, "country_id": region.country_id, "account": "population_purse"})
     # FEAT-181: the region treasury is closed into its country's treasury in this same transaction.
     await _close_treasury(session, AccountRef.region(region_id), AccountRef.country(region.country_id),
                           {"region_id": region_id, "country_id": region.country_id})

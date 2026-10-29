@@ -22,9 +22,11 @@ logger = logging.getLogger("character-service.economy")
 
 SOURCE_SERVICE = "character-service"
 
-# Admin emission may only go into a treasury.
+# Admin emission may only go into a treasury or a region's population purse (FEAT-182).
 EMISSION_TARGET_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_COUNTRY_TREASURY,
-                                   core.KIND_WORLD_TREASURY})
+                                   core.KIND_WORLD_TREASURY, core.KIND_POPULATION_PURSE})
+# Account kinds that belong to a region (name taken from Regions, operation tagged with region_id).
+REGION_ACCOUNT_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_POPULATION_PURSE})
 # Accounts an admin correction must never touch: the money sources themselves and the auction
 # accounts, whose balances must equal the auction tables (sub-invariants).
 ADJUST_FORBIDDEN_KINDS = frozenset({core.KIND_EMISSION, core.KIND_ADJUSTMENT,
@@ -163,6 +165,7 @@ def get_summary(db: Session) -> dict:
     regions_total = kind_sums.get(core.KIND_REGION_TREASURY, 0)
     countries_total = kind_sums.get(core.KIND_COUNTRY_TREASURY, 0)
     world = kind_sums.get(core.KIND_WORLD_TREASURY, 0)
+    purses = kind_sums.get(core.KIND_POPULATION_PURSE, 0)
     sources = sum(kind_sums.get(k, 0) for k in core.SOURCE_KINDS)
 
     held = players + npcs + sum(v for k, v in kind_sums.items() if k not in core.SOURCE_KINDS)
@@ -196,6 +199,7 @@ def get_summary(db: Session) -> dict:
             "issued": issued, "held": held, "players": players, "npcs": npcs, "escrow": escrow,
             "auction_storage": storage, "region_treasuries": regions_total,
             "country_treasuries": countries_total, "world_treasury": world,
+            "population_purses": purses,
         },
         "invariant": invariant,
         "countries": _treasury_tree(db),
@@ -218,6 +222,11 @@ def _treasury_tree(db: Session) -> List[dict]:
         "FROM econ_accounts a LEFT JOIN Regions r ON r.id = a.ref_id "
         "WHERE a.kind = 'region_treasury' ORDER BY COALESCE(r.name, a.name), a.id"
     )).fetchall()
+    purses = {
+        int(r[1]): (int(r[0]), _int(r[2])) for r in db.execute(text(
+            "SELECT id, ref_id, balance FROM econ_accounts WHERE kind = 'population_purse'"
+        )).fetchall()
+    }
 
     tree: List[dict] = []
     by_country: Dict[int, dict] = {}
@@ -229,8 +238,10 @@ def _treasury_tree(db: Session) -> List[dict]:
 
     orphans: List[dict] = []
     for acc_id, region_id, name, balance, is_active, country_id in regions:
+        purse_id, purse_balance = purses.get(int(region_id), (None, None))
         item = {"account_id": int(acc_id), "region_id": int(region_id), "name": name,
-                "balance": _int(balance), "is_active": bool(is_active)}
+                "balance": _int(balance), "is_active": bool(is_active),
+                "purse_account_id": purse_id, "purse_balance": purse_balance}
         parent = by_country.get(int(country_id)) if country_id is not None else None
         (parent["regions"] if parent else orphans).append(item)
     if orphans:
@@ -242,7 +253,8 @@ def _treasury_tree(db: Session) -> List[dict]:
 def _system_accounts(db: Session) -> List[dict]:
     rows = db.execute(text(
         "SELECT id, kind, name, balance FROM econ_accounts "
-        "WHERE kind NOT IN ('character', 'region_treasury', 'country_treasury') ORDER BY id"
+        "WHERE kind NOT IN ('character', 'region_treasury', 'country_treasury', 'population_purse') "
+        "ORDER BY id"
     )).fetchall()
     return [{"account_id": int(r[0]), "kind": r[1], "name": r[2], "balance": _int(r[3])} for r in rows]
 
@@ -258,7 +270,7 @@ SELECT * FROM (
     SELECT a.id AS account_id, a.kind AS kind, a.ref_id AS ref_id,
            COALESCE(r.name, co.name, a.name) AS name, a.balance AS balance, a.is_active AS is_active
     FROM econ_accounts a
-    LEFT JOIN Regions r ON a.kind = 'region_treasury' AND r.id = a.ref_id
+    LEFT JOIN Regions r ON a.kind IN ('region_treasury', 'population_purse') AND r.id = a.ref_id
     LEFT JOIN Countries co ON a.kind = 'country_treasury' AND co.id = a.ref_id
     WHERE a.kind <> 'character'
     UNION ALL
@@ -305,7 +317,7 @@ def _account_infos(db: Session, account_ids: List[int]) -> Dict[int, dict]:
         "SELECT a.id, a.kind, a.ref_id, COALESCE(c.name, r.name, co.name, a.name) "
         "FROM econ_accounts a "
         "LEFT JOIN characters c ON a.kind = 'character' AND c.id = a.ref_id "
-        "LEFT JOIN Regions r ON a.kind = 'region_treasury' AND r.id = a.ref_id "
+        "LEFT JOIN Regions r ON a.kind IN ('region_treasury', 'population_purse') AND r.id = a.ref_id "
         "LEFT JOIN Countries co ON a.kind = 'country_treasury' AND co.id = a.ref_id "
         f"WHERE a.id IN ({placeholders})"
     ), params).fetchall()
@@ -326,11 +338,14 @@ def _metadata(value):
 
 def list_operations(db: Session, *, account_id: Optional[int], character_id: Optional[int],
                     op_type: Optional[str], region_id: Optional[int], date_from: Optional[date],
-                    date_to: Optional[date], page: int, page_size: int) -> Tuple[List[dict], int]:
+                    date_to: Optional[date], page: int, page_size: int,
+                    exclude_op_type: Optional[str] = None) -> Tuple[List[dict], int]:
     Op, Posting = models.EconOperation, models.EconPosting
     query = db.query(Op)
     if op_type:
         query = query.filter(Op.op_type == op_type)
+    if exclude_op_type:
+        query = query.filter(Op.op_type != exclude_op_type)
     if region_id is not None:
         query = query.filter(Op.region_id == region_id)
     if date_from is not None:
@@ -397,13 +412,13 @@ def _load_account(db: Session, account_id: int) -> Tuple[core.AccountRef, bool]:
 
 
 def _region_of(ref: core.AccountRef) -> Optional[int]:
-    return ref.ref_id if ref.kind == core.KIND_REGION_TREASURY else None
+    return ref.ref_id if ref.kind in REGION_ACCOUNT_KINDS else None
 
 
 def emit(db: Session, *, account_id: int, amount: int, comment: str, actor_user_id: Optional[int]) -> dict:
     ref, is_active = _load_account(db, account_id)
     if ref.kind not in EMISSION_TARGET_KINDS:
-        raise EconomyApiError(400, "Эмиссия возможна только в казну региона, страны или Казну Скитальцев")
+        raise EconomyApiError(400, "Эмиссия возможна только в казну региона, страны, Казну Скитальцев или кошелёк жителей региона")
     if not is_active:
         raise EconomyApiError(400, "Счёт закрыт")
     result = econ_ledger.post_operation(

@@ -35,14 +35,17 @@ KIND_AUCTION_ESCROW = "auction_escrow"
 KIND_AUCTION_STORAGE = "auction_storage"
 KIND_EMISSION = "emission"
 KIND_ADJUSTMENT = "adjustment"
+# FEAT-182: the money of a region's inhabitants (ref_id = Regions.id). Never negative.
+KIND_POPULATION_PURSE = "population_purse"
 
 ACCOUNT_KINDS = frozenset({
     KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_WORLD_TREASURY,
     KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_EMISSION, KIND_ADJUSTMENT,
+    KIND_POPULATION_PURSE,
 })
 
 # Kinds identified by a foreign id (ref_id > 0); every other kind is a singleton (ref_id = 0).
-REF_KINDS = frozenset({KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY})
+REF_KINDS = frozenset({KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_POPULATION_PURSE})
 
 # Display names of singleton accounts (snapshotted into econ_accounts.name on creation).
 SINGLETON_NAMES = {
@@ -62,7 +65,7 @@ NEGATIVE_ALLOWED_KINDS = frozenset({
 SOURCE_KINDS = frozenset({KIND_EMISSION, KIND_ADJUSTMENT})
 
 # Inflows into a region treasury from these kinds are taxed in favour of the country.
-TAX_SOURCE_KINDS = frozenset({KIND_CHARACTER, KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE})
+TAX_SOURCE_KINDS = frozenset({KIND_CHARACTER, KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_POPULATION_PURSE})
 
 # ---------------------------------------------------------------------------
 # Operation types
@@ -93,6 +96,7 @@ OP_HOUSE_TAX = "house_tax"
 OP_HOUSE_RESALE = "house_resale"
 OP_CHARACTER_DELETED = "character_deleted"
 OP_TREASURY_CLOSED = "treasury_closed"
+OP_REGION_TICK = "region_tick"            # FEAT-182: purse <-> region <-> country flows of one simulation step
 
 OP_TYPES = frozenset({
     OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST, OP_STARTER_KIT, OP_BATTLE_REWARD,
@@ -100,7 +104,7 @@ OP_TYPES = frozenset({
     OP_AUCTION_BID, OP_AUCTION_REFUND, OP_AUCTION_BUYOUT, OP_AUCTION_SETTLEMENT, OP_AUCTION_CLAIM,
     OP_NPC_SHOP_BUY, OP_NPC_SHOP_BUY_REFUND, OP_NPC_SHOP_SELL, OP_QUEST_REWARD,
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
-    OP_CHARACTER_DELETED, OP_TREASURY_CLOSED,
+    OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK,
 })
 
 # Only these operations may move money out of / into the source accounts.
@@ -183,6 +187,10 @@ class AccountRef:
     @classmethod
     def country(cls, country_id: int) -> "AccountRef":
         return cls(KIND_COUNTRY_TREASURY, int(country_id))
+
+    @classmethod
+    def purse(cls, region_id: int) -> "AccountRef":
+        return cls(KIND_POPULATION_PURSE, int(region_id))
 
     @classmethod
     def world(cls) -> "AccountRef":
@@ -291,6 +299,65 @@ class ApplyStep(NamedTuple):
     row_id: int
     delta: int
     account: AccountRef
+
+
+# ---------------------------------------------------------------------------
+# Goods groups (FEAT-182) and the item -> group auto rule
+# ---------------------------------------------------------------------------
+
+GOODS_GROUPS: Tuple[str, ...] = (
+    "food", "ore_metal", "wood", "herbs", "hides_textiles", "magic",
+    "weapons", "armor", "jewelry", "potions", "tools", "household",
+)
+
+# Items that never trade on the regional market (their group, if any, is still reported).
+OFF_MARKET_ITEM_TYPES = frozenset({"scroll", "recipe"})
+OFF_MARKET_RARITIES = frozenset({"legendary", "mythical", "divine", "demonic"})
+
+_RESOURCE_SUBCATEGORY_GROUPS = {
+    "ore": "ore_metal", "ingot": "ore_metal",
+    "wood": "wood",
+    "herb": "herbs", "reagent": "herbs",
+    "ingredient": "food",
+    "trophy": "hides_textiles",
+    "magic_dust": "magic", "essence": "magic", "material": "magic",
+    "whetstone": "tools", "repair_kit": "tools",
+}
+
+_ITEM_TYPE_GROUPS = {
+    "weapon": "weapons",
+    "head": "armor", "body": "armor", "cloak": "armor", "belt": "armor",
+    "ring": "jewelry", "necklace": "jewelry", "bracelet": "jewelry", "gem": "jewelry",
+    "rune": "magic",
+    "gathering_tool": "tools",
+    "furniture": "household",
+}
+
+
+def auto_item_group(
+    item_type: Optional[str],
+    resource_subcategory: Optional[str],
+    is_food,
+    item_rarity: Optional[str],
+) -> Tuple[Optional[str], bool]:
+    """Default goods group of an item and whether it is off-market (admin overrides win over this).
+
+    consumable -> food / potions by is_food; resource -> by subcategory (NULL -> food when is_food,
+    else no group); equipment and other types by item_type; scroll / recipe / misc -> no group.
+    Off-market: scroll, recipe and legendary-or-higher rarity.
+    """
+    food = bool(is_food)
+    if item_type == "consumable":
+        group: Optional[str] = "food" if food else "potions"
+    elif item_type == "resource":
+        if resource_subcategory:
+            group = _RESOURCE_SUBCATEGORY_GROUPS.get(resource_subcategory)
+        else:
+            group = "food" if food else None
+    else:
+        group = _ITEM_TYPE_GROUPS.get(item_type) if item_type else None
+    off_market = item_type in OFF_MARKET_ITEM_TYPES or item_rarity in OFF_MARKET_RARITIES
+    return group, off_market
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +573,7 @@ SQL_ACCOUNT_NAME = {
     KIND_CHARACTER: "SELECT name FROM characters WHERE id = :ref_id",
     KIND_REGION_TREASURY: "SELECT name FROM Regions WHERE id = :ref_id",
     KIND_COUNTRY_TREASURY: "SELECT name FROM Countries WHERE id = :ref_id",
+    KIND_POPULATION_PURSE: "SELECT name FROM Regions WHERE id = :ref_id",
 }
 
 SQL_DEBIT_CHARACTER = (

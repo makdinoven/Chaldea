@@ -847,6 +847,95 @@ class TestTreasuryClosing:
         assert await _ops(s, "treasury_closed") == 0
         assert await _world_sum(s) == 0
 
+    async def _fund_purse(self, s, region_id, amount):
+        await econ_ledger.post_operation(
+            s, op_type="admin_emission",
+            legs=[econ_core.Leg(econ_core.AccountRef.emission(), econ_core.AccountRef.purse(region_id), amount)],
+            source_service="test", comment="purse seed", apply_tax=False)
+        await s.commit()
+
+    async def test_deleting_a_region_moves_its_population_purse_to_the_country_untaxed(self, world_db):
+        """FEAT-182 3.8: purse -> country (no tax leg), then the treasury as before; both deactivated."""
+        s = world_db
+        await self._fund_purse(s, 10, 1200)
+        assert await _account(s, "population_purse", 10) == 1200
+        await crud.delete_region(s, 10)
+        assert await _account(s, "population_purse", 10) == 0
+        assert await _active(s, "population_purse", 10) == 0
+        assert await _account(s, "region_treasury", 10) == 0
+        assert await _active(s, "region_treasury", 10) == 0
+        assert await _account(s, "country_treasury", 1) == 50 + 450 + 1200
+        assert await _ops(s, "treasury_closed") == 2
+        assert await _one(s, "SELECT COUNT(*) FROM econ_postings p JOIN econ_operations o ON o.id = p.operation_id "
+                             "WHERE o.op_type = 'treasury_closed' AND p.leg_type = 'tax'") == 0
+        assert await _world_sum(s) == 0
+
+    async def test_an_empty_purse_is_deactivated_without_a_posting(self, world_db):
+        s = world_db
+        await self._fund_purse(s, 10, 300)
+        await econ_ledger.post_operation(
+            s, op_type="admin_adjust",
+            legs=[econ_core.Leg(econ_core.AccountRef.purse(10), econ_core.AccountRef.adjustment(), 300)],
+            source_service="test", comment="drain", apply_tax=False)
+        await s.commit()
+        await crud.delete_region(s, 10)
+        assert await _active(s, "population_purse", 10) == 0
+        assert await _ops(s, "treasury_closed") == 1  # the region treasury only
+        assert await _world_sum(s) == 0
+
+    async def test_a_failed_region_delete_keeps_the_purse(self, world_db, monkeypatch):
+        """FEAT-182: the purse closing is part of the same transaction as the region delete."""
+        s = world_db
+        await self._fund_purse(s, 10, 800)
+
+        async def _boom(*a, **kw):
+            raise RuntimeError("district delete failed")
+
+        monkeypatch.setattr(crud, "delete_district", _boom)
+        with pytest.raises(RuntimeError):
+            await crud.delete_region(s, 10)
+        await s.rollback()
+        assert await _account(s, "population_purse", 10) == 800
+        assert await _active(s, "population_purse", 10) == 1
+        assert await _account(s, "country_treasury", 1) == 50
+        assert await _ops(s, "treasury_closed") == 0
+        assert await _world_sum(s) == 0
+
+    async def test_a_negative_treasury_and_a_funded_purse_close_in_one_delete(self, world_db):
+        """Region 11 owes 70; its purse (500) and the debt both land in country 1, untaxed."""
+        s = world_db
+        await self._fund_purse(s, 11, 500)
+        await crud.delete_region(s, 11)
+        assert await _account(s, "population_purse", 11) == 0
+        assert await _account(s, "region_treasury", 11) == 0
+        assert await _account(s, "country_treasury", 1) == 50 + 500 - 70
+        assert await _one(s, "SELECT COUNT(*) FROM econ_postings WHERE leg_type = 'tax'") == 2  # seed buys only
+        assert await _world_sum(s) == 0
+
+    async def test_purse_cannot_be_overdrawn_through_the_async_ledger(self, world_db):
+        s = world_db
+        await self._fund_purse(s, 20, 40)
+        with pytest.raises(econ_core.InsufficientFunds):
+            await econ_ledger.post_operation(
+                s, op_type="region_tick",
+                legs=[econ_core.Leg(econ_core.AccountRef.purse(20), econ_core.AccountRef.region(20), 41)],
+                source_service="test", region_id=20)
+        await s.rollback()
+        assert await _account(s, "population_purse", 20) == 40
+        assert await _ops(s, "region_tick") == 0
+        assert await _world_sum(s) == 0
+
+    async def test_deleting_a_country_sends_region_purses_to_the_world(self, world_db):
+        s = world_db
+        await self._fund_purse(s, 10, 200)
+        await self._fund_purse(s, 11, 30)
+        await crud.delete_country(s, 1)
+        for ref in (10, 11):
+            assert await _account(s, "population_purse", ref) == 0
+            assert await _active(s, "population_purse", ref) == 0
+        assert await _account(s, "world_treasury") == 450 - 70 + 50 + 200 + 30
+        assert await _world_sum(s) == 0
+
     async def test_unknown_region_is_404_and_moves_nothing(self, world_db):
         with pytest.raises(HTTPException) as exc:
             await crud.delete_region(world_db, 999)

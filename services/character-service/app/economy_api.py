@@ -1,8 +1,11 @@
 """FEAT-181 world economy — HTTP API (router included from main.py).
 
-Public:  GET /characters/economy/currency
+Public:  GET /characters/economy/currency, GET /characters/economy/regions/{id}/card (FEAT-182)
 Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,settings}
-RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings.
+         FEAT-182: /characters/admin/economy/{regions[/{id}[/apply-template|/history]],regions/fill,
+                   goods-groups[/{code}],templates[/{code}],item-groups,sim[/run]}
+RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings
+(regions/fill needs economy:settings AND economy:emit).
 
 Endpoints are plain `def` (sync SQLAlchemy runs in the threadpool). The router is included in
 main.py BEFORE the main `/characters` router, so `/characters/{character_id}`-style routes can
@@ -16,14 +19,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 import database
 import econ_core as core
 import econ_ledger
+import econ_scheduler
+import econ_tick
 import economy_crud
+import economy_sim_crud
 import schemas
-from auth_http import UserRead, require_permission
+from auth_http import UserRead, get_current_user_via_http, require_permission
 
 logger = logging.getLogger("character-service.economy")
 
@@ -34,6 +40,8 @@ DEFAULT_PAGE_SIZE = 50
 MAX_SEARCH_LEN = 100
 
 GENERIC_ERROR = "Не удалось выполнить операцию с экономикой"
+HISTORY_DEFAULT_LIMIT = 40
+HISTORY_MAX_LIMIT = 200
 
 
 def get_db():
@@ -62,6 +70,14 @@ def _run_write(db: Session, action):
         db.rollback()
         logger.exception("economy operation failed")
         raise HTTPException(status_code=500, detail=GENERIC_ERROR)
+
+
+def _read_or_error(db: Session, action):
+    """A read that may answer a business error (404 and the like)."""
+    try:
+        return _read(db, action)
+    except economy_crud.EconomyApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 def _read(db: Session, action):
@@ -129,6 +145,7 @@ def list_operations(
     account_id: Optional[int] = Query(None, ge=1),
     character_id: Optional[int] = Query(None, ge=1),
     op_type: Optional[str] = Query(None),
+    exclude_op_type: Optional[str] = Query(None),
     region_id: Optional[int] = Query(None, ge=1),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
@@ -140,6 +157,9 @@ def list_operations(
     op_type = op_type or None
     if op_type is not None and op_type not in core.OP_TYPES:
         raise HTTPException(status_code=400, detail="Неизвестный тип операции")
+    exclude_op_type = exclude_op_type or None
+    if exclude_op_type is not None and exclude_op_type not in core.OP_TYPES:
+        raise HTTPException(status_code=400, detail="Неизвестный тип операции")
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="Дата «с» позже даты «по»")
 
@@ -147,6 +167,7 @@ def list_operations(
         items, total = economy_crud.list_operations(
             db, account_id=account_id, character_id=character_id, op_type=op_type, region_id=region_id,
             date_from=date_from, date_to=date_to, page=page, page_size=page_size,
+            exclude_op_type=exclude_op_type,
         )
         return {"items": items, "total": total, "page": page, "page_size": page_size}
     return _read(db, action)
@@ -207,3 +228,223 @@ def put_settings(
     # This process sees the change immediately; other services within their 60 s TTL.
     econ_ledger.invalidate_settings_cache()
     return economy_crud.settings_response(settings)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-182 living regions (contract 3.7)
+# ---------------------------------------------------------------------------
+
+def require_all_permissions(*permissions: str):
+    """Like ``require_permission``, but every listed permission is required."""
+    def checker(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
+        if any(p not in user.permissions for p in permissions):
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        return user
+    return checker
+
+
+@router.get("/economy/regions/{region_id}/card")
+def get_region_card(region_id: int, db: Session = Depends(get_db)):
+    """Public qualitative region card: no balances, no raw stock/price numbers; non-simulated -> participating=false."""
+    return _read(db, lambda: economy_sim_crud.region_card(db, region_id))
+
+
+@router.get("/admin/economy/regions")
+def list_econ_regions(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: {"items": economy_sim_crud.list_regions(db)})
+
+
+@router.post("/admin/economy/regions/fill")
+def post_regions_fill(
+    body: schemas.EconFillRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_all_permissions("economy:settings", "economy:emit")),
+):
+    """«Заполнить регионы по шаблонам»: template goods, stocks = norm, idempotent top-up emission (purses, treasuries)."""
+    result = _run_write(db, lambda: economy_sim_crud.fill_regions(
+        db, region_ids=body.region_ids, population_from_template=body.population_from_template,
+        reset_stocks=body.reset_stocks, fund_purses=body.fund_purses, treasury_to_reserve=body.treasury_to_reserve,
+        comment=body.comment, actor_user_id=current_user.id,
+    ))
+    logger.info("economy fill: user=%s regions=%s emitted=%s ops=%s", current_user.id, result["regions"],
+                result["emitted"], result["operation_ids"])
+    return result
+
+
+@router.get("/admin/economy/regions/{region_id}")
+def get_econ_region(
+    region_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read_or_error(db, lambda: economy_sim_crud.get_region(db, region_id))
+
+
+@router.put("/admin/economy/regions/{region_id}")
+def put_econ_region(
+    region_id: int,
+    body: schemas.EconRegionUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    result = _run_write(db, lambda: economy_sim_crud.update_region(db, region_id, body))
+    logger.info("economy region updated: user=%s region=%s template=%s population=%s",
+                current_user.id, region_id, body.template_code, body.population)
+    return result
+
+
+@router.post("/admin/economy/regions/{region_id}/apply-template")
+def post_apply_template(
+    region_id: int,
+    body: Optional[schemas.EconApplyTemplateRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    reset_stocks = body.reset_stocks if body is not None else True
+    result = _run_write(db, lambda: economy_sim_crud.apply_template(db, region_id, reset_stocks))
+    logger.info("economy template applied: user=%s region=%s reset_stocks=%s", current_user.id, region_id,
+                reset_stocks)
+    return result
+
+
+@router.get("/admin/economy/regions/{region_id}/history")
+def get_region_history(
+    region_id: int,
+    limit: int = Query(HISTORY_DEFAULT_LIMIT, ge=1, le=HISTORY_MAX_LIMIT),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: {"items": economy_sim_crud.region_history(db, region_id, limit)})
+
+
+@router.get("/admin/economy/goods-groups")
+def list_goods_groups(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: {"items": economy_sim_crud.list_goods_groups(db)})
+
+
+@router.put("/admin/economy/goods-groups/{code}")
+def put_goods_group(
+    code: str,
+    body: schemas.EconGoodsGroupUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    result = _run_write(db, lambda: economy_sim_crud.update_goods_group(db, code, body))
+    logger.info("economy goods group updated: user=%s code=%s", current_user.id, code)
+    return result
+
+
+@router.get("/admin/economy/templates")
+def list_templates(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: {"items": economy_sim_crud.list_templates(db)})
+
+
+@router.put("/admin/economy/templates/{code}")
+def put_template(
+    code: str,
+    body: schemas.EconTemplateUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    result = _run_write(db, lambda: economy_sim_crud.update_template(db, code, body))
+    logger.info("economy template updated: user=%s code=%s", current_user.id, code)
+    return result
+
+
+@router.get("/admin/economy/item-groups")
+def list_item_groups(
+    q: Optional[str] = Query(None),
+    item_type: Optional[str] = Query(None),
+    group: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    off_market: Optional[bool] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    q = (q or "").strip() or None
+    if q is not None and len(q) > MAX_SEARCH_LEN:
+        raise HTTPException(status_code=400, detail=f"Поисковый запрос — не длиннее {MAX_SEARCH_LEN} символов")
+    item_type = item_type or None
+    if item_type is not None and item_type not in economy_sim_crud.ITEM_TYPES:
+        raise HTTPException(status_code=400, detail="Неизвестный тип предмета")
+    group = group or None
+    if group is not None and group != economy_sim_crud.GROUP_NONE and group not in core.GOODS_GROUPS:
+        raise HTTPException(status_code=400, detail="Неизвестная группа товаров")
+    source = source or None
+    if source is not None and source not in (economy_sim_crud.SOURCE_AUTO, economy_sim_crud.SOURCE_MANUAL):
+        raise HTTPException(status_code=400, detail="Источник группы — auto или manual")
+
+    def action():
+        items, total = economy_sim_crud.list_item_groups(
+            db, q=q, item_type=item_type, group=group, source=source, off_market=off_market,
+            page=page, page_size=page_size)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return _read(db, action)
+
+
+@router.put("/admin/economy/item-groups")
+def put_item_groups(
+    body: schemas.EconItemGroupsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    updated = _run_write(db, lambda: economy_sim_crud.update_item_groups(
+        db, item_ids=body.item_ids, fields_set=set(body.__fields_set__), group_code=body.group_code,
+        off_market=body.off_market, reset=body.reset, actor_user_id=current_user.id,
+    ))
+    logger.info("economy item groups updated: user=%s items=%s", current_user.id, updated)
+    return {"updated": updated}
+
+
+@router.get("/admin/economy/sim")
+def get_sim(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_sim_crud.sim_state(db, env_enabled=econ_scheduler.env_enabled()))
+
+
+@router.put("/admin/economy/sim")
+def put_sim(
+    body: schemas.EconSimUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    _run_write(db, lambda: economy_sim_crud.update_sim(
+        db, tick_enabled=body.tick_enabled, params_in=body.params.dict(), user_id=current_user.id))
+    logger.info("economy sim settings updated: user=%s tick_enabled=%s", current_user.id, body.tick_enabled)
+    return _read(db, lambda: economy_sim_crud.sim_state(db, env_enabled=econ_scheduler.env_enabled()))
+
+
+@router.post("/admin/economy/sim/run")
+def post_sim_run(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    """«Пересчитать сейчас»: a real extra step of every simulated region; waits for completion."""
+    # The run opens its own sessions on the request session's engine (so a test override of get_db applies too).
+    factory = sessionmaker(autocommit=False, autoflush=False, bind=db.get_bind())
+    db.close()
+    try:
+        summary = econ_tick.run_manual(current_user.id, session_factory=factory)
+    except econ_tick.RunInProgress:
+        raise HTTPException(status_code=409, detail="Пересчёт уже идёт, попробуйте позже")
+    except Exception:
+        logger.exception("economy manual run failed")
+        raise HTTPException(status_code=500, detail="Не удалось выполнить пересчёт")
+    logger.info("economy manual run: user=%s run=%s status=%s", current_user.id, summary.run_id, summary.status)
+    data = summary.to_dict()
+    data["id"] = data.pop("run_id")
+    data["trigger_kind"] = data.pop("trigger")
+    return data

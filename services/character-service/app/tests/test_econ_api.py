@@ -176,7 +176,7 @@ def test_summary_shape(client):
     assert s["currency"] == CURRENCY
     assert s["totals"] == {"issued": 150, "held": 150, "players": 100, "npcs": 50, "escrow": 0,
                            "auction_storage": 0, "region_treasuries": 0, "country_treasuries": 0,
-                           "world_treasury": 0}
+                           "world_treasury": 0, "population_purses": 0}
     assert s["invariant"] == {"ok": True, "ledger_sum": 0, "escrow_expected": 0, "escrow_actual": 0,
                               "storage_expected": 0, "storage_actual": 0, "drifting_characters": []}
     assert s["settings"] == {"country_tax_rate": 0.1}
@@ -187,7 +187,9 @@ def test_summary_shape(client):
         assert set(country) == {"account_id", "country_id", "name", "balance", "is_active", "regions"}
         assert country["is_active"] is True and country["balance"] == 0
         for region in country["regions"]:
-            assert set(region) == {"account_id", "region_id", "name", "balance", "is_active"}
+            assert set(region) == {"account_id", "region_id", "name", "balance", "is_active",
+                                   "purse_account_id", "purse_balance"}
+            assert region["purse_account_id"] is None and region["purse_balance"] is None
     kinds = [a["kind"] for a in s["system_accounts"]]
     assert kinds == ["emission", "adjustment", "world_treasury", "auction_escrow", "auction_storage"]
     assert set(s["system_accounts"][0]) == {"account_id", "kind", "name", "balance"}
@@ -283,7 +285,8 @@ def test_emission_only_into_treasuries(client, econ_db, account_id):
     resp = client.post("/characters/admin/economy/emission",
                        json={"account_id": account_id, "amount": 5, "comment": "тест"})
     assert resp.status_code == 400
-    assert resp.json()["detail"] == "Эмиссия возможна только в казну региона, страны или Казну Скитальцев"
+    assert resp.json()["detail"] == ("Эмиссия возможна только в казну региона, страны, Казну Скитальцев "
+                                     "или кошелёк жителей региона")
     _assert_world_closes(econ_db, client)
 
 
@@ -496,6 +499,137 @@ def test_operations_shape_and_filters(client, econ_db):
 ])
 def test_operations_validation(client, params, status):
     assert client.get("/characters/admin/economy/operations", params=params).status_code == status
+
+
+# ---------------------------------------------------------------------------
+# FEAT-182: population purse + exclude_op_type
+# ---------------------------------------------------------------------------
+
+def _create_purse(engine, region_id):
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO econ_accounts (kind, ref_id, name, balance, allow_negative) "
+            "VALUES ('population_purse', :r, 'snapshot', 0, 0)"), {"r": region_id})
+    return _account_id(engine, "population_purse", region_id)
+
+
+def test_emission_into_population_purse(client, econ_db):
+    _summary(client)
+    purse = _create_purse(econ_db, 10)
+    resp = client.post("/characters/admin/economy/emission",
+                       json={"account_id": purse, "amount": 700, "comment": "Кошелёк жителей"})
+    assert resp.status_code == 200, resp.text
+    op_id = resp.json()["operation_id"]
+    assert resp.json()["balance"] == 700
+    assert _q(econ_db, "SELECT region_id FROM econ_operations WHERE id = :o", o=op_id) == 10
+    assert _q(econ_db, "SELECT COUNT(*) FROM econ_postings WHERE leg_type = 'tax'") == 0
+
+    s = _summary(client)
+    assert s["invariant"]["ok"] is True
+    assert s["totals"]["population_purses"] == 700 and s["totals"]["held"] == 850
+    region = next(r for c in s["countries"] for r in c["regions"] if r["region_id"] == 10)
+    assert region["purse_account_id"] == purse and region["purse_balance"] == 700
+    assert "population_purse" not in [a["kind"] for a in s["system_accounts"]]
+
+    accounts = client.get("/characters/admin/economy/accounts", params={"kind": "population_purse"}).json()
+    assert [(a["account_id"], a["name"], a["balance"]) for a in accounts["items"]] == [(purse, "Region A1", 700)]
+
+    ops = client.get("/characters/admin/economy/operations", params={"account_id": purse}).json()
+    assert ops["items"][0]["postings"][0]["to"] == {"account_id": purse, "kind": "population_purse",
+                                                    "ref_id": 10, "name": "Region A1"}
+
+
+def test_operations_exclude_op_type(client, econ_db):
+    _summary(client)
+    acc = _account_id(econ_db, "world_treasury")
+    client.post("/characters/admin/economy/emission", json={"account_id": acc, "amount": 5, "comment": "Тест журнала"})
+    all_ops = client.get("/characters/admin/economy/operations").json()
+    assert sorted(o["op_type"] for o in all_ops["items"]) == ["admin_emission", "genesis"]
+    rest = client.get("/characters/admin/economy/operations", params={"exclude_op_type": "admin_emission"}).json()
+    assert [o["op_type"] for o in rest["items"]] == ["genesis"] and rest["total"] == 1
+    assert client.get("/characters/admin/economy/operations",
+                      params={"exclude_op_type": "nope"}).status_code == 400
+
+
+def test_adjust_population_purse_up_down_and_never_negative(client, econ_db):
+    """FEAT-182 3.2: admin adjust is allowed on a purse, but a purse never goes below zero."""
+    _summary(client)
+    purse = _create_purse(econ_db, 20)
+    resp = client.post("/characters/admin/economy/adjust",
+                       json={"account_id": purse, "delta": 120, "comment": "Пополнение кошелька"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["balance"] == 120
+    op_id = resp.json()["operation_id"]
+    assert _q(econ_db, "SELECT region_id FROM econ_operations WHERE id = :o", o=op_id) == 20
+    resp = client.post("/characters/admin/economy/adjust",
+                       json={"account_id": purse, "delta": -121, "comment": "Слишком много"})
+    assert resp.status_code == 400 and resp.json()["detail"] == "Недостаточно средств на счёте"
+    resp = client.post("/characters/admin/economy/adjust",
+                       json={"account_id": purse, "delta": -120, "comment": "Обнуление"})
+    assert resp.status_code == 200 and resp.json()["balance"] == 0
+    assert _q(econ_db, "SELECT COUNT(*) FROM econ_postings WHERE leg_type = 'tax'") == 0
+    s = _summary(client)
+    assert s["totals"]["population_purses"] == 0 and s["invariant"]["ok"] is True
+    _assert_world_closes(econ_db, client)
+
+
+def test_closed_population_purse_rejects_emission_and_adjust(client, econ_db):
+    _summary(client)
+    purse = _create_purse(econ_db, 10)
+    with econ_db.begin() as conn:
+        conn.execute(text("UPDATE econ_accounts SET is_active = 0 WHERE id = :i"), {"i": purse})
+    for url, body in (("/characters/admin/economy/emission", {"account_id": purse, "amount": 5, "comment": "тест"}),
+                      ("/characters/admin/economy/adjust", {"account_id": purse, "delta": 5, "comment": "тест"})):
+        assert client.post(url, json=body).status_code == 400
+    assert _q(econ_db, "SELECT balance FROM econ_accounts WHERE id = :i", i=purse) == 0
+
+
+def test_exclude_region_tick_hides_simulation_steps(client, econ_db):
+    """The journal hides region_tick operations with exclude_op_type and can combine it with other filters."""
+    import econ_ledger
+    from sqlalchemy.orm import sessionmaker as _sm
+
+    _summary(client)
+    purse = _create_purse(econ_db, 10)
+    client.post("/characters/admin/economy/emission", json={"account_id": purse, "amount": 500, "comment": "Жители"})
+    s = _sm(bind=econ_db)()
+    try:
+        for slot in (1, 2):
+            econ_ledger.post_operation(
+                s, op_type="region_tick",
+                legs=[econ_core.Leg(econ_core.AccountRef.purse(10), econ_core.AccountRef.region(10), 100)],
+                source_service="character-service", region_id=10, idempotency_key=f"region_tick:{slot}:r:10")
+            s.commit()
+    finally:
+        s.close()
+
+    def ops(**params):
+        r = client.get("/characters/admin/economy/operations", params=params)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    assert ops()["total"] == 4
+    assert ops(op_type="region_tick")["total"] == 2
+    hidden = ops(exclude_op_type="region_tick")
+    assert hidden["total"] == 2 and {o["op_type"] for o in hidden["items"]} == {"admin_emission", "genesis"}
+    assert ops(account_id=purse, exclude_op_type="region_tick")["total"] == 1
+    assert ops(region_id=10, exclude_op_type="region_tick")["total"] == 1
+    assert ops(op_type="region_tick", exclude_op_type="region_tick")["total"] == 0
+    assert ops(exclude_op_type="")["total"] == 4        # empty == no filter
+    tick = ops(op_type="region_tick")["items"][0]
+    assert [p["leg_type"] for p in tick["postings"]] == ["main", "tax"]
+    assert tick["postings"][0]["from"]["kind"] == "population_purse"
+    _assert_world_closes(econ_db, client)
+
+
+@pytest.mark.parametrize("value", [
+    "region_tick' OR '1'='1", "region_tick; DROP TABLE econ_operations; --", "REGION_TICK", " region_tick",
+    "%", "x" * 300,
+])
+def test_exclude_op_type_rejects_unknown_and_injection(client, econ_db, value):
+    resp = client.get("/characters/admin/economy/operations", params={"exclude_op_type": value})
+    assert resp.status_code == 400 and resp.json()["detail"] == "Неизвестный тип операции"
+    assert _q(econ_db, "SELECT COUNT(*) FROM econ_operations") == 1
 
 
 # ---------------------------------------------------------------------------

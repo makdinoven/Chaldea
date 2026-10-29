@@ -104,6 +104,13 @@ def test_format(n, short, expected):
     assert econ_core.format_currency(n, econ_core.DEFAULT_FORMS, short=short) == expected
 
 
+@pytest.mark.parametrize("args,expected", cc.ITEM_GROUP_CASES)
+def test_auto_item_group(args, expected):
+    group, off_market = econ_core.auto_item_group(*args)
+    assert (group, off_market) == expected
+    assert group is None or group in econ_core.GOODS_GROUPS
+
+
 def test_currency_forms_read_from_settings(contract_db):
     s = contract_db()
     try:
@@ -137,3 +144,29 @@ def test_contract_files_are_the_shared_copies():
         assert "CANONICAL COPY: services/character-service/app/tests/econ_contract_cases.py" in fh.read()
     with open(os.path.join(here, "..", "econ_ledger.py"), encoding="utf-8") as fh:
         assert "CANONICAL SYNC COPY: services/character-service/app/econ_ledger.py" in fh.read()
+
+
+def test_auto_item_group_covers_every_real_item_enum_value(original_enum_values):
+    """FEAT-182 Q1: every value the `items` table can hold maps per section 3.6 — a new item_type,
+    rarity or resource subcategory added to the model without a group rule fails here."""
+    import models
+
+    item_types = set(original_enum_values["items.item_type"])
+    rarities = set(original_enum_values["items.item_rarity"])
+    no_group_types = {"misc", "scroll", "recipe"}
+    for item_type in item_types - {"consumable", "resource"}:
+        group, off_market = econ_core.auto_item_group(item_type, None, False, "common")
+        if item_type in no_group_types:
+            assert group is None, item_type
+        else:
+            assert group in econ_core.GOODS_GROUPS, item_type
+        assert off_market == (item_type in econ_core.OFF_MARKET_ITEM_TYPES), item_type
+    for sub in models.RESOURCE_SUBCATEGORIES:
+        for food in (False, True):
+            group, off_market = econ_core.auto_item_group("resource", sub, food, "common")
+            assert group in econ_core.GOODS_GROUPS and off_market is False, (sub, food)
+    for rarity in rarities:
+        _, off_market = econ_core.auto_item_group("weapon", None, False, rarity)
+        assert off_market == (rarity in econ_core.OFF_MARKET_RARITIES), rarity
+    assert econ_core.OFF_MARKET_RARITIES <= rarities
+    assert econ_core.OFF_MARKET_ITEM_TYPES <= item_types
