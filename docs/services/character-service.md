@@ -552,3 +552,115 @@ Nginx: покрыто существующим `location /characters/` (dev и p
 400 «Счёт закрыт» (неактивный счёт), «Эмиссия возможна только в казну…», «Этот счёт нельзя корректировать»,
 «Неизвестный тип счёта/операции»; SQL и трассировки наружу не уходят. Каждое действие админа — операция журнала с
 `actor_user_id` и обязательным комментарием.
+
+### Контракт этапа 2: кошелёк жителей и пересчёт региона (FEAT-182 B1)
+
+- Новый вид счёта `population_purse` («Кошелёк жителей», `AccountRef.purse(region_id)`, ref = `Regions.id`, имя-снимок
+  из `Regions`). **Не уходит в минус** (не в `NEGATIVE_ALLOWED_KINDS`). Входит в `TAX_SOURCE_KINDS`: поступление
+  `кошелёк → казна региона` облагается налогом стране, как платёж игрока. Закрытие кошелька в казну страны
+  (`treasury_closed`) налогом не облагается.
+- Новый тип операции `region_tick` («Пересчёт региона»): ноги кошелёк ↔ казна региона ↔ казна страны за один шаг
+  симуляции; источники `emission`/`adjustment` трогать не может. Ключ `region_tick:<run_id>:r:<region_id>`.
+- `econ_core.GOODS_GROUPS` — 12 кодов групп товаров; `auto_item_group(item_type, resource_subcategory, is_food,
+  item_rarity) -> (group | None, off_market)` — правило автогруппы (FEAT-182 3.6); `OFF_MARKET_ITEM_TYPES`
+  (`scroll`, `recipe`), `OFF_MARKET_RARITIES` (легендарная и выше). Сценарии — `ITEM_GROUP_CASES` в
+  `tests/econ_contract_cases.py`.
+- Админ-API: эмиссия разрешена и в кошелёк жителей (операция помечается `region_id`); корректировка кошелька тоже
+  разрешена (минус → 400). Сводка: `totals.population_purses` (уже входит в `held`, инвариант не меняется), у узла
+  региона в дереве — `purse_account_id`, `purse_balance` (`null`, если кошелька нет); кошельки не попадают в
+  `system_accounts`. Счета и журнал показывают кошелёк с текущим названием региона. Журнал:
+  `GET …/operations?exclude_op_type=<op_type>` (из `OP_TYPES`, иначе 400) — скрыть операции одного типа
+  (фронтенд скрывает `region_tick` по умолчанию).
+
+## Economy simulation (FEAT-182)
+
+### Пересчёт регионов: тик (`app/econ_tick.py`) и планировщик (`app/econ_scheduler.py`) — B5
+
+Один прогон (`econ_tick_runs`) = один шаг симуляции всех участвующих регионов (`econ_regions.template_code IS NOT
+NULL`, `population > 0`, строка `Regions` существует). Регион без шаблона не участвует. Математика — чистый модуль
+`econ_sim.py`; тик только читает строки, вызывает `simulate_region` и проводит деньги.
+
+- **Слот:** `slot = floor(unix_time / 21600)` (UTC 00/06/12/18). Авто-прогон делает `INSERT econ_tick_runs(slot)`;
+  `UNIQUE(slot)` → второй вызов в том же слоте (другой процесс, перезапуск `--reload`) — no-op (`run_tick` вернёт
+  `None`). **Пропущенные слоты не догоняются**: берётся только текущий.
+- **Доигрывание:** прогон в статусе `running` с `heartbeat_at` старше 10 минут подхватывается следующим авто-вызовом
+  того же слота (условный `UPDATE … WHERE heartbeat_at < stale` — ровно один процесс). Уже сделанные регионы
+  (`econ_regions.last_run_id = run.id`) пропускаются. Зависшие ручные прогоны и прогоны прошлых слотов закрываются
+  как `partial`/`failed` с ошибкой «прерван…».
+- **План грантов:** при захвате в `grant_plan` пишется `{region_id: grant}` для **всех** участвующих регионов (0 тоже —
+  это и список регионов прогона): 25 % (`country_grant_share`) положительного баланса казны страны делится между её
+  регионами пропорционально населению (`econ_sim.country_grants`). При доигрывании используется тот же план.
+- **Регион = одна транзакция:** `econ_regions` FOR UPDATE → `econ_region_goods` FOR UPDATE → балансы кошелька/казны
+  (чтение без блокировки) → `simulate_region` → UPDATE строк → `post_operation(op_type='region_tick')` с ногами
+  `кошелёк → казна` (налог; +10 % `казна → страна` добавляет реестр), `страна → казна` (грант),
+  `казна → кошелёк` (жалованье); `idempotency_key = region_tick:<run_id>:r:<region_id>`, `region_id`, metadata
+  `{run_id, tax, grant, wages, income, hunger}` → строка `econ_region_history` → COMMIT. Порядок блокировок:
+  бизнес-строки → `econ_accounts` по возрастанию id (внутри `post_operation`); `characters` не трогаются. Все ноги
+  нулевые → операции нет (регион всё равно посчитан). `DuplicateOperation` = регион уже проведён параллельным
+  исполнителем → считается сделанным. Любая другая ошибка → откат региона, `regions_failed += 1`, лог с id региона и
+  классом ошибки, остальные регионы идут дальше; итог `done` / `partial` / `failed`, `error` = список регионов.
+- **Застревание:** пустой кошелёк + нет гранта + нет излишка казны → нет налога и жалованья, жители не покупают —
+  тик пишет WARNING «region … is stuck».
+- **Уборка:** перед шагом удаляются `econ_regions` (+ товары) регионов, которых больше нет в `Regions`; после —
+  история старше `history_retention_days` (60) и прогоны старше 500 последних.
+- **Ручной пересчёт** («Пересчитать сейчас», B6): настоящий дополнительный шаг, `slot = NULL`, `trigger_kind =
+  'manual'`, `actor_user_id`; расписание не сдвигает. Захват сериализуется `SELECT … FOR UPDATE` строки
+  `econ_sim_settings`; если жив любой прогон (heartbeat свежее 10 минут) — `RunInProgress` (→ 409).
+
+**Публичные функции `econ_tick`:**
+
+| Функция | Назначение |
+|---|---|
+| `run_tick(session_factory=None, *, trigger='auto'\|'manual', actor_user_id=None, now=None, clock=None) -> RunSummary \| None` | прогон; `None` — авто-слот уже сделан/занят живым процессом; `now` фиксирует часы (тесты) |
+| `run_manual(actor_user_id, session_factory=None) -> RunSummary` | ручной шаг; бросает `RunInProgress(run_id)` |
+| `RunSummary.to_dict()` | `{run_id, trigger, slot, status, resumed, regions_total, regions_done, regions_failed, operations_posted, failed_region_ids, started_at, finished_at}` |
+| `slot_of(now=None)`, `slot_start(slot)` | номер слота / его начало (UTC) — для «следующий пересчёт в …» |
+| `load_params(db)`, `load_groups(db)`, `is_tick_enabled(db)` | параметры `econ_sim_settings`, группы с цепочками, DB-рубильник |
+| `region_state(row)`, `good_state(row)`, `account_balance(db, ref)` | строки ORM → датаклассы `econ_sim`, баланс счёта (0, если счёта нет) |
+| `participating_regions(db)`, `build_grant_plan(db, params)`, `purge_orphans(db)` | список участников, план грантов, уборка (без коммита) |
+
+Сессии `run_tick` открывает сам из `session_factory` (по умолчанию `database.SessionLocal`) и коммитит их сам;
+сессию запроса ему передавать не нужно.
+
+**Планировщик:** `start_scheduler()` вызывается из `@app.on_event("startup")` в `main.py`. Поток-демон стартует,
+только если env `ECON_TICK_ENABLED` ∈ `1/true/yes/on` (по умолчанию выключено; в обоих compose-файлах `1`) и процесс
+не pytest; один поток на процесс (модульный guard). Первая проверка через 30 с, затем каждые
+`ECON_TICK_POLL_SECONDS` (по умолчанию 60, минимум 5). Каждая итерация читает `econ_sim_settings.tick_enabled`
+(выключено → ничего) и вызывает `run_tick(trigger='auto')`; исключения ловятся и логируются, поток не умирает.
+Ручной пересчёт работает независимо от обоих рубильников. `stop_scheduler()` / `is_running()` — для тестов.
+
+### API живых регионов (`app/economy_api.py` + `app/economy_sim_crud.py`) — B6
+
+Контракт — раздел 3.7 файла `features/FEAT-182-economy-living-regions.md`. Все пути под nginx `location /characters/`.
+Права: GET — `economy:read`, запись — `economy:settings`, «Заполнить» — `economy:settings` **и** `economy:emit`
+(`require_all_permissions`). Ошибки валидации — 422 с русским `msg`, бизнес-ошибки — 400/404 с русским `detail`.
+Текстовые поля (названия, описание, слово поселения) обрезаются, `<`, `>` и управляющие символы отклоняются.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET /characters/economy/regions/{id}/card` | **публичный**, без токена: `econ_sim.region_card` + `region_id, participating, updated_at` (= `last_tick_at`). Неизвестный регион / без шаблона / население 0 → `{region_id, participating: false}`. Чисел денег и запасов нет |
+| `GET /characters/admin/economy/regions` | `{items}` — все `Regions` (LEFT JOIN `econ_regions`), кошелёк/казна из `econ_accounts`, `simulated` |
+| `GET …/regions/{id}` | элемент + `goods` (12 строк в порядке групп); 404 «Регион не найден» |
+| `PUT …/regions/{id}` | создаёт/обновляет строку; новая строка (или без товаров) с шаблоном получает товары шаблона, запас = норма; смена шаблона товары **не** перезаписывает; `goods` — частичный список (stock необязателен); норма пересчитывается |
+| `POST …/regions/{id}/apply-template` | `{reset_stocks=true}` — товары и налог из шаблона, население сохраняется; запас = норма, цена ×1 при `reset_stocks`; 400, если шаблона нет |
+| `POST …/regions/fill` | см. ниже |
+| `GET …/regions/{id}/history?limit=1..200 (40)` | `{items}` новые сверху, `goods = {code: {stock, price_mult, produced, consumed}}` |
+| `GET …/goods-groups`, `PUT …/goods-groups/{code}` | `{items}` / одна группа; цепочка: нельзя сам себе, циклы → 400 «Цепочка производства замыкается в круг» |
+| `GET …/templates`, `PUT …/templates/{code}` | `{items}` / один шаблон с `goods`; переданные строки товаров upsert-ятся |
+| `GET …/item-groups` | `q` (LIKE с экранированием `!`), `item_type` (enum items), `group` (код или `none`), `source` (`auto`/`manual`), `off_market`, `page`, `page_size ≤ 100`. `q`/`item_type` фильтруются в SQL, остальное — после автоправила в Python (каталог предметов маленький). `in_quests` — есть `quest_objectives` `collect`/`deliver` с `target_id = item.id` |
+| `PUT …/item-groups` | `{item_ids ≤ 500, group_code?, off_market?, reset?}`: отсутствующее поле не меняется, `null` — назад к авто, `reset` удаляет переопределения (нельзя вместе с полями); строка, где оба поля `null`, удаляется; несуществующие id пропускаются; ответ `{updated}` |
+| `GET …/sim`, `PUT …/sim` | состояние (`tick_enabled`, `env_enabled`, `params`, `current_slot_start`, `next_slot_at`, `running`, `runs` — 20 последних); PUT сливает переданные параметры с сохранёнными, границы — `schemas.ECON_SIM_PARAM_BOUNDS`, плюс `price_min < price_max`, `prod_price_min < prod_price_max` |
+| `POST …/sim/run` | «Пересчитать сейчас»: `econ_tick.run_manual`, ждёт окончания; ответ `RunSummary` с `id`/`trigger_kind`; 409 «Пересчёт уже идёт, попробуйте позже» |
+
+**«Заполнить регионы по шаблонам»** (`fill_regions`): тело `{region_ids?, population_from_template=false,
+reset_stocks=true, fund_purses=true, treasury_to_reserve=true, comment 3..500}`. Без `region_ids` — все регионы с
+шаблоном; явно указанный регион без шаблона → 400. Первым запросом блокируются строки `econ_regions` (FOR UPDATE), затем
+для каждого региона: население из шаблона (только если 0), товары шаблона, запас = норма; регион с населением 0
+пропускается (`skipped_no_population`). Деньги — **доливка** через эмиссию: кошелёк до `econ_sim.starting_purse`,
+казна (`treasury_to_reserve`) до резерва жалованья (`treasury_target` пробного шага `simulate_region` от заполненного
+состояния; он же пишется в `econ_regions.treasury_target`). Без доливки казны жалованье равно 0, пока казна не
+наберёт 7-дневный резерв налогами (~неделя), и кошельки после заполнения только тают. Сумма = `max(0, цель − баланс)`,
+повторный клик эмитирует 0. **Одна операция `admin_emission` на регион** (с `region_id` — журнал фильтруется по
+региону), ключ `econ_fill:r:<region>:p<id последней проводки кошелька>:t<…казны>` — два одновременных одинаковых
+запроса получают один ключ, второй отбрасывается (`DuplicateOperation` → регион пропущен). Ответ:
+`{regions, operation_id (последняя), operation_ids, emitted, emitted_purses, emitted_treasuries, skipped_no_population}`.
