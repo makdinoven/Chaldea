@@ -794,3 +794,152 @@ sold_value, tax, restock_items, restock_value, upkeep}` или `null`. Удал�
 ≥ нормы), `no_target` (нет рыночных админских строк — норма 0), а для явно перечисленных `npc_ids` ещё
 `not_merchant` (нет активных строк), `region_filtered` и причины legacy (`dungeon`, `not_simulated`, …). Отдельная
 правка денег одного НПС — как раньше, в карточке НПС (`economy:adjust`).
+
+## Banks (FEAT-184)
+
+Один банк на регион (таблицы `econ_banks`, `bank_deposits`, `bank_loans`, миграция `031_econ_banks`). Деньги банка —
+два счёта реестра с `ref_id = region_id`: `bank` (свои деньги банка: капитал, вклады жителей, погашения займов; из
+него выдаются займы и платятся проценты) и `bank_deposits` (хранилище вкладов игроков = Σ `amount + interest_accrued`
+открытых строк; никогда не идёт в займы → вклад игрока всегда снимаем). Чистая математика — `app/econ_bank.py`,
+слой БД — `app/economy_bank_crud.py` (разделы: общие помощники → API игрока (B4) → тик (B5) → админка (B6)).
+Параметры — 20 ключей `bank_*` в `econ_sim_settings.params` (`econ_tick.load_params`).
+
+### Порядок блокировок (3.8, общий для всех потоков экономики)
+
+`econ_regions → econ_region_goods → npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits (asc id) →
+bank_loans (asc id) → characters (asc id) → econ_accounts (asc id)`. Любое изменение строк/счетов банка X идёт под
+`econ_banks(X) FOR UPDATE`. Потоки игрока `econ_regions` не блокируют.
+
+| Поток игрока | Блокировки |
+|---|---|
+| вклад / снятие в X | `econ_banks(X)` → строка вклада (или новая) → `characters` → счета |
+| перевод A→B / отправка игроку | `econ_banks{A, B}` asc → строки вкладов asc (новая строка получателя — последней) → `characters` (только при оплате из кошелька) → счета |
+| займ в X / погашение в L | `econ_banks(X | L)` → строка займа → `characters` → счета |
+| тик: проход банка X | `econ_banks(X)` → открытые вклады X → открытые займы X → счета (B, V, P региона X) |
+| тик: взыскание займа L | `econ_banks` {L} ∪ банки вкладов должника asc → вклады должника → займ → `characters` → счета |
+| тик: закрытие банка удалённого региона | `econ_banks(X)` → займы X → счета |
+| удаление персонажа | `econ_banks` всех его вкладов/займов asc → вклады → займы → `characters` → счета |
+
+### Банки в 6-часовом пересчёте (B5, контракт 3.7; `econ_tick.py` + раздел «Tick helpers» в `economy_bank_crud.py`)
+
+После цикла регионов, каждый шаг — **в своей транзакции** (транзакция региона банковские таблицы не трогает):
+
+1. **Закрытие банков удалённых регионов** (`_prepare_banks`): строка `econ_banks` без `Regions` → флаг выключен,
+   вклады/займы жителей обнуляются, открытые займы → `written_off` (без денег), свои деньги банка `B(X) → W`
+   операцией `treasury_closed` (ключ `bank_closed:r:<X>`, `apply_tax=False`; если позже в B(X) снова попали деньги —
+   например, сгоревшие проценты досрочного закрытия — ключ `bank_closed:r:<X>:run<id>`), счёт `bank` деактивирован.
+   Хранилище и строки вкладов остаются (перевод в другой банк / выплата при удалении персонажа).
+2. **Проход банка** — банки с флагом, открытыми вкладами/займами или ненулевыми суммами жителей, по возрастанию
+   региона; одна транзакция на банк: `econ_banks(X)` FOR UPDATE (пропуск, если `last_run_id` = этот запуск) → время
+   берётся **после** блокировки → вклады → займы → `econ_bank.bank_step` (проценты, сроки, займы, жители, фактор
+   ставки) → все строки записываются → одна операция `bank_tick` (ключ `bank_tick:<run>:b:<X>`, `apply_tax=False`,
+   в metadata — счётчики) → `last_run_id`, `last_tick_at`, `accrued_at`, `last_stats` (+ `factor`). Банк включён для
+   начислений, только если флаг стоит **и** регион существует; «жители» — только в симулируемом регионе
+   (`econ_regions.template_code` и `population > 0`).
+3. **Взыскание** — займы `active|overdue` с `due_at <= now`, по возрастанию id; одна транзакция на займ: долг
+   доначисляется до «сейчас», затем `econ_bank.plan_collection` (вклады до востребования → срочные (сначала
+   начисленные проценты) → кошелёк, не больше, чем есть) → операция `loan_collect` (ключ `loan_collect:<run>:l:<id>`:
+   `V(Y) → B(L)` по каждому банку вкладов + `C → B(L)`); долг 0 → займ `closed`. Повтор того же запуска — no-op по ключу.
+
+Сбой банка/займа откатывает только его (лог: регион/займ + класс ошибки), остальное идёт дальше; начисление по
+времени — на следующем запуске ничего не теряется. Нет таблиц (тик раньше миграции 031) — проходы пропускаются с
+предупреждением. `RunSummary` (ответ «Пересчитать сейчас»): `banks_processed`, `bank_ops_posted`, `bank_failures`,
+`bank_failed_region_ids`, `bank_interest_paid` (проценты игрокам и жителям), `loans_overdue`, `loans_collected`,
+`collected_amount`, `banks_closed`. Ошибки банков пишутся в `econ_tick_runs.error` с префиксом
+`BANK_ERROR_PREFIX` («банки — ошибка в регионах: …»); в списке запусков (`economy_sim_crud._run_dict`) выводятся
+`bank_ops_posted` и `loans_collected` (по ключам операций) и `bank_failures` (из текста ошибки). На статус запуска
+сбои банков не влияют (как у торговцев).
+
+**Снятие созревшего срочного вклада до тика:** `withdraw` доплачивает проценты последнего неполного периода
+`[accrued_at, matures_at)` (`matured_term_interest`: только включённый банк, только из свободных денег `lendable`)
+ногой `B(X) → V(X)` `interest` в той же операции `bank_withdraw`.
+
+**Удаление персонажа** (`crud.post_character_deletion`, до блокировки персонажа): открытые вклады →
+`V(Y) → T(Y)` (`W`, если региона Y нет) в той же операции `character_deleted`, что и кошелёк (налог 10 % — как с
+кошелька), строки закрыты; открытый займ → `written_off` (убыток банка, без денег). У НПС банковских строк нет — шаг
+пропускается.
+| админ: флаг / капитал / списание долга | `econ_banks(X)` (вставляется, если нет) → строка займа → счета |
+| «Заполнить регионы» с `open_banks` | строки `econ_regions` → `econ_banks` asc → счета (проводки заливки и капитала) |
+
+### API игрока (B4, контракт 3.9; роутер `economy_api.py`, префикс `/characters/economy/bank`)
+
+| Метод и путь | Тело / query | Ответ |
+|---|---|---|
+| `GET /npc/{npc_id}?character_id=` | — | `BankView` (без гейта; долг займа — проекция на «сейчас», не сохраняется) |
+| `POST /npc/{npc_id}/deposit` | `BankDepositIn {character_id, kind: demand\|term, term_days (term: 7/14/28; demand: null), amount, request_id?}` | `BankActionOut {message, operation_id, wallet, view}` |
+| `POST /npc/{npc_id}/withdraw` | `BankWithdrawIn {character_id, deposit_id, amount? (до востребования — обязателен; срочный — весь вклад), request_id?}` | `BankActionOut` |
+| `POST /npc/{npc_id}/transfer` | `BankTransferIn {character_id, deposit_id, to_region_id, amount, request_id?}` — свой вклад до востребования → свой вклад в другом банке | `BankActionOut` |
+| `POST /npc/{npc_id}/send` | `BankSendIn {character_id, source: wallet\|deposit, deposit_id (только для deposit), recipient_name, to_region_id, amount, request_id?}` | `BankActionOut` |
+| `POST /npc/{npc_id}/loan` | `BankLoanIn {character_id, amount, term_days: 7/14/28, request_id?}` | `BankActionOut` |
+| `POST /npc/{npc_id}/repay` | `BankRepayIn {character_id, amount, request_id?}` (у любого банкира, даже если банк выключен) | `BankActionOut` |
+| `GET /summary?character_id=` | — | `BankSummary` (владелец или `economy:read`; без банкира) |
+| `GET /regions` | — | публичный список включённых банков `[{region_id, name, country_name}]` |
+
+**Проверки банкира — в фиксированном порядке:** 1) JWT → персонаж существует (404) и принадлежит пользователю (403),
+не НПС (403); 2) НПС существует, `is_npc`, `npc_role = 'banker'` (иначе 404 «Банкир не найден»), не мёртв (409);
+3) блокировка активности (только POST, 409 с текстом `activity_lock`); 4) персонаж в локации банкира (400);
+5) гейт FEAT-145 (только POST): `locations_client.check_npc_gate` → `GET /locations/internal/action-gate`
+(`action_type=npc_dialogue`, `target_ref=npc_id`, `X-Internal-Token`, 5 с), `false` → 403, сбой/не-200 → 503
+(fail-closed); вызывается **без открытой транзакции** (чтение шагов 1–4 откатывается до HTTP); 6) регион банкира
+(`econ_ledger.resolve_location`, нет → 409). POST-обработчики — `async def`, синхронная работа с БД идёт в threadpool;
+шаги 1–4 и 6 повторяются внутри транзакции операции.
+
+**Проводки:** вклад `C → V(X)` (`bank_deposit`); снятие `V(X) → C`, досрочное закрытие срочного — ещё
+`V(X) → B(X)` нога `interest` (сгоревшие проценты) (`bank_withdraw`); перевод `V(A) → V(B)` + комиссия
+`V(A) → T(X)` нога `commission` (налог 10 % в страну добавляет реестр) (`bank_transfer`); отправка игроку — то же из
+кошелька `C → V(B)` / `C → T(X)` или со своего вклада (из одного хранилища в то же — только комиссия, двигаются
+строки); займ `B(X) → C` (`loan_issue`); погашение `C → B(L)` (`loan_repay`). X — регион банкира, L — банк займа.
+Комиссия = `max(fee_min, ceil(amount × fee_rate))`, берётся **сверх** суммы из источника.
+
+**Правила:** минимальная сумма `bank_min_amount` (кроме снятия/погашения всего остатка); новый вклад до
+востребования начинает с `interest_base = 0` (процент — со следующего периода), пополнение не меняет
+`interest_base`, снятие — `interest_base = min(base, amount)`; срочный — ставка `term_rate × factor` фиксируется при
+открытии, не больше 10 открытых срочных вкладов на персонажа; срочный после `matures_at` отдаётся с процентами
+(даже если тик ещё не превратил его во вклад до востребования); займ — не больше `loan_cap(level)` и свободных денег
+банка (`lendable`: баланс `bank` минус резерв под вклады жителей), один открытый займ на персонажа
+(`uq_bank_loans_active`), просроченный займ → «Должник», новые не выдаются; при погашении долг сначала
+доначисляется до текущей минуты. Получатель перевода — имя персонажа-игрока (`is_npc = 0`; сравнение по collation колонки — без учёта регистра и ё): нет → 404,
+несколько → 409, сам себе → 400; вклады получателя в ответе не раскрываются.
+
+**Идемпотентность:** `request_id` (`^[A-Za-z0-9-]{8,64}$`) → ключ реестра `bank:<dep|wd|tr|send|loan|repay>:c<id>:<request_id>`;
+повтор → 409 «Операция уже выполнена» (проверка до бизнес-проверок и ещё раз после блокировки банка; гонку ловит
+уникальный ключ реестра). Конфликт уникальных ключей БД → 409 «Не удалось выполнить операцию, попробуйте ещё раз».
+Суммы — строгие целые 1…1e9 (float/строка/bool → 422). Логи — только id и суммы.
+
+### Таблицы (миграция `031_econ_banks`)
+
+| Таблица | Ключ | Назначение |
+|---|---|---|
+| `econ_banks` | `region_id` (без FK на `Regions`) | флаг «Банк есть» `is_enabled`, фактор ставки вкладов `deposit_rate_factor`, вклады/займы жителей числами (`resident_deposits`, `resident_loans` + carry), часы жителей `accrued_at`, `capital_seeded_at` (стартовый капитал уже взят), `last_run_id` / `last_tick_at` / `last_stats` (JSON, ключи `econ_bank.STAT_KEYS`) |
+| `bank_deposits` | `id`; FK `region_id → econ_banks`; `uq (region_id, demand_owner_id)` — один открытый вклад до востребования на банк | вклады игроков: `kind` demand/term, `status` open/closed, `amount`, `interest_base` (минимальный остаток периода), `interest_accrued` (только срочный), `rate_day` (срочный — фикс.), `term_days`, `matures_at`, `accrued_at` |
+| `bank_loans` | `id`; FK `region_id → econ_banks`; `uq (active_character_id)` — один открытый займ на персонажа | `status` active/overdue/closed/written_off, `principal`, `debt` (с процентами и пенями), итоги (`interest_total`, `penalty_total`, `paid_total`, `collected_total`, `written_off`), ставки фикс. при выдаче, `due_at`, `accrued_at`, `closed_by_user_id` + `note` (списание админом) |
+
+### Админ-API (B6, контракт 3.10; префикс `/characters/admin/economy`)
+
+Чтение — `economy:read`, изменения — `economy:settings` (новых прав нет). Ответы — обычные словари.
+
+| Метод и путь | Тело | Ответ |
+|---|---|---|
+| `GET /banks` | — | `{items: [BankAdminItem], totals: {banks, enabled, own_funds, player_deposits, resident_deposits, player_loans_debt, resident_loans, debtors}}` — только регионы со строкой `econ_banks` |
+| `GET /banks/debtors` (объявлен до `/banks/{region_id}`) | — | список `{loan_id, character_id, character_name, region_id, region_name, debt, principal, due_at, overdue_days, penalty_total}` — открытые займы после `due_at` с долгом, долг по убыванию |
+| `GET /banks/{region_id}` | — | `{item, deposits (открытые, 500 новейших), loans (открытые)}` — поля игрока + `character_id`, `character_name` (+ `status` у вкладов); 404 «Банк не найден» (редактор региона читает флаг отсюда) |
+| `PUT /banks/{region_id}` | `BankFlagIn {is_enabled, seed_capital = true}` | `BankAdminItem`; 404 «Регион не найден»; создаёт строку (`accrued_at = now`); первое включение с `seed_capital` и `capital_seeded_at IS NULL` → `bank_capital` `T(X) → B(X)` на `min(bank_start_capital, max(0, казна))`, ключ `bank_capital:r:<X>:seed`, `capital_seeded_at = now` даже при 0 (повторное включение капитал не берёт) |
+| `POST /banks/{region_id}/capital` | `BankCapitalIn {direction: in\|out, amount 1…1e9, comment 3…500}` | `{operation_id, bank_balance, treasury_balance}`; `in` больше положительной казны → 400 «В казне региона только N»; `out` больше `lendable` (резерв жителей остаётся) → 400 «Банк может вернуть не больше N»; нет строки банка → 404; без налога; ключ `bank_capital:r:<X>:p<последняя проводка B(X)>:<dir>:<amount>` |
+| `POST /banks/loans/{loan_id}/write-off` | `BankWriteOffIn {comment}` | `BankLoanOut`; долг доначисляется до «сейчас», затем `written_off += debt`, `debt = 0`, `status = written_off`, `active_character_id = NULL`, `closed_by_user_id`, `note`; денег не двигает (убыток банка), снимает «Должник»; закрытый → 409 «Займ уже закрыт», нет → 404 |
+
+`BankAdminItem`: `region_id, region_name, country_name, enabled` (строка включена и регион существует), `simulated`,
+`bankers` (**список** `{npc_id, name}` живых НПС с ролью `banker`, чья локация разрешается в регион), `own_funds`
+(баланс `bank`), `vault` (баланс `bank_deposits`), `deposits_sum` (Σ открытых строк), `vault_ok`, `deposits_count`,
+`term_count`, `resident_deposits`, `resident_loans`, `reserve`, `lendable`, `loans_count`, `loans_debt` и
+`overdue_count` (по долгу, спроецированному на «сейчас»), `rate_factor`, `demand_rate_day`, `term_rates
+[{term_days, rate_day}]`, `capital_seeded_at`, `last_tick_at`, `last_stats` (`{}` до первого прохода).
+
+**Интеграция с экономикой:** `GET /regions` (и деталь региона) — `bank_enabled`; публичная карточка региона —
+`has_bank` в обеих формах (включая `participating: false`); `POST /regions/fill` — `open_banks` (по умолчанию `true`):
+регионам с шаблоном `capital` / `port` (`BANK_TEMPLATE_CODES`) и жителями после заполнения включает банк и один раз
+берёт стартовый капитал **после** пополнения казны, ответ `+ banks_opened` (регионы, чей банк включила именно эта
+заливка); строки `econ_banks` блокируются до проводок заливки (порядок 3.8). Сводка — `totals.banks`,
+`totals.bank_deposits`, `invariant.bank_deposits_expected` (Σ открытых строк) / `bank_deposits_actual` (Σ хранилищ),
+расхождение роняет `ok`; счета `bank` / `bank_deposits` — региональные (имя из `Regions`, операции с `region_id`), в
+«системные счета» сводки не попадают, ручная корректировка их запрещена (`ADJUST_FORBIDDEN_KINDS`), эмиссия в них
+невозможна.
