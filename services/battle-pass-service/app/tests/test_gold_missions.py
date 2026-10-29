@@ -260,6 +260,84 @@ class TestLedgerProgressEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# FEAT-184: bank operations do not count as earning or spending
+# ---------------------------------------------------------------------------
+
+BANK_ACC = 400
+VAULT_ACC = 401
+
+
+async def _setup_bank(db):
+    db.add_all([
+        EconAccount(id=BANK_ACC, kind="bank", ref_id=5),
+        EconAccount(id=VAULT_ACC, kind="bank_deposits", ref_id=5),
+    ])
+    await db.flush()
+
+
+class TestBankOpsExcluded:
+    async def test_deposit_withdraw_cycle_does_not_change_progress(
+        self, db_session, active_season,
+    ):
+        """Cycling gold through a deposit cannot farm earn/spend missions."""
+        await _setup_accounts(db_session, [100])
+        await _setup_bank(db_session)
+        await _post(db_session, "battle_reward", REGION_ACC, 200, 40)
+        await db_session.commit()
+        before = await _earned_and_spent(db_session, active_season)
+
+        for _ in range(3):
+            await _post(db_session, "bank_deposit", 200, VAULT_ACC, 1000)
+            await _post(db_session, "bank_withdraw", VAULT_ACC, 200, 1000)
+        await db_session.commit()
+
+        assert before == (40, 0)
+        assert await _earned_and_spent(db_session, active_season) == before
+
+    async def test_loan_issue_repay_collect_excluded(self, db_session, active_season):
+        await _setup_accounts(db_session, [100])
+        await _setup_bank(db_session)
+        await _post(db_session, "loan_issue", BANK_ACC, 200, 500)
+        await _post(db_session, "loan_repay", 200, BANK_ACC, 300)
+        await _post(db_session, "loan_collect", 200, BANK_ACC, 200)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (0, 0)
+
+    async def test_bank_transfer_with_commission_excluded(self, db_session, active_season):
+        """A send-to-player from the wallet (main + commission legs) is not
+        spending; the recipient's deposit is not a character account anyway."""
+        await _setup_accounts(db_session, [100])
+        await _setup_bank(db_session)
+        await _post(db_session, "bank_transfer", 200, VAULT_ACC, 100)
+        await _post(db_session, "bank_transfer", 200, REGION_ACC, 2)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (0, 0)
+
+    async def test_non_bank_ops_still_counted_alongside_bank_ops(
+        self, db_session, active_season,
+    ):
+        await _setup_accounts(db_session, [100])
+        await _setup_bank(db_session)
+        await _post(db_session, "bank_deposit", 200, VAULT_ACC, 700)
+        await _post(db_session, "npc_shop_buy", 200, REGION_ACC, 25)
+        await _post(db_session, "quest_reward", REGION_ACC, 200, 15)
+        await _post(db_session, "genesis", WORLD_ACC, 200, 9000)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (15, 25)
+
+    async def test_excluded_op_types_cover_all_bank_ops(self):
+        """Mirrors econ_core.BANK_OP_TYPES (FEAT-184 3.4) plus genesis."""
+        assert set(crud.LEDGER_EXCLUDED_OP_TYPES) == {
+            "genesis",
+            "bank_deposit", "bank_withdraw", "bank_transfer", "bank_tick",
+            "bank_capital", "loan_issue", "loan_repay", "loan_collect",
+        }
+
+
+# ---------------------------------------------------------------------------
 # FEAT-181 Q4: claim -> add_rewards HTTP payload (httpx mocked)
 # ---------------------------------------------------------------------------
 

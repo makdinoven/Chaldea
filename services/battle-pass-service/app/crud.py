@@ -398,15 +398,32 @@ async def _progress_visit_locations(
 # posting OUT of them, whatever the op type (trades, auction refunds included),
 # except the one-off genesis snapshot that opened the ledger. Old
 # gold_transactions rows are not merged (Q6: progress restarts from the deploy).
+# FEAT-184: bank ops are excluded too, otherwise deposit/withdraw or
+# loan/repay cycling would farm the missions. The bank op types mirror
+# econ_core.BANK_OP_TYPES (battle-pass has no econ_core copy, so they are
+# string literals here); bank_tick/bank_capital never touch a character
+# account but are listed for completeness. A bank commission is a leg of the
+# same deposit/withdraw/transfer op, so it is excluded as well (small).
 LEDGER_CHARACTER_KIND = "character"
-LEDGER_EXCLUDED_OP_TYPE = "genesis"
+LEDGER_EXCLUDED_OP_TYPES = (
+    "genesis",
+    "bank_deposit",
+    "bank_withdraw",
+    "bank_transfer",
+    "bank_tick",
+    "bank_capital",
+    "loan_issue",
+    "loan_repay",
+    "loan_collect",
+)
 
 
 async def _ledger_gold_sum(
     db: AsyncSession, char_ids: List[int], season_start: datetime, direction: str,
 ) -> int:
     """SUM of postings to (direction='to') or from (direction='from') the given
-    characters' ledger accounts since season_start, genesis excluded."""
+    characters' ledger accounts since season_start, genesis and bank ops
+    excluded."""
     if not char_ids:
         return 0
     account_col = "p.to_account_id" if direction == "to" else "p.from_account_id"
@@ -414,14 +431,17 @@ async def _ledger_gold_sum(
     params: Dict[str, Any] = {f"cid_{i}": cid for i, cid in enumerate(char_ids)}
     params["season_start"] = season_start
     params["kind"] = LEDGER_CHARACTER_KIND
-    params["excluded_op"] = LEDGER_EXCLUDED_OP_TYPE
+    excluded_placeholders = ", ".join(
+        [f":xop_{i}" for i in range(len(LEDGER_EXCLUDED_OP_TYPES))]
+    )
+    params.update({f"xop_{i}": op for i, op in enumerate(LEDGER_EXCLUDED_OP_TYPES)})
     result = await db.execute(
         text(
             f"SELECT COALESCE(SUM(p.amount), 0) FROM econ_postings p "
             f"JOIN econ_accounts a ON a.id = {account_col} "
             f"JOIN econ_operations o ON o.id = p.operation_id "
             f"WHERE a.kind = :kind AND a.ref_id IN ({placeholders}) "
-            f"AND o.op_type <> :excluded_op "
+            f"AND o.op_type NOT IN ({excluded_placeholders}) "
             f"AND p.created_at >= :season_start"
         ),
         params,
