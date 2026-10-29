@@ -17,6 +17,7 @@ import EconomyGoodsGroups from './EconomyGoodsGroups';
 import EconomyItemGroups from './EconomyItemGroups';
 import EconomyTemplates from './EconomyTemplates';
 import EconomyTick from './EconomyTick';
+import EconomyMerchants from './EconomyMerchants';
 
 type EconomyTab =
   | 'summary'
@@ -26,6 +27,7 @@ type EconomyTab =
   | 'goods'
   | 'items'
   | 'templates'
+  | 'merchants'
   | 'tick'
   | 'settings';
 
@@ -37,6 +39,7 @@ const TAB_LABEL: Record<EconomyTab, string> = {
   goods: 'Товары',
   items: 'Предметы',
   templates: 'Шаблоны',
+  merchants: 'Торговцы',
   tick: 'Пересчёт',
   settings: 'Настройки',
 };
@@ -78,6 +81,7 @@ const EconomyPage = () => {
     'goods',
     'items',
     'templates',
+    'merchants',
     'tick',
     'settings',
   ];
@@ -127,6 +131,9 @@ const EconomyPage = () => {
       {tab === 'goods' && <EconomyGoodsGroups />}
       {tab === 'items' && <EconomyItemGroups />}
       {tab === 'templates' && <EconomyTemplates />}
+      {tab === 'merchants' && (
+        <EconomyMerchants canSettings={canSettings} canEmit={canEmit} onMoneyChanged={loadSummary} />
+      )}
       {tab === 'tick' && <EconomyTick canSettings={canSettings} onMoneyChanged={loadSummary} />}
       {tab === 'settings' && <EconomySettings canEdit={canSettings} onSaved={loadSummary} />}
     </div>

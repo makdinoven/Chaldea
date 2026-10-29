@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import { ArrowDown, ArrowUp } from 'lucide-react';
 import { useSelector, useDispatch } from 'react-redux';
 import { BASE_URL } from '../../../api/api';
 import { fetchInventory, fetchProfile, selectInventory, selectProfile } from '../../../redux/slices/profileSlice';
-import type { InventoryItem } from '../../../redux/slices/profileSlice';
 import type { AppDispatch, RootState } from '../../../redux/store';
 import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
@@ -29,6 +29,24 @@ interface ShopItem {
   item_rarity: string | null;
   item_type: string | null;
   discounted_buy_price?: number | null;
+  /* FEAT-183: current market prices, base prices from the admin, stock state. */
+  base_buy_price?: number;
+  base_sell_price?: number;
+  in_stock?: boolean;
+  market?: boolean;
+  price_level?: PriceLevel;
+  living?: boolean;
+}
+
+type PriceLevel = 'low' | 'normal' | 'high';
+
+/** What of the bag this merchant buys right now (GET .../shop/sell-offers). */
+interface SellOffer {
+  item_id: number;
+  item_name: string | null;
+  item_image: string | null;
+  unit_price: number;
+  max_quantity: number;
 }
 
 interface ShopTransactionResponse {
@@ -49,6 +67,9 @@ interface NpcShopModalProps {
 }
 
 type ShopTab = 'buy' | 'sell';
+
+/** Server-side bound of one buy/sell request (schemas.SHOP_MAX_QUANTITY). */
+const MAX_DEAL_QUANTITY = 999;
 
 /* ── Helpers ── */
 
@@ -78,6 +99,26 @@ const getEffectivePrice = (si: ShopItem): number =>
 const hasDiscount = (si: ShopItem): boolean =>
   si.discounted_buy_price != null && si.discounted_buy_price < si.buy_price;
 
+const PRICE_LEVEL_BADGE: Record<PriceLevel, { label: string; className: string }> = {
+  low: { label: 'дешевле обычного', className: 'text-green-400 border-green-500/30 bg-green-900/20' },
+  normal: { label: 'обычная цена', className: 'text-white/50 border-white/15 bg-white/[0.03]' },
+  high: { label: 'дороже обычного', className: 'text-site-red border-site-red/30 bg-site-red/10' },
+};
+
+const clampQuantity = (raw: string, max: number): number =>
+  Math.max(1, Math.min(max, parseInt(raw, 10) || 1));
+
+/** Russian error text from an axios failure: server `detail` string, otherwise the fallback. */
+const errorText = (err: unknown, fallback: string): string => {
+  if (axios.isAxiosError(err)) {
+    const detail: unknown = err.response?.data?.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (err.response?.status === 422) return 'Неверное количество';
+    if (!err.response) return 'Нет связи с сервером';
+  }
+  return fallback;
+};
+
 /* ── Component ── */
 
 const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps) => {
@@ -89,7 +130,9 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
 
   const [tab, setTab] = useState<ShopTab>('buy');
   const [shopItems, setShopItems] = useState<ShopItem[]>([]);
+  const [sellOffers, setSellOffers] = useState<SellOffer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [offersLoading, setOffersLoading] = useState(false);
   const [quantities, setQuantities] = useState<Record<number, number>>({});
   const [sellQuantities, setSellQuantities] = useState<Record<number, number>>({});
   const [processing, setProcessing] = useState(false);
@@ -108,9 +151,38 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
     }
   }, [npcId, characterId]);
 
+  const fetchSellOffers = useCallback(async () => {
+    if (!characterId) return;
+    setOffersLoading(true);
+    try {
+      const res = await axios.get<SellOffer[]>(
+        `${BASE_URL}/locations/npcs/${npcId}/shop/sell-offers`,
+        { params: { character_id: characterId } },
+      );
+      setSellOffers(res.data);
+    } catch (err) {
+      toast.error(errorText(err, 'Не удалось узнать, что купит торговец'));
+    } finally {
+      setOffersLoading(false);
+    }
+  }, [npcId, characterId]);
+
   useEffect(() => {
     fetchShop();
   }, [fetchShop]);
+
+  useEffect(() => {
+    fetchSellOffers();
+  }, [fetchSellOffers]);
+
+  /** After every deal: both lists, the bag and the balance. */
+  const refreshAfterDeal = () => {
+    if (!characterId) return;
+    dispatch(fetchInventory(characterId));
+    dispatch(fetchProfile(characterId));
+    fetchShop();
+    fetchSellOffers();
+  };
 
   // Load player inventory if not loaded
   useEffect(() => {
@@ -127,7 +199,10 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
 
   const handleBuy = async (shopItem: ShopItem) => {
     if (!characterId || processing) return;
-    const qty = getQuantity(shopItem.id);
+    const qty = Math.min(
+      getQuantity(shopItem.id),
+      shopItem.stock === null ? MAX_DEAL_QUANTITY : Math.max(1, Math.min(shopItem.stock, MAX_DEAL_QUANTITY)),
+    );
     const unitPrice = getEffectivePrice(shopItem);
     const totalPrice = unitPrice * qty;
 
@@ -144,67 +219,61 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
       );
       if (res.data.success) {
         toast.success(`Предмет куплен: ${res.data.item_name ?? shopItem.item_name} x${res.data.quantity}`);
-        // Refresh data
-        dispatch(fetchInventory(characterId));
-        dispatch(fetchProfile(characterId));
-        fetchShop();
         setQuantities((prev) => ({ ...prev, [shopItem.id]: 1 }));
       } else {
         toast.error(res.data.message || 'Ошибка покупки');
       }
+      refreshAfterDeal();
     } catch (err) {
-      const msg = axios.isAxiosError(err) && err.response?.data?.detail
-        ? err.response.data.detail
-        : 'Не удалось купить предмет';
-      toast.error(msg);
+      toast.error(errorText(err, 'Не удалось купить предмет'));
+      // Stock or price may have moved under us: show the fresh state.
+      fetchShop();
     } finally {
       setProcessing(false);
     }
   };
 
-  const [sellConfirm, setSellConfirm] = useState<InventoryItem | null>(null);
+  const [sellConfirm, setSellConfirm] = useState<SellOffer | null>(null);
 
   /** Selling can't be undone: ask first, unless confirmations are off in the settings. */
-  const requestSell = (invItem: InventoryItem) => {
-    if (getClientPrefs().confirmDangerous) setSellConfirm(invItem);
-    else void handleSell(invItem);
+  const requestSell = (offer: SellOffer) => {
+    if (getClientPrefs().confirmDangerous) setSellConfirm(offer);
+    else void handleSell(offer);
   };
 
-  const handleSell = async (invItem: InventoryItem) => {
+  const handleSell = async (offer: SellOffer) => {
     if (!characterId || processing) return;
-    const qty = getSellQuantity(invItem.item_id);
+    const qty = Math.min(getSellQuantity(offer.item_id), offer.max_quantity);
 
     setProcessing(true);
     try {
       const res = await axios.post<ShopTransactionResponse>(
         `${BASE_URL}/locations/npcs/${npcId}/shop/sell`,
-        { character_id: characterId, item_id: invItem.item_id, quantity: qty },
+        { character_id: characterId, item_id: offer.item_id, quantity: qty },
       );
       if (res.data.success) {
-        toast.success(`Предмет продан: ${res.data.item_name ?? invItem.item.name} x${res.data.quantity}`);
-        dispatch(fetchInventory(characterId));
-        dispatch(fetchProfile(characterId));
-        setSellQuantities((prev) => ({ ...prev, [invItem.item_id]: 1 }));
+        toast.success(`Предмет продан: ${res.data.item_name ?? offer.item_name} x${res.data.quantity}`);
+        setSellQuantities((prev) => ({ ...prev, [offer.item_id]: 1 }));
       } else {
         toast.error(res.data.message || 'Ошибка продажи');
       }
+      refreshAfterDeal();
     } catch (err) {
-      const msg = axios.isAxiosError(err) && err.response?.data?.detail
-        ? err.response.data.detail
-        : 'Не удалось продать предмет';
-      toast.error(msg);
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        // The merchant's till is short: the refusal is the merchant's own words.
+        toast.error(`${npcName}: «${errorText(err, 'У меня сейчас нет на это денег')}»`);
+      } else {
+        toast.error(errorText(err, 'Не удалось продать предмет'));
+      }
+      // The item may have been returned to the bag: show the fresh state.
+      refreshAfterDeal();
     } finally {
       setProcessing(false);
     }
   };
 
-  // Build sell price map from shop items
-  const sellPriceMap = new Map<number, number>();
-  shopItems.forEach((si) => {
-    if (si.sell_price > 0) sellPriceMap.set(si.item_id, si.sell_price);
-  });
-
-  const sellableInventory = inventory.filter((inv) => sellPriceMap.has(inv.item_id));
+  // Bag rows give the sell tab its type/rarity frame; offers themselves only carry name and image.
+  const inventoryByItemId = new Map(inventory.map((inv) => [inv.item_id, inv]));
 
   // Compute discount percent from first item that has a discount
   const discountPercent = (() => {
@@ -292,13 +361,19 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {shopItems.map((si) => {
-              const qty = getQuantity(si.id);
+              const maxQty = si.stock === null
+                ? MAX_DEAL_QUANTITY
+                : Math.max(1, Math.min(si.stock, MAX_DEAL_QUANTITY));
+              const soldOut = si.in_stock === false || (si.stock !== null && si.stock <= 0);
+              const qty = Math.min(getQuantity(si.id), maxQty);
               const unitPrice = getEffectivePrice(si);
               const totalPrice = unitPrice * qty;
               const canAfford = totalPrice <= balance;
-              const inStock = si.stock === null || si.stock >= qty;
               const icon = getItemIcon(si.item_type, si.item_image);
               const itemHasDiscount = hasDiscount(si);
+              const basePrice = si.base_buy_price;
+              const showBase = !!si.market && basePrice != null && basePrice !== si.buy_price;
+              const badge = si.market && si.price_level ? PRICE_LEVEL_BADGE[si.price_level] : null;
 
               return (
                 <div
@@ -320,7 +395,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                       {si.item_name ?? `Предмет #${si.item_id}`}
                     </span>
 
-                    {/* Price per unit */}
+                    {/* Price per unit: current (charisma-discounted) price, base price when the market moved it */}
                     <div className="flex items-center gap-1 flex-wrap">
                       <img src={goldCoinsIcon} alt="" className="w-4 h-4" />
                       {itemHasDiscount ? (
@@ -331,26 +406,43 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                       ) : (
                         <span className="text-gold text-xs">{si.buy_price.toLocaleString()}</span>
                       )}
+                      {showBase && basePrice != null && (
+                        <span className="text-white/35 text-[10px]" title="Обычная цена этого товара">
+                          обычно <span className="line-through">{basePrice.toLocaleString()}</span>
+                        </span>
+                      )}
                     </div>
 
-                    {/* Stock */}
-                    {si.stock !== null && (
-                      <span className="text-white/40 text-[10px]">
-                        В наличии: {si.stock}
+                    {badge && (
+                      <span
+                        className={`self-start inline-flex items-center gap-0.5 border rounded-full px-1.5 py-px text-[10px] leading-tight ${badge.className}`}
+                      >
+                        {si.price_level === 'low' && <ArrowDown className="w-3 h-3" aria-hidden />}
+                        {si.price_level === 'high' && <ArrowUp className="w-3 h-3" aria-hidden />}
+                        {badge.label}
                       </span>
                     )}
+
+                    {/* Stock: nothing for an unlimited (legacy) row */}
+                    {soldOut ? (
+                      <span className="text-site-red text-[10px]">Нет в наличии</span>
+                    ) : si.stock !== null ? (
+                      <span className="text-white/40 text-[10px]">Осталось: {si.stock}</span>
+                    ) : null}
 
                     {/* Quantity + total + buy button */}
                     <div className="flex items-center gap-2 mt-1">
                       <input
                         type="number"
                         min={1}
-                        max={si.stock ?? 999}
+                        max={maxQty}
                         value={qty}
+                        disabled={soldOut}
                         onChange={(e) => {
-                          const v = Math.max(1, parseInt(e.target.value) || 1);
+                          const v = clampQuantity(e.target.value, maxQty);
                           setQuantities((prev) => ({ ...prev, [si.id]: v }));
                         }}
+                        aria-label="Количество"
                         className="w-12 sm:w-14 bg-black/30 border border-white/20 rounded px-1.5 py-0.5 text-white text-xs text-center focus:border-gold/50 outline-none"
                       />
                       {qty > 1 && (
@@ -361,7 +453,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                       )}
                       <button
                         onClick={() => handleBuy(si)}
-                        disabled={processing || !canAfford || !inStock}
+                        disabled={processing || !canAfford || soldOut}
                         className="
                           ml-auto px-3 py-1 rounded text-xs font-medium uppercase
                           bg-gradient-to-r from-[#2e353e] to-[#537895] text-white
@@ -372,11 +464,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                         Купить
                       </button>
                     </div>
-                    {!canAfford && (
+                    {!canAfford && !soldOut && (
                       <span className="text-site-red text-[10px]">Недостаточно {forms.genitive}</span>
-                    )}
-                    {!inStock && si.stock !== null && (
-                      <span className="text-site-red text-[10px]">Нет в наличии</span>
                     )}
                   </div>
                 </div>
@@ -385,8 +474,12 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
           </div>
         )
       ) : (
-        /* ── Sell Tab ── */
-        sellableInventory.length === 0 ? (
+        /* ── Sell Tab: what this merchant buys from the bag right now ── */
+        offersLoading && sellOffers.length === 0 ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
+          </div>
+        ) : sellOffers.length === 0 ? (
           <p className="text-center text-white/50 text-sm py-8">
             {inventory.length === 0
               ? 'Ваш инвентарь пуст'
@@ -394,21 +487,24 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
           </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {sellableInventory.map((inv) => {
-              const sellPrice = sellPriceMap.get(inv.item_id) ?? 0;
-              const qty = getSellQuantity(inv.item_id);
-              const totalSell = sellPrice * qty;
-              const icon = getItemIcon(inv.item.item_type, inv.item.image);
+            {sellOffers.map((offer) => {
+              const inv = inventoryByItemId.get(offer.item_id);
+              const maxQty = Math.max(1, Math.min(offer.max_quantity, MAX_DEAL_QUANTITY));
+              const qty = Math.min(getSellQuantity(offer.item_id), maxQty);
+              const totalSell = offer.unit_price * qty;
+              const name = offer.item_name ?? inv?.item.name ?? `Предмет #${offer.item_id}`;
+              const icon = getItemIcon(inv?.item.item_type ?? null, offer.item_image ?? inv?.item.image ?? null);
+              const rarity = inv ? shownRarity(inv.item.item_type, inv.item.item_rarity) : null;
 
               return (
                 <div
-                  key={inv.id}
+                  key={offer.item_id}
                   className="flex gap-3 bg-white/[0.03] rounded-card p-3 border border-white/5 hover:border-white/10 transition-colors"
                 >
                   {/* Item icon */}
-                  <div className={`item-cell !w-14 !h-14 sm:!w-16 sm:!h-16 shrink-0 ${getRarityClass(shownRarity(inv.item.item_type, inv.item.item_rarity))}`}>
+                  <div className={`item-cell !w-14 !h-14 sm:!w-16 sm:!h-16 shrink-0 ${getRarityClass(rarity)}`}>
                     {icon ? (
-                      <img src={icon} alt={inv.item.name} className="w-8 h-8 sm:w-10 sm:h-10 object-contain" />
+                      <img src={icon} alt={name} className="w-8 h-8 sm:w-10 sm:h-10 object-contain" />
                     ) : (
                       <span className="text-white/30 text-xs">?</span>
                     )}
@@ -416,27 +512,28 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
 
                   {/* Item info */}
                   <div className="flex flex-col flex-1 min-w-0 gap-1">
-                    <span className="text-white text-sm font-medium truncate">{inv.item.name}</span>
+                    <span className="text-white text-sm font-medium truncate">{name}</span>
 
                     <div className="flex items-center gap-1">
                       <img src={goldCoinsIcon} alt="" className="w-4 h-4" />
-                      <span className="text-gold text-xs">{sellPrice.toLocaleString()} / шт.</span>
+                      <span className="text-gold text-xs">{offer.unit_price.toLocaleString()} / шт.</span>
                     </div>
 
                     <span className="text-white/40 text-[10px]">
-                      В инвентаре: {inv.quantity}
+                      Можно продать: {offer.max_quantity}
                     </span>
 
                     <div className="flex items-center gap-2 mt-1">
                       <input
                         type="number"
                         min={1}
-                        max={inv.quantity}
+                        max={maxQty}
                         value={qty}
                         onChange={(e) => {
-                          const v = Math.max(1, Math.min(inv.quantity, parseInt(e.target.value) || 1));
-                          setSellQuantities((prev) => ({ ...prev, [inv.item_id]: v }));
+                          const v = clampQuantity(e.target.value, maxQty);
+                          setSellQuantities((prev) => ({ ...prev, [offer.item_id]: v }));
                         }}
+                        aria-label="Количество"
                         className="w-12 sm:w-14 bg-black/30 border border-white/20 rounded px-1.5 py-0.5 text-white text-xs text-center focus:border-gold/50 outline-none"
                       />
                       {qty > 1 && (
@@ -446,8 +543,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                         </span>
                       )}
                       <button
-                        onClick={() => requestSell(inv)}
-                        disabled={processing || qty > inv.quantity}
+                        onClick={() => requestSell(offer)}
+                        disabled={processing || offer.max_quantity < 1}
                         className="
                           ml-auto px-3 py-1 rounded text-xs font-medium uppercase
                           border border-white/30 text-white/80
@@ -472,9 +569,11 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
         title="Продать предмет?"
         message={
           sellConfirm
-            ? `«${sellConfirm.item.name}» x${getSellQuantity(sellConfirm.item_id)} за ${format(
-                (sellPriceMap.get(sellConfirm.item_id) ?? 0) * getSellQuantity(sellConfirm.item_id),
-              )}`
+            ? (() => {
+                const q = Math.min(getSellQuantity(sellConfirm.item_id), sellConfirm.max_quantity);
+                const name = sellConfirm.item_name ?? `Предмет #${sellConfirm.item_id}`;
+                return `«${name}» x${q} за ${format(sellConfirm.unit_price * q)}`;
+              })()
             : ''
         }
         onCancel={() => setSellConfirm(null)}

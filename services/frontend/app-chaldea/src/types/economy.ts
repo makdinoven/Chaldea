@@ -15,7 +15,7 @@ export type EconAccountKind =
   | 'adjustment'
   | 'population_purse';
 
-export type EconLegType = 'main' | 'refund' | 'commission' | 'tax';
+export type EconLegType = 'main' | 'refund' | 'commission' | 'tax' | 'trade_tax';
 
 export interface EconTotals {
   issued: number;
@@ -408,6 +408,16 @@ export interface EconSimParams {
   prosp_hunger_w: number;
   prosp_liq_days: number;
   history_retention_days: number;
+  /* FEAT-183 NPC merchants */
+  merchant_bid_share: number;
+  merchant_wholesale_share: number;
+  merchant_resident_share: number;
+  merchant_resident_share_max: number;
+  merchant_purse_share: number;
+  merchant_take_share: number;
+  merchant_cash_target_mult: number;
+  merchant_cash_cap_mult: number;
+  merchant_cash_release: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -431,6 +441,15 @@ export interface EconTickRun {
   resumed?: boolean;
   operations_posted?: number;
   failed_region_ids?: number[];
+  /** FEAT-183: in both the runs list (derived) and the run-now summary */
+  merchant_ops_posted?: number;
+  merchant_failures?: number;
+  /** FEAT-183: only in the run-now summary */
+  merchants_processed?: number;
+  merchant_items_sold?: number;
+  merchant_items_restocked?: number;
+  merchant_failed_region_ids?: number[];
+  shop_rows_purged?: number;
 }
 
 export interface EconSimState {
@@ -446,6 +465,92 @@ export interface EconSimState {
 export interface EconSimUpdate {
   tick_enabled: boolean;
   params: EconSimParams;
+}
+
+/* ---------------------------------------------- FEAT-183 — NPC merchants (feature file 3.7) */
+
+/** Why a merchant is not living (`econ_core.merchant_status`); null for a living one. */
+export type EconMerchantReason = 'not_npc' | 'dead' | 'no_location' | 'dungeon' | 'no_region' | 'not_simulated';
+
+export interface EconMerchantRow {
+  row_id: number;
+  item_id: number;
+  item_name: string | null;
+  group: string | null;
+  off_market: boolean;
+  /** 'admin' | 'player' (bought from players) */
+  origin: string;
+  is_active: boolean;
+  base_buy: number;
+  base_sell: number;
+  /** Current prices; null when the row is not on the market */
+  ask: number | null;
+  bid: number | null;
+  market: boolean;
+  /** null = unlimited (legacy merchant) */
+  stock: number | null;
+  restock_target: number;
+}
+
+export interface EconMerchantLastTrade {
+  operation_id: number;
+  run_id: number | null;
+  at: string;
+  sold_items: number;
+  sold_value: number;
+  tax: number;
+  restock_items: number;
+  restock_value: number;
+  upkeep: number;
+}
+
+export interface EconMerchant {
+  npc_id: number;
+  /** null when the character is gone (reason not_npc) */
+  name: string | null;
+  location_id: number | null;
+  region_id: number | null;
+  region_name: string | null;
+  living: boolean;
+  reason: EconMerchantReason | string | null;
+  tax_rate: number | null;
+  cash: number;
+  /** 0 for a legacy merchant */
+  cash_target: number;
+  rows: EconMerchantRow[];
+  stock_value: number;
+  last_trade: EconMerchantLastTrade | null;
+}
+
+export interface EconMerchantsResponse {
+  items: EconMerchant[];
+  totals: { merchants: number; living: number; cash: number };
+}
+
+export interface EconMerchantsParams {
+  region_id?: number;
+  living?: boolean;
+}
+
+export interface EconMerchantFundBody {
+  region_ids?: number[];
+  npc_ids?: number[];
+  comment: string;
+}
+
+export type EconMerchantFundSkipReason =
+  | EconMerchantReason
+  | 'at_target'
+  | 'no_target'
+  | 'not_merchant'
+  | 'region_filtered';
+
+export interface EconMerchantFundResult {
+  merchants: number;
+  funded: number;
+  operation_ids: number[];
+  emitted: number;
+  skipped: { npc_id: number; reason: EconMerchantFundSkipReason | string }[];
 }
 
 /* The public player card (`GET /characters/economy/regions/{id}/card`) is typed next to its fetch in

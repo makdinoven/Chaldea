@@ -95,6 +95,22 @@ const SECTIONS: ParamSection[] = [
     ],
   },
   {
+    title: 'Торговцы',
+    intro:
+      'Живые торговцы-НПС в регионах симуляции: продают жителям из своего склада, докупают товар со склада региона и платят налог с выручки.',
+    params: [
+      { key: 'merchant_bid_share', label: 'Цена скупки, доля базовой', hint: 'По какой доле базовой цены торговец скупает у игроков предметы своей группы, которых нет в ассортименте.', min: 0, max: 1, def: 0.5 },
+      { key: 'merchant_wholesale_share', label: 'Оптовая цена, доля рыночной', hint: 'Сколько торговец платит жителям за товар со склада региона при пополнении запаса.', min: 0.05, max: 1, def: 0.5 },
+      { key: 'merchant_resident_share', label: 'Спрос жителей, доля запаса', hint: 'Какую долю запаса строки жители покупают за шаг (умножается на множитель цены товара).', min: 0, max: 1, def: 0.2 },
+      { key: 'merchant_resident_share_max', label: 'Предел спроса жителей', hint: 'Больше этой доли запаса строки жители за шаг не купят.', min: 0, max: 1, def: 0.6 },
+      { key: 'merchant_purse_share', label: 'Траты кошелька у торговцев', hint: 'Какую долю кошелька жителей региона все торговцы вместе могут получить за шаг (0,05 = 5 %).', min: 0, max: 0.5, def: 0.05 },
+      { key: 'merchant_take_share', label: 'Закупка со склада региона', hint: 'Какую долю запаса группы товаров все торговцы региона вместе могут выкупить за шаг.', min: 0, max: 1, def: 0.25 },
+      { key: 'merchant_cash_target_mult', label: 'Норма кассы, × полной закупки', hint: 'Норма кассы = столько полных пополнений склада по оптовым ценам (×1). До неё «Пополнить кассы» доводит кассу.', min: 0, max: 20, def: 2 },
+      { key: 'merchant_cash_cap_mult', label: 'Предел кассы, × нормы', hint: 'Если касса выше нормы × это число, торговец тратит излишек на содержание.', min: 1, max: 20, def: 3 },
+      { key: 'merchant_cash_release', label: 'Расходы сверх предела, доля за шаг', hint: 'Какую долю излишка кассы выше предела торговец за шаг отдаёт жителям.', min: 0, max: 1, def: 0.25 },
+    ],
+  },
+  {
     title: 'Служебное',
     intro: 'Менять только осознанно.',
     params: [
@@ -111,6 +127,8 @@ const RANGE_PAIRS: [ParamKey, ParamKey, string][] = [
   ['price_min', 'price_max', 'Минимальный множитель цены должен быть меньше максимального'],
   ['prod_price_min', 'prod_price_max', 'Нижний предел отклика должен быть меньше верхнего'],
 ];
+
+const MERCHANT_SHARE_PAIR: [ParamKey, ParamKey] = ['merchant_resident_share', 'merchant_resident_share_max'];
 
 const PROSP_WEIGHTS: ParamKey[] = ['prosp_w_sat', 'prosp_w_liq', 'prosp_w_stab'];
 
@@ -165,6 +183,21 @@ const STATUS_CLASS: Record<EconTickStatus, string> = {
 const StatusText = ({ status }: { status: EconTickStatus }) => (
   <span className={STATUS_CLASS[status] ?? 'text-white/70'}>{STATUS_LABEL[status] ?? status}</span>
 );
+
+/** Merchant counters of a run (FEAT-183): trade ops posted and regions whose merchant step was rolled back. */
+const MerchantsCell = ({ run }: { run: EconTickRun }) => {
+  const ops = run.merchant_ops_posted ?? 0;
+  const failures = run.merchant_failures ?? 0;
+  if (ops === 0 && failures === 0) return <span className="text-white/30">—</span>;
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-white/80" title="Операций торговли с жителями">
+        торговля: {ops}
+      </span>
+      {failures > 0 && <span className="text-site-red"> · сбоев {failures}</span>}
+    </span>
+  );
+};
 
 const RegionsCell = ({ run }: { run: EconTickRun }) => (
   <span className="whitespace-nowrap">
@@ -251,7 +284,8 @@ const RunConfirm = ({ nextSlotAt, onClose, onDone, onConflict }: RunConfirmProps
         <p>
           Это <span className="text-white">настоящий шаг мира</span>, такой же, как по расписанию. В каждом регионе в
           симуляции будут произведены и потреблены товары, изменятся запасы и цены, стабильность и достаток; жители
-          заплатят налог, казна выплатит жалованье, страны раздадут дотации.
+          заплатят налог, казна выплатит жалованье, страны раздадут дотации, а торговцы-НПС продадут жителям товар и
+          пополнят склады.
         </p>
         <p>Отменить шаг нельзя. Он попадёт в журнал операций и в список пересчётов как ручной.</p>
         <p className="text-white/50">
@@ -477,6 +511,21 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
               {lastResult.regions_failed > 0 && <span className="text-site-red">, с ошибкой: {lastResult.regions_failed}</span>}
               {lastResult.finished_at && <> · длительность {formatDuration(lastResult)}</>}
             </span>
+            {lastResult.merchants_processed !== undefined && (
+              <span className="text-white/60">
+                Торговцев: {lastResult.merchants_processed}, продано жителям: {lastResult.merchant_items_sold ?? 0} шт.,
+                закуплено со складов: {lastResult.merchant_items_restocked ?? 0} шт., операций торговли:{' '}
+                {lastResult.merchant_ops_posted ?? 0}
+                {(lastResult.shop_rows_purged ?? 0) > 0 && <>, убрано строк магазинов: {lastResult.shop_rows_purged}</>}
+                {(lastResult.merchant_failures ?? 0) > 0 && (
+                  <span className="text-site-red">
+                    , сбой торговли в регионах: {lastResult.merchant_failures}
+                    {lastResult.merchant_failed_region_ids && lastResult.merchant_failed_region_ids.length > 0 &&
+                      ` (№ ${lastResult.merchant_failed_region_ids.join(', ')})`}
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         )}
       </section>
@@ -497,6 +546,7 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                     <th className="py-2 pr-3 font-normal">Начат</th>
                     <th className="py-2 pr-3 font-normal">Длительность</th>
                     <th className="py-2 pr-3 font-normal">Регионы</th>
+                    <th className="py-2 pr-3 font-normal">Торговцы</th>
                     <th className="py-2 pr-3 font-normal">Статус</th>
                     <th className="py-2 font-normal">Ошибка</th>
                   </tr>
@@ -515,6 +565,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                       <td className="py-2 pr-3 text-white/70 whitespace-nowrap">{formatDuration(r)}</td>
                       <td className="py-2 pr-3">
                         <RegionsCell run={r} />
+                      </td>
+                      <td className="py-2 pr-3 text-xs">
+                        <MerchantsCell run={r} />
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap">
                         <StatusText status={r.status} />
@@ -541,6 +594,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                   </span>
                   <span className="text-xs text-white/50">
                     Регионы: <RegionsCell run={r} />
+                  </span>
+                  <span className="text-xs text-white/50">
+                    Торговцы: <MerchantsCell run={r} />
                   </span>
                   {r.error && <span className="text-site-red text-xs break-words">{r.error}</span>}
                 </li>
@@ -600,6 +656,14 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                   );
                 })}
               </div>
+              {section.title === 'Торговцы' &&
+                !errors[MERCHANT_SHARE_PAIR[0]] &&
+                !errors[MERCHANT_SHARE_PAIR[1]] &&
+                parseNum(form[MERCHANT_SHARE_PAIR[0]]) > parseNum(form[MERCHANT_SHARE_PAIR[1]]) && (
+                  <p className="text-gold text-xs">
+                    Спрос жителей больше своего предела — фактически будет действовать предел.
+                  </p>
+                )}
               {section.title === 'Достаток' && weightsSum !== null && (
                 <p className="text-white/50 text-xs">
                   Сумма трёх весов: {fmtNum(Math.round(weightsSum * 100) / 100)} — потолок достатка около{' '}

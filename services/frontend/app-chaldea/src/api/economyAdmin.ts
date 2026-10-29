@@ -25,6 +25,10 @@ import type {
   EconSimUpdate,
   EconTemplateUpdate,
   EconTickRun,
+  EconMerchantFundBody,
+  EconMerchantFundResult,
+  EconMerchantsParams,
+  EconMerchantsResponse,
 } from '../types/economy';
 
 /** Admin «Экономика» API (FEAT-181, character-service). Auth header comes from axiosSetup. */
@@ -168,5 +172,18 @@ export const putEconomySim = async (body: EconSimUpdate): Promise<EconSimState> 
 /** «Пересчитать сейчас» — a real extra step; 409 «Пересчёт уже идёт» while a run is active. */
 export const postEconomySimRun = async (): Promise<EconTickRun> => {
   const { data } = await axios.post<EconTickRun>(`${BASE}/sim/run`);
+  return data;
+};
+
+/* ---------------------------------------------- FEAT-183 — NPC merchants (feature file 3.7) */
+
+export const fetchEconomyMerchants = async (params: EconMerchantsParams = {}): Promise<EconMerchantsResponse> => {
+  const { data } = await axios.get<EconMerchantsResponse>(`${BASE}/merchants`, { params: clean(params) });
+  return data;
+};
+
+/** «Пополнить кассы торговцев» — needs economy:settings + economy:emit; re-click emits 0. */
+export const postEconomyMerchantsFund = async (body: EconMerchantFundBody): Promise<EconMerchantFundResult> => {
+  const { data } = await axios.post<EconMerchantFundResult>(`${BASE}/merchants/fund`, body);
   return data;
 };

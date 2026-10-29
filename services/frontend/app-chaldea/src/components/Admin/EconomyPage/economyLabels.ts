@@ -1,4 +1,4 @@
-import type { EconAccountKind, EconLegType } from '../../../types/economy';
+import type { EconAccountKind, EconLegType, EconMerchantReason } from '../../../types/economy';
 
 /** Russian labels of ledger operation types (econ_core.OP_TYPES). */
 export const OP_TYPE_LABELS: Record<string, string> = {
@@ -28,6 +28,7 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   character_deleted: 'Удаление персонажа',
   treasury_closed: 'Закрытие казны',
   region_tick: 'Пересчёт региона',
+  merchant_trade: 'Торговля с жителями',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
@@ -65,6 +66,7 @@ export const LEG_TYPE_LABELS: Record<EconLegType, string> = {
   refund: 'возврат',
   commission: 'комиссия',
   tax: 'налог',
+  trade_tax: 'налог с выручки',
 };
 
 /** Account kinds an admin emission may target (backend rule). */
@@ -121,3 +123,27 @@ export const formatDateTime = (iso: string): string => {
     minute: '2-digit',
   });
 };
+
+/** Why an NPC merchant is not living (FEAT-183, `econ_core.merchant_status`) — shared by the shop editor and «Торговцы». */
+export const MERCHANT_REASON_LABELS: Record<EconMerchantReason, string> = {
+  not_npc: 'персонаж не является НПС',
+  dead: 'НПС мёртв',
+  no_location: 'НПС не стоит ни в одной локации',
+  dungeon: 'НПС находится в подземелье',
+  no_region: 'локация НПС не относится ни к одному региону',
+  not_simulated: 'экономика региона не моделируется',
+};
+
+export const merchantReasonText = (reason: string | null | undefined): string =>
+  (reason && MERCHANT_REASON_LABELS[reason as EconMerchantReason]) || 'причина неизвестна';
+
+/** Skip reasons of «Пополнить кассы торговцев» (merchant reasons + the fund's own). */
+const MERCHANT_FUND_SKIP_LABELS: Record<string, string> = {
+  at_target: 'касса уже не меньше нормы',
+  no_target: 'норма кассы равна нулю (нет рыночных товаров)',
+  not_merchant: 'не торговец',
+  region_filtered: 'не в выбранных регионах',
+};
+
+export const merchantFundSkipText = (reason: string): string =>
+  MERCHANT_FUND_SKIP_LABELS[reason] ?? merchantReasonText(reason);
