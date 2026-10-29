@@ -444,12 +444,12 @@ class EconSettings(Base):
     __tablename__ = "econ_settings"
 
     id = Column(SmallInteger, primary_key=True, autoincrement=False)  # always 1
-    currency_name = Column(String(50), nullable=False, default="Золото")
-    currency_genitive = Column(String(50), nullable=False, default="золота")
-    currency_one = Column(String(50), nullable=False, default="золотой")
-    currency_few = Column(String(50), nullable=False, default="золотых")
-    currency_many = Column(String(50), nullable=False, default="золотых")
-    currency_short = Column(String(20), nullable=False, default="зол.")
+    currency_name = Column(String(50), nullable=False, default="Марки")
+    currency_genitive = Column(String(50), nullable=False, default="марок")
+    currency_one = Column(String(50), nullable=False, default="марка")
+    currency_few = Column(String(50), nullable=False, default="марки")
+    currency_many = Column(String(50), nullable=False, default="марок")
+    currency_short = Column(String(20), nullable=False, default="мар.")
     country_tax_rate = Column(Numeric(5, 4), nullable=False, default=0.1)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     updated_by_user_id = Column(Integer, nullable=True)

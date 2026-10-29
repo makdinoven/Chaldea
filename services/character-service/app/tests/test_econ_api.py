@@ -24,8 +24,8 @@ EXTRA_DDL = [
 ]
 
 ALL_PERMS = ["economy:read", "economy:emit", "economy:adjust", "economy:settings"]
-CURRENCY = {"name": "Золото", "genitive": "золота", "one": "золотой", "few": "золотых", "many": "золотых",
-            "short": "зол."}
+CURRENCY = {"name": "Марки", "genitive": "марок", "one": "марка", "few": "марки", "many": "марок",
+            "short": "мар."}
 GOOD_SETTINGS = {"currency": {"name": "Крона", "genitive": "крон", "one": "крона", "few": "кроны",
                               "many": "крон", "short": "кр."}, "country_tax_rate": 0.2}
 
@@ -658,7 +658,7 @@ def test_settings_put_strips_and_changes_public_currency_and_tax(client, econ_db
 def test_settings_rejects_markup_and_empty_forms(client, econ_db, field, value):
     body = {**GOOD_SETTINGS, "currency": {**GOOD_SETTINGS["currency"], field: value}}
     assert client.put("/characters/admin/economy/settings", json=body).status_code == 422
-    assert _q(econ_db, "SELECT currency_name FROM econ_settings WHERE id = 1") == "Золото"
+    assert _q(econ_db, "SELECT currency_name FROM econ_settings WHERE id = 1") == "Марки"
 
 
 @pytest.mark.parametrize("field,limit", [("name", 50), ("genitive", 50), ("short", 20)])

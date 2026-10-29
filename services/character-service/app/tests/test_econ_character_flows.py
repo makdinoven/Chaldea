@@ -375,7 +375,7 @@ class TestNpcGold:
         npc_id = r.json()["id"]
         assert _balance(db, npc_id) == 300
         (op,) = _ops(db, "admin_adjust")
-        assert op.actor_user_id == 9 and op.comment == "Правка золота НПС"
+        assert op.actor_user_id == 9 and op.comment == "Правка денег НПС"
         assert '"admin_npc_create"' in op.metadata
         assert _legs(db, op.id) == [("adjustment", 0, "character", npc_id, 300, "main")]
         _assert_invariant(db)

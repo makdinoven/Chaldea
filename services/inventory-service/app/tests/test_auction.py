@@ -466,7 +466,7 @@ def test_place_bid_insufficient_gold(mock_notify, auction_env):
     with pytest.raises(HTTPException) as exc:
         crud.place_bid(db, listing_id=listing.id, data=req, user_id=2)
     assert exc.value.status_code == 400
-    assert "золота" in exc.value.detail
+    assert "марок" in exc.value.detail
 
 
 @patch("crud.publish_auction_notification")
@@ -626,7 +626,7 @@ def test_buyout_insufficient_gold(mock_notify, auction_env):
     with pytest.raises(HTTPException) as exc:
         crud.execute_buyout(db, listing_id=listing.id, data=req, user_id=2)
     assert exc.value.status_code == 400
-    assert "золота" in exc.value.detail
+    assert "марок" in exc.value.detail
 
 
 @patch("crud.publish_auction_notification")

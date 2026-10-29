@@ -3,10 +3,10 @@
  * («Экономика»), so no component may spell the currency word itself.
  *
  * Forms (Russian needs several):
- *  - `name`     — nominative, for labels: «Золото»
- *  - `genitive` — mass genitive: «Недостаточно золота», «Всего золота на складе»
- *  - `one` / `few` / `many` — counting forms: «1 золотой», «3 золотых», «5 золотых»
- *  - `short`    — abbreviation for tight places: «100 зол.»
+ *  - `name`     — nominative, for labels: «Марки»
+ *  - `genitive` — mass genitive: «Недостаточно марок», «Всего марок на складе»
+ *  - `one` / `few` / `many` — counting forms: «1 марка», «3 марки», «5 марок»
+ *  - `short`    — abbreviation for tight places: «100 мар.»
  *
  * React code reads the forms through `useCurrency()`; non-React code (Redux
  * slices, plain helpers) reads the module mirror via `getCurrencyForms()`,
@@ -24,12 +24,12 @@ export interface CurrencyForms {
 
 /** Used until `GET /characters/economy/currency` answers (and if it fails). */
 export const DEFAULT_CURRENCY_FORMS: CurrencyForms = {
-  name: 'Золото',
-  genitive: 'золота',
-  one: 'золотой',
-  few: 'золотых',
-  many: 'золотых',
-  short: 'зол.',
+  name: 'Марки',
+  genitive: 'марок',
+  one: 'марка',
+  few: 'марки',
+  many: 'марок',
+  short: 'мар.',
 };
 
 let currentForms: CurrencyForms = DEFAULT_CURRENCY_FORMS;
@@ -52,7 +52,7 @@ export const pluralRu = (n: number, one: string, few: string, many: string): str
 };
 
 export interface FormatCurrencyOptions {
-  /** Use the abbreviation («100 зол.») instead of the counting form. */
+  /** Use the abbreviation («100 мар.») instead of the counting form. */
   short?: boolean;
   /** Forms to use; defaults to the module mirror (server forms once loaded). */
   forms?: CurrencyForms;

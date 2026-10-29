@@ -239,7 +239,7 @@ class TestTradeEndpoints:
         self._confirm(api, trade_id, 1)
         r = self._confirm(api, trade_id, 2)
         assert r.status_code == 400
-        assert "недостаточно золота" in r.json()["detail"]
+        assert "недостаточно марок" in r.json()["detail"]
 
         assert _op_count(db, "trade") == 0
         assert _balance(db, 1) == 30
@@ -284,8 +284,8 @@ class TestTradeEndpoints:
     @pytest.mark.parametrize("gold,fragment", [
         (-1, "не может быть отрицательным"),
         (-10 ** 12, "не может быть отрицательным"),
-        (10 ** 18, "Недостаточно золота"),
-        (501, "Недостаточно золота"),
+        (10 ** 18, "Недостаточно марок"),
+        (501, "Недостаточно марок"),
     ])
     def test_negative_and_huge_gold_offers_rejected(self, api, env, gold, fragment):
         db = env
@@ -436,7 +436,7 @@ class TestAuctionBids:
         with pytest.raises(HTTPException) as exc:
             _bid(db, listing.id, 2, econ_core.MAX_AMOUNT)
         assert exc.value.status_code == 400
-        assert exc.value.detail == "Недостаточно золота"
+        assert exc.value.detail == "Недостаточно марок"
         assert _balance(db, 2) == 3000
 
 
@@ -479,7 +479,7 @@ class TestAuctionBuyout:
         with pytest.raises(HTTPException) as exc:
             _buyout(db, listing.id, 4)
         assert exc.value.status_code == 400
-        assert exc.value.detail == "Недостаточно золота"
+        assert exc.value.detail == "Недостаточно марок"
 
         db.refresh(listing)
         assert listing.status == "active" and listing.current_bidder_id == 2

@@ -77,7 +77,7 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
   );
 };
 
-/** «Где золото мира»: totals, the conservation check and the treasury tree. */
+/** «Где деньги мира»: totals, the conservation check and the treasury tree. */
 const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps) => {
   const { format, forms } = useCurrency();
   const { totals, invariant } = summary;

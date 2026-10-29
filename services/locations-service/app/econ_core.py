@@ -243,12 +243,12 @@ class PostingResult(NamedTuple):
 
 @dataclass(frozen=True)
 class CurrencyForms:
-    name: str          # nominative, labels: «Золото»
-    genitive: str      # «Недостаточно золота»
-    one: str           # 1, 21, 101: «золотой»
-    few: str           # 2-4, 22-24: «золотых»
-    many: str          # 0, 5-20, 25: «золотых»
-    short: str         # «зол.»
+    name: str          # nominative, labels: «Марки»
+    genitive: str      # «Недостаточно марок»
+    one: str           # 1, 21, 101: «марка»
+    few: str           # 2-4, 22-24: «марки»
+    many: str          # 0, 5-20, 25: «марок»
+    short: str         # «мар.»
 
     def as_dict(self) -> Dict[str, str]:
         return {
@@ -258,7 +258,7 @@ class CurrencyForms:
 
 
 DEFAULT_FORMS = CurrencyForms(
-    name="Золото", genitive="золота", one="золотой", few="золотых", many="золотых", short="зол.",
+    name="Марки", genitive="марок", one="марка", few="марки", many="марок", short="мар.",
 )
 
 
@@ -375,7 +375,7 @@ def plural_ru(n: int, one: str, few: str, many: str) -> str:
 
 
 def format_currency(n: int, forms: CurrencyForms = DEFAULT_FORMS, short: bool = False) -> str:
-    """«1 золотой», «3 золотых», short=True -> «3 зол.»."""
+    """«1 марка», «3 марки», short=True -> «3 мар.»."""
     n = int(n)
     word = forms.short if short else plural_ru(n, forms.one, forms.few, forms.many)
     return f"{n} {word}"

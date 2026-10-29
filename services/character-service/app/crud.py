@@ -2373,7 +2373,7 @@ DEDUCT_GOLD_OP_TYPES = frozenset({
 })
 
 ADMIN_CARD_ADJUST_COMMENT = "Правка в карточке персонажа"
-NPC_FORM_ADJUST_COMMENT = "Правка золота НПС"
+NPC_FORM_ADJUST_COMMENT = "Правка денег НПС"
 
 
 def currency_forms(db: Session) -> econ_ledger.CurrencyForms:

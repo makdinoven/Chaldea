@@ -232,7 +232,7 @@ def test_settings_are_cached_until_invalidated(Session):
     assert econ_ledger.get_economy_settings(s).country_tax_rate == econ_core.DEFAULT_COUNTRY_TAX_RATE
     s.execute(text("UPDATE econ_settings SET country_tax_rate = 0.3, currency_genitive = 'серебра'"))
     s.commit()
-    assert econ_ledger.get_currency_forms(s).genitive == "золота"         # still cached
+    assert econ_ledger.get_currency_forms(s).genitive == "марок"         # still cached
     econ_ledger.invalidate_settings_cache()
     assert econ_ledger.get_currency_forms(s).genitive == "серебра"
     assert float(econ_ledger.get_economy_settings(s).country_tax_rate) == 0.3

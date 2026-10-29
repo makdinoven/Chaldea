@@ -13,12 +13,12 @@ const PREVIEW_AMOUNTS = [1, 3, 5, 21];
 const FORBIDDEN_CHARS = /[<>]/;
 
 const FIELDS: { key: keyof CurrencyForms; label: string; hint: string }[] = [
-  { key: 'name', label: 'Название', hint: 'Именительный падеж, для заголовков: «Золото»' },
-  { key: 'genitive', label: 'Родительный падеж', hint: '«Недостаточно золота»' },
-  { key: 'one', label: 'Счёт: 1', hint: '«1 золотой», «21 золотой»' },
-  { key: 'few', label: 'Счёт: 2–4', hint: '«3 золотых»' },
-  { key: 'many', label: 'Счёт: 5–20', hint: '«5 золотых», «11 золотых»' },
-  { key: 'short', label: 'Сокращение', hint: '«100 зол.» — для тесных мест' },
+  { key: 'name', label: 'Название', hint: 'Именительный падеж, для заголовков: «Марки»' },
+  { key: 'genitive', label: 'Родительный падеж', hint: '«Недостаточно марок»' },
+  { key: 'one', label: 'Счёт: 1', hint: '«1 марка», «21 марка»' },
+  { key: 'few', label: 'Счёт: 2–4', hint: '«3 марки»' },
+  { key: 'many', label: 'Счёт: 5–20', hint: '«5 марок», «11 марок»' },
+  { key: 'short', label: 'Сокращение', hint: '«100 мар.» — для тесных мест' },
 ];
 
 const fieldError = (key: keyof CurrencyForms, value: string): string | null => {

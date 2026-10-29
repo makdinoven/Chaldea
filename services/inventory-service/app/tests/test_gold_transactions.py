@@ -255,7 +255,7 @@ class TestTradeLedger:
     def test_insufficient_funds_rejected_nothing_moves(self, gold_env):
         db = gold_env
         trade = self._setup_trade(db, initiator_gold=600, target_gold=0)
-        with pytest.raises(ValueError, match="недостаточно золота"):
+        with pytest.raises(ValueError, match="недостаточно марок"):
             crud.execute_trade(db, trade)
         db.rollback()
         assert _balance(db, 1) == 500
@@ -335,7 +335,7 @@ class TestAuctionLedger:
         with pytest.raises(HTTPException) as exc:
             crud.place_bid(db, listing.id, schemas.AuctionBidRequest(character_id=2, amount=3500), user_id=2)
         assert exc.value.status_code == 400
-        assert exc.value.detail == "Недостаточно золота"
+        assert exc.value.detail == "Недостаточно марок"
         assert _balance(db, 2) == 3000
         assert _op_count(db, "auction_bid") == 0
 

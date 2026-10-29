@@ -252,7 +252,7 @@ class TestNpcBuy:
         with _Shop(item=_shop_item(NPC_REGION, price=600)) as shop:
             with pytest.raises(HTTPException) as exc:
                 await _buy(shop_db, NPC_REGION, quantity=2)
-        assert exc.value.status_code == 400 and exc.value.detail == "Недостаточно золота"
+        assert exc.value.status_code == 400 and exc.value.detail == "Недостаточно марок"
         shop.client.post.assert_not_awaited()
         assert await _balance(shop_db, PLAYER) == 1000
         assert await _ops(shop_db, "npc_shop_buy") == 0
@@ -696,7 +696,7 @@ class TestHouseResale:
         _set_gold(homes, 30, 899)
         seller = _gold(homes, 10)
         r = homes.as_(STRANGER).post(f"/{hid}/buy", {"character_id": 30})
-        assert r.status_code == 400 and r.json()["detail"] == "Не хватает золота"
+        assert r.status_code == 400 and r.json()["detail"] == "Не хватает марок"
         assert homes.sql("SELECT owner_character_id, sale_price FROM houses WHERE id = :h", h=hid)[0] == (10, 900)
         assert (_gold(homes, 10), _gold(homes, 30)) == (seller, 899)
         assert _ops_sync(homes, "house_resale") == 0

@@ -515,7 +515,7 @@ class TestDeductGoldLedger:
         r = client.post("/characters/internal/deduct-gold", json={"character_id": 1, "amount": 30},
                         headers=INTERNAL_HEADERS)
         assert r.status_code == 400
-        assert r.json()["detail"].startswith("Недостаточно золота")
+        assert r.json()["detail"].startswith("Недостаточно марок")
         assert _ops(session) == []
         assert session.execute(text("SELECT currency_balance FROM characters WHERE id = 1")).scalar() == 10
 

@@ -303,7 +303,7 @@ def test_update_items_insufficient_gold(trade_env):
     })
 
     assert resp.status_code == 400
-    assert "золота" in resp.json()["detail"].lower()
+    assert "марок" in resp.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

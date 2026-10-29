@@ -240,7 +240,7 @@ def test_trade_execution_insufficient_gold_rollback(atomicity_env):
         resp = c.post(f"/inventory/trade/{trade_id}/confirm", json={"character_id": 1})
 
     assert resp.status_code == 400
-    assert "золота" in resp.json()["detail"].lower()
+    assert "марок" in resp.json()["detail"].lower()
 
     # Bob's gold should be unchanged
     bob_gold = db.execute(text(

@@ -25,8 +25,8 @@ SRC = "unit-test"
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("n,expected", [
-    (1, "1 золотой"), (2, "2 золотых"), (5, "5 золотых"), (11, "11 золотых"),
-    (21, "21 золотой"), (111, "111 золотых"), (0, "0 золотых"), (1001, "1001 золотой"),
+    (1, "1 марка"), (2, "2 марки"), (5, "5 марок"), (11, "11 марок"),
+    (21, "21 марка"), (111, "111 марок"), (0, "0 марок"), (1001, "1001 марка"),
 ])
 def test_format_currency_default_forms(n, expected):
     assert core.format_currency(n) == expected
@@ -51,8 +51,8 @@ def test_format_currency_custom_forms_and_short():
 
 
 def test_default_forms_match_the_design():
-    assert core.DEFAULT_FORMS.as_dict() == {"name": "Золото", "genitive": "золота", "one": "золотой",
-                                            "few": "золотых", "many": "золотых", "short": "зол."}
+    assert core.DEFAULT_FORMS.as_dict() == {"name": "Марки", "genitive": "марок", "one": "марка",
+                                            "few": "марки", "many": "марок", "short": "мар."}
 
 
 # ---------------------------------------------------------------------------

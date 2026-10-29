@@ -460,7 +460,7 @@ def test_bid_insufficient_gold(auction_client):
         "amount": 150,
     })
     assert resp.status_code == 400
-    assert "золота" in resp.json()["detail"]
+    assert "марок" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +690,7 @@ def test_error_messages_russian_insufficient_gold(auction_client):
         "amount": 150,
     })
     assert resp.status_code == 400
-    assert "Недостаточно золота" in resp.json()["detail"]
+    assert "Недостаточно марок" in resp.json()["detail"]
 
 
 def test_error_messages_russian_own_listing_bid(auction_client):
