@@ -15,6 +15,7 @@ import models
 import httpx
 import schemas
 import crud
+import econ_core
 import econ_ledger
 import visibility
 import activity_lock
@@ -2617,62 +2618,66 @@ async def choose_dialogue_option(
 # --------------------------------------------------------------------
 # NPC SHOP — Admin endpoints
 # --------------------------------------------------------------------
-@router.post("/admin/npc-shop/{npc_id}/items", response_model=schemas.NpcShopItemRead)
+@router.post("/admin/npc-shop/{npc_id}/items", response_model=schemas.NpcShopItemAdminRead)
 async def add_npc_shop_item(
     npc_id: int,
     body: schemas.NpcShopItemCreate,
     session: AsyncSession = Depends(get_db),
     admin: UserRead = Depends(get_admin_user),
 ):
-    """Add an item to NPC's shop inventory."""
-    shop_item = await crud.create_npc_shop_item(session, npc_id, body.dict())
-    item_name = await crud.get_item_name(session, shop_item.item_id)
-    return {
-        "id": shop_item.id,
-        "npc_id": shop_item.npc_id,
-        "item_id": shop_item.item_id,
-        "buy_price": shop_item.buy_price,
-        "sell_price": shop_item.sell_price,
-        "stock": shop_item.stock,
-        "is_active": shop_item.is_active,
-        "created_at": shop_item.created_at,
-        "item_name": item_name,
-    }
+    """Add an item to NPC's shop (FEAT-183: bounds in the schema, 404 unknown NPC / item,
+    409 when the NPC already has this item)."""
+    if not await crud.npc_exists(session, npc_id):
+        raise HTTPException(status_code=404, detail="НПС не найден")
+    if not await crud.item_exists(session, body.item_id):
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    try:
+        shop_item = await crud.create_npc_shop_item(session, npc_id, body.dict())
+    except crud.ShopItemDuplicate:
+        raise HTTPException(status_code=409, detail="Этот предмет уже есть в магазине")
+    rows = await crud.get_npc_shop_items_admin(session, npc_id, shop_item_id=shop_item.id)
+    return rows[0]
 
 
-@router.get("/admin/npc-shop/{npc_id}/items", response_model=List[schemas.NpcShopItemRead])
+@router.get("/admin/npc-shop/{npc_id}/items", response_model=List[schemas.NpcShopItemAdminRead])
 async def list_npc_shop_items(
     npc_id: int,
     session: AsyncSession = Depends(get_db),
     admin: UserRead = Depends(get_admin_user),
 ):
-    """List all shop items for an NPC (admin view, includes inactive)."""
+    """List all shop items for an NPC (admin view, includes inactive and bought-from-players rows)
+    with restock target, origin, goods group and the current ask / bid."""
     return await crud.get_npc_shop_items_admin(session, npc_id)
 
 
-@router.put("/admin/npc-shop/items/{shop_item_id}", response_model=schemas.NpcShopItemRead)
+@router.get("/admin/npc-shop/{npc_id}/market", response_model=schemas.MerchantMarketRead)
+async def get_npc_shop_market(
+    npc_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """FEAT-183: does this merchant trade in the regional economy (living) or the old way (reason),
+    his region, tax rate, cash and the goods groups he buys from players."""
+    market = await crud.get_merchant_market_admin(session, npc_id)
+    if market is None:
+        raise HTTPException(status_code=404, detail="НПС не найден")
+    return market
+
+
+@router.put("/admin/npc-shop/items/{shop_item_id}", response_model=schemas.NpcShopItemAdminRead)
 async def update_npc_shop_item(
     shop_item_id: int,
     body: schemas.NpcShopItemUpdate,
     session: AsyncSession = Depends(get_db),
     admin: UserRead = Depends(get_admin_user),
 ):
-    """Update price, stock, or active status of a shop item."""
+    """Update prices, stock, restock target or active status of a shop item (a row bought from
+    players becomes an admin row)."""
     updated = await crud.update_npc_shop_item(session, shop_item_id, body.dict(exclude_unset=True))
     if not updated:
         raise HTTPException(status_code=404, detail="Товар в магазине не найден")
-    item_name = await crud.get_item_name(session, updated.item_id)
-    return {
-        "id": updated.id,
-        "npc_id": updated.npc_id,
-        "item_id": updated.item_id,
-        "buy_price": updated.buy_price,
-        "sell_price": updated.sell_price,
-        "stock": updated.stock,
-        "is_active": updated.is_active,
-        "created_at": updated.created_at,
-        "item_name": item_name,
-    }
+    rows = await crud.get_npc_shop_items_admin(session, updated.npc_id, shop_item_id=updated.id)
+    return rows[0]
 
 
 @router.delete("/admin/npc-shop/items/{shop_item_id}")
@@ -2691,6 +2696,40 @@ async def delete_npc_shop_item(
 # --------------------------------------------------------------------
 # NPC SHOP — Player-facing endpoints
 # --------------------------------------------------------------------
+
+# --------------------------------------------------------------------
+# FEAT-183: a merchant is "living" (own cash, region prices, finite stock) or
+# "legacy" (fixed prices, the treasury of his place pays / receives) — see
+# crud.merchant_market. Prices come only from econ_core (Decimal maths).
+# --------------------------------------------------------------------
+
+SHOP_NO_CASH_MESSAGE = "У меня сейчас нет на это денег"
+SHOP_NOT_BUYING_MESSAGE = "Этот NPC не покупает данный предмет"
+SHOP_NO_STOCK_MESSAGE = "Недостаточно товара на складе"
+SHOP_SELL_FAILED_MESSAGE = "Не удалось завершить продажу"
+
+
+async def _return_sold_item(character_id: int, item_id: int, quantity: int) -> bool:
+    """Give a sold item back after a failed credit (FEAT-183 3.6 sell step 4).
+
+    Internal route + service token, like every item grant of this service. True on success; the
+    caller logs a failure (the item is then lost — residual risk in docs/ISSUES.md).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{settings.INVENTORY_SERVICE_URL}/inventory/internal/characters/{character_id}/items",
+                json={"item_id": item_id, "quantity": quantity},
+                headers=_internal_token_headers(),
+            )
+        return resp.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+# Keep the grant helper above apart from the player-token DELETE below: the
+# internal-headers test scans a window after every internal grant URL.
+
 
 async def _fetch_charisma(character_id: int) -> Optional[int]:
     """Fetch charisma value from character-attributes-service.
@@ -2719,10 +2758,8 @@ async def _fetch_charisma(character_id: int) -> Optional[int]:
 
 
 def _compute_charisma_discount(charisma: Optional[int]) -> float:
-    """Return discount percentage (0..50) based on charisma value."""
-    if charisma is None or charisma <= 0:
-        return 0.0
-    return min(charisma * 0.2, 50.0)
+    """Return discount percentage (0..50) based on charisma value (econ_core.charisma_discount_pct)."""
+    return float(econ_core.charisma_discount_pct(charisma))
 
 
 def _shop_item_fields(item) -> dict:
@@ -2746,19 +2783,25 @@ async def get_npc_shop(
     session: AsyncSession = Depends(get_db),
     current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
-    """Get NPC's shop items (active only, with item details).
+    """Get NPC's shop items (active only, with item details). Still a list, so
+    `NpcProfileModal` keeps deciding on the «Магазин» button by non-emptiness.
 
-    Guest / any viewer without `character_id`: the public shop window — base
-    `buy_price` / `sell_price` and the item card. The `discounted_buy_price`
-    key is **absent** (not `null`): the two views are two explicitly-built
-    schemas, `NpcShopItemPublicRead` and `NpcShopItemRead`.
+    FEAT-183: `buy_price` / `sell_price` are the CURRENT prices (region multiplier
+    for a living merchant), plus `base_buy_price`, `base_sell_price`, `stock`
+    (effective), `in_stock`, `market`, `price_level`, `living`. Rows bought from
+    players are hidden while their stock is 0; admin rows stay (in_stock=false).
+
+    Guest / any viewer without `character_id`: the public shop window. The
+    `discounted_buy_price` key is **absent** (not `null`): the two views are two
+    explicitly-built schemas, `NpcShopItemPublicRead` and `NpcShopItemRead`.
 
     With `character_id`: the personal price list. `discounted_buy_price` is
-    derived from that character's `charisma`, so it is a *private* number — the
-    FEAT-171 review inverted `20 → 19` back into `charisma = 30` as a guest.
-    The viewer must therefore pass the same gate as every other private read
-    (owner, or admin/moderator with `characters:read`; NPCs have no private
-    layer). 404 for a character that does not exist, 403 for a stranger.
+    derived from the current price and that character's `charisma`, so it is a
+    *private* number — the FEAT-171 review inverted `20 → 19` back into
+    `charisma = 30` as a guest. The viewer must therefore pass the same gate as
+    every other private read (owner, or admin/moderator with `characters:read`;
+    NPCs have no private layer). 404 for a character that does not exist, 403
+    for a stranger.
     """
     if character_id is not None:
         await visibility.require_private_access(session, character_id, current_user)
@@ -2767,20 +2810,39 @@ async def get_npc_shop(
 
     if character_id is not None:
         charisma = await _fetch_charisma(character_id)
-        discount_pct = _compute_charisma_discount(charisma)
+        discount_pct = econ_core.charisma_discount_pct(charisma)
         result = []
         for item in items:
             fields = _shop_item_fields(item)
-            if discount_pct > 0:
-                discounted = math.ceil(fields["buy_price"] * (1 - discount_pct / 100))
-            else:
-                discounted = fields["buy_price"]
+            discounted = econ_core.discounted_ask(fields["buy_price"], discount_pct)
             result.append(
                 schemas.NpcShopItemRead(**fields, discounted_buy_price=discounted)
             )
         return result
 
     return [schemas.NpcShopItemPublicRead(**_shop_item_fields(item)) for item in items]
+
+
+@router.get("/npcs/{npc_id}/shop/sell-offers", response_model=List[schemas.ShopSellOfferRead])
+async def get_npc_shop_sell_offers(
+    npc_id: int,
+    character_id: int = Query(..., ge=1),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """FEAT-183: what of the character's bag this merchant buys now and at what
+    price — `[{item_id, item_name, item_image, unit_price, max_quantity}]`.
+
+    Living merchant: his assortment rows with a buy price + on-market items of
+    the goods groups he trades; legacy merchant: only his rows with a buy price.
+    The merchant's cash is not disclosed: a broke merchant refuses on the sell
+    itself (409). Auth required + the private-data gate (owner / admin with
+    `characters:read`).
+    """
+    await visibility.require_private_access(session, character_id, current_user)
+    if not await crud.npc_exists(session, npc_id):
+        raise HTTPException(status_code=404, detail="NPC не найден")
+    return await crud.get_sell_offers(session, npc_id, character_id, schemas.SHOP_MAX_QUANTITY)
 
 
 @router.post("/npcs/{npc_id}/shop/buy", response_model=schemas.ShopTransactionResponse)
@@ -2797,11 +2859,13 @@ async def buy_from_npc(
     0. FEAT-145: require an npc_dialogue post naming this NPC
     1. Verify character ownership
     2. Verify character is at NPC's location
-    3. Check stock (if limited)
-    4. Calculate total price
-    5. Atomically deduct currency
-    6. Add item to inventory via inventory-service
-    7. Decrement stock if limited
+    3. Current price (region multiplier for a living merchant, charisma discount)
+    4. ONE transaction: conditional stock take (finite stock; refused -> nothing
+       paid) + payment (living: player -> NPC + NPC -> region trade_tax; legacy:
+       player -> treasury of the NPC's place), committed before the HTTP call
+    5. Add item to inventory via inventory-service; on failure compensate:
+       stock back + reverse the payment (treasury fallback if the NPC's cash is
+       gone)
     """
     # 1. Verify ownership
     await verify_character_ownership(session, body.character_id, current_user.id)
@@ -2823,55 +2887,96 @@ async def buy_from_npc(
     if not shop_item or shop_item.npc_id != npc_id or not shop_item.is_active:
         raise HTTPException(status_code=404, detail="Товар не найден в магазине этого NPC")
 
-    if body.quantity < 1:
-        raise HTTPException(status_code=400, detail="Количество должно быть >= 1")
+    # The schema bounds quantity to 1..999; re-checked here because a negative
+    # quantity would turn the conditional stock take into a stock ADD.
+    quantity = int(body.quantity)
+    if quantity < 1 or quantity > schemas.SHOP_MAX_QUANTITY:
+        raise HTTPException(status_code=400, detail="Количество должно быть от 1 до 999")
 
-    # Check stock
-    if shop_item.stock is not None and shop_item.stock < body.quantity:
-        raise HTTPException(status_code=400, detail="Недостаточно товара на складе")
+    market = await crud.merchant_market(session, npc_id)
+    item_markets = await crud.get_item_markets(session, [shop_item.item_id])
+    prices = crud.price_shop_row(market, item_markets.get(shop_item.item_id),
+                                 shop_item.buy_price, shop_item.sell_price)
+    stock = crud.effective_stock(market, shop_item.stock)
+    finite = stock is not None
+    if finite and stock < quantity:
+        raise HTTPException(status_code=400, detail=SHOP_NO_STOCK_MESSAGE)
 
-    # 4. Fetch charisma and calculate discounted price
     charisma = await _fetch_charisma(body.character_id)
-    discount_pct = _compute_charisma_discount(charisma)
-    if discount_pct > 0:
-        discounted_unit_price = math.ceil(shop_item.buy_price * (1 - discount_pct / 100))
-    else:
-        discounted_unit_price = shop_item.buy_price
-    total_price = discounted_unit_price * body.quantity
+    discount = econ_core.charisma_discount_pct(charisma)
+    discount_pct = float(discount)
+    unit_price = econ_core.discounted_ask(prices["ask"], discount)
+    total_price = unit_price * quantity
+    tax = econ_core.trade_tax(total_price, market.tax_rate or 0) if market.living else 0
 
-    # 5. FEAT-181: the character pays the treasury of the NPC's region (npc_shop_buy) and the
-    # payment is committed before the HTTP call — a transaction is never held across it.
     buy_meta = {"npc_id": npc_id, "shop_item_id": body.shop_item_id,
-                "item_id": shop_item.item_id, "quantity": body.quantity,
-                "unit_price": discounted_unit_price, "discount_pct": discount_pct}
-    charged = await crud.charge_character_op(
-        session, body.character_id, total_price,
-        op_type="npc_shop_buy", location_id=npc_location, metadata=buy_meta,
-    )
-    new_balance, buy_operation_id = charged if charged is not None else (None, None)
+                "item_id": shop_item.item_id, "quantity": quantity,
+                "unit_price": unit_price, "discount_pct": discount_pct,
+                "ask": prices["ask"], "living": market.living}
+    if market.living:
+        buy_meta["trade_tax"] = tax
+
+    # 4. One transaction: the stock is taken BEFORE the payment (lock order 3.5:
+    # shop row -> characters -> accounts), so two buyers of the last unit cannot
+    # both pay; it is committed before the HTTP call.
+    if finite and not await crud.take_shop_stock(session, shop_item.id, quantity):
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=SHOP_NO_STOCK_MESSAGE)
+    if market.living:
+        charged = await crud.charge_player_to_merchant(
+            session, body.character_id, npc_id, total_price, tax=tax,
+            region_id=market.region_id, location_id=npc_location, metadata=buy_meta,
+        )
+    else:
+        charged = await crud.charge_character_op(
+            session, body.character_id, total_price,
+            op_type="npc_shop_buy", location_id=npc_location, metadata=buy_meta,
+        )
     if charged is None:
         await session.rollback()
         raise HTTPException(status_code=400, detail=await crud.not_enough_gold_message(session, "Недостаточно"))
+    new_balance, buy_operation_id = charged
     await session.commit()
 
     async def _refund(reason: str) -> None:
-        """Compensating operation npc_shop_buy_refund: mirrors every leg of the purchase
-        (region -> character and the country's tax back to the region), so both treasuries
-        end exactly as before the purchase."""
-        if buy_operation_id is None:
-            return
+        """Compensation: the stock goes back and npc_shop_buy_refund mirrors every
+        leg of the purchase, so every account ends exactly as before. If the
+        merchant has spent the money meanwhile (the 6 h tick), the treasury of his
+        place refunds the player instead (metadata.fallback = true)."""
+        meta = {**buy_meta, "reason": reason}
         try:
-            await crud.reverse_operation(
-                session, buy_operation_id, op_type="npc_shop_buy_refund",
-                metadata={**buy_meta, "reason": reason},
-            )
+            if finite:
+                await crud.add_shop_stock(session, shop_item.id, quantity)
+            if buy_operation_id is not None:
+                await crud.reverse_operation(
+                    session, buy_operation_id, op_type="npc_shop_buy_refund", metadata=meta,
+                )
             await session.commit()
+            return
+        except econ_core.InsufficientFunds:
+            await session.rollback()
         except Exception:
             await session.rollback()
-            logger.exception("NPC shop refund failed for character %s (npc %s, %s)",
-                              body.character_id, npc_id, total_price)
+            logger.exception("NPC shop refund failed for character %s (npc %s, op %s, %s)",
+                             body.character_id, npc_id, buy_operation_id, total_price)
+            return
+        try:
+            if finite:
+                await crud.add_shop_stock(session, shop_item.id, quantity)
+            await crud.pay_character(
+                session, body.character_id, total_price, op_type="npc_shop_buy_refund",
+                location_id=npc_location, region_id=market.region_id,
+                metadata={**meta, "fallback": True, "reverses_operation_id": buy_operation_id},
+            )
+            await session.commit()
+            logger.warning("NPC shop refund paid by the treasury: npc %s had no cash (op %s, character %s)",
+                           npc_id, buy_operation_id, body.character_id)
+        except Exception:
+            await session.rollback()
+            logger.exception("NPC shop fallback refund failed for character %s (npc %s, op %s, %s)",
+                             body.character_id, npc_id, buy_operation_id, total_price)
 
-    # 6. Add item to inventory via inventory-service.
+    # 5. Add item to inventory via inventory-service.
     # FEAT-167: internal-only route + internal token (оплата уже списана выше).
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -2881,11 +2986,11 @@ async def buy_from_npc(
             )
             add_resp = await client.post(
                 add_url,
-                json={"item_id": shop_item.item_id, "quantity": body.quantity},
+                json={"item_id": shop_item.item_id, "quantity": quantity},
                 headers=_internal_token_headers(),
             )
             if add_resp.status_code != 200:
-                # Compensate: refund currency
+                # Compensate: stock + currency back
                 await _refund("inventory add failed")
                 detail = "Не удалось добавить предмет в инвентарь"
                 try:
@@ -2894,19 +2999,15 @@ async def buy_from_npc(
                     pass
                 raise HTTPException(status_code=500, detail=detail)
     except httpx.HTTPError:
-        # Compensate: refund currency
+        # Compensate: stock + currency back
         await _refund("inventory service unavailable")
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
-
-    # 7. Decrement stock if limited
-    if shop_item.stock is not None:
-        await crud.decrement_stock(session, shop_item.id, body.quantity)
 
     item_name = await crud.get_item_name(session, shop_item.item_id)
 
     # Track cumulative stats: items_bought + gold_spent
     await _track_cumulative_stats(body.character_id, {
-        "items_bought": body.quantity,
+        "items_bought": quantity,
         "total_gold_spent": total_price,
     })
 
@@ -2915,7 +3016,7 @@ async def buy_from_npc(
         "message": "Покупка совершена",
         "new_balance": new_balance,
         "item_name": item_name,
-        "quantity": body.quantity,
+        "quantity": quantity,
         "total_price": total_price,
         "discount_percent": discount_pct,
     }
@@ -2934,9 +3035,13 @@ async def sell_to_npc(
     Flow:
     1. Verify character ownership
     2. Verify character is at NPC's location
-    3. Find sell_price for this item (must be > 0)
-    4. Remove item from inventory via inventory-service
-    5. Add currency to character
+    3. Merchant's bid (crud.quote_bids: own rows with a buy price; a living
+       merchant also buys on-market items of his goods groups); living: his cash
+       must cover the total -> else 409, nothing removed
+    4. Remove item from inventory via inventory-service (player's JWT)
+    5. One transaction: living — the item goes to his stock (row stock += q, or a
+       new origin='player' row) and NPC -> player; legacy — treasury -> player
+       (the item is destroyed). Any failure: rollback and the item is returned.
     """
     # 1. Verify ownership
     await verify_character_ownership(session, body.character_id, current_user.id)
@@ -2953,15 +3058,21 @@ async def sell_to_npc(
     if char_location is None or char_location != npc_location:
         raise HTTPException(status_code=400, detail="Персонаж не находится в локации этого NPC")
 
-    if body.quantity < 1:
-        raise HTTPException(status_code=400, detail="Количество должно быть >= 1")
+    quantity = int(body.quantity)
+    if quantity < 1 or quantity > schemas.SHOP_MAX_QUANTITY:
+        raise HTTPException(status_code=400, detail="Количество должно быть от 1 до 999")
 
-    # 3. Find sell_price
-    sell_price = await crud.find_sell_price_for_item(session, npc_id, body.item_id)
-    if sell_price is None:
-        raise HTTPException(status_code=400, detail="Этот NPC не покупает данный предмет")
-
-    total_price = sell_price * body.quantity
+    # 3. The merchant's bid and (living) his cash, plain reads
+    market = await crud.merchant_market(session, npc_id)
+    quote = (await crud.quote_bids(session, market, [body.item_id])).get(body.item_id)
+    if quote is None:
+        raise HTTPException(status_code=400, detail=SHOP_NOT_BUYING_MESSAGE)
+    total_price = quote.unit_price * quantity
+    if market.living and await crud.merchant_cash(session, npc_id) < total_price:
+        raise HTTPException(status_code=409, detail=SHOP_NO_CASH_MESSAGE)
+    # End the read snapshot: nothing is held across the HTTP call, and the
+    # locking reads of step 5 start fresh.
+    await session.commit()
 
     # 4. Remove item from inventory via inventory-service
     auth_header = request.headers.get("authorization", "")
@@ -2969,7 +3080,7 @@ async def sell_to_npc(
         async with httpx.AsyncClient(timeout=5.0) as client:
             remove_url = (
                 f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}"
-                f"/items/{body.item_id}?quantity={body.quantity}"
+                f"/items/{body.item_id}?quantity={quantity}"
             )
             remove_resp = await client.delete(
                 remove_url,
@@ -2985,20 +3096,41 @@ async def sell_to_npc(
     except httpx.HTTPError:
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
 
-    # 5. FEAT-181: the treasury of the NPC's region pays the character (npc_shop_sell)
-    new_balance = await crud.pay_character(
-        session, body.character_id, total_price,
-        op_type="npc_shop_sell", location_id=npc_location,
-        metadata={"npc_id": npc_id, "item_id": body.item_id,
-                  "quantity": body.quantity, "sell_price": sell_price},
-    )
-    await session.commit()
+    # 5. Credit (FEAT-183): lock order 3.5 — shop row first, then characters / accounts.
+    sell_meta = {"npc_id": npc_id, "item_id": body.item_id, "quantity": quantity,
+                 "sell_price": quote.unit_price, "living": market.living}
+    try:
+        if market.living:
+            row_id = await crud.store_item_bought_from_player(session, npc_id, body.item_id, quantity, quote)
+            sell_meta["shop_item_id"] = row_id
+            new_balance = await crud.pay_player_from_merchant(
+                session, npc_id, body.character_id, total_price,
+                region_id=market.region_id, location_id=npc_location, metadata=sell_meta,
+            )
+        else:
+            new_balance = await crud.pay_character(
+                session, body.character_id, total_price,
+                op_type="npc_shop_sell", location_id=npc_location, metadata=sell_meta,
+            )
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        no_cash = isinstance(exc, econ_core.InsufficientFunds)
+        if not no_cash:
+            logger.exception("NPC shop sell credit failed: character %s, npc %s, item %s x%s",
+                             body.character_id, npc_id, body.item_id, quantity)
+        if not await _return_sold_item(body.character_id, body.item_id, quantity):
+            logger.error("NPC shop sell: item %s x%s NOT returned to character %s (npc %s) after a failed credit",
+                         body.item_id, quantity, body.character_id, npc_id)
+        if no_cash:
+            raise HTTPException(status_code=409, detail=SHOP_NO_CASH_MESSAGE)
+        raise HTTPException(status_code=500, detail=SHOP_SELL_FAILED_MESSAGE)
 
     item_name = await crud.get_item_name(session, body.item_id)
 
     # Track cumulative stats: items_sold + gold_earned
     await _track_cumulative_stats(body.character_id, {
-        "items_sold": body.quantity,
+        "items_sold": quantity,
         "total_gold_earned": total_price,
     })
 
@@ -3007,7 +3139,7 @@ async def sell_to_npc(
         "message": "Продажа совершена",
         "new_balance": new_balance,
         "item_name": item_name,
-        "quantity": body.quantity,
+        "quantity": quantity,
         "total_price": total_price,
     }
 

@@ -459,7 +459,16 @@ class DialogueNode(Base):
 
 
 class NpcShopItem(Base):
+    """A merchant's assortment row and stock (FEAT-183).
+
+    buy_price / sell_price are BASE prices at region multiplier 1; stock NULL = unlimited
+    (legacy merchants only; a living merchant treats NULL as 0); restock_target = «норма склада»;
+    origin = admin (set by an admin, restocked) | player (bought from players, resold only).
+    """
     __tablename__ = 'npc_shop_items'
+    __table_args__ = (
+        UniqueConstraint('npc_id', 'item_id', name='uq_npc_shop_items_npc_item'),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     npc_id = Column(Integer, nullable=False, index=True)
@@ -468,7 +477,10 @@ class NpcShopItem(Base):
     sell_price = Column(Integer, nullable=False, default=0)
     stock = Column(Integer, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default=text("1"))
+    restock_target = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    origin = Column(String(16), nullable=False, default='admin', server_default='admin')
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    updated_at = Column(TIMESTAMP, nullable=True, server_default=func.now(), onupdate=func.now())
 
 
 class Quest(Base):

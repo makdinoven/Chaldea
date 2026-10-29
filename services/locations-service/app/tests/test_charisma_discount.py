@@ -19,8 +19,16 @@ from auth_http import get_current_user_via_http, UserRead
 @pytest.fixture(autouse=True)
 def _bypass_npc_gate():
     """FEAT-145: NPC trading is gated by an npc_dialogue post; bypass it here so
-    the charisma-discount buy flow can be tested in isolation."""
-    with patch("main._require_npc_gate", new_callable=AsyncMock):
+    the charisma-discount buy flow can be tested in isolation. FEAT-183: the
+    merchant is a legacy one (fixed prices, treasury pays) and the item has no
+    market data, so the buy prices are the base prices."""
+    import crud
+    import econ_core
+    legacy = crud.MerchantMarket(
+        npc_id=5, living=False, reason=econ_core.MERCHANT_REASON_NOT_SIMULATED, location_id=100,
+        region_id=None, tax_rate=None, mults={}, group_base={}, bid_share=econ_core.DEFAULT_MERCHANT_BID_SHARE,
+    )
+    with patch("main._require_npc_gate", new_callable=AsyncMock),             patch("crud.merchant_market", new_callable=AsyncMock, return_value=legacy),             patch("crud.get_item_markets", new_callable=AsyncMock, return_value={}):
         yield
 
 
@@ -101,6 +109,13 @@ def _make_shop_item(
     item.item_type = "weapon"
     item.created_at = None
     item.discounted_buy_price = None
+    # FEAT-183 player-view fields (crud.get_npc_shop_items_player returns them)
+    item.base_buy_price = buy_price
+    item.base_sell_price = sell_price
+    item.in_stock = True
+    item.market = False
+    item.price_level = "normal"
+    item.living = False
     return item
 
 
@@ -187,7 +202,6 @@ class TestBuyFromNpcWithDiscount:
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
-    @patch("crud.decrement_stock", new_callable=AsyncMock)
     @patch("crud.charge_character_op", new_callable=AsyncMock, return_value=(9000, 1))
     @patch("crud.get_shop_item_by_id", new_callable=AsyncMock)
     @patch("crud.get_npc_location", new_callable=AsyncMock, return_value=100)
@@ -195,7 +209,7 @@ class TestBuyFromNpcWithDiscount:
     @patch("main.verify_character_ownership", new_callable=AsyncMock)
     def test_buy_with_charisma_50_discount(
         self, mock_ownership, mock_char_loc, mock_npc_loc,
-        mock_shop_item, mock_deduct, mock_dec_stock,
+        mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
         """Purchase with charisma=50 -> price reduced by 10%."""
@@ -218,7 +232,6 @@ class TestBuyFromNpcWithDiscount:
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
-    @patch("crud.decrement_stock", new_callable=AsyncMock)
     @patch("crud.charge_character_op", new_callable=AsyncMock, return_value=(10000, 1))
     @patch("crud.get_shop_item_by_id", new_callable=AsyncMock)
     @patch("crud.get_npc_location", new_callable=AsyncMock, return_value=100)
@@ -226,7 +239,7 @@ class TestBuyFromNpcWithDiscount:
     @patch("main.verify_character_ownership", new_callable=AsyncMock)
     def test_buy_with_charisma_0_full_price(
         self, mock_ownership, mock_char_loc, mock_npc_loc,
-        mock_shop_item, mock_deduct, mock_dec_stock,
+        mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
         """Purchase with charisma=0 -> full price, no discount."""
@@ -249,7 +262,6 @@ class TestBuyFromNpcWithDiscount:
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
-    @patch("crud.decrement_stock", new_callable=AsyncMock)
     @patch("crud.charge_character_op", new_callable=AsyncMock, return_value=(5000, 1))
     @patch("crud.get_shop_item_by_id", new_callable=AsyncMock)
     @patch("crud.get_npc_location", new_callable=AsyncMock, return_value=100)
@@ -257,7 +269,7 @@ class TestBuyFromNpcWithDiscount:
     @patch("main.verify_character_ownership", new_callable=AsyncMock)
     def test_buy_with_charisma_250_max_discount(
         self, mock_ownership, mock_char_loc, mock_npc_loc,
-        mock_shop_item, mock_deduct, mock_dec_stock,
+        mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
         """Purchase with charisma=250 -> 50% discount (max cap)."""
@@ -280,7 +292,6 @@ class TestBuyFromNpcWithDiscount:
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
-    @patch("crud.decrement_stock", new_callable=AsyncMock)
     @patch("crud.charge_character_op", new_callable=AsyncMock, return_value=(9000, 1))
     @patch("crud.get_shop_item_by_id", new_callable=AsyncMock)
     @patch("crud.get_npc_location", new_callable=AsyncMock, return_value=100)
@@ -288,7 +299,7 @@ class TestBuyFromNpcWithDiscount:
     @patch("main.verify_character_ownership", new_callable=AsyncMock)
     def test_buy_discount_in_response(
         self, mock_ownership, mock_char_loc, mock_npc_loc,
-        mock_shop_item, mock_deduct, mock_dec_stock,
+        mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
         """Verify discount_percent is present in buy response."""
@@ -404,7 +415,6 @@ class TestGracefulDegradation:
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
-    @patch("crud.decrement_stock", new_callable=AsyncMock)
     @patch("crud.charge_character_op", new_callable=AsyncMock, return_value=(9000, 1))
     @patch("crud.get_shop_item_by_id", new_callable=AsyncMock)
     @patch("crud.get_npc_location", new_callable=AsyncMock, return_value=100)
@@ -412,7 +422,7 @@ class TestGracefulDegradation:
     @patch("main.verify_character_ownership", new_callable=AsyncMock)
     def test_attributes_service_500_full_price(
         self, mock_ownership, mock_char_loc, mock_npc_loc,
-        mock_shop_item, mock_deduct, mock_dec_stock,
+        mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
         """Attributes-service returns 500 -> purchase proceeds at full price."""
@@ -441,7 +451,6 @@ class TestGracefulDegradation:
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
-    @patch("crud.decrement_stock", new_callable=AsyncMock)
     @patch("crud.charge_character_op", new_callable=AsyncMock, return_value=(9000, 1))
     @patch("crud.get_shop_item_by_id", new_callable=AsyncMock)
     @patch("crud.get_npc_location", new_callable=AsyncMock, return_value=100)
@@ -449,7 +458,7 @@ class TestGracefulDegradation:
     @patch("main.verify_character_ownership", new_callable=AsyncMock)
     def test_attributes_service_timeout_full_price(
         self, mock_ownership, mock_char_loc, mock_npc_loc,
-        mock_shop_item, mock_deduct, mock_dec_stock,
+        mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
         """Attributes-service timeout -> purchase proceeds at full price."""

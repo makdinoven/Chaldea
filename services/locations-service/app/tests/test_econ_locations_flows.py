@@ -2,9 +2,11 @@
 
 `test_econ_locations.py` covers the crud wrappers; this file drives the routes that use them:
 
-* NPC shop: buy (charisma price, tax leg to the country, refund on an inventory failure that
-  restores every account exactly), sell (region pays, world treasury when the NPC's place has
-  no region), ownership 403, negative / huge quantities;
+* NPC shop: legacy merchant — buy (charisma price, tax leg to the country, refund on an inventory
+  failure that restores every account and the stock), sell (region pays, world treasury when the
+  NPC's place has no region), ownership 403, quantity bounds; FEAT-183 living merchant — player ->
+  NPC + trade_tax, conditional stock take, refund fallback, broke merchant 409, sale into stock /
+  new player-origin row, item returned after a failed credit, shop window + sell offers;
 * quest reward: paid by the quest giver's region, and once only even when the status race is
   lost (the idempotency key is the second line of defence);
 * houses: purchase / build / layer + cell unlock / upgrade / tax are atomic with their business
@@ -29,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import BigInteger, event, text
 from sqlalchemy.dialects.mysql import MEDIUMTEXT, TINYINT
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -123,10 +126,18 @@ def _http_factory(*, post_status=200, post_exc=None, delete_status=200):
 PLAYER, OTHER, USER, OTHER_USER = 1, 2, 11, 12
 NPC_REGION, NPC_NOWHERE = 50, 51          # NPCs at location 1000 (region 10) / 1003 (no region)
 REGION_A, COUNTRY_A = 10, 1
+ROW = 900                                 # the shop row every shop test trades
+ITEM, OTHER_FOOD, SWORD = 7, 8, 9         # food 100, food 10 (not in the assortment), weapon 300
+
+_MERCHANT_TABLES = ("econ_regions", "econ_goods_groups", "econ_region_goods", "items", "econ_item_groups",
+                    "econ_sim_settings", "npc_shop_items")
 
 
 @pytest_asyncio.fixture()
 async def shop_db(tmp_path):
+    """Ledger world of econ_contract_cases + the FEAT-183 merchant tables. Region 10 has no
+    econ_regions row, so NPC_REGION is a LEGACY merchant (not_simulated) unless a test calls
+    _make_living()."""
     econ_core.invalidate_settings_cache()
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shop.db'}", poolclass=NullPool)
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -134,14 +145,29 @@ async def shop_db(tmp_path):
         await s.execute(text(
             "CREATE TABLE characters (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', user_id INTEGER, "
             "currency_balance BIGINT NOT NULL DEFAULT 0, current_location_id INTEGER, "
-            "is_npc INTEGER NOT NULL DEFAULT 0)"))
+            "is_npc INTEGER NOT NULL DEFAULT 0, npc_status VARCHAR(10) NOT NULL DEFAULT 'alive')"))
         for ddl in cc.SQLITE_DDL:
             await s.execute(text(ddl))
+        await s.execute(text("ALTER TABLE Locations ADD COLUMN marker_type VARCHAR(16) NOT NULL DEFAULT 'safe'"))
+        for ddl in cc.MERCHANT_SQLITE_DDL:
+            if any(f"CREATE TABLE {t} " in ddl or f"CREATE TABLE {t}(" in ddl for t in _MERCHANT_TABLES):
+                await s.execute(text(ddl))
+        await s.execute(text("CREATE TABLE character_inventory (id INTEGER PRIMARY KEY, character_id INTEGER, "
+                             "item_id INTEGER, quantity INTEGER)"))
         for sql, params in cc.SEED_SQL:
             if "INTO characters" not in sql:
                 await s.execute(text(sql), params)
-        await s.execute(text("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)"))
-        await s.execute(text("INSERT INTO items VALUES (7, 'Зелье')"))
+        await s.execute(text(
+            "INSERT INTO items (id, name, image, item_type, item_rarity, resource_subcategory, is_food, price) "
+            "VALUES (7, 'Зелье', NULL, 'consumable', 'common', NULL, 1, 100), "
+            "(8, 'Хлеб', NULL, 'consumable', 'common', NULL, 1, 10), "
+            "(9, 'Меч', NULL, 'weapon', 'common', NULL, 0, 300)"))
+        await s.execute(text("INSERT INTO econ_goods_groups (code, name, base_price) VALUES "
+                             "('food', 'Еда', 2), ('weapons', 'Оружие', 120)"))
+        await s.execute(text("INSERT INTO econ_sim_settings (id, tick_enabled, params) VALUES (1, 1, '{}')"))
+        await s.execute(text("INSERT INTO npc_shop_items (id, npc_id, item_id, buy_price, sell_price, stock, "
+                             "is_active, restock_target, origin) VALUES (:r, :n, 7, 100, 40, NULL, 1, 10, 'admin')"),
+                        {"r": ROW, "n": NPC_REGION})
         rows = [(PLAYER, USER, 1000, 1000, 0), (OTHER, OTHER_USER, 1000, 1000, 0),
                 (NPC_REGION, None, 0, 1000, 1), (NPC_NOWHERE, None, 0, 1003, 1)]
         for cid, uid, gold, loc, npc in rows:
@@ -156,16 +182,39 @@ async def shop_db(tmp_path):
     econ_core.invalidate_settings_cache()
 
 
-def _shop_item(npc_id, price=100, stock=None):
-    return SimpleNamespace(id=900, npc_id=npc_id, item_id=7, is_active=True, buy_price=price, stock=stock)
+async def _make_living(s, *, tax="0.2", food_mult="1.5"):
+    """Region 10 becomes simulated: NPC_REGION turns into a living merchant (food ×1.5, tax 20 %)."""
+    await s.execute(text("INSERT INTO econ_regions (region_id, template_code, population, tax_rate) "
+                         "VALUES (10, 'capital', 1000, :t)"), {"t": tax})
+    await s.execute(text("INSERT INTO econ_region_goods (region_id, group_code, price_mult) VALUES "
+                         "(10, 'food', :m)"), {"m": food_mult})
+    await s.commit()
+
+
+async def _fund(s, cid, amount):
+    await econ_ledger.post_operation(
+        s, op_type="admin_emission",
+        legs=[econ_core.Leg(econ_core.AccountRef.emission(), econ_core.AccountRef.character(cid), amount)],
+        source_service="test", comment="seed", apply_tax=False)
+    await s.commit()
+
+
+def _shop_item(npc_id, price=100, stock=None, sell_price=40):
+    return SimpleNamespace(id=ROW, npc_id=npc_id, item_id=ITEM, is_active=True, buy_price=price,
+                           sell_price=sell_price, stock=stock, origin="admin")
 
 
 class _Shop:
-    """Patches the shop route's outbound calls and lookups that need other services' tables."""
+    """Patches the shop route's outbound calls and lookups that need other services' tables.
+    The shop row the route reads (`item`) is mirrored into npc_shop_items by _buy / _sell, so the
+    conditional stock take runs against the real table."""
+
+    current = None
 
     def __init__(self, *, item=None, charisma=0, sell_price=40, **http):
         self.factory, self.client = _http_factory(**http)
-        self.decrement = AsyncMock(return_value=True)
+        self.item = item
+        self.sell_price = sell_price
         self._p = [
             patch.object(main.httpx, "AsyncClient", self.factory),
             patch.object(main, "_require_npc_gate", AsyncMock(return_value=None)),
@@ -173,34 +222,51 @@ class _Shop:
             patch.object(main, "_fetch_charisma", AsyncMock(return_value=charisma)),
             patch.object(main, "_track_cumulative_stats", AsyncMock(return_value=None)),
             patch.object(crud, "get_shop_item_by_id", AsyncMock(return_value=item)),
-            patch.object(crud, "decrement_stock", self.decrement),
-            patch.object(crud, "find_sell_price_for_item", AsyncMock(return_value=sell_price)),
         ]
 
     def __enter__(self):
         for p in self._p:
             p.start()
+        _Shop.current = self
         return self
 
     def __exit__(self, *exc):
+        _Shop.current = None
         for p in reversed(self._p):
             p.stop()
+
+
+async def _mirror_row(s, npc_id):
+    shop = _Shop.current
+    item = shop.item if shop is not None else None
+    if item is not None:
+        await s.execute(text("UPDATE npc_shop_items SET npc_id = :n, buy_price = :b, sell_price = :sp, "
+                             "stock = :st WHERE id = :r"),
+                        {"n": item.npc_id, "b": item.buy_price, "sp": item.sell_price, "st": item.stock, "r": ROW})
+    elif shop is not None:
+        await s.execute(text("UPDATE npc_shop_items SET npc_id = :n, sell_price = :sp WHERE id = :r"),
+                        {"n": npc_id, "sp": shop.sell_price, "r": ROW})
+    await s.commit()
 
 
 def _user(uid=USER):
     return SimpleNamespace(id=uid)
 
 
-async def _buy(s, npc_id, *, character_id=PLAYER, quantity=1, uid=USER):
-    body = schemas.ShopBuyRequest(character_id=character_id, shop_item_id=900, quantity=quantity)
+async def _buy(s, npc_id, *, character_id=PLAYER, quantity=1, uid=USER, mirror=True):
+    if mirror:
+        await _mirror_row(s, npc_id)
+    body = schemas.ShopBuyRequest(character_id=character_id, shop_item_id=ROW, quantity=quantity)
     return await main.buy_from_npc(npc_id=npc_id, body=body, request=MagicMock(), session=s,
                                    current_user=_user(uid))
 
 
-async def _sell(s, npc_id, *, character_id=PLAYER, quantity=1, uid=USER):
+async def _sell(s, npc_id, *, character_id=PLAYER, quantity=1, uid=USER, item_id=ITEM, mirror=True):
+    if mirror:
+        await _mirror_row(s, npc_id)
     request = MagicMock()
     request.headers = {"authorization": "Bearer t"}
-    body = schemas.ShopSellRequest(character_id=character_id, item_id=7, quantity=quantity)
+    body = schemas.ShopSellRequest(character_id=character_id, item_id=item_id, quantity=quantity)
     return await main.sell_to_npc(npc_id=npc_id, body=body, request=request, session=s,
                                   current_user=_user(uid))
 
@@ -209,7 +275,12 @@ async def _balance(s, cid):
     return await _one(s, cc.CHARACTER_BALANCE_SQL, id=cid)
 
 
+async def _stock(s, row_id=ROW):
+    return await _one(s, "SELECT stock FROM npc_shop_items WHERE id = :r", r=row_id)
+
+
 class TestNpcBuy:
+    """Legacy merchant (region without simulation): the treasury of his place is paid."""
 
     async def test_buy_with_charisma_pays_the_region_and_taxes_the_country(self, shop_db):
         # charisma 50 -> 10 % off; ceil(155 * 0.9) = 140 per unit, 2 units = 280
@@ -222,10 +293,16 @@ class TestNpcBuy:
         meta = await _one(shop_db, "SELECT metadata FROM econ_operations WHERE op_type = 'npc_shop_buy'")
         assert '"unit_price": 140' in meta and '"quantity": 2' in meta
         assert shop.client.post.await_count == 1
+        assert await _stock(shop_db) is None                     # unlimited legacy row stays NULL
         assert await _world_sum(shop_db) == 0
 
-    async def test_inventory_refusal_refunds_every_leg(self, shop_db):
-        with _Shop(item=_shop_item(NPC_REGION, price=200, stock=5), post_status=400) as shop:
+    async def test_finite_legacy_stock_is_taken(self, shop_db):
+        with _Shop(item=_shop_item(NPC_REGION, price=10, stock=5)):
+            await _buy(shop_db, NPC_REGION, quantity=2)
+        assert await _stock(shop_db) == 3
+
+    async def test_inventory_refusal_refunds_every_leg_and_the_stock(self, shop_db):
+        with _Shop(item=_shop_item(NPC_REGION, price=200, stock=5), post_status=400):
             with pytest.raises(HTTPException) as exc:
                 await _buy(shop_db, NPC_REGION)
         assert exc.value.status_code == 500 and exc.value.detail == "Инвентарь переполнен"
@@ -233,7 +310,7 @@ class TestNpcBuy:
         assert await _account(shop_db, "region_treasury", REGION_A) == 0
         assert await _account(shop_db, "country_treasury", COUNTRY_A) == 0
         assert (await _ops(shop_db, "npc_shop_buy"), await _ops(shop_db, "npc_shop_buy_refund")) == (1, 1)
-        shop.decrement.assert_not_awaited()       # stock untouched on a failed purchase
+        assert await _stock(shop_db) == 5                        # taken before payment, given back
         assert await _world_sum(shop_db) == 0
 
     async def test_inventory_unreachable_refunds_and_answers_503(self, shop_db):
@@ -249,13 +326,14 @@ class TestNpcBuy:
         assert await _world_sum(shop_db) == 0
 
     async def test_not_enough_gold_moves_nothing_and_skips_inventory(self, shop_db):
-        with _Shop(item=_shop_item(NPC_REGION, price=600)) as shop:
+        with _Shop(item=_shop_item(NPC_REGION, price=600, stock=4)) as shop:
             with pytest.raises(HTTPException) as exc:
                 await _buy(shop_db, NPC_REGION, quantity=2)
         assert exc.value.status_code == 400 and exc.value.detail == "Недостаточно марок"
         shop.client.post.assert_not_awaited()
         assert await _balance(shop_db, PLAYER) == 1000
         assert await _ops(shop_db, "npc_shop_buy") == 0
+        assert await _stock(shop_db) == 4                        # the take rolled back with the payment
         assert await _world_sum(shop_db) == 0
 
     async def test_npc_without_region_is_paid_through_the_world_treasury(self, shop_db):
@@ -276,23 +354,28 @@ class TestNpcBuy:
         assert await _balance(shop_db, OTHER) == 1000
         assert await _one(shop_db, "SELECT COUNT(*) FROM econ_operations") == 0
 
-    @pytest.mark.parametrize("quantity", [0, -1, -10**6])
-    async def test_non_positive_quantity_is_refused(self, shop_db, quantity):
-        with _Shop(item=_shop_item(NPC_REGION)):
-            with pytest.raises(HTTPException) as exc:
-                await _buy(shop_db, NPC_REGION, quantity=quantity)
-        assert exc.value.status_code == 400
-        assert await _balance(shop_db, PLAYER) == 1000
-        assert await _one(shop_db, "SELECT COUNT(*) FROM econ_operations") == 0
+    @pytest.mark.parametrize("quantity", [0, -1, -10**6, 1000, 10**6])
+    def test_quantity_out_of_bounds_is_rejected_by_the_schema(self, quantity):
+        with pytest.raises(ValidationError):
+            schemas.ShopBuyRequest(character_id=PLAYER, shop_item_id=ROW, quantity=quantity)
+        with pytest.raises(ValidationError):
+            schemas.ShopSellRequest(character_id=PLAYER, item_id=ITEM, quantity=quantity)
 
-    async def test_huge_quantity_is_refused_without_moving_gold(self, shop_db):
-        with _Shop(item=_shop_item(NPC_REGION, price=10**9)) as shop:
+    @pytest.mark.parametrize("quantity", [0, -1, -3, 1000])
+    async def test_out_of_bounds_quantity_past_the_schema_moves_no_stock_or_money(self, shop_db, quantity):
+        """A negative quantity must never reach the conditional stock take (`stock >= -q` would ADD
+        stock): the route re-checks the bound even if the schema is bypassed."""
+        with _Shop(item=_shop_item(NPC_REGION, stock=5)) as shop:
+            await _mirror_row(shop_db, NPC_REGION)
+            body = schemas.ShopBuyRequest.construct(character_id=PLAYER, shop_item_id=ROW, quantity=quantity)
             with pytest.raises(HTTPException) as exc:
-                await _buy(shop_db, NPC_REGION, quantity=10**6)
+                await main.buy_from_npc(npc_id=NPC_REGION, body=body, request=MagicMock(), session=shop_db,
+                                        current_user=_user())
         assert exc.value.status_code == 400
         shop.client.post.assert_not_awaited()
+        assert await _stock(shop_db) == 5
         assert await _balance(shop_db, PLAYER) == 1000
-        assert await _world_sum(shop_db) == 0
+        assert await _one(shop_db, "SELECT COUNT(*) FROM econ_operations") == 0
 
     async def test_limited_stock_smaller_than_quantity_is_refused(self, shop_db):
         with _Shop(item=_shop_item(NPC_REGION, stock=1)):
@@ -301,8 +384,22 @@ class TestNpcBuy:
         assert exc.value.status_code == 400
         assert await _balance(shop_db, PLAYER) == 1000
 
+    async def test_stock_race_second_buyer_of_the_last_unit_pays_nothing(self, shop_db):
+        """Both buyers read stock 1 (the plain read is patched to the stale row); the conditional
+        take lets exactly one through, the other pays nothing."""
+        with _Shop(item=_shop_item(NPC_REGION, price=50, stock=1)) as shop:
+            await _buy(shop_db, NPC_REGION)
+            with pytest.raises(HTTPException) as exc:
+                await _buy(shop_db, NPC_REGION, character_id=OTHER, uid=OTHER_USER, mirror=False)
+        assert exc.value.status_code == 400 and exc.value.detail == "Недостаточно товара на складе"
+        assert shop.client.post.await_count == 1
+        assert (await _balance(shop_db, PLAYER), await _balance(shop_db, OTHER)) == (950, 1000)
+        assert await _stock(shop_db) == 0
+        assert await _world_sum(shop_db) == 0
+
 
 class TestNpcSell:
+    """Legacy merchant: the treasury of his place pays; the item is destroyed."""
 
     async def test_sell_is_paid_by_the_npc_region(self, shop_db):
         with _Shop(sell_price=40) as shop:
@@ -311,7 +408,14 @@ class TestNpcSell:
         assert await _account(shop_db, "region_treasury", REGION_A) == -120
         assert await _one(shop_db, "SELECT COUNT(*) FROM econ_postings WHERE leg_type = 'tax'") == 0
         assert shop.client.delete.await_count == 1
+        assert await _stock(shop_db) is None                     # legacy: the sold item is not stocked
         assert await _world_sum(shop_db) == 0
+
+    async def test_legacy_bid_is_capped_by_the_cheapest_ask(self, shop_db):
+        # sell 80 > floor(100 * 0.5): capped to 50
+        with _Shop(sell_price=80):
+            out = await _sell(shop_db, NPC_REGION)
+        assert out["total_price"] == 50
 
     async def test_sell_at_a_place_without_region_uses_the_world_treasury(self, shop_db):
         await shop_db.execute(text("UPDATE characters SET current_location_id = 1003 WHERE id = :c"), {"c": PLAYER})
@@ -320,6 +424,13 @@ class TestNpcSell:
             await _sell(shop_db, NPC_NOWHERE)
         assert await _account(shop_db, "world_treasury") == -25
         assert await _world_sum(shop_db) == 0
+
+    async def test_legacy_merchant_does_not_buy_items_outside_his_rows(self, shop_db):
+        with _Shop() as shop:
+            with pytest.raises(HTTPException) as exc:
+                await _sell(shop_db, NPC_REGION, item_id=OTHER_FOOD)
+        assert exc.value.status_code == 400 and exc.value.detail == "Этот NPC не покупает данный предмет"
+        shop.client.delete.assert_not_awaited()
 
     async def test_inventory_refusal_pays_nothing(self, shop_db):
         with _Shop(delete_status=404):
@@ -340,11 +451,159 @@ class TestNpcSell:
     @pytest.mark.parametrize("quantity", [0, -5])
     async def test_non_positive_quantity_is_refused(self, shop_db, quantity):
         with _Shop() as shop:
+            await _mirror_row(shop_db, NPC_REGION)
+            request = MagicMock()
+            request.headers = {"authorization": "Bearer t"}
+            body = schemas.ShopSellRequest.construct(character_id=PLAYER, item_id=ITEM, quantity=quantity)
             with pytest.raises(HTTPException) as exc:
-                await _sell(shop_db, NPC_REGION, quantity=quantity)
+                await main.sell_to_npc(npc_id=NPC_REGION, body=body, request=request, session=shop_db,
+                                       current_user=_user())
         assert exc.value.status_code == 400
         shop.client.delete.assert_not_awaited()
         assert await _balance(shop_db, PLAYER) == 1000
+
+
+class TestLivingMerchant:
+    """FEAT-183: region 10 simulated (food ×1.5, tax 20 %) -> NPC_REGION trades with his own cash."""
+
+    async def test_buy_pays_the_merchant_and_his_trade_tax(self, shop_db):
+        await _make_living(shop_db)
+        with _Shop(item=_shop_item(NPC_REGION, price=100, stock=5)):
+            out = await _buy(shop_db, NPC_REGION, quantity=2)
+        # ask = ceil(100 * 1.5) = 150; 2 units = 300; trade tax floor(300 * 0.2) = 60 (country 10 % = 6)
+        assert out["total_price"] == 300
+        assert await _balance(shop_db, PLAYER) == 700
+        assert await _balance(shop_db, NPC_REGION) == 240
+        assert await _account(shop_db, "region_treasury", REGION_A) == 54
+        assert await _account(shop_db, "country_treasury", COUNTRY_A) == 6
+        legs = (await shop_db.execute(text(
+            "SELECT p.leg_type, p.amount FROM econ_postings p JOIN econ_operations o ON o.id = p.operation_id "
+            "WHERE o.op_type = 'npc_shop_buy' ORDER BY p.id"))).fetchall()
+        assert sorted(tuple(r) for r in legs) == [("main", 300), ("tax", 6), ("trade_tax", 60)]
+        assert await _stock(shop_db) == 3
+        assert await _world_sum(shop_db) == 0
+
+    async def test_unlimited_row_of_a_living_merchant_counts_as_empty(self, shop_db):
+        await _make_living(shop_db)
+        with _Shop(item=_shop_item(NPC_REGION, stock=None)) as shop:
+            with pytest.raises(HTTPException) as exc:
+                await _buy(shop_db, NPC_REGION)
+        assert exc.value.status_code == 400
+        shop.client.post.assert_not_awaited()
+        assert await _one(shop_db, "SELECT COUNT(*) FROM econ_operations") == 0
+
+    async def test_refund_restores_stock_and_every_balance(self, shop_db):
+        await _make_living(shop_db)
+        with _Shop(item=_shop_item(NPC_REGION, stock=5), post_status=400):
+            with pytest.raises(HTTPException):
+                await _buy(shop_db, NPC_REGION)
+        assert await _stock(shop_db) == 5
+        assert (await _balance(shop_db, PLAYER), await _balance(shop_db, NPC_REGION)) == (1000, 0)
+        assert await _account(shop_db, "region_treasury", REGION_A) == 0
+        assert await _account(shop_db, "country_treasury", COUNTRY_A) == 0
+        assert await _world_sum(shop_db) == 0
+
+    async def test_refund_falls_back_to_the_treasury_when_the_merchant_cash_is_gone(self, shop_db):
+        await _make_living(shop_db)
+
+        async def _broke(*a, **kw):
+            raise econ_core.InsufficientFunds(econ_core.AccountRef.character(NPC_REGION), 120)
+
+        with _Shop(item=_shop_item(NPC_REGION, stock=5), post_status=400), \
+                patch.object(crud, "reverse_operation", _broke):
+            with pytest.raises(HTTPException):
+                await _buy(shop_db, NPC_REGION)
+        assert await _balance(shop_db, PLAYER) == 1000
+        assert await _stock(shop_db) == 5
+        meta = await _one(shop_db, "SELECT metadata FROM econ_operations WHERE op_type = 'npc_shop_buy_refund'")
+        assert '"fallback": true' in meta
+        assert await _world_sum(shop_db) == 0
+
+    async def test_broke_merchant_refuses_without_touching_the_inventory(self, shop_db):
+        await _make_living(shop_db)
+        with _Shop(sell_price=40) as shop:
+            with pytest.raises(HTTPException) as exc:
+                await _sell(shop_db, NPC_REGION)
+        assert exc.value.status_code == 409 and exc.value.detail == "У меня сейчас нет на это денег"
+        shop.client.delete.assert_not_awaited()
+        assert await _one(shop_db, "SELECT COUNT(*) FROM econ_operations") == 0
+
+    async def test_sale_is_paid_from_the_cash_and_stocked(self, shop_db):
+        await _make_living(shop_db)
+        await _fund(shop_db, NPC_REGION, 1000)
+        await shop_db.execute(text("UPDATE npc_shop_items SET stock = 2 WHERE id = :r"), {"r": ROW})
+        await shop_db.commit()
+        with _Shop(sell_price=40):
+            await shop_db.execute(text("UPDATE npc_shop_items SET sell_price = 40 WHERE id = :r"), {"r": ROW})
+            out = await _sell(shop_db, NPC_REGION, quantity=3, mirror=False)
+        # bid = min(floor(40 * 1.5), floor(150 * 0.5)) = 60
+        assert out["total_price"] == 180
+        assert (await _balance(shop_db, PLAYER), await _balance(shop_db, NPC_REGION)) == (1180, 820)
+        assert await _stock(shop_db) == 5
+        assert await _one(shop_db, "SELECT COUNT(*) FROM econ_postings WHERE leg_type IN ('tax', 'trade_tax')") == 0
+        assert await _world_sum(shop_db) == 0
+
+    async def test_same_group_item_creates_a_player_origin_row(self, shop_db):
+        await _make_living(shop_db)
+        await _fund(shop_db, NPC_REGION, 100)
+        with _Shop():
+            out = await _sell(shop_db, NPC_REGION, item_id=OTHER_FOOD, quantity=4, mirror=False)
+        # item_base 10, ask ceil(15) = 15, base bid floor(10 * 0.5) = 5, bid min(floor(7.5), floor(7.5)) = 7
+        assert out["total_price"] == 28
+        row = (await shop_db.execute(text(
+            "SELECT buy_price, sell_price, stock, restock_target, origin, is_active FROM npc_shop_items "
+            "WHERE npc_id = :n AND item_id = :i"), {"n": NPC_REGION, "i": OTHER_FOOD})).first()
+        assert tuple(row) == (10, 5, 4, 0, "player", 1)
+        # a second sale lands in the same row
+        with _Shop():
+            await _sell(shop_db, NPC_REGION, item_id=OTHER_FOOD, quantity=1, mirror=False)
+        assert await _one(shop_db, "SELECT stock FROM npc_shop_items WHERE npc_id = :n AND item_id = :i",
+                          n=NPC_REGION, i=OTHER_FOOD) == 5
+        assert await _world_sum(shop_db) == 0
+
+    async def test_other_group_is_refused(self, shop_db):
+        await _make_living(shop_db)
+        await _fund(shop_db, NPC_REGION, 1000)
+        with _Shop() as shop:
+            with pytest.raises(HTTPException) as exc:
+                await _sell(shop_db, NPC_REGION, item_id=SWORD, mirror=False)
+        assert exc.value.status_code == 400
+        shop.client.delete.assert_not_awaited()
+
+    async def test_credit_failure_returns_the_item(self, shop_db):
+        await _make_living(shop_db)
+        await _fund(shop_db, NPC_REGION, 1000)
+
+        async def _drained(*a, **kw):
+            raise econ_core.InsufficientFunds(econ_core.AccountRef.character(NPC_REGION), 40)
+
+        with _Shop(sell_price=40) as shop, patch.object(crud, "pay_player_from_merchant", _drained):
+            with pytest.raises(HTTPException) as exc:
+                await _sell(shop_db, NPC_REGION, quantity=2)
+        assert exc.value.status_code == 409
+        assert shop.client.delete.await_count == 1
+        shop.client.post.assert_awaited_once()
+        assert "/inventory/internal/characters/1/items" in shop.client.post.await_args.args[0]
+        assert shop.client.post.await_args.kwargs["json"] == {"item_id": ITEM, "quantity": 2}
+        assert await _stock(shop_db) is None                     # stock add rolled back
+        assert await _balance(shop_db, PLAYER) == 1000
+        assert await _world_sum(shop_db) == 0
+
+    async def test_shop_window_and_sell_offers(self, shop_db):
+        await _make_living(shop_db)
+        await shop_db.execute(text("INSERT INTO npc_shop_items (npc_id, item_id, buy_price, sell_price, stock, "
+                                   "is_active, restock_target, origin) VALUES (:n, 8, 10, 5, 0, 1, 0, 'player')"),
+                              {"n": NPC_REGION})
+        await shop_db.execute(text("INSERT INTO character_inventory (character_id, item_id, quantity) VALUES "
+                                   "(1, 7, 2), (1, 7, 1), (1, 8, 5), (1, 9, 1)"))
+        await shop_db.commit()
+        rows = await crud.get_npc_shop_items_player(shop_db, NPC_REGION)
+        assert len(rows) == 1                                     # the empty player-origin row is hidden
+        r = rows[0]
+        assert (r["buy_price"], r["sell_price"], r["base_buy_price"], r["base_sell_price"]) == (150, 60, 100, 40)
+        assert (r["stock"], r["in_stock"], r["market"], r["price_level"], r["living"]) == (0, False, True, "high", True)
+        offers = await crud.get_sell_offers(shop_db, NPC_REGION, PLAYER, 999)
+        assert [(o["item_id"], o["unit_price"], o["max_quantity"]) for o in offers] == [(7, 60, 3), (8, 7, 5)]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -1037,25 +1037,30 @@ class DialogueChooseRequest(BaseModel):
 # -------------------------------
 #   NPC SHOP SCHEMAS
 # -------------------------------
+# FEAT-183 admin bounds of a shop row (prices are BASE prices at region multiplier 1).
+SHOP_MAX_PRICE = 1_000_000_000
+SHOP_MAX_STOCK = 100_000
+SHOP_DEFAULT_RESTOCK_TARGET = 10   # = econ_core.DEFAULT_RESTOCK_TARGET
+
+
 class NpcShopItemCreate(BaseModel):
-    item_id: int
-    buy_price: int
-    sell_price: int = 0
-    stock: Optional[int] = None
+    item_id: int = Field(..., ge=1)
+    buy_price: int = Field(..., ge=1, le=SHOP_MAX_PRICE)
+    sell_price: int = Field(0, ge=0, le=SHOP_MAX_PRICE)       # 0 = the merchant does not buy this item
+    stock: Optional[int] = Field(None, ge=0, le=SHOP_MAX_STOCK)  # null = unlimited (legacy merchants only)
+    restock_target: int = Field(SHOP_DEFAULT_RESTOCK_TARGET, ge=0, le=SHOP_MAX_STOCK)
 
 class NpcShopItemUpdate(BaseModel):
-    buy_price: Optional[int] = None
-    sell_price: Optional[int] = None
-    stock: Optional[int] = None
+    """All optional; `stock` may be set to null explicitly (unlimited). Editing a row that was
+    bought from players (origin='player') turns it into an admin row."""
+    buy_price: Optional[int] = Field(None, ge=1, le=SHOP_MAX_PRICE)
+    sell_price: Optional[int] = Field(None, ge=0, le=SHOP_MAX_PRICE)
+    stock: Optional[int] = Field(None, ge=0, le=SHOP_MAX_STOCK)
+    restock_target: Optional[int] = Field(None, ge=0, le=SHOP_MAX_STOCK)
     is_active: Optional[bool] = None
 
-class NpcShopItemPublicRead(BaseModel):
-    """The public shop window: base prices and the item card, nothing personal.
-
-    FEAT-171: this is the BASE and `NpcShopItemRead` extends it, so a future
-    private field added to the personal price list cannot leak into the guest
-    view by default (same inheritance direction as the user-service schemas).
-    """
+class NpcShopItemCore(BaseModel):
+    """Fields shared by the player shop window and the admin editor rows."""
     id: int
     npc_id: int
     item_id: int
@@ -1072,20 +1077,87 @@ class NpcShopItemPublicRead(BaseModel):
     class Config:
         orm_mode = True
 
+class NpcShopItemPublicRead(NpcShopItemCore):
+    """The public shop window: current prices and the item card, nothing personal.
+
+    FEAT-183: `buy_price` / `sell_price` are the merchant's CURRENT prices (region multiplier for a
+    living merchant and an on-market item, bid capped by the cheapest possible ask); `base_*` are the
+    admin base prices; `stock` is effective (a living merchant's NULL = 0; NULL = unlimited only for a
+    legacy merchant); `market` = the row is priced by the region; `price_level` low | normal | high;
+    `living` = the merchant trades in the regional economy (own cash, finite stock).
+
+    FEAT-171: this is the BASE and `NpcShopItemRead` extends it, so a future
+    private field added to the personal price list cannot leak into the guest
+    view by default (same inheritance direction as the user-service schemas).
+    """
+    base_buy_price: Optional[int] = None
+    base_sell_price: Optional[int] = None
+    in_stock: bool = True
+    market: bool = False
+    price_level: str = "normal"
+    living: bool = False
+
 class NpcShopItemRead(NpcShopItemPublicRead):
     """The personal price list — `discounted_buy_price` is derived from the
     character's `charisma` and is therefore a private number (FEAT-171)."""
     discounted_buy_price: Optional[int] = None
 
+class NpcShopItemAdminRead(NpcShopItemCore):
+    """Admin shop editor row (FEAT-183): base prices + the merchant's current market prices.
+
+    `group` / `off_market` — the item's effective goods group; `market` — the row is priced by the
+    region (living merchant, on-market item); `ask` / `bid` — current selling / buying price per item
+    (bid 0 = the merchant does not buy it).
+    """
+    restock_target: int = 0
+    origin: str = "admin"
+    updated_at: Optional[datetime] = None
+    group: Optional[str] = None
+    off_market: bool = True
+    market: bool = False
+    ask: Optional[int] = None
+    bid: Optional[int] = None
+
+class MerchantGroupRead(BaseModel):
+    code: str
+    name: str
+
+class MerchantMarketRead(BaseModel):
+    """GET /locations/admin/npc-shop/{npc_id}/market — how the merchant trades right now.
+
+    living = trades in the regional economy (own cash, region prices); otherwise `reason` is one of
+    not_npc | dead | no_location | dungeon | no_region | not_simulated and the shop works as before.
+    """
+    npc_id: int
+    living: bool
+    reason: Optional[str] = None
+    region_id: Optional[int] = None
+    region_name: Optional[str] = None
+    location_id: Optional[int] = None
+    tax_rate: Optional[float] = None
+    cash: int = 0
+    buys_groups: List[MerchantGroupRead] = []
+
+# FEAT-183: one shop request moves at most this many items.
+SHOP_MAX_QUANTITY = 999
+
 class ShopBuyRequest(BaseModel):
-    character_id: int
-    shop_item_id: int
-    quantity: int = 1
+    character_id: int = Field(..., ge=1)
+    shop_item_id: int = Field(..., ge=1)
+    quantity: int = Field(1, ge=1, le=SHOP_MAX_QUANTITY)
 
 class ShopSellRequest(BaseModel):
-    character_id: int
+    character_id: int = Field(..., ge=1)
+    item_id: int = Field(..., ge=1)
+    quantity: int = Field(1, ge=1, le=SHOP_MAX_QUANTITY)
+
+class ShopSellOfferRead(BaseModel):
+    """GET /npcs/{npc_id}/shop/sell-offers row: a bag item this merchant buys now."""
     item_id: int
-    quantity: int = 1
+    item_name: Optional[str] = None
+    item_image: Optional[str] = None
+    unit_price: int
+    max_quantity: int
 
 class ShopTransactionResponse(BaseModel):
     success: bool

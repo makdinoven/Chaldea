@@ -6,6 +6,7 @@ import re
 import math
 import time
 import httpx
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -4263,37 +4264,180 @@ def _build_node_response(node: DialogueNode) -> dict:
 # -------------------------------
 #   NPC SHOP
 # -------------------------------
+class MerchantMarket(NamedTuple):
+    """How a merchant trades right now (FEAT-183 3.6), computed on every request.
+
+    living: trades in the regional economy (own cash, region prices, finite stock); else `reason`
+    (econ_core.MERCHANT_REASON_*) and the shop works the legacy way (fixed prices, treasury pays).
+    region_id / tax_rate are filled whenever the NPC's place resolves to a region (also for legacy
+    merchants, e.g. not_simulated); mults / group_base / bid_share are loaded for living merchants only.
+    """
+    npc_id: int
+    living: bool
+    reason: Optional[str]
+    location_id: Optional[int]
+    region_id: Optional[int]
+    tax_rate: Optional[Decimal]       # econ_regions.tax_rate of the region; None without an econ row
+    mults: Dict[str, Decimal]         # {group: price_mult} of the region (living only)
+    group_base: Dict[str, int]        # {group: base_price} (living only)
+    bid_share: Decimal                # econ_sim_settings.params.merchant_bid_share (living only)
+
+
+async def merchant_market(session: AsyncSession, npc_id: int) -> MerchantMarket:
+    """Living / legacy status of the merchant + the region's market (econ_core SQL + merchant_status).
+
+    Plain reads, no locks (player flows price from the last tick's snapshot, lock order 3.5).
+    """
+    npc_row = (await session.execute(text(econ_core.SQL_NPC_PLACE), {"id": npc_id})).first()
+    location_id = int(npc_row[3]) if npc_row is not None and npc_row[3] else None
+    region_id = None
+    region_row = None
+    if npc_row is not None and npc_row[1] and location_id:
+        region_id, _country_id = await econ_ledger.resolve_location(session, location_id)
+        if region_id:
+            region_row = (await session.execute(
+                text(econ_core.SQL_REGION_ECON), {"region_id": region_id})).first()
+    living, reason = econ_core.merchant_status(npc_row, region_row)
+    tax_rate = None
+    if region_row is not None and region_row[3] is not None:
+        tax_rate = Decimal(str(region_row[3]))
+    mults: Dict[str, Decimal] = {}
+    group_base: Dict[str, int] = {}
+    bid_share = econ_core.DEFAULT_MERCHANT_BID_SHARE
+    if living:
+        rows = (await session.execute(text(econ_core.SQL_REGION_MARKET), {"region_id": region_id})).fetchall()
+        mults, group_base = econ_core.region_goods_from_rows(rows)
+        params_row = (await session.execute(text(econ_core.SQL_SIM_PARAMS))).first()
+        bid_share = econ_core.merchant_bid_share(params_row[0] if params_row is not None else None)
+    return MerchantMarket(
+        npc_id=npc_id, living=living, reason=reason, location_id=location_id, region_id=region_id,
+        tax_rate=tax_rate, mults=mults, group_base=group_base, bid_share=bid_share,
+    )
+
+
+async def get_item_markets(session: AsyncSession, item_ids) -> Dict[int, econ_core.ItemMarket]:
+    """{item_id: ItemMarket} (effective goods group, items.price, name, image); unknown ids are absent."""
+    ids = sorted({int(i) for i in item_ids})
+    if not ids:
+        return {}
+    placeholders, params = econ_core.in_params("i", ids)
+    rows = (await session.execute(text(econ_core.sql_item_market(placeholders)), params)).fetchall()
+    return {m.item_id: m for m in (econ_core.item_market_from_row(r) for r in rows)}
+
+
+def price_shop_row(market: MerchantMarket, item: Optional[econ_core.ItemMarket],
+                   buy_price: int, sell_price: int) -> dict:
+    """Current prices of one shop row (3.1 #4): region mult for a living merchant and an on-market item,
+    1 otherwise; the bid is capped by the cheapest possible ask (applies to legacy merchants too).
+
+    -> {group, off_market, market, mult, ask, bid, price_level}; bid 0 = «does not buy».
+    """
+    group = item.group if item is not None else None
+    off_market = item.off_market if item is not None else True
+    mult = econ_core.market_mult(market.living, group, off_market, market.mults)
+    ask = econ_core.market_ask(buy_price, mult)
+    return {
+        "group": group,
+        "off_market": off_market,
+        "market": bool(market.living and group is not None and not off_market),
+        "mult": mult,
+        "ask": ask,
+        "bid": econ_core.market_bid(sell_price, mult, ask),
+        "price_level": econ_core.price_level(mult),
+    }
+
+
+async def merchant_buy_groups(session: AsyncSession, market: MerchantMarket) -> List[str]:
+    """Goods groups a LIVING merchant buys from players outside his assortment (3.1 #7): effective
+    groups of his active, on-market, admin-origin rows. [] for a legacy merchant (he buys only the
+    rows of his list with sell_price > 0)."""
+    if not market.living:
+        return []
+    placeholders, params = econ_core.in_params("n", [market.npc_id])
+    rows = (await session.execute(
+        text(econ_core.sql_lock_shop_rows(placeholders, for_update=False)), params)).fetchall()
+    # SHOP_ROW_COLUMNS: id, npc_id, item_id, buy_price, sell_price, stock, restock_target, origin, is_active
+    item_ids = [r[2] for r in rows if r[8] and r[7] == econ_core.SHOP_ORIGIN_ADMIN]
+    items = await get_item_markets(session, item_ids)
+    return _buys_groups(rows, items)
+
+
+async def npc_exists(session: AsyncSession, npc_id: int) -> bool:
+    row = (await session.execute(
+        text("SELECT 1 FROM characters WHERE id = :id AND is_npc = 1"), {"id": npc_id})).first()
+    return row is not None
+
+
+async def item_exists(session: AsyncSession, item_id: int) -> bool:
+    row = (await session.execute(text("SELECT 1 FROM items WHERE id = :id"), {"id": item_id})).first()
+    return row is not None
+
+
+async def get_shop_row_by_item(session: AsyncSession, npc_id: int, item_id: int) -> Optional[NpcShopItem]:
+    result = await session.execute(
+        select(NpcShopItem).where(NpcShopItem.npc_id == npc_id, NpcShopItem.item_id == item_id)
+    )
+    return result.scalars().first()
+
+
+class ShopItemDuplicate(Exception):
+    """The NPC already has a row for this item (UNIQUE npc_id, item_id)."""
+
+
 async def create_npc_shop_item(session: AsyncSession, npc_id: int, data: dict) -> NpcShopItem:
-    """Add an item to NPC's shop inventory."""
+    """Add an item to NPC's shop (origin='admin'). Raises ShopItemDuplicate when the NPC already
+    has a row for it (pre-check + the unique key for a concurrent insert). Existence of the NPC /
+    item is checked by the route."""
+    if await get_shop_row_by_item(session, npc_id, data["item_id"]) is not None:
+        raise ShopItemDuplicate()
     shop_item = NpcShopItem(
         npc_id=npc_id,
         item_id=data["item_id"],
         buy_price=data["buy_price"],
         sell_price=data.get("sell_price", 0),
         stock=data.get("stock"),
+        restock_target=data.get("restock_target", econ_core.DEFAULT_RESTOCK_TARGET),
+        origin=econ_core.SHOP_ORIGIN_ADMIN,
     )
     session.add(shop_item)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise ShopItemDuplicate()
     await session.refresh(shop_item)
     return shop_item
 
 
-async def get_npc_shop_items_admin(session: AsyncSession, npc_id: int) -> List[dict]:
-    """Get all shop items for an NPC (admin view, includes inactive)."""
-    query = text("""
+async def get_npc_shop_items_admin(session: AsyncSession, npc_id: int,
+                                   shop_item_id: Optional[int] = None) -> List[dict]:
+    """All shop rows of an NPC (admin view, includes inactive and player-origin rows) with the
+    item card, the effective goods group and the merchant's current ask / bid. `shop_item_id`
+    narrows the list to one row."""
+    query = """
         SELECT si.id, si.npc_id, si.item_id, si.buy_price, si.sell_price,
                si.stock, si.is_active, si.created_at,
                i.name AS item_name, i.image AS item_image,
-               i.item_rarity, i.item_type
+               i.item_rarity, i.item_type,
+               si.restock_target, si.origin, si.updated_at
         FROM npc_shop_items si
         LEFT JOIN items i ON si.item_id = i.id
         WHERE si.npc_id = :npc_id
-        ORDER BY si.id ASC
-    """)
-    result = await session.execute(query, {"npc_id": npc_id})
+    """
+    params = {"npc_id": npc_id}
+    if shop_item_id is not None:
+        query += " AND si.id = :sid"
+        params["sid"] = shop_item_id
+    result = await session.execute(text(query + " ORDER BY si.id ASC"), params)
     rows = result.fetchall()
-    return [
-        {
+    if not rows:
+        return []
+    market = await merchant_market(session, npc_id)
+    items = await get_item_markets(session, [row[2] for row in rows])
+    out = []
+    for row in rows:
+        prices = price_shop_row(market, items.get(row[2]), row[3], row[4])
+        out.append({
             "id": row[0],
             "npc_id": row[1],
             "item_id": row[2],
@@ -4306,13 +4450,53 @@ async def get_npc_shop_items_admin(session: AsyncSession, npc_id: int) -> List[d
             "item_image": row[9],
             "item_rarity": row[10],
             "item_type": row[11],
-        }
-        for row in rows
-    ]
+            "restock_target": row[12],
+            "origin": row[13],
+            "updated_at": row[14],
+            "group": prices["group"],
+            "off_market": prices["off_market"],
+            "market": prices["market"],
+            "ask": prices["ask"],
+            "bid": prices["bid"],
+        })
+    return out
+
+
+async def get_merchant_market_admin(session: AsyncSession, npc_id: int) -> Optional[dict]:
+    """GET /admin/npc-shop/{npc_id}/market payload; None when there is no such NPC."""
+    market = await merchant_market(session, npc_id)
+    if market.reason == econ_core.MERCHANT_REASON_NOT_NPC:
+        return None
+    region_name = None
+    if market.region_id:
+        row = (await session.execute(
+            text("SELECT name FROM Regions WHERE id = :id"), {"id": market.region_id})).first()
+        region_name = row[0] if row else None
+    cash_row = (await session.execute(
+        text("SELECT currency_balance FROM characters WHERE id = :id"), {"id": npc_id})).first()
+    groups = await merchant_buy_groups(session, market)
+    names: Dict[str, str] = {}
+    if groups:
+        placeholders, params = econ_core.in_params("g", groups)
+        name_rows = (await session.execute(
+            text(f"SELECT code, name FROM econ_goods_groups WHERE code IN ({placeholders})"), params)).fetchall()
+        names = {r[0]: r[1] for r in name_rows}
+    return {
+        "npc_id": npc_id,
+        "living": market.living,
+        "reason": market.reason,
+        "region_id": market.region_id,
+        "region_name": region_name,
+        "location_id": market.location_id,
+        "tax_rate": float(market.tax_rate) if market.tax_rate is not None else None,
+        "cash": int(cash_row[0] or 0) if cash_row else 0,
+        "buys_groups": [{"code": g, "name": names.get(g, g)} for g in groups],
+    }
 
 
 async def update_npc_shop_item(session: AsyncSession, shop_item_id: int, data: dict) -> Optional[NpcShopItem]:
-    """Update an NPC shop item's price, stock, or active status."""
+    """Update an NPC shop row's prices, stock, restock target or active status. Any admin edit of a
+    row bought from players (origin='player') turns it into an admin row."""
     result = await session.execute(
         select(NpcShopItem).where(NpcShopItem.id == shop_item_id)
     )
@@ -4326,8 +4510,12 @@ async def update_npc_shop_item(session: AsyncSession, shop_item_id: int, data: d
         shop_item.sell_price = data["sell_price"]
     if "stock" in data:
         shop_item.stock = data["stock"]
+    if "restock_target" in data and data["restock_target"] is not None:
+        shop_item.restock_target = data["restock_target"]
     if "is_active" in data and data["is_active"] is not None:
         shop_item.is_active = data["is_active"]
+    if shop_item.origin != econ_core.SHOP_ORIGIN_ADMIN:
+        shop_item.origin = econ_core.SHOP_ORIGIN_ADMIN
 
     await session.commit()
     await session.refresh(shop_item)
@@ -4347,37 +4535,169 @@ async def delete_npc_shop_item(session: AsyncSession, shop_item_id: int) -> bool
     return True
 
 
+def effective_stock(market: MerchantMarket, stock: Optional[int]) -> Optional[int]:
+    """Stock a player sees / can buy: NULL = unlimited for a legacy merchant only; a living merchant
+    treats NULL as 0 (nothing to sell until the tick restocks the row)."""
+    if stock is None:
+        return 0 if market.living else None
+    return max(0, int(stock))
+
+
 async def get_npc_shop_items_player(session: AsyncSession, npc_id: int) -> List[dict]:
-    """Get active shop items for an NPC (player view)."""
+    """Active shop rows of an NPC for the player shop window (FEAT-183 3.6).
+
+    buy_price / sell_price are the merchant's CURRENT prices (region multiplier for a living merchant
+    and an on-market item; the bid is capped by the cheapest possible ask); base_* are the admin base
+    prices. Rows bought from players (origin='player') are hidden while their stock is 0; admin rows
+    stay visible with in_stock = false. No cash, restock target or tax is exposed.
+    """
     query = text("""
         SELECT si.id, si.npc_id, si.item_id, si.buy_price, si.sell_price,
                si.stock, si.is_active, si.created_at,
                i.name AS item_name, i.image AS item_image,
-               i.item_rarity, i.item_type
+               i.item_rarity, i.item_type, si.origin
         FROM npc_shop_items si
         LEFT JOIN items i ON si.item_id = i.id
         WHERE si.npc_id = :npc_id AND si.is_active = 1
         ORDER BY si.id ASC
     """)
-    result = await session.execute(query, {"npc_id": npc_id})
-    rows = result.fetchall()
-    return [
-        {
+    rows = (await session.execute(query, {"npc_id": npc_id})).fetchall()
+    if not rows:
+        return []
+    market = await merchant_market(session, npc_id)
+    items = await get_item_markets(session, [row[2] for row in rows])
+    out = []
+    for row in rows:
+        stock = effective_stock(market, row[5])
+        if row[12] == econ_core.SHOP_ORIGIN_PLAYER and not stock:
+            continue
+        prices = price_shop_row(market, items.get(row[2]), row[3], row[4])
+        out.append({
             "id": row[0],
             "npc_id": row[1],
             "item_id": row[2],
-            "buy_price": row[3],
-            "sell_price": row[4],
-            "stock": row[5],
+            "buy_price": prices["ask"],
+            "sell_price": prices["bid"],
+            "base_buy_price": row[3],
+            "base_sell_price": row[4],
+            "stock": stock,
+            "in_stock": stock is None or stock > 0,
+            "market": prices["market"],
+            "price_level": prices["price_level"],
+            "living": market.living,
             "is_active": bool(row[6]),
             "created_at": row[7],
             "item_name": row[8],
             "item_image": row[9],
             "item_rarity": row[10],
             "item_type": row[11],
-        }
-        for row in rows
-    ]
+        })
+    return out
+
+
+class BidQuote(NamedTuple):
+    """What a merchant pays per item right now (3.1 #4 / #7).
+
+    row_id: the shop row the bought item lands in (None = a new player-origin row is created with
+    buy_price = item_base and sell_price = new_row_bid).
+    """
+    unit_price: int
+    row_id: Optional[int]
+    item_base: int
+    new_row_bid: int
+
+
+def _buys_groups(rows, items: Dict[int, econ_core.ItemMarket]) -> List[str]:
+    """Effective groups of the active, on-market, admin-origin rows (SHOP_ROW_COLUMNS tuples)."""
+    groups = set()
+    for r in rows:
+        if not r[8] or r[7] != econ_core.SHOP_ORIGIN_ADMIN:
+            continue
+        m = items.get(r[2])
+        if m is not None and m.group is not None and not m.off_market:
+            groups.add(m.group)
+    return sorted(groups)
+
+
+def quote_bid(market: MerchantMarket, item: Optional[econ_core.ItemMarket], row,
+              buys_groups) -> Optional[BidQuote]:
+    """Merchant's bid for one item (pure). `row` = the NPC's shop row for the item (SHOP_ROW_COLUMNS
+    tuple) or None. None = «does not buy».
+
+    * row present: active with sell_price > 0 -> the row's current (capped) bid; else refused (an
+      admin row with sell_price 0 or an inactive row means «not this item»);
+    * no row, living merchant: on-market item of one of his goods groups -> default bid
+      floor(item_base x bid_share) moved by the region and capped like any bid;
+    * no row, legacy merchant: refused (he buys only his own rows).
+    """
+    if row is not None:
+        if not row[8] or int(row[4] or 0) <= 0:
+            return None
+        bid = price_shop_row(market, item, row[3], row[4])["bid"]
+        return BidQuote(bid, int(row[0]), 0, 0) if bid >= 1 else None
+    if not market.living or item is None or item.group is None or item.off_market:
+        return None
+    if item.group not in buys_groups:
+        return None
+    base = econ_core.item_base_price(item.price, market.group_base.get(item.group))
+    if base <= 0:
+        return None
+    mult = econ_core.market_mult(True, item.group, False, market.mults)
+    base_bid = econ_core.default_bid(base, market.bid_share)
+    bid = econ_core.market_bid(base_bid, mult, econ_core.market_ask(base, mult))
+    return BidQuote(bid, None, base, base_bid) if bid >= 1 else None
+
+
+async def quote_bids(session: AsyncSession, market: MerchantMarket, item_ids) -> Dict[int, BidQuote]:
+    """{item_id: BidQuote} for the items this merchant buys now; refused items are absent."""
+    ids = sorted({int(i) for i in item_ids})
+    if not ids:
+        return {}
+    placeholders, params = econ_core.in_params("n", [market.npc_id])
+    rows = (await session.execute(
+        text(econ_core.sql_lock_shop_rows(placeholders, for_update=False)), params)).fetchall()
+    by_item = {int(r[2]): r for r in rows}
+    items = await get_item_markets(session, set(ids) | set(by_item))
+    groups = set(_buys_groups(rows, items)) if market.living else set()
+    out: Dict[int, BidQuote] = {}
+    for item_id in ids:
+        quote = quote_bid(market, items.get(item_id), by_item.get(item_id), groups)
+        if quote is not None:
+            out[item_id] = quote
+    return out
+
+
+async def get_bag_quantities(session: AsyncSession, character_id: int) -> Dict[int, int]:
+    """{item_id: quantity} of the character's bag (character_inventory; equipped items are not there)."""
+    rows = (await session.execute(text(
+        "SELECT item_id, SUM(quantity) FROM character_inventory WHERE character_id = :c "
+        "GROUP BY item_id ORDER BY item_id"), {"c": character_id})).fetchall()
+    return {int(r[0]): int(r[1] or 0) for r in rows if int(r[1] or 0) > 0}
+
+
+async def get_sell_offers(session: AsyncSession, npc_id: int, character_id: int,
+                          max_quantity: int) -> List[dict]:
+    """GET /npcs/{npc_id}/shop/sell-offers: the character's bag items this merchant buys now and at
+    what bid. The merchant's cash is not disclosed (a broke merchant refuses on the sell itself)."""
+    bag = await get_bag_quantities(session, character_id)
+    if not bag:
+        return []
+    market = await merchant_market(session, npc_id)
+    quotes = await quote_bids(session, market, bag.keys())
+    if not quotes:
+        return []
+    items = await get_item_markets(session, quotes.keys())
+    out = []
+    for item_id, quote in sorted(quotes.items()):
+        item = items.get(item_id)
+        out.append({
+            "item_id": item_id,
+            "item_name": item.name if item else None,
+            "item_image": item.image if item else None,
+            "unit_price": quote.unit_price,
+            "max_quantity": min(bag[item_id], max_quantity),
+        })
+    return out
 
 
 async def get_shop_item_by_id(session: AsyncSession, shop_item_id: int) -> Optional[NpcShopItem]:
@@ -4603,20 +4923,112 @@ async def get_npc_location(session: AsyncSession, npc_id: int) -> Optional[int]:
     return row[0]
 
 
-async def decrement_stock(session: AsyncSession, shop_item_id: int, quantity: int) -> bool:
-    """Decrement stock for a shop item. Returns False if insufficient stock."""
-    result = await session.execute(
-        text("""
-            UPDATE npc_shop_items
-            SET stock = stock - :qty
-            WHERE id = :sid AND stock >= :qty
-        """),
-        {"sid": shop_item_id, "qty": quantity},
-    )
-    if result.rowcount == 0:
+async def take_shop_stock(session: AsyncSession, shop_item_id: int, quantity: int) -> bool:
+    """Conditional stock take (FEAT-183: before the payment, in its transaction — locks the shop row
+    first, lock order 3.5). False = not enough stock (NULL / unlimited never matches) or a
+    non-positive quantity (a negative :q would ADD stock through `stock >= -q`). No commit."""
+    if int(quantity) < 1:
         return False
-    await session.commit()
-    return True
+    result = await session.execute(text(econ_core.SQL_SHOP_STOCK_TAKE), {"id": shop_item_id, "q": quantity})
+    return result.rowcount > 0
+
+
+async def add_shop_stock(session: AsyncSession, shop_item_id: int, quantity: int) -> None:
+    """stock += quantity (NULL counts as 0); a non-positive quantity is ignored. No commit."""
+    if int(quantity) < 1:
+        return
+    await session.execute(text(econ_core.SQL_SHOP_STOCK_ADD), {"id": shop_item_id, "q": quantity})
+
+
+async def charge_player_to_merchant(
+    session: AsyncSession,
+    character_id: int,
+    npc_id: int,
+    amount: int,
+    *,
+    tax: int,
+    region_id: Optional[int],
+    location_id: Optional[int],
+    metadata: Optional[dict] = None,
+) -> Optional[Tuple[Optional[int], Optional[int]]]:
+    """Living merchant sale `npc_shop_buy`: player -> NPC (main) + NPC -> region treasury (trade_tax);
+    the ledger adds the usual 10 % region -> country tax leg. Returns (player balance, operation id),
+    None when the player has not enough money (nothing moved). No commit."""
+    if amount <= 0:
+        return await _character_balance(session, character_id), None
+    legs = [Leg(AccountRef.character(character_id), AccountRef.character(npc_id), int(amount))]
+    if tax > 0 and region_id:
+        legs.append(Leg(AccountRef.character(npc_id), AccountRef.region(int(region_id)), int(tax),
+                        econ_core.LEG_TRADE_TAX))
+    try:
+        result = await econ_ledger.post_operation(
+            session, op_type=econ_core.OP_NPC_SHOP_BUY, legs=legs, source_service=ECON_SOURCE_SERVICE,
+            location_id=location_id, region_id=region_id, metadata=metadata,
+        )
+    except InsufficientFunds:
+        # only the player can be short: the NPC's net change is paid - tax >= 0
+        return None
+    return result.balances.get(character_id), result.operation_id
+
+
+async def pay_player_from_merchant(
+    session: AsyncSession,
+    npc_id: int,
+    character_id: int,
+    amount: int,
+    *,
+    region_id: Optional[int],
+    location_id: Optional[int],
+    metadata: Optional[dict] = None,
+) -> Optional[int]:
+    """Living merchant buys from a player `npc_shop_sell`: NPC -> player (no tax: the payee is a
+    character). Raises InsufficientFunds when the NPC's cash is short (nothing moved). Returns the
+    player's new balance. No commit."""
+    if amount <= 0:
+        return await _character_balance(session, character_id)
+    result = await econ_ledger.post_operation(
+        session, op_type=econ_core.OP_NPC_SHOP_SELL,
+        legs=[Leg(AccountRef.character(npc_id), AccountRef.character(character_id), int(amount))],
+        source_service=ECON_SOURCE_SERVICE, location_id=location_id, region_id=region_id, metadata=metadata,
+    )
+    return result.balances.get(character_id)
+
+
+async def merchant_cash(session: AsyncSession, npc_id: int) -> int:
+    """The NPC's cash (characters.currency_balance), plain read; 0 when unknown."""
+    return int(await _character_balance(session, npc_id) or 0)
+
+
+async def store_item_bought_from_player(session: AsyncSession, npc_id: int, item_id: int, quantity: int,
+                                        quote: "BidQuote") -> int:
+    """A living merchant keeps what he buys (3.1 #7): the existing row gets stock += quantity, else a
+    new origin='player' row (buy_price = item_base, sell_price = default bid, restock_target 0) is
+    inserted with stock = quantity. A concurrent insert of the same (npc, item) falls back to the
+    stock add. Runs before the payment (lock order 3.5: shop row -> characters). Returns the row id.
+    No commit."""
+    if quote.row_id is not None:
+        await add_shop_stock(session, quote.row_id, quantity)
+        return quote.row_id
+    params = {"npc": npc_id, "item": item_id, "buy": quote.item_base, "sell": quote.new_row_bid,
+              "q": quantity, "origin": econ_core.SHOP_ORIGIN_PLAYER}
+    inserted = False
+    try:
+        async with econ_ledger._savepoint(session):
+            await session.execute(text(
+                "INSERT INTO npc_shop_items (npc_id, item_id, buy_price, sell_price, stock, is_active, "
+                "restock_target, origin) VALUES (:npc, :item, :buy, :sell, :q, 1, 0, :origin)"), params)
+        inserted = True
+    except IntegrityError:
+        pass   # a concurrent sale inserted the row first: add to it below
+    # locking read = current read (a plain SELECT would not see a row a concurrent sale just committed)
+    for_update = econ_core.supports_for_update(session.get_bind().dialect.name)
+    row = (await session.execute(text(econ_core.sql_shop_row_by_item(for_update)),
+                                 {"npc_id": npc_id, "item_id": item_id})).first()
+    if row is None:
+        raise econ_ledger.EconomyError(f"shop row of npc {npc_id} / item {item_id} not stored")
+    if not inserted:
+        await add_shop_stock(session, int(row[0]), quantity)
+    return int(row[0])
 
 
 async def get_item_name(session: AsyncSession, item_id: int) -> Optional[str]:
@@ -4624,21 +5036,6 @@ async def get_item_name(session: AsyncSession, item_id: int) -> Optional[str]:
     result = await session.execute(
         text("SELECT name FROM items WHERE id = :iid"),
         {"iid": item_id},
-    )
-    row = result.fetchone()
-    return row[0] if row else None
-
-
-async def find_sell_price_for_item(session: AsyncSession, npc_id: int, item_id: int) -> Optional[int]:
-    """Find the sell price for an item in NPC's shop. Returns None if NPC won't buy it."""
-    result = await session.execute(
-        text("""
-            SELECT sell_price FROM npc_shop_items
-            WHERE npc_id = :npc_id AND item_id = :item_id
-              AND is_active = 1 AND sell_price > 0
-            LIMIT 1
-        """),
-        {"npc_id": npc_id, "item_id": item_id},
     )
     row = result.fetchone()
     return row[0] if row else None

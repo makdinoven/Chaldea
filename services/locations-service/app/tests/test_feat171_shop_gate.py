@@ -80,6 +80,13 @@ def _shop_item(buy_price=20):
     item.item_type = "weapon"
     item.created_at = None
     item.discounted_buy_price = None
+    # FEAT-183 player-view fields (crud.get_npc_shop_items_player returns them)
+    item.base_buy_price = buy_price
+    item.base_sell_price = buy_price // 2
+    item.in_stock = True
+    item.market = False
+    item.price_level = "normal"
+    item.living = False
     return item
 
 
