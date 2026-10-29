@@ -138,14 +138,32 @@ class TestLivingBuyLegs:
         assert await _stock(shop_db) is None
         assert await _world_sum(shop_db) == 0
 
-    async def test_dead_merchant_trades_the_legacy_way(self, shop_db):
-        await _make_living(shop_db)
+    @pytest.mark.parametrize("living", [True, False])
+    async def test_dead_merchant_does_not_sell(self, shop_db, living):
+        if living:
+            await _make_living(shop_db)
         await _exec(shop_db, "UPDATE characters SET npc_status = 'dead' WHERE id = :n", n=NPC_REGION)
-        with _Shop(item=_shop_item(NPC_REGION, price=100, stock=None)):
-            out = await _buy(shop_db, NPC_REGION)
-        assert out["total_price"] == 100
-        assert ("trade_tax", 20) not in await _legs(shop_db)
-        assert await _balance(shop_db, NPC_REGION) == 0
+        with _Shop(item=_shop_item(NPC_REGION, price=100, stock=None)) as shop:
+            with pytest.raises(HTTPException) as exc:
+                await _buy(shop_db, NPC_REGION)
+        assert exc.value.status_code == 409 and exc.value.detail == "Торговец мёртв — лавка закрыта"
+        shop.client.post.assert_not_awaited()
+        assert await _legs(shop_db) == []
+        assert await _balance(shop_db, PLAYER) == 1000
+        assert await _world_sum(shop_db) == 0
+
+    @pytest.mark.parametrize("living", [True, False])
+    async def test_dead_merchant_does_not_buy(self, shop_db, living):
+        if living:
+            await _make_living(shop_db)
+            await _fund(shop_db, NPC_REGION, 1000)
+        await _exec(shop_db, "UPDATE characters SET npc_status = 'dead' WHERE id = :n", n=NPC_REGION)
+        with _Shop() as shop:
+            with pytest.raises(HTTPException) as exc:
+                await _sell(shop_db, NPC_REGION)
+        assert exc.value.status_code == 409 and exc.value.detail == "Торговец мёртв — лавка закрыта"
+        shop.client.delete.assert_not_awaited()
+        shop.client.post.assert_not_awaited()
         assert await _world_sum(shop_db) == 0
 
     async def test_off_market_row_of_a_living_merchant_is_base_priced_and_taxed(self, shop_db):
@@ -684,6 +702,16 @@ class TestShopWindowHttp:
         assert set(rows) == {ROW, 911}
         assert (rows[ROW]["stock"], rows[ROW]["in_stock"], rows[ROW]["living"]) == (None, True, False)
         assert (rows[ROW]["buy_price"], rows[ROW]["sell_price"]) == (100, 40)
+
+    async def test_dead_merchant_has_an_empty_window_and_no_offers(self, http, shop_db):
+        await (_make_living(shop_db))
+        await (_add_items(shop_db))
+        await (_exec(shop_db, "INSERT INTO character_inventory (character_id, item_id, quantity) VALUES (1, 7, 3)"))
+        await (_exec(shop_db, "UPDATE characters SET npc_status = 'dead' WHERE id = :n", n=NPC_REGION))
+        r = http.as_user(None).get(f"/locations/npcs/{NPC_REGION}/shop")
+        assert r.status_code == 200 and r.json() == []
+        r = http.as_user(OWNER_U).get(f"/locations/npcs/{NPC_REGION}/shop/sell-offers?character_id={PLAYER}")
+        assert r.status_code == 200 and r.json() == []
 
     async def test_unknown_npc_has_an_empty_window(self, http):
         r = http.as_user(None).get("/locations/npcs/4242/shop")

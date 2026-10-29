@@ -4565,6 +4565,8 @@ async def get_npc_shop_items_player(session: AsyncSession, npc_id: int) -> List[
     if not rows:
         return []
     market = await merchant_market(session, npc_id)
+    if market.reason == econ_core.MERCHANT_REASON_DEAD:
+        return []                        # a dead merchant's shop is closed; [] hides the «Магазин» button
     items = await get_item_markets(session, [row[2] for row in rows])
     out = []
     for row in rows:
@@ -4683,6 +4685,8 @@ async def get_sell_offers(session: AsyncSession, npc_id: int, character_id: int,
     if not bag:
         return []
     market = await merchant_market(session, npc_id)
+    if market.reason == econ_core.MERCHANT_REASON_DEAD:
+        return []                        # a dead merchant's shop is closed
     quotes = await quote_bids(session, market, bag.keys())
     if not quotes:
         return []

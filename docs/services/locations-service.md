@@ -592,6 +592,10 @@ dungeon-service; CI `econ-contract-copies`). Правила вызывающих
 Смысл полей: `buy_price` / `sell_price` — **базовые** цены при множителе региона 1 (`sell_price = 0` — «не
 покупает»); `stock NULL` = без ограничений **только у обычного (legacy) торговца**, у живого `NULL` считается 0.
 
+**Мёртвый торговец (`npc_status = dead`) — лавка закрыта:** витрина и `sell-offers` отдают `[]` (кнопка «Магазин» пропадает),
+покупка и продажа — 409 «Торговец мёртв — лавка закрыта» до любых списаний и вызовов inventory. После воскрешения
+лавка открывается сама: строки склада не трогаются.
+
 **`crud.merchant_market(session, npc_id) -> MerchantMarket`** — статус торговца на каждый запрос (без
 блокировок, снимок последнего тика): `SQL_NPC_PLACE` → `econ_ledger.resolve_location` → `SQL_REGION_ECON` →
 `econ_core.merchant_status`. Поля: `living`, `reason` (`not_npc | dead | no_location | dungeon | no_region |

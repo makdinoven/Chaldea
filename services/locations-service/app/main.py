@@ -2707,6 +2707,13 @@ SHOP_NO_CASH_MESSAGE = "У меня сейчас нет на это денег"
 SHOP_NOT_BUYING_MESSAGE = "Этот NPC не покупает данный предмет"
 SHOP_NO_STOCK_MESSAGE = "Недостаточно товара на складе"
 SHOP_SELL_FAILED_MESSAGE = "Не удалось завершить продажу"
+SHOP_CLOSED_MESSAGE = "Торговец мёртв — лавка закрыта"
+
+
+def _require_shop_open(market) -> None:
+    """A dead merchant's shop is closed: no buying, no selling (409)."""
+    if market.reason == econ_core.MERCHANT_REASON_DEAD:
+        raise HTTPException(status_code=409, detail=SHOP_CLOSED_MESSAGE)
 
 
 async def _return_sold_item(character_id: int, item_id: int, quantity: int) -> bool:
@@ -2894,6 +2901,7 @@ async def buy_from_npc(
         raise HTTPException(status_code=400, detail="Количество должно быть от 1 до 999")
 
     market = await crud.merchant_market(session, npc_id)
+    _require_shop_open(market)
     item_markets = await crud.get_item_markets(session, [shop_item.item_id])
     prices = crud.price_shop_row(market, item_markets.get(shop_item.item_id),
                                  shop_item.buy_price, shop_item.sell_price)
@@ -3064,6 +3072,7 @@ async def sell_to_npc(
 
     # 3. The merchant's bid and (living) his cash, plain reads
     market = await crud.merchant_market(session, npc_id)
+    _require_shop_open(market)
     quote = (await crud.quote_bids(session, market, [body.item_id])).get(body.item_id)
     if quote is None:
         raise HTTPException(status_code=400, detail=SHOP_NOT_BUYING_MESSAGE)
