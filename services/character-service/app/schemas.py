@@ -1909,6 +1909,16 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "prosp_hunger_w": (0.0, 500.0),
     "prosp_liq_days": (0.1, 60.0),
     "history_retention_days": (1, 365),
+    # FEAT-183 NPC merchants
+    "merchant_bid_share": (0.0, 1.0),
+    "merchant_wholesale_share": (0.05, 1.0),
+    "merchant_resident_share": (0.0, 1.0),
+    "merchant_resident_share_max": (0.0, 1.0),
+    "merchant_purse_share": (0.0, 0.5),
+    "merchant_take_share": (0.0, 1.0),
+    "merchant_cash_target_mult": (0.0, 20.0),
+    "merchant_cash_cap_mult": (1.0, 20.0),
+    "merchant_cash_release": (0.0, 1.0),
 }
 ECON_SIM_INT_PARAMS = frozenset({"treasury_release_ticks", "history_retention_days"})
 
@@ -2048,6 +2058,23 @@ class EconFillRequest(BaseModel):
     @validator("region_ids")
     def _ids(cls, v):
         return None if v is None else _econ_bulk_ids(v, "регионы")
+
+
+class EconMerchantFundRequest(BaseModel):
+    """FEAT-183 «Пополнить кассы торговцев»: default = every living merchant."""
+    region_ids: Optional[List[StrictInt]] = None
+    npc_ids: Optional[List[StrictInt]] = None
+    comment: str
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+    @validator("region_ids")
+    def _regions(cls, v):
+        return None if v is None else _econ_bulk_ids(v, "регионы")
+
+    @validator("npc_ids")
+    def _npcs(cls, v):
+        return None if v is None else _econ_bulk_ids(v, "торговцы")
 
 
 class EconGroupInputIn(BaseModel):
@@ -2199,6 +2226,15 @@ class EconSimParamsIn(BaseModel):
     prosp_hunger_w: Optional[float] = None
     prosp_liq_days: Optional[float] = None
     history_retention_days: Optional[int] = None
+    merchant_bid_share: Optional[float] = None
+    merchant_wholesale_share: Optional[float] = None
+    merchant_resident_share: Optional[float] = None
+    merchant_resident_share_max: Optional[float] = None
+    merchant_purse_share: Optional[float] = None
+    merchant_take_share: Optional[float] = None
+    merchant_cash_target_mult: Optional[float] = None
+    merchant_cash_cap_mult: Optional[float] = None
+    merchant_cash_release: Optional[float] = None
 
     class Config:
         extra = Extra.forbid

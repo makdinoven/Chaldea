@@ -650,7 +650,9 @@ def test_item_groups_shape_auto_rule_and_in_quests(api):
     assert items[1]["group"] == "food" and items[2]["group"] == "ore_metal" and items[4]["group"] == "weapons"
     assert items[3]["group"] is None and items[3]["off_market"] is True                 # scroll
     assert items[6]["group"] == "weapons" and items[6]["off_market"] is True            # legendary
-    assert items[5]["group"] is None and items[5]["off_market"] is False
+    # FEAT-183: no group => off-market (econ_core.effective_item_group), also for the auto value
+    assert items[5]["group"] is None and items[5]["off_market"] is True and items[5]["auto_off_market"] is True
+    assert items[1]["off_market"] is False and items[1]["auto_off_market"] is False
     assert items[2]["in_quests"] is True and items[1]["in_quests"] is True              # collect / deliver
     assert items[4]["in_quests"] is False                                               # kill objective only
     assert all(i["override_group"] is None and i["override_off_market"] is None for i in items.values())
@@ -659,7 +661,8 @@ def test_item_groups_shape_auto_rule_and_in_quests(api):
 def test_item_groups_filters(api):
     assert {i["item_id"] for i in _items(api, group="none")["items"]} == {3, 5, 7}
     assert {i["item_id"] for i in _items(api, group="weapons")["items"]} == {4, 6}
-    assert {i["item_id"] for i in _items(api, off_market=True)["items"]} == {3, 6}
+    assert {i["item_id"] for i in _items(api, off_market=True)["items"]} == {3, 5, 6, 7}   # 5, 7: no group
+    assert {i["item_id"] for i in _items(api, off_market=False)["items"]} == {1, 2, 4}
     assert {i["item_id"] for i in _items(api, item_type="weapon")["items"]} == {4, 6}
     assert _items(api, source="manual")["total"] == 0
     assert _items(api, source="auto")["total"] == len(ITEMS)

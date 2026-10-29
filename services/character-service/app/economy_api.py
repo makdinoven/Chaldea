@@ -4,8 +4,9 @@ Public:  GET /characters/economy/currency, GET /characters/economy/regions/{id}/
 Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,settings}
          FEAT-182: /characters/admin/economy/{regions[/{id}[/apply-template|/history]],regions/fill,
                    goods-groups[/{code}],templates[/{code}],item-groups,sim[/run]}
+         FEAT-183: /characters/admin/economy/merchants[/fund]
 RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings
-(regions/fill needs economy:settings AND economy:emit).
+(regions/fill and merchants/fund need economy:settings AND economy:emit).
 
 Endpoints are plain `def` (sync SQLAlchemy runs in the threadpool). The router is included in
 main.py BEFORE the main `/characters` router, so `/characters/{character_id}`-style routes can
@@ -27,6 +28,7 @@ import econ_ledger
 import econ_scheduler
 import econ_tick
 import economy_crud
+import economy_merchants_crud
 import economy_sim_crud
 import schemas
 from auth_http import UserRead, get_current_user_via_http, require_permission
@@ -405,6 +407,36 @@ def put_item_groups(
     ))
     logger.info("economy item groups updated: user=%s items=%s", current_user.id, updated)
     return {"updated": updated}
+
+
+# ---------------------------------------------------------------------------
+# FEAT-183 NPC merchants (contract 3.7)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/economy/merchants")
+def list_merchants(
+    region_id: Optional[int] = Query(None, ge=1),
+    living: Optional[bool] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    """Every NPC with shop rows: living/legacy status, cash vs target, rows with current prices, last trade."""
+    return _read(db, lambda: economy_merchants_crud.list_merchants(db, region_id=region_id, living=living))
+
+
+@router.post("/admin/economy/merchants/fund")
+def post_merchants_fund(
+    body: schemas.EconMerchantFundRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_all_permissions("economy:settings", "economy:emit")),
+):
+    """«Пополнить кассы торговцев»: idempotent top-up of living merchants to their cash target via emission."""
+    result = _run_write(db, lambda: economy_merchants_crud.fund_merchants(
+        db, region_ids=body.region_ids, npc_ids=body.npc_ids, comment=body.comment, actor_user_id=current_user.id,
+    ))
+    logger.info("economy merchants fund: user=%s merchants=%s funded=%s emitted=%s ops=%s", current_user.id,
+                result["merchants"], result["funded"], result["emitted"], result["operation_ids"])
+    return result
 
 
 @router.get("/admin/economy/sim")

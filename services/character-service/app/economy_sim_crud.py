@@ -572,19 +572,19 @@ def list_item_groups(db: Session, *, q: Optional[str], item_type: Optional[str],
                      ) -> Tuple[List[dict], int]:
     """Items with their auto / override / effective group. ``q`` and ``item_type`` filter in SQL; the effective
     group, source and off-market filters need the Python auto rule, so they run over the SQL result (the items
-    catalogue is small — hundreds of rows) before paging."""
+    catalogue is small — hundreds of rows) before paging. FEAT-183: auto and effective values come from
+    ``econ_core.effective_item_group`` (the rule the merchants use) — an item without a group is off-market."""
     rows = db.execute(text(SQL_ITEM_GROUPS), {
         "q": _like_pattern(q) if q else None, "item_type": item_type,
         "obj_collect": QUEST_ITEM_OBJECTIVES[0], "obj_deliver": QUEST_ITEM_OBJECTIVES[1],
     }).fetchall()
     items = []
     for r in rows:
-        auto_group, auto_off = core.auto_item_group(r[2], r[4], r[5], r[3])
+        auto_group, auto_off = core.effective_item_group(r[2], r[4], r[5], r[3])
         override_group = r[9]
         override_off = None if r[10] is None else bool(r[10])
         manual = r[8] is not None and (override_group is not None or override_off is not None)
-        effective_group = override_group if override_group is not None else auto_group
-        effective_off = override_off if override_off is not None else auto_off
+        effective_group, effective_off = core.effective_item_group(r[2], r[4], r[5], r[3], override_group, override_off)
         if group is not None and (effective_group is not None if group == GROUP_NONE else effective_group != group):
             continue
         if source is not None and (source == SOURCE_MANUAL) != manual:
@@ -644,12 +644,22 @@ def update_item_groups(db: Session, *, item_ids: List[int], fields_set: Set[str]
 # Simulation settings / runs
 # ---------------------------------------------------------------------------
 
-def _run_dict(run: "models.EconTickRun") -> dict:
+def _merchant_ops(db: Session, run_id: int) -> int:
+    """merchant_trade operations posted by a run (FEAT-183; keyed merchant_trade:<run>:r:<region>)."""
+    return _i(db.execute(text(
+        "SELECT COUNT(*) FROM econ_operations WHERE op_type = :op AND idempotency_key LIKE :key"
+    ), {"op": core.OP_MERCHANT_TRADE, "key": f"merchant_trade:{int(run_id)}:r:%"}).scalar())
+
+
+def _run_dict(run: "models.EconTickRun", db: Optional[Session] = None) -> dict:
     return {
         "id": int(run.id), "slot": run.slot, "trigger_kind": run.trigger_kind, "actor_user_id": run.actor_user_id,
         "status": run.status, "regions_total": _i(run.regions_total), "regions_done": _i(run.regions_done),
         "regions_failed": _i(run.regions_failed), "error": run.error, "started_at": run.started_at,
         "heartbeat_at": run.heartbeat_at, "finished_at": run.finished_at,
+        # FEAT-183: derived (econ_tick_runs has no merchant columns)
+        "merchant_ops_posted": _merchant_ops(db, int(run.id)) if db is not None else 0,
+        "merchant_failures": econ_tick.merchant_failures_from_error(run.error),
     }
 
 
@@ -664,8 +674,8 @@ def sim_state(db: Session, *, env_enabled: bool, now: Optional[datetime] = None)
         "params": econ_tick.load_params(db).to_dict(),
         "current_slot_start": econ_tick.slot_start(slot),
         "next_slot_at": econ_tick.slot_start(slot + 1),
-        "running": _run_dict(running) if running is not None else None,
-        "runs": [_run_dict(run) for run in runs],
+        "running": _run_dict(running, db) if running is not None else None,
+        "runs": [_run_dict(run, db) for run in runs],
     }
 
 

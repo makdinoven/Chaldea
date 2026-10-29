@@ -85,6 +85,17 @@ class SimParams:
     prosp_hunger_w: float = 60.0
     prosp_liq_days: float = 14.0
     history_retention_days: int = 60
+    # FEAT-183 NPC merchants (3.2): background trade step of econ_merchant. Not in the 028 migration seed —
+    # missing keys of a stored params JSON fall back to these defaults.
+    merchant_bid_share: float = 0.5           # = econ_core.DEFAULT_MERCHANT_BID_SHARE (locations reads it via econ_core)
+    merchant_wholesale_share: float = 0.5     # restock price = market ask x share
+    merchant_resident_share: float = 0.2      # residents buy share x price_mult of a row's stock per tick ...
+    merchant_resident_share_max: float = 0.6  # ... capped at this share
+    merchant_purse_share: float = 0.05        # at most this share of the purse is spent at merchants per tick
+    merchant_take_share: float = 0.25         # merchants together take at most this share of a group's region stock
+    merchant_cash_target_mult: float = 2.0    # cash target = mult x wholesale value of a full restock at x1 prices
+    merchant_cash_cap_mult: float = 3.0       # upkeep starts above cap_mult x cash target ...
+    merchant_cash_release: float = 0.25       # ... and releases this share of the excess per tick to the purse
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":
