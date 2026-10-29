@@ -368,6 +368,36 @@ workshop), `furniture_sleep_bonus`, `furniture_storage_stacks`, `furniture_xp_bo
   `{location_id, location_name, house_id, house_room_id, scroll_kept}`.
 - Тесты: `tests/test_house_storage.py`, `tests/test_house_workshop.py`, `tests/test_house_6b.py`.
 
+## Золото: обмен и аукцион через реестр экономики (FEAT-181)
+
+Деньги inventory-service ходят только через общий реестр (правила вызова — `docs/services/character-service.md`,
+раздел «Economy ledger»). Файлы `app/econ_core.py`, `app/econ_ledger.py` (sync) и `app/tests/econ_contract_cases.py` —
+**побайтовые копии** канонических файлов character-service; править их можно только там и копировать сюда (CI
+`econ-contract-copies` сверяет sha256). Таблицы реестра (`econ_*`) принадлежат character-service: inventory лишь пишет в
+них строки через `econ_ledger.post_operation` внутри своей транзакции. Прямых `UPDATE characters SET currency_balance`
+и записи в `gold_transactions` в сервисе больше нет (`log_gold_transaction` удалён).
+
+| Действие | op_type | Проводки | Защита от гонок |
+|---|---|---|---|
+| Обмен (`execute_trade`) | `trade`, ключ `trade:<id>` | инициатор → цель, цель → инициатор (одна операция) | `trade/{id}/confirm` берёт строку обмена `FOR UPDATE`; статус ставится условным `UPDATE … WHERE status IN ('pending','negotiating')` (второе выполнение → 400 «Этот обмен уже завершён или отменён»); `lock_characters` обоих; нехватка → 400 «У инициатора/второго участника недостаточно золота для обмена» |
+| Ставка (`place_bid`) | `auction_bid` | ставящий → `auction_escrow`; `auction_escrow` → прежний лидер (`refund`) | лот `FOR UPDATE`; списание условное → 400 «Недостаточно …» |
+| Выкуп (`execute_buyout`) | `auction_buyout`, ключ `auction_buyout:listing:<id>` | покупатель → эскроу; эскроу → прежний лидер (`refund`); эскроу → `auction_storage` 95 %; эскроу → казна региона лота (или «Казна Скитальцев») 5 % (`commission`) + налоговая нога регион → страна | лот `FOR UPDATE` |
+| Истечение с победителем (`expire_stale_listings`) | `auction_settlement`, ключ `auction_settlement:listing:<id>` | эскроу → хранилище 95 %; эскроу → казна 5 % (+ налог) | истёкшие лоты `FOR UPDATE` |
+| Отмена лота со ставкой | `auction_refund`, ключ `auction_refund:cancel:<id>` | эскроу → ставивший (`refund`) | лот `FOR UPDATE` |
+| Получение выручки (`claim_from_storage`) | `auction_claim` | `auction_storage` → персонаж (одна операция на все выбранные записи) | записи склада `FOR UPDATE` — повторный параллельный claim ничего не находит |
+
+- Комиссия: `AUCTION_COMMISSION_PERCENT = 5`, доля продавца `price * 95 // 100` (целочисленно, как прежний `floor`).
+- `auction_listings.location_id / region_id` (миграция **033_auction_listing_region**, индекс `ix_auction_listings_region`)
+  заполняются при выставлении лота по текущей локации продавца (он стоит у аукциониста) через
+  `econ_ledger.resolve_location`. У старых лотов NULL → комиссия идёт в мировую казну.
+- Под-инварианты: баланс счёта `auction_escrow` = Σ `current_bid` активных лотов с лидером; `auction_storage` =
+  Σ `auction_storage.gold_amount`. Тесты, которые кладут строки в эти таблицы напрямую, обязаны пополнить счёт
+  (`admin_emission`), как это делает genesis.
+- Название валюты в уведомлениях и ошибках — из `econ_settings` (`crud.money_text` → «150 зол.»,
+  `crud.not_enough_money_message` → «Недостаточно золота»), кэш 60 с.
+- Тесты: `tests/test_gold_transactions.py` (проводки обмена и аукциона, инварианты после каждого сценария);
+  `conftest.py` создаёт таблицы реестра и иерархии мира из `econ_contract_cases.SQLITE_DDL`.
+
 ## Быстрые слоты
 
 - Только от экипировки: сумма `fast_slot_bonus` надетых предметов (пояс), базы нет (`BASE_FAST_SLOTS = 0`, миграция 027 привела к этому всех существующих персонажей)

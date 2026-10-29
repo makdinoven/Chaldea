@@ -16,6 +16,8 @@ character-service/app/
 ├── models.py             # SQLAlchemy модели (8 моделей)
 ├── schemas.py            # Pydantic схемы
 ├── crud.py               # CRUD и бизнес-логика
+├── economy_api.py        # FEAT-181: роутер API экономики (публичная валюта + /admin/economy/*)
+├── economy_crud.py       # FEAT-181: сводка, счета, журнал, эмиссия/корректировка, настройки
 ├── presets.py            # МЁРТВЫЙ КОД: реальный источник статов — колонка subraces.stat_preset
 ├── locations_client.py   # HTTP-клиент к locations-service (FEAT-154), всё graceful
 ├── config.py             # Настройки из env
@@ -76,7 +78,7 @@ PUT заменяет таблицу целиком (уровни подряд с
 | GET | `/characters/{id}/short_info` | Краткая инфо (имя, аватар, локация). **FEAT-171 (C4, D7):** `currency_balance` убран **безусловно, для всех** — маршрут читают сервис-в-сервис, поэтому optional-auth тут не годится. Баланс отдаёт только двойник `/characters/internal/{id}/short_info` |
 | GET | `/characters/{id}/race_info` | Раса, подраса, класс, уровень |
 | GET | `/characters/list` | Список всех персонажей |
-| DELETE | `/characters/{id}` | Удалить персонажа |
+| DELETE | `/characters/{id}` | Удалить персонажа. **FEAT-181 C8:** весь баланс уходит проводкой `character_deleted` в казну его локации (иначе «Казна Скитальцев»), счёт персонажа помечается неактивным — в той же транзакции, что и удаление строки. То же делает `DELETE /characters/admin/npcs/{id}` |
 | PUT | `/characters/internal/{id}/deduct_points` | Списать stat points (internal, `X-Internal-Token`) |
 | GET | `/characters/internal/{id}/full_profile` | **FEAT-171 (C1i):** двойник `GET /characters/{id}/full_profile` для межсервисных вызовов. Тело общее с публичным маршрутом (общий хелпер `_build_full_profile`), но остаётся полным после того, как Pass B утончит публичный ответ. Требует `X-Internal-Token` (пустой env → 503, неверный заголовок → 401), nginx отдаёт 403 снаружи. Вызывающий — character-attributes-service (`perk_evaluator`, `/upgrade`) |
 | GET | `/characters/internal/{id}/short_info` | **FEAT-171 (C4i):** двойник `GET /characters/{id}/short_info`, **всегда с `currency_balance`** — именно он питает `/users/me` и счётчик золота в шапке, когда Pass B уберёт баланс из публичного тела. Та же защита `X-Internal-Token`. Вызывающие — user-service (`_fetch_character_short`) и locations-service |
@@ -210,7 +212,7 @@ PUT заменяет таблицу целиком (уровни подряд с
 1. Заявка существует и в статусе `pending` (иначе 404 / 400), лимит персонажей не превышен (лимит настраивается переменной `MAX_CHARACTERS_PER_USER`; по умолчанию `0` = без ограничений, и проверка пропускается)
 2. **Разрешить стартовый набор** — `crud.resolve_starter_kit(db, id_class, origin_id or 0)`, **ровно один вызов**. Результат идёт и на выдачу, и в слепок `granted_kit`. Тот же вызов делал мастер создания, поэтому выдаётся ровно то, что игроку показали
 2.5. **Сгенерировать атрибуты по подрасе** — `crud.generate_attributes_for_subrace`, из колонки **`subraces.stat_preset`** (не из `presets.py`, он мёртв); при отсутствии пресета — все по 10 с warning. **Ровно один вызов**: результат идёт и в слепок `starting_attributes` (шаг 3), и в character-attributes-service (шаг 7)
-3. Создать `Character` (`flush`) — с `currency_balance` из набора, `registered_at = utcnow()`, `origin_id` и `skitaltsy_since_*` из заявки, `granted_kit` = слепок набора, `starting_attributes` = слепок пресета. `avatar` берётся из заявки, при её отсутствии — `subraces.image`, затем `''`
+3. Создать `Character` (`flush`) — с `currency_balance = 0` (золото набора — проводкой на шаге 11.5), `registered_at = utcnow()`, `origin_id` и `skitaltsy_since_*` из заявки, `granted_kit` = слепок набора, `starting_attributes` = слепок пресета. `avatar` берётся из заявки, при её отсутствии — `subraces.image`, затем `''`
 4. *(шага 4 больше нет — генерация атрибутов поднята в 2.5, чтобы слепок и начисление шли из одного результата)*
 5. HTTP -> **inventory-service**: создать инвентарь с предметами набора *(graceful)*
 6. HTTP -> **skills-service**: назначить навыки набора + подрасовый `SUBRACE_SKILL_ID = 7` *(graceful)*
@@ -219,7 +221,8 @@ PUT заменяет таблицу целиком (уровни подряд с
 9. **Разрешить стартовую локацию** — цепочка ниже *(graceful)*
 10. Статус заявки -> `approved` (`flush`)
 11. HTTP -> **user-service**: создать связь user-character *(критично — при провале rollback + 500)*
-12. `db.commit()` — единый коммит шагов 3, 8, 9, 10
+11.5. **FEAT-181 C1:** `crud.post_starter_kit` — проводка `starter_kit` из казны региона стартовой локации (шаг 9; без локации — «Казна Скитальцев») персонажу, ключ `starter_kit:c:<id>`. Последний шаг перед коммитом, после всех HTTP-вызовов
+12. `db.commit()` — единый коммит шагов 3, 8, 9, 10, 11.5
 13. RabbitMQ: уведомление игроку *(не блокирует)*
 
 Ответ, помимо `message`, содержит `current_location_id` и `location_warning`.
@@ -397,3 +400,155 @@ character-service **обнуляет при каждой смене локаци
 локации; комната не раскрывается; таблицы домов читаются сырым SQL, без них — null). Откат миграции снимает индекс
 и колонку. Тесты: `tests/test_house_presence.py`.
 - `GET /characters/internal/{id}/short_info` отдаёт `current_house {house_id, house_name, room_id, room_name}` (или null) — комната дома, где стоит персонаж (правило то же: дом в его локации). Публичный `short_info` этого поля не содержит. user-service передаёт его только в `/users/me` — для ссылки «вернуться в дом» в шапке.
+
+## Economy ledger (FEAT-181 этап 1, миграция 027)
+
+Двойная запись золота мира. Таблицы живут в character-service (миграция `027_world_economy`), но в них пишут
+четыре сервиса — каждый в **своей** транзакции через локальный помощник над одним контрактом.
+
+### Таблицы
+
+- `characters.currency_balance` — теперь `BIGINT NOT NULL DEFAULT 0`; это баланс счёта `character`.
+- `econ_settings` (одна строка `id=1`) — формы названия валюты (`currency_name/genitive/one/few/many/short`) и
+  `country_tax_rate` (доля налога регион → страна, по умолчанию 0.1).
+- `econ_accounts` (`kind`, `ref_id`, уникальная пара) — счета: `character` (баланс в `characters`, колонка `balance`
+  не используется), `region_treasury` / `country_treasury` (ref = `Regions.id` / `Countries.id`), одиночки
+  `world_treasury` («Казна Скитальцев»), `auction_escrow` («Ставки аукциона»), `auction_storage` («Хранилище аукциона»),
+  `emission`, `adjustment`. В минус могут уходить казны и источники; персонажи, эскроу и хранилище — нет.
+  Счета создаются лениво при первой проводке; `is_active=0` после удаления владельца (строка остаётся).
+- `econ_operations` — заголовок бизнес-события (`op_type`, уникальный `idempotency_key`, `location_id`, `region_id`,
+  `actor_user_id`, `source_service`, `comment`, `metadata` JSON). Только добавление.
+- `econ_postings` — ноги «откуда → куда» (`amount > 0`, `leg_type`: `main | refund | commission | tax`). Только
+  добавление; отмена — новая операция.
+
+Инвариант мира: `Σ characters.currency_balance + Σ econ_accounts.balance (kind <> 'character') = 0`. Деньги
+появляются только проводками из `emission` (genesis, админская эмиссия) и `adjustment` (админская корректировка).
+Подинварианты: счёт `auction_escrow` = Σ активных ставок (`auction_listings.current_bid`, status `active`, есть
+ставящий), `auction_storage` = Σ `auction_storage.gold_amount`, у каждого персонажа баланс = Σ входящих − Σ исходящих
+проводок (детектор обхода помощника).
+
+Genesis (в миграции, идемпотентно по `idempotency_key='genesis'`): одиночные счета, казна на каждый регион и страну,
+счёт на каждого персонажа с ненулевым балансом (игроки **и** НПС), одна операция `genesis`: `emission → персонаж`,
+`emission → auction_escrow`, `emission → auction_storage`. Казны стартуют с 0 — начальную эмиссию делает админ.
+
+### Файлы контракта
+
+| Файл | Что | Копии |
+|------|-----|-------|
+| `app/econ_core.py` | Чистый контракт: виды счетов, типы операций/ног, `AccountRef`, `Leg`, `PostingResult`, валидация, ноги налога, неттинг, порядок применения, все SQL, `plural_ru`, `format_currency`, `CurrencyForms`, исключения, кэш настроек | побайтно в inventory-, locations-, dungeon-service (CI `econ-contract-copies`) |
+| `app/econ_ledger.py` | Sync-исполнитель (SQLAlchemy `Session`) + ORM-страж баланса | побайтно в inventory-service; async-канон — locations-service (копия в dungeon-service) |
+| `app/tests/econ_contract_cases.py` | Общие сценарии + SQLite DDL; каждый сервис гоняет их через свой исполнитель | побайтно во всех четырёх |
+
+Канон — character-service: правки делаются здесь и копируются дословно.
+
+### API помощника (`econ_ledger`, async-вариант — те же имена с `await`)
+
+```python
+from econ_ledger import AccountRef, Leg, post_operation, treasury_for_location, lock_characters
+# AccountRef.character(id) / region(id) / country(id) / world() / escrow() / storage() / emission() / adjustment()
+# Leg(src, dst, amount, leg_type="main")          # amount: int >= 0, ноги с 0 отбрасываются
+
+post_operation(session, *, op_type, legs, source_service, location_id=None, region_id=None,
+               actor_user_id=None, comment=None, metadata=None, idempotency_key=None,
+               apply_tax=True) -> PostingResult    # (operation_id | None, {character_id: new_balance})
+resolve_location(session, location_id) -> (region_id | None, country_id | None)
+treasury_for_location(session, location_id | None) -> AccountRef   # казна региона, иначе world_treasury
+lock_characters(session, character_ids) -> {id: balance}            # SELECT … FOR UPDATE по возрастанию id
+get_currency_forms(session) -> CurrencyForms                        # кэш 60 с, при ошибке — DEFAULT_FORMS
+get_economy_settings(session) -> EconomySettings(forms, country_tax_rate)
+invalidate_settings_cache()                                         # после PUT настроек
+get_or_create_account(session, ref) -> account_id
+deactivate_account(session, ref)                                    # удаление персонажа / региона / страны
+allow_direct_balance_write(session)                                 # контекст: отключить страж (фикстуры, ремонт)
+install_balance_guard(model_cls, attr="currency_balance", strict=True)
+# econ_core: plural_ru(n, one, few, many), format_currency(n, forms, short=False), DEFAULT_FORMS,
+#   EconomyError, InsufficientFunds(account, needed), DuplicateOperation(operation_id)
+```
+
+Алгоритм `post_operation`: валидация (до любого SQL) → ноги налога `регион → страна` для каждого поступления в казну
+региона от `character` / `auction_escrow` / `auction_storage` (`floor(amount × country_tax_rate)`, `leg_type='tax'`) →
+`session.flush()` → вставка операции (с ключом — сначала SELECT, затем INSERT в SAVEPOINT; дубликат →
+`DuplicateOperation`, ничего не двигалось) → get-or-create счетов → неттинг по счёту и применение в порядке:
+персонажи по возрастанию id (условное списание `… WHERE currency_balance >= :d`, иначе `InsufficientFunds`), затем
+`econ_accounts` по возрастанию id (`allow_negative = 1 OR balance + :delta >= 0`) → вставка всех ног (без неттинга) →
+чтение новых балансов и `expire` ORM-копий `currency_balance`. Если все ноги нулевые — ничего не пишется,
+`operation_id=None`. В SQLite (тесты) SAVEPOINT не используется.
+
+### Правила для вызывающих
+
+- Никто не меняет `characters.currency_balance` и `econ_accounts.balance` иначе как через `post_operation`. Новый
+  персонаж вставляется с 0, стартовый баланс — проводкой после `flush`.
+- Порядок блокировок: свои бизнес-строки (лот, обмен, дом, квест, сессия данжа) → `characters` по возрастанию id →
+  `econ_accounts` по возрастанию id. Помощник вызывается последним шагом перед `commit`; транзакция не держится
+  открытой через HTTP-вызов.
+- **Помощник никогда не делает commit/rollback.** Вызывающий коммитит вместе с бизнес-строками или откатывает при
+  исключении (`InsufficientFunds` → понятная русская ошибка «Недостаточно {forms.genitive}»).
+- Всегда передавать `location_id`, если он известен; плательщика/получателя-казну выбирать через
+  `treasury_for_location()`. Локация без региона → `world_treasury`.
+- Ключи идемпотентности: `<op_type>:<бизнес-id>`, например `quest_reward:cq:123`, `battle_pass_reward:claim:55`,
+  `dungeon_reward:s:7:r:3`.
+- Админские операции (`admin_emission`, `admin_adjust`) — с обязательным `comment`, `actor_user_id` и `apply_tax=False`.
+  Только `genesis` / `admin_emission` / `admin_adjust` могут трогать счета `emission` / `adjustment`.
+- `gold_transactions` заморожена: новых записей не делать (удаление таблицы — позже).
+
+### Страж ORM
+
+`models.py` ставит `before_flush`-слушатель (`econ_ledger.install_balance_guard(Character)`): изменение
+`currency_balance` у **существующего** персонажа через ORM — обход журнала. С FEAT-181 B2
+`BALANCE_GUARD_STRICT = True`: такой `flush` бросает `EconomyError`. Фикстуры тестов (и разовые скрипты починки),
+которым нужно выставить баланс через ORM, оборачивают запись в `allow_direct_balance_write(session)`. Вставка новых
+строк не проверяется — новые персонажи/НПС создаются с 0, деньги приходят проводкой.
+
+В тестах SQLite `conftest.py` при каждом `create_all()` создаёт переносимые копии `Countries`/`Regions`/`Districts`/
+`Locations` (DDL из `tests/econ_contract_cases.py`), чтобы выбор казны по локации работал в любом тесте.
+
+### Писатели золота в character-service (FEAT-181 B2)
+
+Все в `crud.py`, секция «Economy writers», `source_service = "character-service"`. В `gold_transactions` сервис больше
+не пишет (функция `log_gold_transaction` удалена).
+
+| # | Где | Операция | Проводка |
+|---|-----|----------|----------|
+| C1 | одобрение заявки → `post_starter_kit` | `starter_kit`, ключ `starter_kit:c:<id>` | казна стартовой локации → персонаж |
+| C2 | `POST /characters/{id}/add_rewards` → `add_rewards_to_character` | `gold_op_type` | `payer="world"` → «Казна Скитальцев»; `payer="location"` → казна `location_id`, иначе текущей локации персонажа, иначе «Казна Скитальцев» |
+| C3 | `POST /characters/internal/deduct-gold` | `op_type` (по умолчанию `dungeon_expense`) | персонаж → казна `location_id` / текущей локации / мира (+ налог стране) |
+| C4 | телепорт (`execute_teleport`) | `teleport` | персонаж → казна локации НПС-источника (+ налог); строка персонажа уже под `FOR UPDATE` |
+| C5 | `PUT /characters/admin/{id}` → `admin_set_balance` | `admin_adjust`, комментарий «Правка в карточке персонажа» | дельта под `lock_characters`: `adjustment → персонаж` или `персонаж → adjustment`, без налога |
+| C6 | `POST`/`PUT /characters/admin/npcs[/{id}]` → `admin_set_balance` | `admin_adjust`, «Правка золота НПС» | как C5; НПС вставляется с 0 |
+| C8 | `DELETE /characters/{id}`, `DELETE /characters/admin/npcs/{id}`, `crud.delete_character` → `post_character_deletion` | `character_deleted`, ключ `character_deleted:c:<id>` | весь баланс → казна локации (+ налог), счёт неактивен |
+
+Изменённые внутренние контракты (обратно совместимы — новые поля необязательны, старые клиенты работают как раньше):
+- `POST /characters/{id}/add_rewards`: запрос `+ gold_op_type` (`battle_reward` по умолчанию | `battle_pass_reward` |
+  `dungeon_reward`), `+ location_id`, `+ payer` (`location` по умолчанию | `world`), `+ idempotency_key` (1–128). Ответ
+  `+ duplicate`. Повтор ключа → 200 `duplicate=true`, **ни опыта, ни золота** (`new_xp = null`). Ключ записывается
+  только вместе с операцией, т.е. защищает награды с `gold > 0`; награда только опытом идемпотентной не является.
+- `POST /characters/internal/deduct-gold`: запрос `+ location_id`, `+ op_type` (только траты игрока: `dungeon_expense`,
+  `teleport`, `npc_shop_buy`, `house_purchase`, `house_build`, `house_tax`), `+ idempotency_key`. Ответ `+ duplicate`.
+  Нехватка → 400 «Недостаточно {genitive} (имеется N …, нужно M …)» с формами валюты из `econ_settings`.
+- `PUT /characters/admin/{id}`: форма та же; **изменённый** `currency_balance` дополнительно требует `economy:adjust`
+  (иначе 403 «Недостаточно прав для изменения баланса»), неизменённый игнорируется (карточка шлёт его всегда).
+  Отрицательный → 400 «Баланс не может быть отрицательным». То же для создания/правки НПС с ненулевым/изменённым золотом.
+- Сообщение телепорта о нехватке денег — «Недостаточно {genitive}» из настроек валюты.
+
+### API экономики (FEAT-181 B3)
+
+Роутер `app/economy_api.py` (логика в `app/economy_crud.py`, схемы — секция FEAT-181 в конце `schemas.py`). Подключён
+в `main.py` **перед** основным роутером, поэтому статические пути не перехватываются маршрутами `/characters/{character_id}/…`.
+Nginx: покрыто существующим `location /characters/` (dev и prod), правок не нужно. Эндпоинты — обычные `def`
+(синхронная сессия в threadpool); собственный `economy_api.get_db` читает `database.SessionLocal` в момент вызова
+(в тестах переопределяется через `app.dependency_overrides[economy_api.get_db]`).
+
+| Метод и путь | Право | Что делает |
+|---|---|---|
+| `GET /characters/economy/currency` | публичный | формы названия валюты (кеш 60 с, при сбое — значения по умолчанию) |
+| `GET /characters/admin/economy/summary` | `economy:read` | итоги (выпущено/на руках/игроки/НПС/эскроу/хранилище/казны), инвариант (сумма мира = 0, эскроу и хранилище = суммам аукциона, до 50 персонажей с расхождением баланса и журнала), дерево страна → регионы, системные счета, ставка налога. Перед расчётом создаёт недостающие счета казн существующих регионов/стран, чтобы на любую казну можно было сделать эмиссию. Регионы без известной страны — в группе «Без страны» (`account_id = null`) |
+| `GET /characters/admin/economy/accounts?kind=&q=&page=&page_size=` | `economy:read` | счета: несимвольные из `econ_accounts` + все персонажи (баланс из `characters`); `q` — поиск по имени (LIKE с экранированием, ≤ 100 символов); персонажам без счёта на текущей странице счёт создаётся; `page_size ≤ 100` |
+| `GET /characters/admin/economy/operations?account_id=&character_id=&op_type=&region_id=&date_from=&date_to=&page=&page_size=` | `economy:read` | журнал, `id DESC`, у каждой операции её проводки с именами счетов; `date_to` включительно |
+| `POST /characters/admin/economy/emission` | `economy:emit` | `{account_id, amount 1…10^12, comment 3–500}` → `admin_emission` из `emission` в казну региона/страны/Казну Скитальцев, без налога |
+| `POST /characters/admin/economy/adjust` | `economy:adjust` | `{account_id, delta ≠ 0, модуль ≤ 10^12, comment}` → `admin_adjust` через счёт `adjustment`; запрещены `emission`, `adjustment`, `auction_escrow`, `auction_storage`; уход в минус неотрицательного счёта → 400 «Недостаточно средств на счёте» |
+| `GET` / `PUT /characters/admin/economy/settings` | `economy:read` / `economy:settings` | формы валюты (1–50 символов, сокращение 1–20, обрезка пробелов, `<` `>` и управляющие символы запрещены → 422) и `country_tax_rate` 0…0.5; PUT сбрасывает кеш настроек этого процесса, остальные сервисы подхватят за 60 с |
+
+Ответы эмиссии/корректировки: `{operation_id, account_id, balance}`. Ошибки — по-русски: 404 «Счёт не найден»,
+400 «Счёт закрыт» (неактивный счёт), «Эмиссия возможна только в казну…», «Этот счёт нельзя корректировать»,
+«Неизвестный тип счёта/операции»; SQL и трассировки наружу не уходят. Каждое действие админа — операция журнала с
+`actor_user_id` и обязательным комментарием.

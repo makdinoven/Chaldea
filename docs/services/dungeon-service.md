@@ -16,7 +16,8 @@ Redis (кэш состояния забега), WebSocket. Alembic: `alembic_ver
 | `crud.py` | Админский CRUD + валидация графа |
 | `schemas.py` | Pydantic v1; `validate_room_config` / `validate_grid_size` общие для create и update |
 | `session_state.py` | Redis-ключи забега (кэш, восстанавливается из БД) |
-| `http_clients.py` | Вызовы соседей (все с `X-Internal-Token`) |
+| `http_clients.py` | Вызовы соседей (все с `X-Internal-Token`); золота по HTTP больше нет (FEAT-181) |
+| `econ_core.py` / `econ_ledger.py` | FEAT-181: байт-в-байт копии общего контракта (character-service) и async-исполнителя (locations-service), CI `econ-contract-copies` |
 | `ws_manager.py` | Реестр WebSocket `session_id -> {user_id -> ws}` |
 
 ## Таблицы
@@ -264,7 +265,34 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 
 Действия с гонками (сундук, выбор события, торговец, воскрешение, дележ, finalize) берут
 блокировку строки сессии/состояния комнаты; повтор получает `409`, золото не списывается дважды.
-Внешние эффекты (золото, HP) — после коммита.
+Золото — в той же транзакции, что и изменение забега (см. «Экономика мира»); внешние эффекты (HP) — после коммита.
+
+## Экономика мира (FEAT-181, этап 1)
+
+Золото меняется только проводками двойной записи через `econ_ledger.post_operation` (async-копия; правила
+вызывающих, таблицы и инвариант — `docs/services/character-service.md` → «Economy ledger»). Сервис пишет
+напрямую в общие таблицы `characters`, `econ_accounts`, `econ_operations`, `econ_postings` и читает
+`econ_settings`, `Locations`/`Districts`/`Regions` (та же БД `mydatabase`, тот же aiomysql-движок). Казна —
+регион локации подземелья (`dungeons.location_id` → регион, иначе «Казна Скитальцев»); налог 10 % региона в
+страну добавляет исполнитель.
+
+Обёртки в `gameplay.py` (никогда не коммитят — проводка последний шаг перед коммитом обработчика):
+- `_charge_gold(db, dungeon, cid, amount, *, metadata)` — `dungeon_expense`: персонаж → казна; `False` при
+  нехватке (ничего не сдвинуто, обработчик откатывает и отвечает `400`).
+- `_pay_gold(db, dungeon, cid, amount, *, idempotency_key, metadata)` — `dungeon_reward`: казна → персонаж
+  (казна может уйти в минус); повтор ключа ничего не платит.
+
+| Поток | Операция | Ключ | Транзакция |
+|---|---|---|---|
+| Отдых (`room_config.gold_cost`) | `dungeon_expense` (лидер) | — | вместе с `rest_started_at` |
+| Воскрешение (`revive_gold_cost`) | `dungeon_expense` (лидер) | — | вместе с `status='alive'` |
+| Торговец (цена × кол-во) | `dungeon_expense` (покупатель) | — | вместе с остатком и групповым инвентарём |
+| Событие `reward` с `gold` | `dungeon_reward` (лидеру) | `dungeon_reward:s:<session>:r:<room>` | вместе с выбором события (раньше — HTTP после коммита, при сбое золото терялось) |
+
+Упавший коммит забега откатывает и проводку — балансы не меняются. Тексты («Недостаточно золота для отдыха
+(нужно 40 золотых)», «воскрешён(а) за 100 золотых», «Покупка совершена за 10 золотых.») берут формы валюты из
+`econ_settings` (`format_currency`). В `generator_texts.py` остались только «монеты» как предметы обстановки
+(«горсть монет») — это не название валюты.
 
 ## API
 
@@ -363,7 +391,7 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 ## Межсервисные связи
 
 * character-service: профиль (`character_name`, `activity_lock`), блокировки (`/internal/activity-lock/*`),
-  спавн/удаление мобов, золото.
+  спавн/удаление мобов. Золото — не по HTTP, а проводками в общей БД (FEAT-181).
 * character-attributes-service: атрибуты, выносливость, `recover` (лечение и урон отрицательным значением).
 * inventory-service: выдача предметов, названия предметов.
 * battle-service: `POST /battles/internal/dungeon`, `GET /battles/internal/{id}/state|result`; обратно — колбэк.
@@ -374,4 +402,7 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 `app/tests/`, pytest `--asyncio-mode=auto`. `dungeon_harness.py` гоняет **настоящий** `gameplay.py`
 на SQLite с in-memory Redis и фейковыми соседями. `conftest.py` принудительно завершает процесс
 (`os._exit`) после прогона из-за пулов aiomysql; `PYTEST_NO_FORCE_EXIT=1` оставляет отчёт
-(процесс может не выйти сам — запускайте с `timeout`).
+(процесс может не выйти сам — запускайте с `timeout`). В харнессе золото — фейк `world.gold` (подменяет
+`gameplay._charge_gold`/`_pay_gold`); настоящий ledger проверяют `test_econ_contract.py` (общие сценарии
+`econ_contract_cases.py` через async-исполнитель) и `test_econ_dungeon.py` (отдых/воскрешение/торговец/событие,
+упавший коммит, сумма мира = 0).
