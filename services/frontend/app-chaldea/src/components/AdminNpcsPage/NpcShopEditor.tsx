@@ -520,13 +520,17 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
         <div className="flex flex-wrap items-center gap-2">
           {market.living ? (
             <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/40 text-green-400">Живой рынок</span>
+          ) : market.reason === 'dead' ? (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-site-red/20 text-site-red">Лавка закрыта</span>
           ) : (
             <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60">Обычный магазин</span>
           )}
           <span className="text-white text-sm break-words">
             {market.living
               ? `Торгует в экономике региона «${regionText ?? '—'}»: цены по рынку региона, своя касса, склад пополняется при пересчёте региона`
-              : `Цены и запас — как задано ниже. Причина: ${merchantReasonText(market.reason)}${regionText ? ` (регион «${regionText}»)` : ''}`}
+              : market.reason === 'dead'
+                ? 'НПС мёртв: игроки не могут у него покупать и продавать, пока он не оживёт'
+                : `Цены и запас — как задано ниже. Причина: ${merchantReasonText(market.reason)}${regionText ? ` (регион «${regionText}»)` : ''}`}
           </span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">

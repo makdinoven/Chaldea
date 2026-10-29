@@ -200,7 +200,18 @@ const userSlice = createSlice({
         state.roleDisplayName = null;
         state.permissions = [];
         state.avatar = null;
-      });
+      })
+      // A fresh full profile of the own character (e.g. after an NPC shop deal) carries the current
+      // balance — keep the header in sync. Matched by type: profileSlice imports this slice.
+      .addMatcher(
+        (action): action is PayloadAction<{ currency_balance?: number }, string, { arg: number }> =>
+          action.type === 'profile/fetchProfile/fulfilled',
+        (state, action) => {
+          if (state.character?.id !== action.meta.arg) return;
+          if (typeof action.payload.currency_balance !== 'number') return;
+          state.character.currency_balance = action.payload.currency_balance;
+        }
+      );
   },
 });
 
