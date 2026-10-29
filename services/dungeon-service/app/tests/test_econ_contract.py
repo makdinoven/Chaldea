@@ -68,6 +68,8 @@ async def test_contract_case(case, tmp_path):
             assert await _scalar(Session, cc.POSTING_COUNT_SQL) == case.expected_postings
         if case.expected_tax_legs is not None:
             assert await _scalar(Session, cc.TAX_LEG_COUNT_SQL) == case.expected_tax_legs
+        for leg_type, expected in case.expected_leg_counts.items():
+            assert await _scalar(Session, cc.LEG_TYPE_COUNT_SQL, leg_type=leg_type) == expected, leg_type
         assert await _scalar(Session, cc.WORLD_SUM_SQL) == 0
     finally:
         await engine.dispose()
@@ -130,5 +132,91 @@ async def test_lock_characters_and_accounts(tmp_path):
             row = (await s.execute(text("SELECT name, is_active, allow_negative FROM econ_accounts WHERE id = :i"),
                                    {"i": a})).first()
             assert tuple(row) == ("Region A1", 0, 1)
+    finally:
+        await engine.dispose()
+
+
+# --------------------------------------------------------------------------------------------- FEAT-183 merchants
+
+@pytest.mark.parametrize("name,args,expected", cc.PRICING_CASES,
+                         ids=[f"{c[0]}-{i}" for i, c in enumerate(cc.PRICING_CASES)])
+def test_merchant_pricing(name, args, expected):
+    assert getattr(econ_core, name)(*args) == expected
+
+
+@pytest.mark.parametrize("args,expected", cc.EFFECTIVE_GROUP_CASES)
+def test_effective_item_group(args, expected):
+    assert econ_core.effective_item_group(*args) == expected
+
+
+@pytest.mark.parametrize("args,expected", cc.ITEM_GROUP_CASES)
+def test_effective_item_group_without_override_follows_auto_rule(args, expected):
+    group, off_market = expected
+    assert econ_core.effective_item_group(*args) == (group, off_market or group is None)
+
+
+@pytest.mark.parametrize("npc_row,region_row,expected", cc.MERCHANT_STATUS_CASES)
+def test_merchant_status(npc_row, region_row, expected):
+    assert econ_core.merchant_status(npc_row, region_row) == expected
+    assert expected[1] is None or expected[1] in econ_core.MERCHANT_LEGACY_REASONS
+
+
+def test_merchant_bid_never_beats_the_cheapest_ask():
+    best_pct = econ_core.charisma_discount_pct(10 ** 6)
+    for base_ask, base_bid, mult in cc.BID_CAP_GRID:
+        ask = econ_core.market_ask(base_ask, mult)
+        bid = econ_core.market_bid(base_bid, mult, ask)
+        assert 0 <= bid <= econ_core.discounted_ask(ask, best_pct), (base_ask, base_bid, mult)
+        assert 2 * bid <= ask, (base_ask, base_bid, mult)
+
+
+async def _make_merchant_db(path):
+    """FEAT-183 merchant SQL smoke world (its own SQLite, see econ_contract_cases)."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{path}", poolclass=NullPool)
+    Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with Session() as s:
+        for ddl in cc.MERCHANT_SQLITE_DDL:
+            await s.execute(text(ddl))
+        for sql, params in cc.MERCHANT_SEED_SQL:
+            await s.execute(text(sql), params)
+        await s.commit()
+    return engine, Session
+
+
+@pytest.mark.parametrize("name,sql,params,convert,expected", cc.MERCHANT_QUERY_CASES,
+                         ids=[c[0] for c in cc.MERCHANT_QUERY_CASES])
+async def test_merchant_sql(name, sql, params, convert, expected, tmp_path):
+    engine, Session = await _make_merchant_db(tmp_path / "merchant.db")
+    try:
+        async with Session() as s:
+            rows = [tuple(r) for r in (await s.execute(text(sql), params)).fetchall()]
+            assert convert(rows) == expected
+    finally:
+        await engine.dispose()
+
+
+async def test_merchant_status_from_sql(tmp_path):
+    engine, Session = await _make_merchant_db(tmp_path / "merchant.db")
+    try:
+        async with Session() as s:
+            for npc_id, expected in cc.MERCHANT_STATUS_SQL_CASES:
+                npc = (await s.execute(text(econ_core.SQL_NPC_PLACE), {"id": npc_id})).first()
+                region_id = (await econ_ledger.resolve_location(s, npc[3] if npc else None))[0]
+                region = ((await s.execute(text(econ_core.SQL_REGION_ECON), {"region_id": region_id})).first()
+                          if region_id else None)
+                assert econ_core.merchant_status(npc, region) == expected, npc_id
+    finally:
+        await engine.dispose()
+
+
+async def test_merchant_shop_stock_statements(tmp_path):
+    engine, Session = await _make_merchant_db(tmp_path / "merchant.db")
+    try:
+        async with Session() as s:
+            for sql, params, rowcount in cc.MERCHANT_STOCK_STEPS:
+                assert (await s.execute(text(sql), params)).rowcount == rowcount, (sql, params)
+            await s.commit()
+            rows = (await s.execute(text(cc.MERCHANT_STOCK_SQL))).fetchall()
+            assert dict(rows) == cc.MERCHANT_STOCK_EXPECTED
     finally:
         await engine.dispose()

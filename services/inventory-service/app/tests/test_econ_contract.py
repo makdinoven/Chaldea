@@ -78,6 +78,8 @@ def test_contract_case(case, contract_db):
         assert _scalar(Session, cc.POSTING_COUNT_SQL) == case.expected_postings
     if case.expected_tax_legs is not None:
         assert _scalar(Session, cc.TAX_LEG_COUNT_SQL) == case.expected_tax_legs
+    for leg_type, expected in case.expected_leg_counts.items():
+        assert _scalar(Session, cc.LEG_TYPE_COUNT_SQL, leg_type=leg_type) == expected, leg_type
     assert _scalar(Session, cc.WORLD_SUM_SQL) == 0
 
 
@@ -170,3 +172,90 @@ def test_auto_item_group_covers_every_real_item_enum_value(original_enum_values)
         assert off_market == (rarity in econ_core.OFF_MARKET_RARITIES), rarity
     assert econ_core.OFF_MARKET_RARITIES <= rarities
     assert econ_core.OFF_MARKET_ITEM_TYPES <= item_types
+
+
+# --------------------------------------------------------------------------------------------- FEAT-183 merchants
+
+@pytest.mark.parametrize("name,args,expected", cc.PRICING_CASES,
+                         ids=[f"{c[0]}-{i}" for i, c in enumerate(cc.PRICING_CASES)])
+def test_merchant_pricing(name, args, expected):
+    assert getattr(econ_core, name)(*args) == expected
+
+
+@pytest.mark.parametrize("args,expected", cc.EFFECTIVE_GROUP_CASES)
+def test_effective_item_group(args, expected):
+    assert econ_core.effective_item_group(*args) == expected
+
+
+@pytest.mark.parametrize("args,expected", cc.ITEM_GROUP_CASES)
+def test_effective_item_group_without_override_follows_auto_rule(args, expected):
+    group, off_market = expected
+    assert econ_core.effective_item_group(*args) == (group, off_market or group is None)
+
+
+@pytest.mark.parametrize("npc_row,region_row,expected", cc.MERCHANT_STATUS_CASES)
+def test_merchant_status(npc_row, region_row, expected):
+    assert econ_core.merchant_status(npc_row, region_row) == expected
+    assert expected[1] is None or expected[1] in econ_core.MERCHANT_LEGACY_REASONS
+
+
+def test_merchant_bid_never_beats_the_cheapest_ask():
+    best_pct = econ_core.charisma_discount_pct(10 ** 6)
+    for base_ask, base_bid, mult in cc.BID_CAP_GRID:
+        ask = econ_core.market_ask(base_ask, mult)
+        bid = econ_core.market_bid(base_bid, mult, ask)
+        assert 0 <= bid <= econ_core.discounted_ask(ask, best_pct), (base_ask, base_bid, mult)
+        assert 2 * bid <= ask, (base_ask, base_bid, mult)
+
+
+@pytest.fixture()
+def merchant_db():
+    """FEAT-183 merchant SQL smoke world (its own SQLite, see econ_contract_cases)."""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    s = Session()
+    for ddl in cc.MERCHANT_SQLITE_DDL:
+        s.execute(text(ddl))
+    for sql, params in cc.MERCHANT_SEED_SQL:
+        s.execute(text(sql), params)
+    s.commit()
+    s.close()
+    try:
+        yield Session
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("name,sql,params,convert,expected", cc.MERCHANT_QUERY_CASES,
+                         ids=[c[0] for c in cc.MERCHANT_QUERY_CASES])
+def test_merchant_sql(name, sql, params, convert, expected, merchant_db):
+    s = merchant_db()
+    try:
+        rows = [tuple(r) for r in s.execute(text(sql), params).fetchall()]
+        assert convert(rows) == expected
+    finally:
+        s.close()
+
+
+@pytest.mark.parametrize("npc_id,expected", cc.MERCHANT_STATUS_SQL_CASES)
+def test_merchant_status_from_sql(npc_id, expected, merchant_db):
+    s = merchant_db()
+    try:
+        npc = s.execute(text(econ_core.SQL_NPC_PLACE), {"id": npc_id}).first()
+        region_id = econ_ledger.resolve_location(s, npc[3] if npc else None)[0]
+        region = (s.execute(text(econ_core.SQL_REGION_ECON), {"region_id": region_id}).first()
+                  if region_id else None)
+        assert econ_core.merchant_status(npc, region) == expected
+    finally:
+        s.close()
+
+
+def test_merchant_shop_stock_statements(merchant_db):
+    s = merchant_db()
+    try:
+        for sql, params, rowcount in cc.MERCHANT_STOCK_STEPS:
+            assert s.execute(text(sql), params).rowcount == rowcount, (sql, params)
+        s.commit()
+        assert dict(s.execute(text(cc.MERCHANT_STOCK_SQL)).fetchall()) == cc.MERCHANT_STOCK_EXPECTED
+    finally:
+        s.close()
