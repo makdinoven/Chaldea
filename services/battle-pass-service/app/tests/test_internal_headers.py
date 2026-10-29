@@ -140,6 +140,9 @@ class TestDeliverGoldXp:
             "xp": 120,
             "gold": 45,
             "xp_source": crud.BATTLE_PASS_XP_SOURCE,
+            # FEAT-181: paid by the world treasury as a battle-pass operation
+            "gold_op_type": "battle_pass_reward",
+            "payer": "world",
         }
 
     @pytest.mark.asyncio

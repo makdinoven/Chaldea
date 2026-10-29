@@ -392,46 +392,56 @@ async def _progress_visit_locations(
     return result.scalar() or 0
 
 
-async def _progress_earn_gold(
-    db: AsyncSession, char_ids: List[int], season_start: datetime,
+# FEAT-181: gold missions read the world-economy ledger (character-service owns
+# econ_accounts / econ_operations / econ_postings). Per-player semantics are kept:
+# "earned" = every posting INTO the user's character accounts, "spent" = every
+# posting OUT of them, whatever the op type (trades, auction refunds included),
+# except the one-off genesis snapshot that opened the ledger. Old
+# gold_transactions rows are not merged (Q6: progress restarts from the deploy).
+LEDGER_CHARACTER_KIND = "character"
+LEDGER_EXCLUDED_OP_TYPE = "genesis"
+
+
+async def _ledger_gold_sum(
+    db: AsyncSession, char_ids: List[int], season_start: datetime, direction: str,
 ) -> int:
-    """SUM positive amounts from gold_transactions since season_start."""
+    """SUM of postings to (direction='to') or from (direction='from') the given
+    characters' ledger accounts since season_start, genesis excluded."""
     if not char_ids:
         return 0
+    account_col = "p.to_account_id" if direction == "to" else "p.from_account_id"
     placeholders = ", ".join([f":cid_{i}" for i in range(len(char_ids))])
     params: Dict[str, Any] = {f"cid_{i}": cid for i, cid in enumerate(char_ids)}
     params["season_start"] = season_start
+    params["kind"] = LEDGER_CHARACTER_KIND
+    params["excluded_op"] = LEDGER_EXCLUDED_OP_TYPE
     result = await db.execute(
         text(
-            f"SELECT COALESCE(SUM(amount), 0) FROM gold_transactions "
-            f"WHERE character_id IN ({placeholders}) "
-            f"AND amount > 0 AND created_at >= :season_start"
+            f"SELECT COALESCE(SUM(p.amount), 0) FROM econ_postings p "
+            f"JOIN econ_accounts a ON a.id = {account_col} "
+            f"JOIN econ_operations o ON o.id = p.operation_id "
+            f"WHERE a.kind = :kind AND a.ref_id IN ({placeholders}) "
+            f"AND o.op_type <> :excluded_op "
+            f"AND p.created_at >= :season_start"
         ),
         params,
     )
     row = result.fetchone()
-    return row[0] if row else 0
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+async def _progress_earn_gold(
+    db: AsyncSession, char_ids: List[int], season_start: datetime,
+) -> int:
+    """Ledger postings INTO the characters since season_start (genesis excluded)."""
+    return await _ledger_gold_sum(db, char_ids, season_start, "to")
 
 
 async def _progress_spend_gold(
     db: AsyncSession, char_ids: List[int], season_start: datetime,
 ) -> int:
-    """SUM absolute negative amounts from gold_transactions since season_start."""
-    if not char_ids:
-        return 0
-    placeholders = ", ".join([f":cid_{i}" for i in range(len(char_ids))])
-    params: Dict[str, Any] = {f"cid_{i}": cid for i, cid in enumerate(char_ids)}
-    params["season_start"] = season_start
-    result = await db.execute(
-        text(
-            f"SELECT COALESCE(SUM(ABS(amount)), 0) FROM gold_transactions "
-            f"WHERE character_id IN ({placeholders}) "
-            f"AND amount < 0 AND created_at >= :season_start"
-        ),
-        params,
-    )
-    row = result.fetchone()
-    return row[0] if row else 0
+    """Ledger postings OUT OF the characters since season_start (genesis excluded)."""
+    return await _ledger_gold_sum(db, char_ids, season_start, "from")
 
 
 # ---------------------------------------------------------------------------
@@ -509,16 +519,26 @@ async def complete_mission(
 # Reward delivery
 # ---------------------------------------------------------------------------
 
+def reward_idempotency_key(user_id: int, level_id: int, track: str) -> str:
+    """FEAT-181: stable add_rewards key for one claim. A claim is unique per
+    (user, level, track) (`uq_user_level_track`), so a retried or concurrent
+    double claim carries the same key and character-service pays it once."""
+    return f"{BATTLE_PASS_GOLD_OP_TYPE}:u:{user_id}:l:{level_id}:{track}"
+
+
 async def deliver_reward(
     reward: BpReward,
     character_id: int,
     user_id: int,
+    idempotency_key: Optional[str] = None,
 ) -> None:
     """Deliver a reward to the character/user via inter-service HTTP calls."""
     if reward.reward_type == "gold" or reward.reward_type == "xp":
         xp = reward.reward_value if reward.reward_type == "xp" else 0
         gold = reward.reward_value if reward.reward_type == "gold" else 0
-        await _deliver_gold_xp(character_id, xp=xp, gold=gold)
+        await _deliver_gold_xp(
+            character_id, xp=xp, gold=gold, idempotency_key=idempotency_key,
+        )
     elif reward.reward_type == "item":
         await _deliver_item(character_id, reward.item_id, 1)
     elif reward.reward_type == "diamonds":
@@ -532,19 +552,41 @@ async def deliver_reward(
 # («к опыту персонажа за боевой пропуск»), а не книгой на бои.
 BATTLE_PASS_XP_SOURCE = "character_xp_pass_bonus"
 
+# FEAT-181 C2c: battle-pass gold is paid by the world account («Казна Скитальцев»)
+# — a season reward has no natural location/region treasury.
+BATTLE_PASS_GOLD_OP_TYPE = "battle_pass_reward"
+BATTLE_PASS_GOLD_PAYER = "world"
 
-async def _deliver_gold_xp(character_id: int, xp: int = 0, gold: int = 0):
+
+async def _deliver_gold_xp(
+    character_id: int,
+    xp: int = 0,
+    gold: int = 0,
+    idempotency_key: Optional[str] = None,
+):
     """POST to character-service /characters/{char_id}/add_rewards.
 
     FEAT-169: маршрут закрыт `verify_internal_token` — без заголовка
     начисление молча пропадает (ошибка тут только логируется выше по стеку).
+    FEAT-181: золото идёт операцией `battle_pass_reward` из мировой казны;
+    повтор того же `idempotency_key` не начисляет ни опыт, ни золото
+    (character-service отвечает `duplicate=true`).
     """
     url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/add_rewards"
+    body: Dict[str, Any] = {
+        "xp": xp,
+        "gold": gold,
+        "xp_source": BATTLE_PASS_XP_SOURCE,
+        "gold_op_type": BATTLE_PASS_GOLD_OP_TYPE,
+        "payer": BATTLE_PASS_GOLD_PAYER,
+    }
+    if idempotency_key:
+        body["idempotency_key"] = idempotency_key
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 url,
-                json={"xp": xp, "gold": gold, "xp_source": BATTLE_PASS_XP_SOURCE},
+                json=body,
                 headers=_internal_token_headers(),
             )
             resp.raise_for_status()
@@ -676,7 +718,10 @@ async def claim_reward(
         return {"error": "Награда не найдена для данного уровня и дорожки"}
 
     # Deliver the reward
-    await deliver_reward(reward, character_id, user_id)
+    await deliver_reward(
+        reward, character_id, user_id,
+        idempotency_key=reward_idempotency_key(user_id, level.id, track),
+    )
 
     # Record the claim
     claim = BpUserReward(

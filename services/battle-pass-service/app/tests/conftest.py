@@ -63,14 +63,31 @@ class Post(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
-class GoldTransaction(Base):
-    __tablename__ = "gold_transactions"
+# FEAT-181: world-economy ledger mirrors (owned by character-service, migration 027).
+class EconAccount(Base):
+    __tablename__ = "econ_accounts"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    character_id = Column(Integer, nullable=False)
+    kind = Column(String(32), nullable=False)
+    ref_id = Column(Integer, nullable=False, default=0)
+    balance = Column(Integer, nullable=False, default=0)
+
+
+class EconOperation(Base):
+    __tablename__ = "econ_operations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    op_type = Column(String(50), nullable=False)
+    source_service = Column(String(32), nullable=False, default="test")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class EconPosting(Base):
+    __tablename__ = "econ_postings"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operation_id = Column(Integer, nullable=False)
+    from_account_id = Column(Integer, nullable=False)
+    to_account_id = Column(Integer, nullable=False)
     amount = Column(Integer, nullable=False)
-    balance_after = Column(Integer, nullable=False, default=0)
-    transaction_type = Column(String(50), nullable=False)
-    source = Column(String(100), nullable=True)
+    leg_type = Column(String(32), nullable=False, default="main")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 

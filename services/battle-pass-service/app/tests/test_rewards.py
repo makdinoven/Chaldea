@@ -65,7 +65,7 @@ class TestClaimRewardTypes:
     async def test_claim_gold_reward(
         self, mock_deliver, client, db_session, active_season,
     ):
-        await _setup_claimable(db_session, active_season, "gold", 500)
+        level, _ = await _setup_claimable(db_session, active_season, "gold", 500)
 
         # Mock get_active_character
         with patch("crud.get_active_character", new_callable=AsyncMock) as mock_char:
@@ -80,13 +80,16 @@ class TestClaimRewardTypes:
         assert data["reward_type"] == "gold"
         assert data["reward_value"] == 500
         assert data["delivered_to_character_id"] == 100
-        mock_deliver.assert_called_once_with(100, xp=0, gold=500)
+        mock_deliver.assert_called_once_with(
+            100, xp=0, gold=500,
+            idempotency_key=f"battle_pass_reward:u:{TEST_USER.id}:l:{level.id}:free",
+        )
 
     @patch("crud._deliver_gold_xp", new_callable=AsyncMock)
     async def test_claim_xp_reward(
         self, mock_deliver, client, db_session, active_season,
     ):
-        await _setup_claimable(db_session, active_season, "xp", 200)
+        level, _ = await _setup_claimable(db_session, active_season, "xp", 200)
 
         with patch("crud.get_active_character", new_callable=AsyncMock) as mock_char:
             mock_char.return_value = {"id": 100, "name": "Test Hero"}
@@ -97,7 +100,10 @@ class TestClaimRewardTypes:
         assert resp.status_code == 200
         data = resp.json()
         assert data["reward_type"] == "xp"
-        mock_deliver.assert_called_once_with(100, xp=200, gold=0)
+        mock_deliver.assert_called_once_with(
+            100, xp=200, gold=0,
+            idempotency_key=f"battle_pass_reward:u:{TEST_USER.id}:l:{level.id}:free",
+        )
 
     @patch("crud._deliver_item", new_callable=AsyncMock)
     async def test_claim_item_reward(
@@ -294,7 +300,7 @@ class TestRewardDelivery:
         self, mock_deliver, client, db_session, active_season,
     ):
         """Verify gold reward calls _deliver_gold_xp with correct params."""
-        await _setup_claimable(db_session, active_season, "gold", 1000)
+        level, _ = await _setup_claimable(db_session, active_season, "gold", 1000)
 
         with patch("crud.get_active_character", new_callable=AsyncMock) as mock_char:
             mock_char.return_value = {"id": 100, "name": "Hero"}
@@ -303,7 +309,10 @@ class TestRewardDelivery:
                 json={"level_number": 1, "track": "free"},
             )
         assert resp.status_code == 200
-        mock_deliver.assert_called_once_with(100, xp=0, gold=1000)
+        mock_deliver.assert_called_once_with(
+            100, xp=0, gold=1000,
+            idempotency_key=f"battle_pass_reward:u:{TEST_USER.id}:l:{level.id}:free",
+        )
 
     @patch("crud._deliver_diamonds", new_callable=AsyncMock)
     async def test_diamonds_delivery_call(

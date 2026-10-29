@@ -63,7 +63,19 @@ class TestDeliverGoldXpSource:
 
         assert client.post.call_args.kwargs["json"] == {
             "xp": 0, "gold": 500, "xp_source": PASS_SOURCE,
+            "gold_op_type": "battle_pass_reward", "payer": "world",
         }
+
+    @pytest.mark.asyncio
+    async def test_idempotency_key_is_forwarded(self):
+        """FEAT-181: the claim key reaches character-service so a retry pays once."""
+        client = _make_async_client()
+        with patch("crud.httpx.AsyncClient", return_value=client):
+            await crud._deliver_gold_xp(
+                42, xp=0, gold=500, idempotency_key="battle_pass_reward:u:1:l:9:free",
+            )
+
+        assert client.post.call_args.kwargs["json"]["idempotency_key"] ==             "battle_pass_reward:u:1:l:9:free"
 
     @pytest.mark.asyncio
     async def test_never_sends_the_battle_source(self):
@@ -93,4 +105,7 @@ class TestClaimRewardUsesTheSource:
             await crud._deliver_gold_xp(7, xp=250)
 
         body = client.post.call_args.kwargs["json"]
-        assert body == {"xp": 250, "gold": 0, "xp_source": PASS_SOURCE}
+        assert body == {
+            "xp": 250, "gold": 0, "xp_source": PASS_SOURCE,
+            "gold_op_type": "battle_pass_reward", "payer": "world",
+        }
