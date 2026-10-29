@@ -17,6 +17,7 @@ import { describeItemBattleLines, describeXpBuffLines } from '../../../utils/ite
 import { furnitureItemSummary } from '../../../utils/furniture';
 import { seedItemSummary } from '../../../utils/seeds';
 import { houseItemSummary } from '../../../utils/houseItems';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /** Modifier field keys that are numeric on ItemData */
 const MODIFIER_FIELDS = [
@@ -166,6 +167,7 @@ interface ItemDetailModalInnerProps {
 }
 
 const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
+  const { format } = useCurrency();
   const dispatch = useAppDispatch();
   const modal = useAppSelector(selectItemDetailModal);
   const inventory = useAppSelector(selectInventory);
@@ -580,7 +582,7 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
                   </span>
                   {item.price > 0 && (
                     <span className="text-gold text-xs">
-                      {item.price} монет
+                      {format(item.price)}
                     </span>
                   )}
                 </div>

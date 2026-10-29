@@ -8,6 +8,7 @@ import { useAppDispatch } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
 import ConfirmDialog from './ConfirmDialog';
 import BuyListedHouseDialog, { type ListedHouse } from '../HousesPage/BuyListedHouseDialog';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface HousesSectionProps {
   locationId: number;
@@ -21,6 +22,7 @@ interface HousesSectionProps {
  * the location has no plots.
  */
 const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSectionProps) => {
+  const { format, forms } = useCurrency();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const [plots, setPlots] = useState<Plot[]>([]);
@@ -135,7 +137,7 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
                     )}
                     {house.sale_price != null && (
                       <p className="text-gold text-xs flex items-center gap-1">
-                        <Tag size={12} />Продаётся за {house.sale_price.toLocaleString('ru-RU')} золота
+                        <Tag size={12} />Продаётся за {format(house.sale_price)}
                       </p>
                     )}
                     <div className="mt-auto flex gap-2">
@@ -168,7 +170,7 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
                   </>
                 ) : (
                   <>
-                    <p className="text-gold text-xs">Свободен · {plot.price.toLocaleString('ru-RU')} золота</p>
+                    <p className="text-gold text-xs">Свободен · {format(plot.price)}</p>
                     {characterId ? (
                       <button type="button" disabled={!isCharacterHere || busy} onClick={() => setBuying(plot)}
                         className="btn-blue !w-full !py-1.5 !text-xs mt-auto disabled:opacity-50">
@@ -192,8 +194,8 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
         <ConfirmDialog
           title="Покупка дома"
           message={buying.kind === 'empty'
-            ? `Купить «${buying.name}» за ${buying.price.toLocaleString('ru-RU')} золота? Это пустой участок: комнаты (мест: ${buying.cells_open}${buying.cells_total > buying.cells_open ? `, с пристройками и этажами до ${buying.cells_total}` : ''}) вы построите сами за золото и материалы.`
-            : `Купить «${buying.name}» за ${buying.price.toLocaleString('ru-RU')} золота? Дом станет вашим, а комнаты можно будет обставить и открыть гостям.`}
+            ? `Купить «${buying.name}» за ${format(buying.price)}? Это пустой участок: комнаты (мест: ${buying.cells_open}${buying.cells_total > buying.cells_open ? `, с пристройками и этажами до ${buying.cells_total}` : ''}) вы построите сами за ${forms.name.toLowerCase()} и материалы.`
+            : `Купить «${buying.name}» за ${format(buying.price)}? Дом станет вашим, а комнаты можно будет обставить и открыть гостям.`}
           confirmLabel="Купить"
           onCancel={() => setBuying(null)}
           onConfirm={() => void buy(buying)}

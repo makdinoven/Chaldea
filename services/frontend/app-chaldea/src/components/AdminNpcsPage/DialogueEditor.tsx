@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
+import { getCurrencyForms } from '../../utils/currency';
 
 /* ── Types ── */
 
@@ -65,7 +66,7 @@ const ACTION_TYPES = [
   { value: 'heal', label: 'Исцелить' },
   { value: 'teleport', label: 'Телепортировать' },
   { value: 'give_item', label: 'Выдать предмет' },
-  { value: 'give_gold', label: 'Выдать золото' },
+  { value: 'give_gold', get label() { return `Выдать ${getCurrencyForms().name.toLowerCase()}`; } },
   { value: 'give_xp', label: 'Выдать опыт' },
   { value: 'start_battle', label: 'Начать бой' },
   { value: 'train_skill', label: 'Обучить навыку' },

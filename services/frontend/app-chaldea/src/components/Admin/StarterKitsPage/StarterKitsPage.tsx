@@ -17,6 +17,7 @@ import {
 import { fetchOrigins, type OriginCountry } from '../../../api/origins';
 import CoverageMatrix, { kitKey } from './CoverageMatrix';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /**
  * FEAT-154 (rules 12a-12c, task #32) — starter kits in two dimensions.
@@ -68,6 +69,7 @@ const errorText = (error: unknown, fallback: string): string =>
 /* ── Component ── */
 
 const StarterKitsPage = () => {
+  const { forms } = useCurrency();
   const [allItems, setAllItems] = useState<Item[]>([]);
   const [allSkills, setAllSkills] = useState<Skill[]>([]);
 
@@ -586,7 +588,7 @@ const StarterKitsPage = () => {
               {/* ── Currency ── */}
               <section className="flex flex-col gap-2">
                 <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">
-                  Стартовое золото
+                  Стартовое {forms.name.toLowerCase()}
                 </h3>
                 <input
                   type="number"

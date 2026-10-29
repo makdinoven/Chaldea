@@ -16,6 +16,7 @@ import { apiErrorMessage } from '../../../api/errors';
 import { FIELD, LABEL } from '../../pages/EpisodesPage/EpisodeFormModal';
 import ImageField from '../../pages/EpisodesPage/ImageField';
 import PlotPlanEditor, { defaultPlan, planFromPlot, planToBody, validatePlan, type EditorPlan } from './PlotPlanEditor';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface PlotFormModalProps {
   /** Absent → a new plot. */
@@ -42,6 +43,7 @@ const regionMapOf = async (locationId: number, knownRegionId: number | null): Pr
 };
 
 const PlotFormModal = ({ plot, onClose, onSaved }: PlotFormModalProps) => {
+  const { forms } = useCurrency();
   const [form, setForm] = useState<PlotFields>({
     location_id: plot?.location_id ?? 0,
     name: plot?.name ?? '',
@@ -192,7 +194,7 @@ const PlotFormModal = ({ plot, onClose, onSaved }: PlotFormModalProps) => {
           <span className="text-white/40 text-xs">
             {form.kind === 'ready'
               ? 'Покупатель получает дом с шаблонными комнатами, расставленными на плане ниже.'
-              : 'Покупатель получает только землю и сам строит комнаты на местах плана за золото и материалы.'}
+              : `Покупатель получает только землю и сам строит комнаты на местах плана за ${forms.name.toLowerCase()} и материалы.`}
           </span>
         </div>
 
@@ -235,7 +237,7 @@ const PlotFormModal = ({ plot, onClose, onSaved }: PlotFormModalProps) => {
         <ImageField label="Картинка" value={form.image_url} onChange={(url) => set('image_url', url)} />
 
         <label className="flex flex-col gap-1.5 sm:max-w-xs">
-          <span className={LABEL}>Цена (золото)</span>
+          <span className={LABEL}>Цена ({forms.name.toLowerCase()})</span>
           <input type="number" min={0} value={form.price} onChange={(e) => set('price', Math.max(0, Number(e.target.value) || 0))} className={FIELD} />
         </label>
 

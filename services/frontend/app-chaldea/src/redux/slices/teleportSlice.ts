@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import axios, { AxiosError } from 'axios';
 import toast from 'react-hot-toast';
 import type { RootState } from '../store';
+import { getCurrencyForms } from '../../utils/currency';
 
 // --- Types ---
 
@@ -108,7 +109,7 @@ const mapExecuteError = (err: unknown): string => {
     typeof raw === 'string' ? raw : raw && typeof raw === 'object' ? raw.detail : undefined;
 
   if (status === 402 || detailCode === 'insufficient_gold') {
-    return 'Недостаточно золота';
+    return `Недостаточно ${getCurrencyForms().genitive}`;
   }
   if (status === 409 || detailCode === 'cooldown_active') {
     return 'Телепорт ещё на перезарядке';

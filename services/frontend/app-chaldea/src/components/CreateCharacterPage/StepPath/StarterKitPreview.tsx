@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { resolveStarterKit } from '../../../api/starterKits';
 import { fetchItemsBulk, fetchSkillsBulk, indexById } from '../../../api/bulk';
 import type { PassportKit, ResolvedItem, ResolvedSkill } from '../../CommonComponents/CharacterPassport';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /**
  * FEAT-154 (task #17) — rules 12, 12a-12c.
@@ -44,6 +45,7 @@ const StarterKitPreview = ({
   originName,
   onResolved,
 }: StarterKitPreviewProps) => {
+  const { word } = useCurrency();
   const [kit, setKit] = useState<PassportKit | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -231,7 +233,7 @@ const StarterKitPreview = ({
           {kit.currency > 0 && (
             <p className="text-white text-sm">
               Подъёмные:{' '}
-              <span className="text-gold font-medium">{kit.currency}</span> монет.
+              <span className="text-gold font-medium">{kit.currency}</span> {word(kit.currency)}.
             </p>
           )}
         </motion.div>

@@ -15,6 +15,7 @@ import {
   selectAdminTeleportSaving,
   type TeleportLink,
 } from '../../redux/slices/teleportSlice';
+import { useCurrency } from '../../hooks/useCurrency';
 
 interface TeleportMasterOption {
   id: number;
@@ -37,6 +38,7 @@ const TOOLTIP_TEXT =
   'Изменение стоимости одной стороны не обновляет обратную связь автоматически';
 
 const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
+  const { forms, format } = useCurrency();
   const dispatch = useAppDispatch();
   const links = useSelector((state: RootState) => selectAdminTeleportLinks(npcId)(state)) ?? [];
   const loading = useSelector(selectAdminTeleportLoading);
@@ -260,7 +262,7 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="text-white/50 text-xs">Стоимость (золото)</span>
+            <span className="text-white/50 text-xs">Стоимость ({forms.name.toLowerCase()})</span>
             <input
               type="number"
               min={0}
@@ -339,7 +341,7 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
                         className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-xs font-medium"
                         title={TOOLTIP_TEXT}
                       >
-                        {link.cost_gold} зол.
+                        {format(link.cost_gold, true)}
                       </span>
                     )}
 

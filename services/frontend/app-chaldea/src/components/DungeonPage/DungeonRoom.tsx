@@ -18,6 +18,8 @@ import type {
   SessionState,
   LootEntry,
 } from '../../api/dungeons';
+import { useCurrency } from '../../hooks/useCurrency';
+import { formatCurrency } from '../../utils/currency';
 
 // --- Types ---
 
@@ -416,6 +418,7 @@ const formatWait = (seconds: number): string =>
   seconds >= 60 ? `${Math.round(seconds / 60)} мин.` : `${seconds} сек.`;
 
 const RestRoomContent = ({ cfg, session, isLeader, busy, onInteract }: RoomCtx) => {
+  const { format } = useCurrency();
   const healPercent = (cfg.heal_percent as number | undefined) ?? 30;
   const waitSeconds = (cfg.wait_seconds as number | undefined) ?? 60;
   const goldCost = (cfg.gold_cost as number | undefined) ?? 0;
@@ -461,7 +464,7 @@ const RestRoomContent = ({ cfg, session, isLeader, busy, onInteract }: RoomCtx) 
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/50">
           <span>Лечение: <span className="text-green-300">{healPercent}% HP</span></span>
           <span>Ожидание: <span className="text-green-300">{formatWait(waitSeconds)}</span></span>
-          {goldCost > 0 && <span>Стоимость: <span className="text-gold">{goldCost} золота</span></span>}
+          {goldCost > 0 && <span>Стоимость: <span className="text-gold">{format(goldCost)}</span></span>}
         </div>
         {isLeader && (
           <button
@@ -506,6 +509,7 @@ const ReviveSection = ({
   onInteract: OnInteract;
 }) => {
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const { format } = useCurrency();
 
   return (
     <div className="mt-4 pt-3 border-t border-green-600/20">
@@ -516,7 +520,7 @@ const ReviveSection = ({
             <span className="text-white/60 text-sm">{member.name}</span>
             {isLeader && (confirmId === member.character_id ? (
               <div className="flex items-center gap-2">
-                <span className="text-gold text-xs">{reviveCost} золота?</span>
+                <span className="text-gold text-xs">{format(reviveCost)}?</span>
                 <button
                   onClick={() => {
                     onInteract('revive_member', { target_character_id: member.character_id });
@@ -540,7 +544,7 @@ const ReviveSection = ({
                 disabled={busy}
                 className="text-xs px-3 py-1.5 rounded-card bg-green-600/20 text-green-300 hover:bg-green-600/30 transition-colors disabled:opacity-50"
               >
-                Воскресить ({reviveCost} зол.)
+                Воскресить ({format(reviveCost, true)})
               </button>
             ))}
           </div>
@@ -761,12 +765,13 @@ const ManaCoreRoomContent = ({ session, isLeader, busy, onInteract }: RoomCtx) =
 
 // --- Loot of the last action ---
 
-const lootLine = (entry: LootEntry): string => {
-  if (entry.gold) return `${entry.gold} золота (лидеру)`;
+const lootLine = (entry: LootEntry, format: (n: number) => string = formatCurrency): string => {
+  if (entry.gold) return `${format(entry.gold)} (лидеру)`;
   return `${entry.item_name || `Предмет #${entry.item_id}`} ×${entry.quantity ?? 1}`;
 };
 
 const LootDisplay = ({ response }: { response: InteractResponse | null }) => {
+  const { format } = useCurrency();
   const loot = response?.loot_gained ?? [];
   if (loot.length === 0) return null;
   return (
@@ -779,7 +784,7 @@ const LootDisplay = ({ response }: { response: InteractResponse | null }) => {
       <p className="text-yellow-300/80 text-xs uppercase tracking-wide mb-2">Получено:</p>
       <div className="flex flex-col gap-1">
         {loot.map((entry, i) => (
-          <span key={i} className="text-white text-sm">{lootLine(entry)}</span>
+          <span key={i} className="text-white text-sm">{lootLine(entry, format)}</span>
         ))}
       </div>
     </motion.div>

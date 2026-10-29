@@ -4,6 +4,7 @@ import { Home, MapPin, User } from 'react-feather';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAppSelector } from '../../../redux/store';
 import CharacterSwitchDropdown from './CharacterSwitchDropdown';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 export const CoinIcon = ({ size = 12 }: { size?: number }) => (
   <svg
@@ -27,6 +28,7 @@ export const CoinIcon = ({ size = 12 }: { size?: number }) => (
  * Click opens the character switch dropdown.
  */
 const CharacterChip = () => {
+  const { forms } = useCurrency();
   const character = useAppSelector((state) => state.user.character);
   const userId = useAppSelector((state) => state.user.id);
 
@@ -90,7 +92,7 @@ const CharacterChip = () => {
                 <span className="text-white/70 text-[11px] whitespace-nowrap">Ур. {level}</span>
               )}
               {coins != null && (
-                <span className="flex items-center gap-1 text-gold text-[11px] whitespace-nowrap">
+                <span className="flex items-center gap-1 text-gold text-[11px] whitespace-nowrap" title={forms.name}>
                   <CoinIcon size={11} />
                   {coins.toLocaleString('ru-RU')}
                 </span>

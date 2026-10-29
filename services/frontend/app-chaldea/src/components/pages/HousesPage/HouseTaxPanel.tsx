@@ -6,6 +6,7 @@ import { apiErrorMessage } from '../../../api/errors';
 import { useAppDispatch } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
 import { formatServerDate } from '../../../utils/serverDate';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface HouseTaxPanelProps {
   house: House;
@@ -26,6 +27,7 @@ export const taxDeadline = (house: House) =>
  * The owner or any resident (through the acting character) pays.
  */
 const HouseTaxPanel = ({ house, acting, onChanged }: HouseTaxPanelProps) => {
+  const { format } = useCurrency();
   const dispatch = useAppDispatch();
   const [busy, setBusy] = useState(false);
   const { tax } = house;
@@ -38,7 +40,7 @@ const HouseTaxPanel = ({ house, acting, onChanged }: HouseTaxPanelProps) => {
     setBusy(true);
     try {
       const { paid } = await payTax(house.id, payer.id);
-      toast.success(`Налог уплачен: ${gold(paid)} золота`);
+      toast.success(`Налог уплачен: ${format(paid)}`);
       onChanged();
       void dispatch(getMe());
     } catch (e) {
@@ -66,7 +68,7 @@ const HouseTaxPanel = ({ house, acting, onChanged }: HouseTaxPanelProps) => {
             Дом заморожен за неуплату налога
           </span>
           <span className="text-white/75 text-xs sm:text-sm">
-            Долг — {gold(tax.due)} золота ({tax.owed_periods} {tax.owed_periods === 1 ? 'сезон' : 'сезона'}).
+            Долг — {format(tax.due)} ({tax.owed_periods} {tax.owed_periods === 1 ? 'сезон' : 'сезона'}).
             Пока он не погашен, в доме нельзя писать, спать, строить, обставлять комнаты и пользоваться кладовой;
             бонус мастерской не действует. Если не заплатить до {date}, город изымет дом.
           </span>
@@ -81,7 +83,7 @@ const HouseTaxPanel = ({ house, acting, onChanged }: HouseTaxPanelProps) => {
       <div className="rounded-card border border-gold/50 bg-gold/10 backdrop-blur-sm px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
         <AlertTriangle size={18} className="text-gold shrink-0 hidden sm:block" />
         <span className="text-white/85 text-sm flex-1 min-w-0">
-          Налог за сезон не уплачен — <span className="text-gold">{gold(tax.due)} золота</span> до {date}, иначе дом заморозят.
+          Налог за сезон не уплачен — <span className="text-gold">{format(tax.due)}</span> до {date}, иначе дом заморозят.
         </span>
         {payButton}
       </div>
@@ -91,7 +93,7 @@ const HouseTaxPanel = ({ house, acting, onChanged }: HouseTaxPanelProps) => {
   return (
     <p className="text-white/50 text-xs flex items-center gap-1.5 px-1">
       <Coins size={13} className="text-gold/70 shrink-0" />
-      Налог: {gold(tax.per_season)} золота за сезон · оплачен до {date}
+      Налог: {format(tax.per_season)} за сезон · оплачен до {date}
     </p>
   );
 };

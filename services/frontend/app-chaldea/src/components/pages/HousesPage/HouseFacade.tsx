@@ -6,6 +6,7 @@ import { useAppSelector } from '../../../redux/store';
 import { useBodyBackground } from '../../../hooks/useBodyBackground';
 import CharAvatar from './CharAvatar';
 import BuyListedHouseDialog from './BuyListedHouseDialog';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /*
   FEAT-180 stage 7 — a house seen from the street: picture, name, owner and
@@ -18,6 +19,7 @@ interface HouseFacadeProps {
 }
 
 const HouseFacade = ({ house, onChanged }: HouseFacadeProps) => {
+  const { format } = useCurrency();
   const characterId = useAppSelector((state) => state.user.character?.id ?? null);
   const [buying, setBuying] = useState(false);
   useBodyBackground(house.image_url);
@@ -70,7 +72,7 @@ const HouseFacade = ({ house, onChanged }: HouseFacadeProps) => {
           {house.sale_price != null && (
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
               <span className="flex items-center gap-1.5 text-gold text-sm">
-                <Tag size={14} className="shrink-0" />Продаётся за {house.sale_price.toLocaleString('ru-RU')} золота
+                <Tag size={14} className="shrink-0" />Продаётся за {format(house.sale_price)}
               </span>
               {canBuy && (
                 <button type="button" onClick={() => setBuying(true)} className="btn-blue !w-full sm:!w-auto !px-6 !py-1.5 !text-sm">

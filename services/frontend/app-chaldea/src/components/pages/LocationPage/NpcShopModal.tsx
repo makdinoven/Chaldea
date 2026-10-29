@@ -12,6 +12,7 @@ import { shownRarity } from '../../../constants/items';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import ConfirmationModal from '../../ui/ConfirmationModal';
 import { getClientPrefs } from '../../../utils/clientPrefs';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /* ── Types ── */
 
@@ -80,6 +81,7 @@ const hasDiscount = (si: ShopItem): boolean =>
 /* ── Component ── */
 
 const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps) => {
+  const { format, forms } = useCurrency();
   const dispatch = useDispatch<AppDispatch>();
   const character = useSelector(selectProfile);
   const inventory = useSelector(selectInventory);
@@ -130,7 +132,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
     const totalPrice = unitPrice * qty;
 
     if (character && totalPrice > character.currency_balance) {
-      toast.error('Недостаточно золота');
+      toast.error(`Недостаточно ${forms.genitive}`);
       return;
     }
 
@@ -371,7 +373,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                       </button>
                     </div>
                     {!canAfford && (
-                      <span className="text-site-red text-[10px]">Недостаточно золота</span>
+                      <span className="text-site-red text-[10px]">Недостаточно {forms.genitive}</span>
                     )}
                     {!inStock && si.stock !== null && (
                       <span className="text-site-red text-[10px]">Нет в наличии</span>
@@ -470,9 +472,9 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
         title="Продать предмет?"
         message={
           sellConfirm
-            ? `«${sellConfirm.item.name}» x${getSellQuantity(sellConfirm.item_id)} за ${(
-                (sellPriceMap.get(sellConfirm.item_id) ?? 0) * getSellQuantity(sellConfirm.item_id)
-              ).toLocaleString()} золота`
+            ? `«${sellConfirm.item.name}» x${getSellQuantity(sellConfirm.item_id)} за ${format(
+                (sellPriceMap.get(sellConfirm.item_id) ?? 0) * getSellQuantity(sellConfirm.item_id),
+              )}`
             : ''
         }
         onCancel={() => setSellConfirm(null)}

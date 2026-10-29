@@ -1,4 +1,5 @@
 import type { BPReward } from '../../../types/battlePass';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface RewardCellProps {
   reward: BPReward;
@@ -20,8 +21,8 @@ const REWARD_ICONS: Record<string, string> = {
   chat_background: '\u{1F4AC}',
 };
 
+/** `gold` is the world currency — its name comes from `useCurrency()`. */
 const REWARD_LABELS: Record<string, string> = {
-  gold: 'Золото',
   xp: 'Опыт',
   diamonds: 'Алмазы',
   item: 'Предмет',
@@ -39,6 +40,9 @@ const RewardCell = ({
   onClaim,
   claiming,
 }: RewardCellProps) => {
+  const { forms, format } = useCurrency();
+  const labelOf = (type: string): string =>
+    type === 'gold' ? forms.name : REWARD_LABELS[type] || '';
   const canClaim = isReached && !isClaimed && !isPremiumLocked;
 
   return (
@@ -52,14 +56,16 @@ const RewardCell = ({
         ${isPremiumLocked ? 'opacity-40' : ''}
       `}
     >
-      <span className="text-2xl" aria-label={REWARD_LABELS[reward.reward_type] || reward.reward_type}>
+      <span className="text-2xl" aria-label={labelOf(reward.reward_type) || reward.reward_type}>
         {REWARD_ICONS[reward.reward_type] || '\u{1F381}'}
       </span>
 
       <span className="text-xs text-white font-medium text-center leading-tight">
         {reward.item_name
           || reward.cosmetic_slug
-          || `${reward.reward_value} ${REWARD_LABELS[reward.reward_type] || ''}`}
+          || (reward.reward_type === 'gold'
+            ? format(reward.reward_value)
+            : `${reward.reward_value} ${labelOf(reward.reward_type)}`)}
       </span>
 
       {isClaimed && (

@@ -7,6 +7,7 @@ import { searchItemsCatalog } from '../../../api/adminCharacters';
 import type { ItemData } from '../CharactersPage/types';
 import { apiErrorMessage } from '../../../api/errors';
 import { FIELD, LABEL } from '../../pages/EpisodesPage/EpisodeFormModal';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface BuildCostModalProps {
   roomType: RoomType;
@@ -33,6 +34,7 @@ const clampInt = (v: string, min: number, max: number) => Math.min(max, Math.max
 
 /** Admin: gold, build time and materials of one build step (room type × level). */
 const BuildCostModal = ({ roomType, level, cost, onClose, onSaved }: BuildCostModalProps) => {
+  const { forms } = useCurrency();
   const [gold, setGold] = useState(cost?.gold ?? 0);
   const [hours, setHours] = useState(cost?.build_hours ?? 0);
   const [rows, setRows] = useState<MaterialRow[]>(
@@ -105,7 +107,7 @@ const BuildCostModal = ({ roomType, level, cost, onClose, onSaved }: BuildCostMo
       <div className="flex flex-col gap-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="flex flex-col gap-1.5">
-            <span className={LABEL}>Золото</span>
+            <span className={LABEL}>{forms.name}</span>
             <input type="number" min={0} max={MAX_GOLD} value={gold}
               onChange={(e) => setGold(clampInt(e.target.value, 0, MAX_GOLD))} className={FIELD} />
           </label>

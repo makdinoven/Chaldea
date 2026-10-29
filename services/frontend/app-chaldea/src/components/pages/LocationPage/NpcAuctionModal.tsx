@@ -17,6 +17,7 @@ import { RARITY_COLOR_MAP } from '../../Auction/AuctionListingCard';
 import type { AuctionStorageItemResponse } from '../../../types/auction';
 import { shownRarity } from '../../../constants/items';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /* -- Types -- */
 
@@ -71,6 +72,7 @@ const StorageRow = ({
   selected: boolean;
   onToggle: (id: number) => void;
 }) => {
+  const { format } = useCurrency();
   const rarityColor = item.item
     ? (RARITY_COLOR_MAP[shownRarity(item.item.item_type, item.item.item_rarity) ?? ''] ?? 'text-white')
     : 'text-gold';
@@ -113,7 +115,7 @@ const StorageRow = ({
       <div className="flex-1 min-w-0">
         <p className={`${rarityColor} text-sm font-medium truncate`}>
           {isGold
-            ? `${item.gold_amount.toLocaleString('ru-RU')} золота`
+            ? format(item.gold_amount)
             : item.item?.name ?? 'Неизвестный предмет'}
         </p>
         <p className="text-white/40 text-xs">
@@ -128,6 +130,7 @@ const StorageRow = ({
 /* -- Main Component -- */
 
 const NpcAuctionModal = ({ npcId, npcName, npcAvatar, onClose }: NpcAuctionModalProps) => {
+  const { forms } = useCurrency();
   const dispatch = useAppDispatch();
   const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
 
@@ -394,7 +397,7 @@ const NpcAuctionModal = ({ npcId, npcName, npcAvatar, onClose }: NpcAuctionModal
             {storageTotalGold > 0 && (
               <div className="mb-4 p-3 rounded-card bg-white/5 flex items-center justify-between">
                 <p className="text-white/60 text-sm">
-                  Всего золота на складе:{' '}
+                  Всего {forms.genitive} на складе:{' '}
                   <span className="gold-text font-medium">
                     {storageTotalGold.toLocaleString('ru-RU')}
                   </span>

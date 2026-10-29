@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { adminGetHouseSettings, adminSetHouseSettings, type HouseSettings } from '../../../api/houses';
 import { apiErrorMessage } from '../../../api/errors';
 import { FIELD, LABEL } from '../../pages/EpisodesPage/EpisodeFormModal';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface HouseTaxAdminProps {
   canUpdate: boolean;
@@ -10,6 +11,7 @@ interface HouseTaxAdminProps {
 
 /** Admin: house tax rates (FEAT-180 stage 4). */
 const HouseTaxAdmin = ({ canUpdate }: HouseTaxAdminProps) => {
+  const { forms } = useCurrency();
   const [settings, setSettings] = useState<HouseSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pct, setPct] = useState('');
@@ -74,7 +76,7 @@ const HouseTaxAdmin = ({ canUpdate }: HouseTaxAdminProps) => {
             onChange={(e) => setPct(e.target.value)} className={FIELD} />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className={LABEL}>Золото за уровень комнаты</span>
+          <span className={LABEL}>{forms.name} за уровень комнаты</span>
           <input type="number" inputMode="numeric" min={0} step={1} value={perLevel} disabled={!canUpdate}
             onChange={(e) => setPerLevel(e.target.value)} className={FIELD} />
         </label>

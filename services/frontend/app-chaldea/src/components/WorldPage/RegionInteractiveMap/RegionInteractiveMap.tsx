@@ -1,6 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
+import { formatCurrency } from '../../../utils/currency';
 
 export interface MapItem {
   id: number;
@@ -67,7 +68,7 @@ export interface HouseMarker {
 const houseMarkerTitle = (house: HouseMarker): string => {
   if (!house.owned) return `${house.name} — продаётся`;
   const notes = [
-    house.salePrice != null && `продаётся за ${house.salePrice.toLocaleString('ru-RU')} золота`,
+    house.salePrice != null && `продаётся за ${formatCurrency(house.salePrice)}`,
     house.frozen && 'заморожен',
   ].filter(Boolean);
   return notes.length ? `${house.name} — ${notes.join(', ')}` : house.name;

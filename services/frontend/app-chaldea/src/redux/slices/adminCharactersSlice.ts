@@ -3,7 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import type { RootState, AppDispatch } from '../store';
 import * as api from '../../api/adminCharacters';
-import { itemGrantErrorMessage } from '../../api/errors';
+import { apiErrorMessage, itemGrantErrorMessage } from '../../api/errors';
 import type {
   AdminCharacterListItem,
   AdminCharacterUpdate,
@@ -83,9 +83,10 @@ export const updateAdminCharacter = createAsyncThunk<
       const result = await api.updateAdminCharacter(characterId, update);
       toast.success('Персонаж обновлён');
       return result;
-    } catch {
-      toast.error('Не удалось обновить персонажа');
-      return thunkAPI.rejectWithValue('Не удалось обновить персонажа');
+    } catch (error) {
+      const message = apiErrorMessage(error, 'Не удалось обновить персонажа');
+      toast.error(message);
+      return thunkAPI.rejectWithValue(message);
     }
   },
 );

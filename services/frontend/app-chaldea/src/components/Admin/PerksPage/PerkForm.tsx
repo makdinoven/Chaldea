@@ -3,6 +3,7 @@ import { createPerk, updatePerk, fetchPerk } from "../../../api/perks";
 import toast from "react-hot-toast";
 import type { PerkCondition, PerkBonuses } from "../../../types/perks";
 import axios from "axios";
+import { capitalize, getCurrencyForms } from '../../../utils/currency';
 
 /* ── Dictionaries ── */
 
@@ -48,7 +49,7 @@ const CONDITION_TYPE_LABELS: Record<string, string> = {
   quest: "Квест",
   perk_count: "Кол-во перков",
   has_perk: "Имеет перк (ID)",
-  gold_balance: "Баланс золота",
+  get gold_balance() { return `Баланс ${getCurrencyForms().genitive}`; },
   admin_grant: "Ручная выдача",
 };
 
@@ -70,8 +71,8 @@ const CUMULATIVE_STAT_OPTIONS: { value: string; label: string }[] = [
   { value: "max_win_streak", label: "Макс. серия побед" },
   { value: "current_win_streak", label: "Текущая серия побед" },
   { value: "total_rounds_survived", label: "Раундов пережито" },
-  { value: "total_gold_earned", label: "Золота заработано" },
-  { value: "total_gold_spent", label: "Золота потрачено" },
+  { value: "total_gold_earned", get label() { return `${capitalize(getCurrencyForms().genitive)} заработано`; } },
+  { value: "total_gold_spent", get label() { return `${capitalize(getCurrencyForms().genitive)} потрачено`; } },
   { value: "items_bought", label: "Предметов куплено" },
   { value: "items_sold", label: "Предметов продано" },
   { value: "locations_visited", label: "Локаций посещено" },

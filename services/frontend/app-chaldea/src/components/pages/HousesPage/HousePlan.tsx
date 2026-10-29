@@ -24,6 +24,7 @@ import FurnitureThumbs from './FurnitureIcon';
 import { RoomTypeInfo } from './RoomFeatures';
 import { ReturnCircleInfo } from './RoomBlessings';
 import TrophyHall from './TrophyHall';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /*
   FEAT-180 stage 5 — the house plan: a grid per layer (floors, basement, yard)
@@ -65,6 +66,7 @@ const HousePlan = ({ house, acting, ownerActing, frozen, onChanged }: HousePlanP
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [costs, setCosts] = useState<BuildCost[] | null>(null);
   const { busy, act } = useHouseAction(onChanged);
+  const { format, forms } = useCurrency();
 
   const ownerId = ownerActing?.character?.id ?? null;
   const atHouse = ownerActing?.location_id != null && ownerActing.location_id === house.location_id;
@@ -186,7 +188,7 @@ const HousePlan = ({ house, acting, ownerActing, frozen, onChanged }: HousePlanP
         <div className="flex flex-col gap-3">
           <h3 className="gold-text text-sm font-medium uppercase tracking-[0.08em]">Пристройка</h3>
           <p className="text-white/55 text-sm">
-            Место для ещё одной комнаты. {price != null ? `Стоит ${gold(price)} золота.` : 'Цена не задана — обратитесь к администрации.'}
+            Место для ещё одной комнаты. {price != null ? `Стоит ${format(price)}.` : 'Цена не задана — обратитесь к администрации.'}
           </p>
           {ownerProps && price != null && (
             <>
@@ -194,7 +196,7 @@ const HousePlan = ({ house, acting, ownerActing, frozen, onChanged }: HousePlanP
               <button type="button" disabled={busy || !atHouse || frozen}
                 onClick={() => setConfirm({ kind: 'cell', cell: selectedCell, price })}
                 className="btn-blue !w-full sm:!w-auto !px-6 self-start disabled:opacity-50">
-                Купить место за {gold(price)} золота
+                Купить место за {format(price)}
               </button>
             </>
           )}
@@ -245,7 +247,7 @@ const HousePlan = ({ house, acting, ownerActing, frozen, onChanged }: HousePlanP
                 <button type="button" disabled={busy || !atHouse || frozen}
                   onClick={() => setConfirm({ kind: 'layer', layer: layerInfo.layer, label: layerInfo.label, price: layerInfo.unlock_price! })}
                   className="btn-blue !w-full sm:!w-auto !px-5 !py-1.5 !text-xs self-start disabled:opacity-50">
-                  Открыть за {gold(layerInfo.unlock_price)} золота
+                  Открыть за {format(layerInfo.unlock_price)}
                 </button>
               </>
             )}
@@ -273,7 +275,7 @@ const HousePlan = ({ house, acting, ownerActing, frozen, onChanged }: HousePlanP
 
         {ownerProps && (
           <p className="text-white/40 text-[11px] leading-relaxed">
-            Каждая ступень стоит золота и материалов из сумки хозяина и строится сама. Комнаты растут до {MAX_ROOM_LEVEL}-го уровня:
+            Каждая ступень стоит {forms.genitive} и материалов из сумки хозяина и строится сама. Комнаты растут до {MAX_ROOM_LEVEL}-го уровня:
             кладовая и погреб вмещают больше вещей, спальня даёт более крепкий сон, на огороде больше грядок, баня восстанавливает
             больше сил, а мастерская профессии даёт больший бонус своей профессии.
           </p>
@@ -288,8 +290,8 @@ const HousePlan = ({ house, acting, ownerActing, frozen, onChanged }: HousePlanP
         <ConfirmDialog
           title={confirm.kind === 'layer' ? `Открыть: ${confirm.label}` : 'Купить место'}
           message={confirm.kind === 'layer'
-            ? `${confirm.label} откроется за ${gold(confirm.price)} золота — на нём можно будет строить комнаты.`
-            : `Купить ещё одно место под комнату за ${gold(confirm.price)} золота?`}
+            ? `${confirm.label} откроется за ${format(confirm.price)} — на нём можно будет строить комнаты.`
+            : `Купить ещё одно место под комнату за ${format(confirm.price)}?`}
           confirmLabel={`Заплатить ${gold(confirm.price)}`}
           onCancel={() => setConfirm(null)}
           onConfirm={() => runConfirm(confirm)}

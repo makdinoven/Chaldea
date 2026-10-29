@@ -17,6 +17,7 @@ import { formatTimeRemaining, RARITY_COLOR_MAP } from './AuctionListingCard';
 import AuctionListingDetail from './AuctionListingDetail';
 import type { AuctionListingResponse } from '../../types/auction';
 import { shownRarity } from '../../constants/items';
+import { useCurrency } from '../../hooks/useCurrency';
 
 interface AuctionMyListingsTabProps {
   characterId: number;
@@ -49,6 +50,7 @@ const ListingRow = ({
   canCancel: boolean;
   actionLoading: boolean;
 }) => {
+  const { format } = useCurrency();
   const rarityColor =
     RARITY_COLOR_MAP[shownRarity(listing.item.item_type, listing.item.item_rarity) ?? ''] ?? 'text-white';
   const statusColor = STATUS_COLORS[listing.status] ?? 'text-white/50';
@@ -76,8 +78,8 @@ const ListingRow = ({
         <p className={`${rarityColor} text-sm font-medium truncate`}>{listing.item.name}</p>
         <p className="text-white/40 text-xs">
           {listing.current_bid > 0
-            ? `Ставка: ${listing.current_bid.toLocaleString('ru-RU')} зол.`
-            : `Старт: ${listing.start_price.toLocaleString('ru-RU')} зол.`}
+            ? `Ставка: ${format(listing.current_bid, true)}`
+            : `Старт: ${format(listing.start_price, true)}`}
           {listing.bid_count > 0 && ` (${listing.bid_count} ст.)`}
         </p>
       </div>

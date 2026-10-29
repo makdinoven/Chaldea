@@ -11,6 +11,7 @@ import PlotFormModal from './PlotFormModal';
 import BuildCostsAdmin from './BuildCostsAdmin';
 import HouseTaxAdmin from './HouseTaxAdmin';
 import SeizedHousesAdmin from './SeizedHousesAdmin';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 type AdminTab = 'plots' | 'costs' | 'tax' | 'seized';
 
@@ -23,6 +24,7 @@ const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
 
 /** Admin: house plots — where houses stand, their price and template rooms (FEAT-180). */
 const HousesAdminPage = () => {
+  const { format } = useCurrency();
   const permissions = useAppSelector((state) => state.user.permissions) as string[];
   const canCreate = hasPermission(permissions, 'locations:create');
   const canUpdate = hasPermission(permissions, 'locations:update');
@@ -113,7 +115,7 @@ const HousesAdminPage = () => {
                   {plot.map_x != null && plot.map_y != null && <span className="text-white/30 shrink-0">· на карте</span>}
                 </p>
                 <p className="text-xs text-white/50">
-                  {plot.price.toLocaleString('ru-RU')} золота · комнат {plot.room_count} · мест {plot.cells_open}{plot.cells_total > plot.cells_open ? `/${plot.cells_total}` : ''} ·{' '}
+                  {format(plot.price)} · комнат {plot.room_count} · мест {plot.cells_open}{plot.cells_total > plot.cells_open ? `/${plot.cells_total}` : ''} ·{' '}
                   {plot.house ? (
                     <Link to={`/houses/${plot.house.id}`} className="text-gold hover:text-gold-light">
                       {plot.house.owner?.name ?? 'куплен'}

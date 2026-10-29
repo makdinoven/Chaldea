@@ -11,6 +11,7 @@ import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
 import AvatarEquipmentGrid from './AvatarEquipmentGrid';
 import FastSlots from '../EquipmentPanel/FastSlots';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /** Experience in Russian digit groups: 29 726. */
 const fmtXp = (n: number | null | undefined) => Math.round(n ?? 0).toLocaleString('ru-RU');
@@ -33,6 +34,7 @@ const getRarityColorClass = (rarity?: string | null): string => {
  * fast slots 5×2.
  */
 const CharacterPanel = () => {
+  const { forms } = useCurrency();
   const [showTotalXp, setShowTotalXp] = useState(false);
   const profile = useAppSelector(selectProfile);
   const raceInfo = useAppSelector(selectRaceInfo);
@@ -131,7 +133,7 @@ const CharacterPanel = () => {
           {profile && (
             <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-1 py-3 border-y border-white/10">
               <div className="flex items-center gap-2">
-                <img src={goldCoinsIcon} alt="Валюта" className="w-[18px] h-[18px]" />
+                <img src={goldCoinsIcon} alt={forms.name} className="w-[18px] h-[18px]" />
                 <span className="gold-text text-sm font-medium">
                   {(profile.currency_balance ?? 0).toLocaleString('ru-RU')}
                 </span>

@@ -6,6 +6,7 @@ import {
   upsertSeasonMissions,
 } from "../../../api/battlePassAdmin";
 import type { AdminSeason, AdminMission } from "../../../api/battlePassAdmin";
+import { getCurrencyForms } from '../../../utils/currency';
 
 /* ── Constants ── */
 
@@ -14,8 +15,8 @@ const MISSION_TYPES = [
   { value: "write_posts", label: "Написать постов" },
   { value: "level_up", label: "Поднять уровень" },
   { value: "visit_locations", label: "Посетить локации" },
-  { value: "earn_gold", label: "Заработать золото" },
-  { value: "spend_gold", label: "Потратить золото" },
+  { value: "earn_gold", get label() { return `Заработать ${getCurrencyForms().name.toLowerCase()}`; } },
+  { value: "spend_gold", get label() { return `Потратить ${getCurrencyForms().name.toLowerCase()}`; } },
   { value: "quest_complete", label: "Выполнить квесты (заглушка)" },
   { value: "dungeon_run", label: "Сходить в данж (заглушка)" },
   { value: "resource_gather", label: "Добыть ресурсы (заглушка)" },

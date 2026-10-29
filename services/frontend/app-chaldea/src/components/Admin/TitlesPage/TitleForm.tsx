@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createTitle, updateTitle, fetchTitle } from "../../../api/titles";
 import toast from "react-hot-toast";
 import type { TitleCondition } from "../../../types/titles";
+import { capitalize, getCurrencyForms } from '../../../utils/currency';
 
 /* ── Dictionaries ── */
 
@@ -41,8 +42,8 @@ const CUMULATIVE_STAT_OPTIONS: { value: string; label: string }[] = [
   { value: "current_win_streak", label: "Текущая серия побед" },
   { value: "total_rounds_survived", label: "Раундов пережито" },
   { value: "low_hp_wins", label: "Побед с HP < 10%" },
-  { value: "total_gold_earned", label: "Золота заработано" },
-  { value: "total_gold_spent", label: "Золота потрачено" },
+  { value: "total_gold_earned", get label() { return `${capitalize(getCurrencyForms().genitive)} заработано`; } },
+  { value: "total_gold_spent", get label() { return `${capitalize(getCurrencyForms().genitive)} потрачено`; } },
   { value: "items_bought", label: "Предметов куплено" },
   { value: "items_sold", label: "Предметов продано" },
   { value: "locations_visited", label: "Локаций посещено" },

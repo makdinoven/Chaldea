@@ -13,6 +13,7 @@ import {
   type SketchSecret,
 } from '../DungeonPage/minigames/sketchChallenges';
 import type { ChallengeKind, ChallengeStart } from '../../api/dungeons';
+import { getCurrencyForms } from '../../utils/currency';
 
 /** The class challenges to try here, offline. */
 const SKETCH_CHALLENGES: { kind: ChallengeKind; label: string }[] = [
@@ -40,7 +41,7 @@ const ROOM_HINT: Record<BoardRoomType, string> = {
   treasure: 'Сундук с добычей ляжет в общий инвентарь группы.',
   trap: 'Ловушка: проверка характеристики лучшего в группе.',
   event: 'Событие с выбором — как в нынешних данжах.',
-  rest: 'Привал: лечение и воскрешение за золото.',
+  get rest() { return `Привал: лечение и воскрешение за ${getCurrencyForms().name.toLowerCase()}.`; },
   merchant: 'Торговец подземелья.',
   teleport: 'Переносит группу в другую комнату.',
   fork: 'Развилка — несколько путей дальше.',

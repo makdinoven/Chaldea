@@ -1,5 +1,6 @@
 import type { BattleRewards } from '../../../api/mobs';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface BattleRewardsModalProps {
   rewards: BattleRewards;
@@ -8,6 +9,7 @@ interface BattleRewardsModalProps {
 }
 
 const BattleRewardsModal = ({ rewards, visible, onClose }: BattleRewardsModalProps) => {
+  const { forms } = useCurrency();
   return (
     <ModalShell
       open={visible}
@@ -78,7 +80,7 @@ const BattleRewardsModal = ({ rewards, visible, onClose }: BattleRewardsModalPro
                   </div>
                   <div className="flex flex-col">
                     <span className="text-white/60 text-xs uppercase tracking-wider">
-                      Золото
+                      {forms.name}
                     </span>
                     <span className="text-gold text-lg font-medium">
                       +{rewards.gold}

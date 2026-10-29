@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
+import { useCurrency } from '../../hooks/useCurrency';
 
 /* ── Types ── */
 
@@ -100,6 +101,7 @@ const OBJECTIVE_TYPES = [
 /* ── Component ── */
 
 const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
+  const { forms } = useCurrency();
   const [quests, setQuests] = useState<QuestListItem[]>([]);
   const [loadingQuests, setLoadingQuests] = useState(true);
 
@@ -506,7 +508,7 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
 
             {/* Reward currency */}
             <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Награда (золото)</span>
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Награда ({forms.name.toLowerCase()})</span>
               <input type="number" name="reward_currency" value={form.reward_currency} onChange={handleChange} min={0} className="input-underline" />
             </label>
 

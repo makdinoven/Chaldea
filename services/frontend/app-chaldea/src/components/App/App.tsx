@@ -4,6 +4,7 @@ import { Toaster } from "react-hot-toast";
 import { useAppDispatch } from "../../redux/store";
 import { getMe, setAuthInitialized } from "../../redux/slices/userSlice";
 import { fetchFrames, fetchBackgrounds } from "../../redux/slices/cosmeticsSlice";
+import { fetchCurrencyForms } from "../../redux/slices/economySlice";
 
 import StartPage from "../StartPage/StartPage";
 import HomePage from "../HomePage/HomePage";
@@ -37,6 +38,7 @@ import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
 import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
 import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
+import EconomyPage from "../Admin/EconomyPage/EconomyPage";
 import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
@@ -103,6 +105,8 @@ const App = () => {
     // resolve frame/background slugs everywhere in the app.
     dispatch(fetchFrames());
     dispatch(fetchBackgrounds());
+    // Currency word forms (FEAT-181); defaults are shown until they arrive.
+    dispatch(fetchCurrencyForms());
   }, [dispatch]);
 
   return (
@@ -181,6 +185,11 @@ const App = () => {
             <Route path="admin/houses" element={
               <ProtectedRoute requiredPermission="locations:read">
                 <HousesAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/economy" element={
+              <ProtectedRoute requiredPermission="economy:read">
+                <EconomyPage />
               </ProtectedRoute>
             } />
             <Route path="admin/floating-structures" element={

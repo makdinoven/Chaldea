@@ -34,6 +34,7 @@ import floatingStructuresReducer from './slices/floatingStructuresSlice';
 import teleportReducer from './slices/teleportSlice';
 import gatheringReducer from './slices/gatheringSlice';
 import originsReducer from './slices/originsSlice';
+import economyReducer from './slices/economySlice';
 
 export const store = configureStore({
   reducer: {
@@ -71,6 +72,7 @@ export const store = configureStore({
     teleport: teleportReducer,
     gathering: gatheringReducer,
     origins: originsReducer,
+    economy: economyReducer,
   },
 });
 

@@ -6,9 +6,11 @@ import { apiErrorMessage } from '../../../api/errors';
 import { useAppSelector } from '../../../redux/store';
 import CharAvatar from './CharAvatar';
 import BuyListedHouseDialog from './BuyListedHouseDialog';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /** FEAT-180 stage 4 — «Продажа домов»: houses their owners put up for sale. */
 const HouseMarketPage = () => {
+  const { format } = useCurrency();
   const loggedIn = useAppSelector((state) => state.user.id != null);
   const characterId = useAppSelector((state) => state.user.character?.id ?? null);
   const [houses, setHouses] = useState<MarketHouse[] | null>(null);
@@ -52,7 +54,7 @@ const HouseMarketPage = () => {
                   <Home size={36} className="text-white/15" />
                 )}
                 <span className="absolute top-2 right-2 px-2.5 py-0.5 rounded-full bg-black/75 text-gold text-xs font-medium">
-                  {h.price.toLocaleString('ru-RU')} золота
+                  {format(h.price)}
                 </span>
               </Link>
               <div className="p-4 flex flex-col gap-2 flex-1">

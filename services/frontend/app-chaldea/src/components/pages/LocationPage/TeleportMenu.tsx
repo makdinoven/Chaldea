@@ -13,6 +13,7 @@ import {
 } from '../../../redux/slices/teleportSlice';
 import { setCharacterAfterTeleport } from '../../../redux/slices/userSlice';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface TeleportMenuProps {
   npcId: number;
@@ -32,6 +33,7 @@ const formatCooldown = (seconds: number): string => {
 };
 
 const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
+  const { format } = useCurrency();
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
 
@@ -159,7 +161,7 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
                 </div>
                 <div className="flex items-center gap-3 justify-between sm:justify-end">
                   <span className="gold-text text-sm font-medium whitespace-nowrap">
-                    {opt.cost_gold} зол.
+                    {format(opt.cost_gold, true)}
                   </span>
                   <button
                     onClick={() => setConfirming(opt)}
@@ -225,7 +227,7 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
             {confirming.to_location_name}
           </p>
           <p className="text-white/60 text-sm text-center">
-            Стоимость: <span className="gold-text font-medium">{confirming.cost_gold} зол.</span>
+            Стоимость: <span className="gold-text font-medium">{format(confirming.cost_gold, true)}</span>
           </p>
 
           {executeError && (

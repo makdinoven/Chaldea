@@ -10,11 +10,12 @@ import type {
   AdminLevel,
   AdminLevelInput,
 } from "../../../api/battlePassAdmin";
+import { getCurrencyForms } from '../../../utils/currency';
 
 /* ── Constants ── */
 
 const REWARD_TYPES = [
-  { value: "gold", label: "Золото" },
+  { value: "gold", get label() { return getCurrencyForms().name; } },
   { value: "xp", label: "Опыт" },
   { value: "item", label: "Предмет" },
   { value: "diamonds", label: "Алмазы" },

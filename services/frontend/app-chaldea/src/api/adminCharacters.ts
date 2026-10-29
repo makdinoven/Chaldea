@@ -50,6 +50,8 @@ export const updateAdminCharacter = async (
   const { data } = await axios.put<AdminCharacterUpdateResponse>(
     `/characters/admin/${characterId}`,
     update,
+    // The caller toasts the server's own 403 text (e.g. «Недостаточно прав для изменения баланса»).
+    { skipForbiddenToast: true },
   );
   return data;
 };

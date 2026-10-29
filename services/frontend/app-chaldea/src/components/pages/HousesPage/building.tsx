@@ -52,6 +52,7 @@ import {
 } from '../../../api/houses';
 import { cellsWord } from '../../../utils/furniture';
 import { parseServerDate } from '../../../utils/serverDate';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /*
   FEAT-180 stage 2 — shared bits of house building: durations, the live
@@ -270,13 +271,14 @@ interface CostViewProps {
 
 /** Gold, materials (with pictures) and build time of one step. */
 export const CostView = ({ cost, className = '' }: CostViewProps) => {
+  const { format } = useCurrency();
   if (!cost) {
     return <p className={`text-white/40 text-xs ${className}`}>Стоимость не задана — обратитесь к администрации.</p>;
   }
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs ${className}`}>
       <span className="flex items-center gap-1 text-gold">
-        <Coins size={13} className="shrink-0" />{cost.gold.toLocaleString('ru-RU')} золота
+        <Coins size={13} className="shrink-0" />{format(cost.gold)}
       </span>
       {cost.items.map((item) => (
         <span key={item.item_id} className="flex items-center gap-1.5 text-white/75 min-w-0">

@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import type { AuctionListingResponse } from '../../types/auction';
 import { shownRarity } from '../../constants/items';
+import { useCurrency } from '../../hooks/useCurrency';
 
 const RARITY_COLOR_MAP: Record<string, string> = {
   common: 'text-rarity-common',
@@ -41,6 +42,7 @@ interface AuctionListingCardProps {
 }
 
 const AuctionListingCard = ({ listing, onClick }: AuctionListingCardProps) => {
+  const { format } = useCurrency();
   const visibleRarity = shownRarity(listing.item.item_type, listing.item.item_rarity) ?? '';
   const rarityColor = RARITY_COLOR_MAP[visibleRarity] ?? 'text-white';
   const rarityBorder = RARITY_BORDER_MAP[visibleRarity] ?? 'border-white/10';
@@ -98,11 +100,11 @@ const AuctionListingCard = ({ listing, onClick }: AuctionListingCardProps) => {
             {listing.current_bid > 0 ? 'Текущая ставка' : 'Начальная цена'}
           </p>
           <p className="gold-text text-base sm:text-lg font-medium">
-            {displayPrice.toLocaleString('ru-RU')} зол.
+            {format(displayPrice, true)}
           </p>
           {listing.buyout_price && (
             <p className="text-site-blue text-xs mt-0.5">
-              Выкуп: {listing.buyout_price.toLocaleString('ru-RU')} зол.
+              Выкуп: {format(listing.buyout_price, true)}
             </p>
           )}
         </div>

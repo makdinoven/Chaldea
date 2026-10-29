@@ -22,6 +22,7 @@ import { getMe } from '../../../redux/slices/userSlice';
 import { FIELD, LABEL } from '../EpisodesPage/EpisodeFormModal';
 import ConfirmDialog from '../LocationPage/ConfirmDialog';
 import { CostView, levelPerk, ROOM_TYPE_ICON, roomTypeHint } from './building';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /*
   FEAT-180 stages 2 and 5 — the owner's building actions, used by the house
@@ -78,6 +79,7 @@ interface OwnerActionProps {
 
 /** Upgrade (with its price) and demolish of one room. */
 export const RoomBuildActions = ({ house, room, characterId, costs, atHouse, frozen, busy, act }: OwnerActionProps & { room: HouseRoom }) => {
+  const { forms } = useCurrency();
   const [demolishing, setDemolishing] = useState(false);
   const building = room.upgrade_to_level != null;
   const next = room.level + 1;
@@ -109,7 +111,7 @@ export const RoomBuildActions = ({ house, room, characterId, costs, atHouse, fro
       {demolishing && (
         <ConfirmDialog
           title="Снести комнату"
-          message={`«${room.name}» будет снесена вместе со всеми её постами. Потраченные золото и материалы не возвращаются.`}
+          message={`«${room.name}» будет снесена вместе со всеми её постами. Потраченные ${forms.name.toLowerCase()} и материалы не возвращаются.`}
           confirmLabel="Снести"
           danger
           onCancel={() => setDemolishing(false)}
@@ -125,6 +127,7 @@ export const RoomBuildActions = ({ house, room, characterId, costs, atHouse, fro
 
 /** A new room on a free place: the types the place allows, their level-1 price, a name. */
 export const BuildRoomForm = ({ house, cell, characterId, costs, atHouse, frozen, busy, act }: OwnerActionProps & { cell: PlanCell }) => {
+  const { format } = useCurrency();
   const types = ROOM_TYPES.filter((t) => cell.allowed_types.includes(t));
   const [type, setType] = useState<RoomType | null>(types[0] ?? null);
   const [name, setName] = useState(types[0] ? ROOM_TYPE_LABEL[types[0]] : '');
@@ -166,7 +169,7 @@ export const BuildRoomForm = ({ house, cell, characterId, costs, atHouse, frozen
                   {perk && <span className="text-[10px] text-white/50 leading-tight break-words">{perk}</span>}
                   {costs && (
                     <span className="text-[10px] text-gold/80 leading-tight">
-                      {typeCost ? `${typeCost.gold.toLocaleString('ru-RU')} золота` : 'цена не задана'}
+                      {typeCost ? format(typeCost.gold) : 'цена не задана'}
                     </span>
                   )}
                 </span>

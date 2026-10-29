@@ -7,6 +7,7 @@ import { apiErrorMessage } from '../../../api/errors';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 /** What the dialog needs to know about a listed house. */
 export interface ListedHouse {
@@ -34,6 +35,7 @@ interface BuyListedHouseDialogProps {
  * dialog only explains that and links there.
  */
 const BuyListedHouseDialog = ({ house, onClose }: BuyListedHouseDialogProps) => {
+  const { format, forms } = useCurrency();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const character = useAppSelector((state) => state.user.character);
@@ -88,7 +90,7 @@ const BuyListedHouseDialog = ({ house, onClose }: BuyListedHouseDialogProps) => 
     >
       <div className="flex flex-col gap-3 text-sm text-white/80 break-words">
         <p>
-          «{house.name}» за <span className="text-gold">{price} золота</span>
+          «{house.name}» за <span className="text-gold">{format(house.price)}</span>
           {house.owner_name ? <> у {house.owner_name}</> : null}.
         </p>
         <div className="flex flex-col gap-1">
@@ -98,8 +100,8 @@ const BuyListedHouseDialog = ({ house, onClose }: BuyListedHouseDialogProps) => 
           </ul>
         </div>
         <p className="text-white/55 text-xs">
-          Жильцы и наследник прежнего хозяина будут выписаны. Золото уходит продавцу.
-          {house.tax_per_season != null && ` Налог дома — ${house.tax_per_season.toLocaleString('ru-RU')} золота за сезон.`}
+          Жильцы и наследник прежнего хозяина будут выписаны. {forms.name} уходит продавцу.
+          {house.tax_per_season != null && ` Налог дома — ${format(house.tax_per_season)} за сезон.`}
         </p>
         {!character && <p className="text-site-red text-xs">Выберите персонажа, чтобы купить дом.</p>}
         {character && isOwner && <p className="text-site-red text-xs">Это дом вашего персонажа.</p>}

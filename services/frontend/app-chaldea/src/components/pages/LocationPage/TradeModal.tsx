@@ -13,6 +13,7 @@ import TradeItemSelector from './TradeItemSelector';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface TradeModalProps {
   tradeId: number;
@@ -46,6 +47,7 @@ const TradeModal = ({
   targetCharacterName,
   onClose,
 }: TradeModalProps) => {
+  const { forms, word } = useCurrency();
   const [trade, setTrade] = useState<TradeState | null>(null);
   const [goldInput, setGoldInput] = useState('0');
   const [selectedItems, setSelectedItems] = useState<{ item_id: number; quantity: number }[]>([]);
@@ -230,7 +232,7 @@ const TradeModal = ({
 
               {/* Gold input */}
               <div className="flex items-center gap-2 mt-3 px-1.5">
-                <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
+                <img src={goldCoinsIcon} alt={forms.name} className="w-5 h-5 flex-shrink-0" />
                 <input
                   type="number"
                   min="0"
@@ -239,7 +241,7 @@ const TradeModal = ({
                   className="input-underline w-20 sm:w-24 text-sm"
                   placeholder="0"
                 />
-                <span className="text-white/50 text-xs">золота</span>
+                <span className="text-white/50 text-xs">{word(Number(goldInput) || 0)}</span>
               </div>
 
               {/* Action buttons */}
@@ -288,11 +290,11 @@ const TradeModal = ({
               {/* Their gold */}
               {theirSide && theirSide.gold > 0 && (
                 <div className="flex items-center gap-2 mt-3 px-1.5">
-                  <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
+                  <img src={goldCoinsIcon} alt={forms.name} className="w-5 h-5 flex-shrink-0" />
                   <span className="text-gold text-sm font-medium">
                     {theirSide.gold}
                   </span>
-                  <span className="text-white/50 text-xs">золота</span>
+                  <span className="text-white/50 text-xs">{word(theirSide.gold)}</span>
                 </div>
               )}
 

@@ -9,6 +9,8 @@ import {
   DUNGEON_KEY_KINDS,
 } from '../../../DungeonPage/dungeonConstants';
 import { EntityListPicker, EntityPicker } from './pickers';
+import { useCurrency } from '../../../../hooks/useCurrency';
+import { getCurrencyForms } from '../../../../utils/currency';
 
 const GRID_MIN = 2;
 const GRID_MAX = 8;
@@ -398,6 +400,7 @@ const OutcomeDataFields = ({
   outcomeData: string;
   onChange: (val: string) => void;
 }) => {
+  const { forms } = useCurrency();
   const data = parseOutcomeData(outcomeData);
 
   const set = (key: string, value: unknown) => {
@@ -489,7 +492,7 @@ const OutcomeDataFields = ({
       <div className="flex flex-col gap-1 col-span-2">
         <div className="flex flex-wrap gap-2">
           <div className="flex flex-col gap-0.5 flex-1">
-            <span className="text-[9px] text-white/40">Золото</span>
+            <span className="text-[9px] text-white/40">{forms.name}</span>
             <input
               type="number"
               className="input-underline !text-sm"
@@ -659,7 +662,7 @@ const RestConfig = ({
       />
     </div>
     <div className="flex flex-col gap-1 col-span-2">
-      <FieldLabel>Стоимость (золото)</FieldLabel>
+      <FieldLabel>Стоимость ({getCurrencyForms().name.toLowerCase()})</FieldLabel>
       <input
         type="number"
         className="input-underline !text-sm"

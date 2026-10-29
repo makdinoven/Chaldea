@@ -20,6 +20,7 @@ import { shownRarity } from '../../constants/items';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import ConfirmationModal from '../ui/ConfirmationModal';
 import { getClientPrefs } from '../../utils/clientPrefs';
+import { useCurrency } from '../../hooks/useCurrency';
 
 interface AuctionListingDetailProps {
   listingId: number;
@@ -27,6 +28,7 @@ interface AuctionListingDetailProps {
 }
 
 const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailProps) => {
+  const { format, forms } = useCurrency();
   const dispatch = useAppDispatch();
   const listing = useAppSelector(selectSelectedListing);
   const loading = useAppSelector(selectSelectedListingLoading);
@@ -178,14 +180,14 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
                 <div className="p-3 rounded-card bg-white/5">
                   <p className="text-white/50 text-xs mb-1">Начальная цена</p>
                   <p className="gold-text text-lg font-medium">
-                    {listing.start_price.toLocaleString('ru-RU')} зол.
+                    {format(listing.start_price, true)}
                   </p>
                 </div>
                 <div className="p-3 rounded-card bg-white/5">
                   <p className="text-white/50 text-xs mb-1">Текущая ставка</p>
                   <p className="gold-text text-lg font-medium">
                     {listing.current_bid > 0
-                      ? `${listing.current_bid.toLocaleString('ru-RU')} зол.`
+                      ? format(listing.current_bid, true)
                       : 'Нет ставок'}
                   </p>
                 </div>
@@ -193,7 +195,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
                   <div className="p-3 rounded-card bg-white/5">
                     <p className="text-white/50 text-xs mb-1">Цена выкупа</p>
                     <p className="text-site-blue text-lg font-medium">
-                      {listing.buyout_price.toLocaleString('ru-RU')} зол.
+                      {format(listing.buyout_price, true)}
                     </p>
                   </div>
                 )}
@@ -244,7 +246,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
                     >
                       {actionLoading
                         ? 'Обработка...'
-                        : `Выкупить за ${listing.buyout_price.toLocaleString('ru-RU')} зол.`}
+                        : `Выкупить за ${format(listing.buyout_price, true)}`}
                     </button>
                   )}
                 </div>
@@ -268,7 +270,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
         title="Выкупить лот?"
         message={
           listing?.buyout_price
-            ? `Выкупить за ${listing.buyout_price.toLocaleString('ru-RU')} зол.? Золото спишется сразу.`
+            ? `Выкупить за ${format(listing.buyout_price, true)}? ${forms.name} спишется сразу.`
             : ''
         }
         onCancel={() => setBuyoutConfirmOpen(false)}

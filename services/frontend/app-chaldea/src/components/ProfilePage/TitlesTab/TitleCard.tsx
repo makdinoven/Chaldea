@@ -6,6 +6,7 @@ import { Lock, Sparkles } from 'lucide-react';
 import type { CharacterTitle, TitleCondition } from '../../../types/titles';
 import ProfileCard from '../shared/ProfileCard';
 import ProgressBar, { type ProgressBarVariant } from '../shared/ProgressBar';
+import { capitalize, getCurrencyForms } from '../../../utils/currency';
 
 /* ── Dictionaries ── */
 
@@ -41,8 +42,8 @@ const STAT_LABELS: Record<string, string> = {
   current_win_streak: 'Текущая серия побед',
   total_rounds_survived: 'Раундов пережито',
   low_hp_wins: 'Побед с HP < 10%',
-  total_gold_earned: 'Золота заработано',
-  total_gold_spent: 'Золота потрачено',
+  get total_gold_earned() { return `${capitalize(getCurrencyForms().genitive)} заработано`; },
+  get total_gold_spent() { return `${capitalize(getCurrencyForms().genitive)} потрачено`; },
   items_bought: 'Предметов куплено',
   items_sold: 'Предметов продано',
   locations_visited: 'Локаций посещено',

@@ -6,6 +6,7 @@ import { putUpForSale, setHeir, takeOffSale, type House } from '../../../api/hou
 import { apiErrorMessage } from '../../../api/errors';
 import ConfirmDialog from '../LocationPage/ConfirmDialog';
 import { FIELD, LABEL } from '../EpisodesPage/EpisodeFormModal';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface HouseOwnershipProps {
   house: House;
@@ -18,6 +19,7 @@ const SALE_WARNING = 'Мебель и вещи кладовой перейдут
 
 /** FEAT-180 stage 4 — the owner's «Владение»: the heir and selling the house on the board. */
 const HouseOwnership = ({ house, ownerCharacterId, onChanged }: HouseOwnershipProps) => {
+  const { format, forms } = useCurrency();
   const [heirId, setHeirId] = useState<number | null>(house.heir?.id ?? null);
   const [savingHeir, setSavingHeir] = useState(false);
   const [price, setPrice] = useState(house.sale_price != null ? String(house.sale_price) : '');
@@ -51,7 +53,7 @@ const HouseOwnership = ({ house, ownerCharacterId, onChanged }: HouseOwnershipPr
   const askSale = () => {
     const value = Number(price);
     if (!Number.isInteger(value) || value < 1 || value > MAX_PRICE) {
-      toast.error('Укажите цену — целое число золота от 1');
+      toast.error(`Укажите цену — целое число ${forms.genitive} от 1`);
       return;
     }
     setConfirmSale(value);
@@ -103,12 +105,12 @@ const HouseOwnership = ({ house, ownerCharacterId, onChanged }: HouseOwnershipPr
         </h2>
         <p className="text-white/55 text-xs leading-snug">
           Выставленный дом виден на <Link to="/houses/market" className="site-link">доске продажи домов</Link>.
-          Покупатель платит на месте, в локации дома; золото получает хозяин. {SALE_WARNING}
+          Покупатель платит на месте, в локации дома; {forms.name.toLowerCase()} получает хозяин. {SALE_WARNING}
         </p>
         {listed ? (
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <span className="text-white text-sm flex-1">
-              Продаётся за <span className="text-gold">{house.sale_price!.toLocaleString('ru-RU')} золота</span>
+              Продаётся за <span className="text-gold">{format(house.sale_price!)}</span>
             </span>
             <button type="button" disabled={busy}
               onClick={() => void run(() => takeOffSale(house.id, ownerCharacterId), 'Дом снят с продажи', 'Не удалось снять с продажи')}
@@ -119,7 +121,7 @@ const HouseOwnership = ({ house, ownerCharacterId, onChanged }: HouseOwnershipPr
         ) : (
           <div className="flex flex-col sm:flex-row sm:items-end gap-3">
             <label className="flex flex-col gap-1.5 flex-1">
-              <span className={LABEL}>Цена, золото</span>
+              <span className={LABEL}>Цена, {forms.name.toLowerCase()}</span>
               <input type="number" inputMode="numeric" min={1} max={MAX_PRICE} value={price}
                 disabled={blockedReason != null}
                 onChange={(e) => setPrice(e.target.value)} className={FIELD} />
@@ -136,7 +138,7 @@ const HouseOwnership = ({ house, ownerCharacterId, onChanged }: HouseOwnershipPr
       {confirmSale != null && (
         <ConfirmDialog
           title="Выставить дом на продажу"
-          message={`«${house.name}» появится на доске продажи за ${confirmSale.toLocaleString('ru-RU')} золота. ${SALE_WARNING} Снять с продажи можно в любой момент до покупки.`}
+          message={`«${house.name}» появится на доске продажи за ${format(confirmSale)}. ${SALE_WARNING} Снять с продажи можно в любой момент до покупки.`}
           confirmLabel="Выставить"
           onCancel={() => setConfirmSale(null)}
           onConfirm={() => {

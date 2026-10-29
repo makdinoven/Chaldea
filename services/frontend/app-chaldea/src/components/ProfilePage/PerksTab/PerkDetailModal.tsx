@@ -9,6 +9,7 @@ import ProfileCard from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import ProgressBar from '../shared/ProgressBar';
 import SectionHeader from '../shared/SectionHeader';
+import { formatCurrency } from '../../../utils/currency';
 
 interface PerkDetailModalProps {
   perk: CharacterPerk | null;
@@ -83,8 +84,8 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   current_win_streak: (v) => `Текущая серия побед: ${v}`,
   total_rounds_survived: (v) => `Пережить ${v} раундов`,
   // Кумулятивная статистика — экономика
-  total_gold_earned: (v) => `Заработать ${v} золота`,
-  total_gold_spent: (v) => `Потратить ${v} золота`,
+  total_gold_earned: (v) => `Заработать ${formatCurrency(v)}`,
+  total_gold_spent: (v) => `Потратить ${formatCurrency(v)}`,
   items_bought: (v) => `Купить ${v} предметов`,
   items_sold: (v) => `Продать ${v} предметов`,
   // Кумулятивная статистика — исследование
@@ -133,7 +134,7 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   admin_grant: () => 'Выдаётся администратором',
   // Новые типы условий
   perk_count: (v) => `Открыть ${v} перков`,
-  gold_balance: (v) => `Иметь ${v} золота`,
+  gold_balance: (v) => `Иметь ${formatCurrency(v)}`,
   has_perk: () => 'Открыть определённый перк',
 };
 
@@ -167,7 +168,7 @@ const formatConditionText = (
   }
 
   // gold_balance
-  if (condType === 'gold_balance') return `Иметь ${value} золота`;
+  if (condType === 'gold_balance') return `Иметь ${formatCurrency(value)}`;
 
   // perk_count
   if (condType === 'perk_count') return `Открыть ${value} перков`;

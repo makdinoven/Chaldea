@@ -30,6 +30,8 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
   const raceNamesMap = useAppSelector(selectRaceNamesMap);
   const permissions = useAppSelector(selectPermissions);
   const canTeleport = hasPermission(permissions, 'characters:teleport');
+  // FEAT-181: a balance change is an admin_adjust posting and needs economy:adjust.
+  const canAdjustBalance = hasPermission(permissions, 'economy:adjust');
 
   const [level, setLevel] = useState(character.level);
   const [statPoints, setStatPoints] = useState(character.stat_points);
@@ -137,6 +139,9 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
   };
 
   const handleSave = async () => {
+    // The balance is sent only when it was actually changed by someone allowed to:
+    // the server turns it into an admin_adjust posting (delta computed under lock).
+    const balanceChanged = canAdjustBalance && currencyBalance !== character.currency_balance;
     setSaving(true);
     try {
       await dispatch(
@@ -145,7 +150,7 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
           update: {
             level,
             stat_points: statPoints,
-            currency_balance: currencyBalance,
+            ...(balanceChanged ? { currency_balance: currencyBalance } : {}),
           },
         }),
       ).unwrap();
@@ -155,9 +160,11 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
           ...character,
           level,
           stat_points: statPoints,
-          currency_balance: currencyBalance,
+          currency_balance: balanceChanged ? currencyBalance : character.currency_balance,
         }),
       );
+    } catch {
+      // The thunk has already shown the error toast; keep the form for a retry.
     } finally {
       setSaving(false);
     }
@@ -283,14 +290,26 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-white/60 text-xs uppercase tracking-[0.06em]">Баланс</label>
+            <label
+              className="text-white/60 text-xs uppercase tracking-[0.06em]"
+              htmlFor="admin-character-balance"
+            >
+              Баланс
+            </label>
             <input
+              id="admin-character-balance"
               type="number"
-              className="input-underline"
+              className="input-underline disabled:opacity-60 disabled:cursor-not-allowed"
               min={0}
               value={currencyBalance}
-              onChange={(e) => setCurrencyBalance(Math.max(0, Number(e.target.value)))}
+              disabled={!canAdjustBalance}
+              onChange={(e) => setCurrencyBalance(Math.max(0, Math.trunc(Number(e.target.value))))}
             />
+            {canAdjustBalance ? (
+              <p className="text-white/40 text-xs">Изменение попадёт в журнал экономики как корректировка</p>
+            ) : (
+              <p className="text-white/40 text-xs">Баланс меняется через раздел «Экономика»</p>
+            )}
           </div>
         </div>
 

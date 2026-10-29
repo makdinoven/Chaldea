@@ -31,6 +31,7 @@ import { navItems, NavLinkItem } from './navData';
 import { DropdownLink } from './types';
 import logo from '../../../assets/logo_fog.png';
 import { parseServerDate } from '../../../utils/serverDate';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface UnreadBadgeProps {
   count: number;
@@ -80,6 +81,7 @@ interface MobileHeaderProps {
  * accordion nav + notifications/messages buttons with badges.
  */
 const MobileHeader = ({ userLinks }: MobileHeaderProps) => {
+  const { forms } = useCurrency();
   const location = useLocation();
   const dispatch = useAppDispatch();
   const isLocationPage = /^\/location\/\d+/.test(location.pathname);
@@ -266,7 +268,7 @@ const MobileHeader = ({ userLinks }: MobileHeaderProps) => {
                   <span className="text-white/70 text-[11px]">Ур. {level}</span>
                 )}
                 {coins != null && (
-                  <span className="flex items-center gap-1 text-gold text-[11px]">
+                  <span className="flex items-center gap-1 text-gold text-[11px]" title={forms.name}>
                     <CoinIcon size={11} />
                     {coins.toLocaleString('ru-RU')}
                   </span>

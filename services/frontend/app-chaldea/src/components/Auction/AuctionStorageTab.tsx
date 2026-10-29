@@ -16,6 +16,7 @@ import {
 import { RARITY_COLOR_MAP } from './AuctionListingCard';
 import type { AuctionStorageItemResponse } from '../../types/auction';
 import { shownRarity } from '../../constants/items';
+import { useCurrency } from '../../hooks/useCurrency';
 
 interface AuctionStorageTabProps {
   characterId: number;
@@ -42,6 +43,7 @@ const CreateListingForm = ({
   onClose: () => void;
   onSuccess: () => void;
 }) => {
+  const { forms } = useCurrency();
   const dispatch = useAppDispatch();
   const actionLoading = useAppSelector(selectActionLoading);
 
@@ -102,7 +104,7 @@ const CreateListingForm = ({
 
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
-            <label className="text-white/60 text-xs block mb-1">Начальная цена (зол.)</label>
+            <label className="text-white/60 text-xs block mb-1">Начальная цена ({forms.short})</label>
             <input
               type="number"
               value={startPrice}
@@ -158,6 +160,7 @@ const StorageRow = ({
   onCloseListingForm: () => void;
   onListingSuccess: () => void;
 }) => {
+  const { format } = useCurrency();
   const rarityColor = item.item
     ? (RARITY_COLOR_MAP[shownRarity(item.item.item_type, item.item.item_rarity) ?? ''] ?? 'text-white')
     : 'text-gold';
@@ -188,7 +191,7 @@ const StorageRow = ({
         <div className="flex-1 min-w-0">
           <p className={`${rarityColor} text-sm font-medium truncate`}>
             {isGold
-              ? `${item.gold_amount.toLocaleString('ru-RU')} золота`
+              ? format(item.gold_amount)
               : item.item?.name ?? 'Неизвестный предмет'}
           </p>
           <p className="text-white/40 text-xs">
@@ -231,6 +234,7 @@ const StorageRow = ({
 /* -- Main Component -- */
 
 const AuctionStorageTab = ({ characterId }: AuctionStorageTabProps) => {
+  const { forms } = useCurrency();
   const dispatch = useAppDispatch();
   const storageItems = useAppSelector(selectStorageItems);
   const totalGold = useAppSelector(selectStorageTotalGold);
@@ -253,7 +257,7 @@ const AuctionStorageTab = ({ characterId }: AuctionStorageTabProps) => {
       {/* Info message */}
       <div className="mb-4 p-3 rounded-card bg-white/5 border border-white/10">
         <p className="text-white/50 text-sm text-center">
-          Для забора предметов и золота подойдите к НПС-Аукционисту
+          Для забора предметов и {forms.genitive} подойдите к НПС-Аукционисту
         </p>
       </div>
 
@@ -261,7 +265,7 @@ const AuctionStorageTab = ({ characterId }: AuctionStorageTabProps) => {
       {totalGold > 0 && (
         <div className="mb-4 p-3 rounded-card bg-white/5 flex items-center justify-between">
           <p className="text-white/60 text-sm">
-            Всего золота на складе: <span className="gold-text font-medium">{totalGold.toLocaleString('ru-RU')}</span>
+            Всего {forms.genitive} на складе: <span className="gold-text font-medium">{totalGold.toLocaleString('ru-RU')}</span>
           </p>
         </div>
       )}
