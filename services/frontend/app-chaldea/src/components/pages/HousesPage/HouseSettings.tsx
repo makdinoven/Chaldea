@@ -77,7 +77,7 @@ const RoomForm = ({ houseId, room, ownerCharacterId, onChanged }: RoomFormProps)
         <input type="checkbox" checked={isOpen} onChange={(e) => setIsOpen(e.target.checked)} className="mt-1 accent-gold" />
         <span className="flex flex-col">
           <span className="text-white text-sm">Открыта для всех</span>
-          <span className="text-white/45 text-xs">Читать комнату смогут все игроки. Писать — только вы и жильцы с доступом.</span>
+          <span className="text-white/45 text-xs">Читать комнату смогут все, кого вы пускаете в дом. Писать — только вы и жильцы с доступом.</span>
         </span>
       </label>
       <button type="button" onClick={() => void save()} disabled={saving}
