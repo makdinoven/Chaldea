@@ -33,6 +33,7 @@ import HierarchyTree from './HierarchyTree/HierarchyTree';
 import GameTimeWidget from './GameTimeWidget';
 import InteractiveMap from './InteractiveMap/InteractiveMap';
 import RegionInteractiveMap from './RegionInteractiveMap/RegionInteractiveMap';
+import RegionEconomyCard from './RegionEconomyCard';
 import type { HouseMarker, MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
 import { plotsInRegion } from '../../api/houses';
 import { apiErrorMessage } from '../../api/errors';
@@ -678,6 +679,8 @@ const WorldPage = () => {
           </p>
         )}
 
+        <RegionEconomyCard regionId={regionDetails.id} />
+
         <div className="space-y-4">
           {regionDetails.districts.map((district) => (
             <div key={district.id} className="gray-bg p-4">
@@ -845,6 +848,7 @@ const WorldPage = () => {
                   Рекомендуемый уровень: {regionDetails.recommended_level}
                 </p>
               )}
+              <RegionEconomyCard regionId={regionDetails.id} />
               <RegionInteractiveMap
                 mapImageUrl={regionDetails.map_image_url}
                 mapItems={regionMapItems}

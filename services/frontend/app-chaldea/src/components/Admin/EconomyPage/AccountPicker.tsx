@@ -5,7 +5,7 @@ import { apiErrorMessage } from '../../../api/errors';
 import useDebounce from '../../../hooks/useDebounce';
 import { useCurrency } from '../../../hooks/useCurrency';
 import type { EconAccount, EconAccountKind } from '../../../types/economy';
-import { accountKindLabel } from './economyLabels';
+import { accountDisplayName, accountKindLabel } from './economyLabels';
 
 const RESULTS_PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -86,7 +86,7 @@ const AccountPicker = ({
       {value ? (
         <div className="flex items-center gap-2 min-w-0">
           <p className="text-white text-sm min-w-0 break-words">
-            <span className="text-gold font-medium">{value.name ?? `#${value.account_id}`}</span>{' '}
+            <span className="text-gold font-medium">{accountDisplayName(value)}</span>{' '}
             <span className="text-white/50">
               · {accountKindLabel(value.kind)} · {format(value.balance)}
             </span>
@@ -125,7 +125,7 @@ const AccountPicker = ({
             id={inputId}
             type="text"
             className="input-underline w-full"
-            placeholder="Название счёта или имя персонажа..."
+            placeholder="Регион, страна, имя персонажа..."
             value={query}
             maxLength={100}
             onFocus={() => setOpen(true)}
@@ -153,7 +153,7 @@ const AccountPicker = ({
                       onClick={() => pick(acc)}
                       className="dropdown-item w-full text-left flex flex-wrap items-baseline gap-x-2 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
-                      <span className="text-white break-words">{acc.name ?? `#${acc.account_id}`}</span>
+                      <span className="text-white break-words">{accountDisplayName(acc)}</span>
                       <span className="text-white/40 text-xs">
                         {accountKindLabel(acc.kind)}
                         {!acc.is_active && ' · закрыт'}

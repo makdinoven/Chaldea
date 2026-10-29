@@ -6,7 +6,15 @@ import { useCurrency } from '../../../hooks/useCurrency';
 import AdminPagination from '../AdminPagination/AdminPagination';
 import type { EconAccount, EconOperation, EconPosting, EconSummary } from '../../../types/economy';
 import AccountPicker from './AccountPicker';
-import { LEG_TYPE_LABELS, OP_TYPE_LABELS, formatDateTime, opTypeLabel } from './economyLabels';
+import {
+  ALL_ACCOUNT_KINDS,
+  LEG_TYPE_LABELS,
+  OP_TYPE_LABELS,
+  REGION_TICK_OP,
+  accountDisplayName,
+  formatDateTime,
+  opTypeLabel,
+} from './economyLabels';
 
 const PAGE_SIZE = 25;
 
@@ -19,9 +27,9 @@ const PostingLine = ({ p }: { p: EconPosting }) => {
   const { format } = useCurrency();
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
-      <span className="text-white/80 break-words">{p.from.name ?? `#${p.from.account_id}`}</span>
+      <span className="text-white/80 break-words">{accountDisplayName(p.from)}</span>
       <ArrowRight size={14} className="text-gold shrink-0" />
-      <span className="text-white/80 break-words">{p.to.name ?? `#${p.to.account_id}`}</span>
+      <span className="text-white/80 break-words">{accountDisplayName(p.to)}</span>
       <span className="text-white font-medium">{format(p.amount)}</span>
       {p.leg_type !== 'main' && (
         <span className="text-white/40 text-xs">({LEG_TYPE_LABELS[p.leg_type] ?? p.leg_type})</span>
@@ -61,6 +69,8 @@ const EconomyJournal = ({ summary }: EconomyJournalProps) => {
   const [account, setAccount] = useState<EconAccount | null>(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  // Region ticks add one operation per simulated region every 6 hours — hidden unless asked for.
+  const [hideTicks, setHideTicks] = useState(true);
   const [page, setPage] = useState(1);
 
   const [items, setItems] = useState<EconOperation[] | null>(null);
@@ -72,7 +82,7 @@ const EconomyJournal = ({ summary }: EconomyJournalProps) => {
   // Any filter change goes back to the first page.
   useEffect(() => {
     setPage(1);
-  }, [opType, regionId, account, dateFrom, dateTo]);
+  }, [opType, regionId, account, dateFrom, dateTo, hideTicks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +90,8 @@ const EconomyJournal = ({ summary }: EconomyJournalProps) => {
     setError(null);
     fetchEconomyOperations({
       op_type: opType || undefined,
+      // An explicit «Пересчёт региона» type filter wins over the hide toggle.
+      exclude_op_type: hideTicks && opType !== REGION_TICK_OP ? REGION_TICK_OP : undefined,
       region_id: regionId ? Number(regionId) : undefined,
       account_id: account?.account_id,
       date_from: dateFrom || undefined,
@@ -104,7 +116,7 @@ const EconomyJournal = ({ summary }: EconomyJournalProps) => {
     return () => {
       cancelled = true;
     };
-  }, [opType, regionId, account, dateFrom, dateTo, page]);
+  }, [opType, regionId, account, dateFrom, dateTo, hideTicks, page]);
 
   const toggle = (id: number) =>
     setExpanded((prev) => {
@@ -160,7 +172,7 @@ const EconomyJournal = ({ summary }: EconomyJournalProps) => {
         </div>
         <div className="sm:col-span-2 lg:col-span-3">
           <AccountPicker
-            kinds={['character', 'region_treasury', 'country_treasury', 'world_treasury', 'auction_escrow', 'auction_storage', 'emission', 'adjustment']}
+            kinds={ALL_ACCOUNT_KINDS}
             allowAnyKind
             allowInactive
             value={account}
@@ -169,6 +181,16 @@ const EconomyJournal = ({ summary }: EconomyJournalProps) => {
             inputId="econ-journal-account"
           />
         </div>
+        <label className="flex items-center gap-2 self-end py-2 text-sm text-white/70 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hideTicks}
+            disabled={opType === REGION_TICK_OP}
+            onChange={(e) => setHideTicks(e.target.checked)}
+            className="w-4 h-4 shrink-0 accent-gold disabled:opacity-40"
+          />
+          Скрыть пересчёты регионов
+        </label>
         {hasFilters && (
           <div className="flex items-end">
             <button

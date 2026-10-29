@@ -6,7 +6,7 @@ import { useCurrency } from '../../../hooks/useCurrency';
 import ConfirmDialog from '../../pages/LocationPage/ConfirmDialog';
 import type { EconAccount } from '../../../types/economy';
 import AccountPicker from './AccountPicker';
-import { ADJUST_KINDS, EMISSION_KINDS } from './economyLabels';
+import { ADJUST_KINDS, EMISSION_KINDS, accountDisplayName } from './economyLabels';
 
 const MAX_AMOUNT = 1_000_000_000_000;
 const COMMENT_MIN = 3;
@@ -69,8 +69,8 @@ const ActionForm = ({ mode, onDone }: ActionFormProps) => {
         </h2>
         <p className="text-white/50 text-sm">
           {isEmission
-            ? 'Выпуск новых денег в казну региона, страны или в Казну Скитальцев. Налог не удерживается.'
-            : 'Ручное начисление или списание на счёт персонажа или казны — через счёт «Корректировки».'}
+            ? 'Выпуск новых денег в казну региона, кошелёк жителей региона, казну страны или в Казну Скитальцев. Налог не удерживается.'
+            : 'Ручное начисление или списание на счёт персонажа, казны или кошелька жителей — через счёт «Корректировки».'}
         </p>
       </div>
 
@@ -155,10 +155,8 @@ const ActionForm = ({ mode, onDone }: ActionFormProps) => {
           title={isEmission ? 'Подтвердите эмиссию' : 'Подтвердите корректировку'}
           message={
             isEmission
-              ? `Выпустить ${format(amount)} в «${account.name ?? `#${account.account_id}`}»? Общая сумма денег в мире вырастет.`
-              : `${direction === 1 ? 'Начислить' : 'Списать'} ${format(amount)} ${direction === 1 ? 'на счёт' : 'со счёта'} «${
-                  account.name ?? `#${account.account_id}`
-                }»? Сейчас на счёте ${format(account.balance)}.`
+              ? `Выпустить ${format(amount)} в «${accountDisplayName(account)}»? Общая сумма денег в мире вырастет.`
+              : `${direction === 1 ? 'Начислить' : 'Списать'} ${format(amount)} ${direction === 1 ? 'на счёт' : 'со счёта'} «${accountDisplayName(account)}»? Сейчас на счёте ${format(account.balance)}.`
           }
           confirmLabel={isEmission ? 'Выпустить' : direction === 1 ? 'Начислить' : 'Списать'}
           danger={!isEmission && direction === -1}

@@ -12,13 +12,32 @@ import EconomySummary from './EconomySummary';
 import EconomyJournal from './EconomyJournal';
 import EconomyActions from './EconomyActions';
 import EconomySettings from './EconomySettings';
+import EconomyRegions from './EconomyRegions';
+import EconomyGoodsGroups from './EconomyGoodsGroups';
+import EconomyItemGroups from './EconomyItemGroups';
+import EconomyTemplates from './EconomyTemplates';
+import EconomyTick from './EconomyTick';
 
-type EconomyTab = 'summary' | 'journal' | 'actions' | 'settings';
+type EconomyTab =
+  | 'summary'
+  | 'journal'
+  | 'actions'
+  | 'regions'
+  | 'goods'
+  | 'items'
+  | 'templates'
+  | 'tick'
+  | 'settings';
 
 const TAB_LABEL: Record<EconomyTab, string> = {
   summary: 'Сводка',
   journal: 'Журнал',
   actions: 'Действия',
+  regions: 'Регионы',
+  goods: 'Товары',
+  items: 'Предметы',
+  templates: 'Шаблоны',
+  tick: 'Пересчёт',
   settings: 'Настройки',
 };
 
@@ -51,7 +70,17 @@ const EconomyPage = () => {
 
   useEffect(loadSummary, [loadSummary]);
 
-  const tabs: EconomyTab[] = ['summary', 'journal', ...(canEmit || canAdjust ? (['actions'] as EconomyTab[]) : []), 'settings'];
+  const tabs: EconomyTab[] = [
+    'summary',
+    'journal',
+    ...(canEmit || canAdjust ? (['actions'] as EconomyTab[]) : []),
+    'regions',
+    'goods',
+    'items',
+    'templates',
+    'tick',
+    'settings',
+  ];
 
   return (
     <div className="w-full max-w-container mx-auto flex flex-col gap-5 pb-10">
@@ -63,7 +92,8 @@ const EconomyPage = () => {
         <h1 className="gold-text text-2xl sm:text-3xl font-semibold uppercase tracking-[0.06em]">Экономика</h1>
         <p className="text-white/60 text-sm max-w-2xl">
           Все деньги мира лежат на счетах: у персонажей, в казнах регионов и стран, в Казне Скитальцев или
-          на аукционе. Деньги только переходят со счёта на счёт; новые появляются лишь эмиссией.
+          на аукционе, а у жителей регионов — в общем кошельке. Деньги только переходят со счёта на счёт; новые
+          появляются лишь эмиссией.
         </p>
       </div>
 
@@ -93,6 +123,11 @@ const EconomyPage = () => {
       )}
       {tab === 'journal' && <EconomyJournal summary={summary} />}
       {tab === 'actions' && <EconomyActions canEmit={canEmit} canAdjust={canAdjust} onDone={loadSummary} />}
+      {tab === 'regions' && <EconomyRegions canSettings={canSettings} canEmit={canEmit} onMoneyChanged={loadSummary} />}
+      {tab === 'goods' && <EconomyGoodsGroups />}
+      {tab === 'items' && <EconomyItemGroups />}
+      {tab === 'templates' && <EconomyTemplates />}
+      {tab === 'tick' && <EconomyTick canSettings={canSettings} onMoneyChanged={loadSummary} />}
       {tab === 'settings' && <EconomySettings canEdit={canSettings} onSaved={loadSummary} />}
     </div>
   );

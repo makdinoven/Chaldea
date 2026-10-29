@@ -27,6 +27,7 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   house_resale: 'Перепродажа дома',
   character_deleted: 'Удаление персонажа',
   treasury_closed: 'Закрытие казны',
+  region_tick: 'Пересчёт региона',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
@@ -40,10 +41,24 @@ export const ACCOUNT_KIND_LABELS: Record<EconAccountKind, string> = {
   auction_storage: 'Хранилище аукциона',
   emission: 'Эмиссия',
   adjustment: 'Корректировки',
+  population_purse: 'Кошелёк жителей',
 };
 
 export const accountKindLabel = (kind: string | null | undefined): string =>
   (kind && ACCOUNT_KIND_LABELS[kind as EconAccountKind]) || 'Счёт';
+
+/**
+ * Display name of an account. A population purse carries its region's name, so it is prefixed
+ * («Кошелёк жителей — Эльмирия») to tell it apart from the region treasury with the same name.
+ */
+export const accountDisplayName = (account: {
+  kind: string | null | undefined;
+  name: string | null;
+  account_id: number;
+}): string => {
+  const base = account.name ?? `#${account.account_id}`;
+  return account.kind === 'population_purse' ? `${ACCOUNT_KIND_LABELS.population_purse} — ${base}` : base;
+};
 
 export const LEG_TYPE_LABELS: Record<EconLegType, string> = {
   main: 'основная',
@@ -53,15 +68,45 @@ export const LEG_TYPE_LABELS: Record<EconLegType, string> = {
 };
 
 /** Account kinds an admin emission may target (backend rule). */
-export const EMISSION_KINDS: EconAccountKind[] = ['region_treasury', 'country_treasury', 'world_treasury'];
+export const EMISSION_KINDS: EconAccountKind[] = [
+  'region_treasury',
+  'population_purse',
+  'country_treasury',
+  'world_treasury',
+];
 
 /** Account kinds an admin adjustment may target (everything except source and auction accounts). */
 export const ADJUST_KINDS: EconAccountKind[] = [
   'character',
   'region_treasury',
+  'population_purse',
   'country_treasury',
   'world_treasury',
 ];
+
+/** Every account kind, for «all kinds» pickers (journal filter). */
+export const ALL_ACCOUNT_KINDS: EconAccountKind[] = [
+  'character',
+  'region_treasury',
+  'population_purse',
+  'country_treasury',
+  'world_treasury',
+  'auction_escrow',
+  'auction_storage',
+  'emission',
+  'adjustment',
+];
+
+/** Op type the journal hides by default: one per simulated region every 6 hours. */
+export const REGION_TICK_OP = 'region_tick';
+
+/** «0,1234» → «12,3 %»: tax rates and other shares. */
+export const formatPercent = (share: number, digits = 1): string =>
+  `${(share * 100).toLocaleString('ru-RU', { maximumFractionDigits: digits })}%`;
+
+/** Plain decimal with a Russian separator: stocks, multipliers. */
+export const formatDecimal = (n: number, digits = 2): string =>
+  n.toLocaleString('ru-RU', { maximumFractionDigits: digits });
 
 /** «12.03.2026, 14:05» in the viewer's time zone; the server sends naive UTC timestamps. */
 export const formatDateTime = (iso: string): string => {

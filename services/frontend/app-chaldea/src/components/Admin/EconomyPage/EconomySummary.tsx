@@ -25,6 +25,8 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
   const { format } = useCurrency();
   const [open, setOpen] = useState(false);
   const regionsSum = country.regions.reduce((s, r) => s + r.balance, 0);
+  const pursesSum = country.regions.reduce((s, r) => s + (r.purse_balance ?? 0), 0);
+  const hasPurses = country.regions.some((r) => r.purse_account_id != null);
   const noCountry = country.account_id === null;
 
   return (
@@ -43,6 +45,7 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
           {!country.is_active && !noCountry && <span className="ml-2 text-white/40 text-xs">закрыта</span>}
           <span className="block text-white/40 text-xs">
             Регионов: {country.regions.length} · в казнах регионов {format(regionsSum)}
+            {hasPurses && ` · у жителей ${format(pursesSum)}`}
           </span>
         </span>
         {!noCountry && (
@@ -53,12 +56,19 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
         <ul className="pl-6 pb-3 flex flex-col gap-1.5">
           {country.regions.length === 0 && <li className="text-white/40 text-xs italic">Регионов нет</li>}
           {country.regions.map((r) => (
-            <li key={r.account_id} className="flex items-baseline gap-2 text-sm">
-              <span className="flex-1 min-w-0 text-white/80 break-words">
+            <li key={r.account_id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
+              <span className="flex-1 min-w-[50%] text-white/80 break-words">
                 {r.name ?? `Регион #${r.region_id}`}
                 {!r.is_active && <span className="ml-2 text-white/40 text-xs">закрыта</span>}
               </span>
-              <span className={`shrink-0 ${balanceClass(r.balance)}`}>{format(r.balance)}</span>
+              {r.purse_account_id != null && (
+                <span className="shrink-0 text-white/50 text-xs" title="Кошелёк жителей">
+                  жители {format(r.purse_balance ?? 0)}
+                </span>
+              )}
+              <span className={`shrink-0 ${balanceClass(r.balance)}`} title="Казна региона">
+                {format(r.balance)}
+              </span>
             </li>
           ))}
         </ul>
@@ -80,6 +90,7 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
     { label: 'Ставки аукциона', value: totals.escrow },
     { label: 'Хранилище аукциона', value: totals.auction_storage },
     { label: 'Казны регионов', value: totals.region_treasuries },
+    { label: 'Кошельки жителей', value: totals.population_purses ?? 0 },
     { label: 'Казны стран', value: totals.country_treasuries },
     { label: 'Казна Скитальцев', value: totals.world_treasury },
   ];
