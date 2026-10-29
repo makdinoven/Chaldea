@@ -6,6 +6,7 @@ import { fetchEconomySim, postEconomySimRun, putEconomySim } from '../../../api/
 import { apiErrorMessage } from '../../../api/errors';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type { EconSimParams, EconSimState, EconTickRun, EconTickStatus, EconTickTrigger } from '../../../types/economy';
+import { BigMoney } from './CompactValue';
 import { useCurrency } from '../../../hooks/useCurrency';
 import { formatDateTime } from './economyLabels';
 import { GuideIntro } from './GuideLink';
@@ -146,6 +147,7 @@ const SECTIONS: ParamSection[] = [
     title: 'Служебное',
     intro: 'Менять только осознанно.',
     params: [
+      { key: 'population_scale', label: 'Масштаб населения, 1 к N', hint: 'Расчёт берёт население региона, делённое на это число: при 100 лорные 4 000 000 считаются как 40 000. Меняет масштаб всей экономики со следующего пересчёта.', min: 1, max: 10_000, def: 100, integer: true },
       { key: 'dt', label: 'Длина шага, суток', hint: 'Доля суток на один шаг: 6 часов = 0,25. Должна совпадать с расписанием.', min: 0.05, max: 1, def: 0.25 },
       { key: 'history_retention_days', label: 'Хранить историю, дней', hint: 'Записи истории регионов старше этого срока удаляются.', min: 1, max: 365, def: 60, integer: true },
     ],
@@ -608,9 +610,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
             )}
             {lastResult.banks_processed !== undefined && (
               <span className="text-white/60">
-                Банков: {lastResult.banks_processed}, выплачено процентов: {format(lastResult.bank_interest_paid ?? 0)},
+                Банков: {lastResult.banks_processed}, выплачено процентов: <BigMoney value={lastResult.bank_interest_paid ?? 0} />,
                 просрочено займов: {lastResult.loans_overdue ?? 0}, взыскано по займам: {lastResult.loans_collected ?? 0}{' '}
-                ({format(lastResult.collected_amount ?? 0)})
+                (<BigMoney value={lastResult.collected_amount ?? 0} />)
                 {(lastResult.banks_closed ?? 0) > 0 && <>, закрыто банков удалённых регионов: {lastResult.banks_closed}</>}
                 {(lastResult.bank_failures ?? 0) > 0 && (
                   <span className="text-site-red">

@@ -9,6 +9,7 @@ import type { EconFillResult, EconRegionItem } from '../../../types/economy';
 import RegionEconomyEditor from './RegionEconomyEditor';
 import { formatDateTime } from './economyLabels';
 import { BankBadge, HungerBadge, ScaleBar } from './regionBits';
+import { BigMoney, Population } from './CompactValue';
 
 const COMMENT_MIN = 3;
 const COMMENT_MAX = 500;
@@ -35,6 +36,8 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
   const [fundPurses, setFundPurses] = useState(true);
   const [treasuryToReserve, setTreasuryToReserve] = useState(true);
   const [openBanks, setOpenBanks] = useState(true);
+  const [returnPurseExcess, setReturnPurseExcess] = useState(false);
+  const [returnTreasuryExcess, setReturnTreasuryExcess] = useState(false);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -50,6 +53,8 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
         fund_purses: fundPurses,
         treasury_to_reserve: treasuryToReserve,
         open_banks: openBanks,
+        return_purse_excess: returnPurseExcess,
+        return_treasury_excess: returnTreasuryExcess,
         comment: trimmed,
       });
       onDone(result);
@@ -94,7 +99,21 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
       checked: openBanks,
       set: setOpenBanks,
       label: 'Открыть банки в столицах и портах',
-      hint: 'Банк включается регионам с шаблоном «Столица» или «Порт»; стартовый капитал берётся из казны один раз. Остальным регионам банк включают вручную.',
+      hint: 'Банк включается регионам с шаблоном «Столичный регион» или «Портовый регион»; стартовый капитал берётся из казны один раз. Остальным регионам банк включают вручную.',
+    },
+    {
+      id: 'econ-fill-return-purse',
+      checked: returnPurseExcess,
+      set: setReturnPurseExcess,
+      label: 'Вернуть излишек кошелька жителей в эмиссию',
+      hint: 'Всё, что в кошельке выше стартового запаса (7 дней потребностей при текущем масштабе населения), уходит обратно в эмиссию. Перед этим вклады и займы жителей в банке региона приводятся к масштабу (лишние вклады возвращаются в кошелёк, лишние займы гасятся из него; вклады игроков не трогаются). Нужно после перехода на масштаб населения, когда кошельки раздуты.',
+    },
+    {
+      id: 'econ-fill-return-treasury',
+      checked: returnTreasuryExcess,
+      set: setReturnTreasuryExcess,
+      label: 'Вернуть излишек казны в эмиссию',
+      hint: 'Всё, что в казне региона выше резерва жалованья (7 дней налогов), уходит в эмиссию — в том числе деньги, пришедшие от игроков (налоги, платежи, комиссии).',
     },
   ];
 
@@ -289,6 +308,18 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
         <p className="text-sm text-white/80 rounded-card border border-stat-energy/30 bg-stat-energy/[0.06] px-4 py-3">
           Заполнено регионов: {fillResult.regions}. Выпущено жителям: {format(fillResult.emitted_purses)}, в казны:{' '}
           {format(fillResult.emitted_treasuries)}
+          {(fillResult.returned ?? 0) > 0 && (
+            <>
+              . Возвращено в эмиссию: <BigMoney value={fillResult.returned ?? 0} /> (жители{' '}
+              <BigMoney value={fillResult.returned_purses ?? 0} />, казны <BigMoney value={fillResult.returned_treasuries ?? 0} />)
+            </>
+          )}
+          {((fillResult.resident_deposits_out ?? 0) > 0 || (fillResult.resident_loans_repaid ?? 0) > 0) && (
+            <>
+              . Банк: вклады жителей возвращены в кошелёк <BigMoney value={fillResult.resident_deposits_out ?? 0} />, займы
+              жителей погашены <BigMoney value={fillResult.resident_loans_repaid ?? 0} />
+            </>
+          )}
           {fillResult.operation_ids.length > 0 && (
             <span className="text-white/50"> (операций: {fillResult.operation_ids.length})</span>
           )}
@@ -344,7 +375,9 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                       <span className="block text-white/40 text-xs">{r.country_name ?? 'Без страны'}</span>
                     </td>
                     <td className="py-2 pr-3 text-white/80">{r.template_name ?? <span className="text-white/30">—</span>}</td>
-                    <td className="py-2 pr-3 text-right text-white/80">{r.population.toLocaleString('ru-RU')}</td>
+                    <td className="py-2 pr-3 text-right text-white/80 whitespace-nowrap">
+                      <Population value={r.population} sim={r.sim_population} />
+                    </td>
                     <td className="py-2 pr-3">
                       {r.simulated ? <ScaleBar value={r.stability} tone="stability" label="Стабильность" /> : <span className="text-white/30">—</span>}
                     </td>
@@ -354,8 +387,8 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                     <td className="py-2 pr-3">
                       <HungerBadge hunger={r.hunger} simulated={r.simulated} />
                     </td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap text-white/80">{format(r.purse)}</td>
-                    <td className={`py-2 pr-3 text-right whitespace-nowrap ${balanceClass(r.treasury)}`}>{format(r.treasury)}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap text-white/80"><BigMoney value={r.purse} /></td>
+                    <td className={`py-2 pr-3 text-right whitespace-nowrap ${balanceClass(r.treasury)}`}><BigMoney value={r.treasury} /></td>
                     <td className="py-2 text-white/50 text-xs whitespace-nowrap">
                       {r.last_tick_at ? formatDateTime(r.last_tick_at) : '—'}
                     </td>
@@ -382,7 +415,12 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                       </span>
                       <span className="block text-white/40 text-xs break-words">
                         {r.country_name ?? 'Без страны'} · {r.template_name ?? 'без шаблона'}
-                        {r.population > 0 && ` · ${r.population.toLocaleString('ru-RU')} жит.`}
+                        {r.population > 0 && (
+                          <>
+                            {' · '}
+                            <Population value={r.population} sim={r.sim_population} suffix="жит." />
+                          </>
+                        )}
                       </span>
                     </span>
                     <ChevronRight size={16} className="text-gold shrink-0 mt-0.5" />
@@ -398,10 +436,10 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                   <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                     <HungerBadge hunger={r.hunger} simulated={r.simulated} />
                     <span className="text-white/50">
-                      жители <span className="text-white/80">{format(r.purse)}</span>
+                      жители <BigMoney value={r.purse} className="text-white/80" />
                     </span>
                     <span className="text-white/50">
-                      казна <span className={balanceClass(r.treasury)}>{format(r.treasury)}</span>
+                      казна <BigMoney value={r.treasury} className={balanceClass(r.treasury)} />
                     </span>
                   </span>
                   {r.last_tick_at && (
@@ -422,8 +460,14 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
             setFillOpen(false);
             setFillResult(result);
             const banksText = result.banks_opened?.length ? `. Открыто банков: ${result.banks_opened.length}` : '';
+            const returnedText = (result.returned ?? 0) > 0
+              ? `. Возвращено в эмиссию: ${format(result.returned ?? 0)} (жители ${format(result.returned_purses ?? 0)}, казны ${format(result.returned_treasuries ?? 0)})`
+              : '';
+            const bankText = (result.resident_deposits_out ?? 0) > 0 || (result.resident_loans_repaid ?? 0) > 0
+              ? `. Банк: вклады жителей в кошелёк ${format(result.resident_deposits_out ?? 0)}, займы жителей погашены ${format(result.resident_loans_repaid ?? 0)}`
+              : '';
             toast.success(
-              `Регионы заполнены: ${result.regions}. Жителям: ${format(result.emitted_purses)}, в казны: ${format(result.emitted_treasuries)}${banksText}`,
+              `Регионы заполнены: ${result.regions}. Жителям: ${format(result.emitted_purses)}, в казны: ${format(result.emitted_treasuries)}${banksText}${returnedText}${bankText}`,
             );
             load();
             onMoneyChanged();

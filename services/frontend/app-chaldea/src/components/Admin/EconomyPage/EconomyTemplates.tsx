@@ -13,6 +13,8 @@ import type {
   EconTemplateUpdate,
 } from '../../../types/economy';
 import { formatPercent } from './economyLabels';
+import { Population, populationTitle } from './CompactValue';
+import { compactNumber } from '../../../utils/compactNumber';
 import { FieldHint } from './ParamHint';
 import type { FieldHintKey } from './paramHints';
 
@@ -20,7 +22,7 @@ import type { FieldHintKey } from './paramHints';
 const NAME_MAX = 100;
 const DESCRIPTION_MAX = 500;
 const NOUN_MAX = 50;
-const MAX_POPULATION = 10_000_000;
+const MAX_POPULATION = 1_000_000_000;
 const MAX_TAX_PERCENT = 50;
 const MAX_PRODUCTION = 100_000;
 const MAX_CONSUMPTION_MULT = 10;
@@ -35,7 +37,7 @@ const FOOD_WORDS: Record<EconNounGender, [string, string, string]> = {
 };
 
 const GENDER_LABELS: Record<EconNounGender, string> = {
-  m: 'Мужской («Город сыт»)',
+  m: 'Мужской («Регион сыт»)',
   f: 'Женский («Крепость сыта»)',
   n: 'Средний («Село сыто»)',
 };
@@ -132,7 +134,7 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
   const setGoods = (code: string, patch: Partial<GoodsDraft>) =>
     setDraft({ ...draft, goods: { ...draft.goods, [code]: { ...draft.goods[code], ...patch } } });
 
-  const nounPreview = draft.noun.trim() || 'Город';
+  const nounPreview = draft.noun.trim() || 'Регион';
   const words = FOOD_WORDS[draft.gender];
 
   const save = async () => {
@@ -215,7 +217,15 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
               <FieldLabel htmlFor="econ-tpl-population" hint="template_population">Население</FieldLabel>
               {numberInput('econ-tpl-population', draft.population, (v) => setDraft({ ...draft, population: v }), populationValid,
                 { min: 0, max: MAX_POPULATION, step: 100 })}
-              {!populationValid && <p className="text-site-red text-xs">Целое от 0 до 10 000 000</p>}
+              {populationValid ? (
+                draft.population.trim() !== '' && (
+                  <p className="text-white/40 text-xs break-words" title={populationTitle(Number(draft.population))}>
+                    {compactNumber(Number(draft.population))} жит.
+                  </p>
+                )
+              ) : (
+                <p className="text-site-red text-xs">Целое от 0 до 1 000 000 000</p>
+              )}
             </div>
             <div className="flex flex-col gap-1 min-w-0">
               <FieldLabel htmlFor="econ-tpl-tax" hint="template_tax" hintTitle="Налог с жителей">Налог, %</FieldLabel>
@@ -254,7 +264,7 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
               id="econ-tpl-noun"
               type="text"
               maxLength={NOUN_MAX}
-              placeholder="Город, Порт, Крепость..."
+              placeholder="Регион, Край, Округа..."
               className={`input-underline w-full ${nounValid ? '' : '!border-site-red'}`}
               value={draft.noun}
               disabled={!canEdit}
@@ -442,7 +452,7 @@ const EconomyTemplates = () => {
                       «<span className="text-white/80">{t.settlement_noun} {FOOD_WORDS[t.noun_gender]?.[0] ?? ''}</span>»
                     </span>
                     <span>
-                      жителей <span className="text-white/80">{t.default_population.toLocaleString('ru-RU')}</span>
+                      жителей <Population value={t.default_population} className="text-white/80" />
                     </span>
                     <span>
                       налог <span className="text-white/80">{formatPercent(t.tax_rate)}</span>

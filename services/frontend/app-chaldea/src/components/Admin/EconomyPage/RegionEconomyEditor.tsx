@@ -9,7 +9,6 @@ import {
   putEconomyRegion,
 } from '../../../api/economyAdmin';
 import { apiErrorMessage } from '../../../api/errors';
-import { useCurrency } from '../../../hooks/useCurrency';
 import ConfirmDialog from '../../pages/LocationPage/ConfirmDialog';
 import type {
   EconRegionDetail,
@@ -19,7 +18,9 @@ import type {
   EconRegionTemplate,
   EconRegionUpdate,
 } from '../../../types/economy';
-import { formatDateTime, formatDecimal, formatPercent } from './economyLabels';
+import { formatDateTime, formatDecimal, formatPercent, formatQty } from './economyLabels';
+import { BigMoney, populationTitle } from './CompactValue';
+import { compactNumber } from '../../../utils/compactNumber';
 import { HungerBadge, PriceMult, ScaleBar } from './regionBits';
 import RegionBankPanel from './RegionBankPanel';
 import { FieldHint } from './ParamHint';
@@ -27,7 +28,7 @@ import { GuideIntro } from './GuideLink';
 import type { FieldHintKey } from './paramHints';
 
 const HISTORY_LIMIT = 40;
-const MAX_POPULATION = 10_000_000;
+const MAX_POPULATION = 1_000_000_000;
 const MAX_TAX_PERCENT = 50;
 const MAX_PRODUCTION = 100_000;
 const MAX_CONSUMPTION_MULT = 10;
@@ -113,10 +114,10 @@ const HistoryDetails = ({ row, groupNames }: { row: EconRegionHistoryRow; groupN
     {Object.entries(row.goods).map(([code, g]) => (
       <li key={code} className="flex flex-wrap items-baseline gap-x-2">
         <span className="text-white/80 min-w-[120px]">{groupNames[code] ?? code}</span>
-        <span className="text-white/50">запас {formatDecimal(g.stock, 1)}</span>
+        <span className="text-white/50">запас {formatQty(g.stock)}</span>
         <PriceMult mult={g.price_mult} />
         <span className="text-white/40">
-          +{formatDecimal(g.produced, 1)} / −{formatDecimal(g.consumed, 1)}
+          +{formatQty(g.produced)} / −{formatQty(g.consumed)}
         </span>
       </li>
     ))}
@@ -125,7 +126,6 @@ const HistoryDetails = ({ row, groupNames }: { row: EconRegionHistoryRow; groupN
 
 /** One region's economy: template, population, tax, stability/prosperity, the 12 goods and the tick history. */
 const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEconomyEditorProps) => {
-  const { format } = useCurrency();
   const [detail, setDetail] = useState<EconRegionDetail | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [templates, setTemplates] = useState<EconRegionTemplate[]>([]);
@@ -307,11 +307,11 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
   );
 
   const goodsReadOnly = (g: EconRegionGoods) => [
-    { label: 'Норма', value: formatDecimal(g.norm_stock, 1) },
-    { label: 'Произведено', value: formatDecimal(g.last_produced, 1) },
-    { label: 'Потреблено', value: formatDecimal(g.last_consumed, 1) },
-    { label: 'Спрос', value: formatDecimal(g.last_demand, 1) },
-    { label: 'Испорчено', value: formatDecimal(g.last_spoiled, 1) },
+    { label: 'Норма', value: formatQty(g.norm_stock) },
+    { label: 'Произведено', value: formatQty(g.last_produced) },
+    { label: 'Потреблено', value: formatQty(g.last_consumed) },
+    { label: 'Спрос', value: formatQty(g.last_demand) },
+    { label: 'Испорчено', value: formatQty(g.last_spoiled) },
   ];
 
   const lastFlows = [
@@ -375,11 +375,11 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
         </div>
         <div className="bg-site-bg rounded-card border border-white/[0.07] p-3 flex flex-col gap-1 min-w-0 text-sm">
           <span className="text-white/50 text-[11px] sm:text-xs uppercase tracking-[0.06em]">Деньги</span>
-          <span className="text-white/80 break-words">жители {format(detail.purse)}</span>
+          <span className="text-white/80 break-words">жители <BigMoney value={detail.purse} /></span>
           <span className={`break-words ${detail.treasury < 0 ? 'text-site-red' : 'text-white/80'}`}>
-            казна {format(detail.treasury)}
+            казна <BigMoney value={detail.treasury} />
           </span>
-          <span className="text-white/40 text-xs break-words">резерв казны {format(detail.treasury_target)}</span>
+          <span className="text-white/40 text-xs break-words">резерв казны <BigMoney value={detail.treasury_target} /></span>
         </div>
       </div>
 
@@ -387,7 +387,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
         <span className="uppercase tracking-[0.06em]">Последний пересчёт:</span>
         {lastFlows.map((f) => (
           <span key={f.label}>
-            {f.label} <span className="text-white/80">{format(f.value)}</span>
+            {f.label} <BigMoney value={f.value} className="text-white/80" />
           </span>
         ))}
       </div>
@@ -420,7 +420,23 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
               max: MAX_POPULATION,
               step: 100,
             })}
-            {!populationValid && <p className="text-site-red text-xs">Целое от 0 до 10 000 000</p>}
+            {populationValid ? (
+              draft.population.trim() !== '' && (
+                <p
+                  className="text-white/40 text-xs break-words"
+                  title={populationTitle(
+                    Number(draft.population),
+                    Number(draft.population) === detail.population ? detail.sim_population : null,
+                  )}
+                >
+                  {compactNumber(Number(draft.population))} жит.
+                  {Number(draft.population) === detail.population && detail.sim_population != null &&
+                    ` · в расчёте ${compactNumber(detail.sim_population)}`}
+                </p>
+              )
+            ) : (
+              <p className="text-site-red text-xs">Целое от 0 до 1 000 000 000</p>
+            )}
           </div>
           <div className="flex flex-col gap-1 min-w-0">
             <FieldLabel htmlFor="econ-region-tax" hint="region_tax">Налог с жителей, %</FieldLabel>
@@ -552,17 +568,17 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
                           {numberInput(`econ-g-${g.group_code}-stock`, d.stock, (v) => setGoods(g.group_code, { stock: v, stockTouched: true }),
                             inRange(d.stock, 0, Number.MAX_SAFE_INTEGER), { min: 0, step: 1 })}
                         </td>
-                        <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(g.norm_stock, 1)}</td>
+                        <td className="py-1.5 pr-3 text-right text-white/70">{formatQty(g.norm_stock)}</td>
                         <td className="py-1.5 pr-3 text-right whitespace-nowrap">
                           <PriceMult mult={g.price_mult} />
                           {g.prev_price_mult !== g.price_mult && (
                             <span className="text-white/30 text-xs ml-1">(было ×{formatDecimal(g.prev_price_mult, 2)})</span>
                           )}
                         </td>
-                        <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(g.last_produced, 1)}</td>
-                        <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(g.last_consumed, 1)}</td>
-                        <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(g.last_demand, 1)}</td>
-                        <td className="py-1.5 text-right text-white/70">{formatDecimal(g.last_spoiled, 1)}</td>
+                        <td className="py-1.5 pr-3 text-right text-white/70">{formatQty(g.last_produced)}</td>
+                        <td className="py-1.5 pr-3 text-right text-white/70">{formatQty(g.last_consumed)}</td>
+                        <td className="py-1.5 pr-3 text-right text-white/70">{formatQty(g.last_demand)}</td>
+                        <td className="py-1.5 text-right text-white/70">{formatQty(g.last_spoiled)}</td>
                       </tr>
                     );
                   })}
@@ -678,12 +694,12 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
                           <td className={`py-1.5 pr-3 text-right ${h.hunger >= 0.15 ? 'text-site-red' : 'text-white/80'}`}>
                             {formatPercent(h.hunger, 0)}
                           </td>
-                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap">{format(h.tax)}</td>
-                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap">{format(h.wages)}</td>
-                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap">{format(h.grant_amount)}</td>
-                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap">{format(h.purse)}</td>
+                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap"><BigMoney value={h.tax} /></td>
+                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap"><BigMoney value={h.wages} /></td>
+                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap"><BigMoney value={h.grant_amount} /></td>
+                          <td className="py-1.5 pr-3 text-right text-white/80 whitespace-nowrap"><BigMoney value={h.purse} /></td>
                           <td className={`py-1.5 text-right whitespace-nowrap ${h.treasury < 0 ? 'text-site-red' : 'text-white/80'}`}>
-                            {format(h.treasury)}
+                            <BigMoney value={h.treasury} />
                           </td>
                         </tr>
                         {isOpen && (
@@ -714,10 +730,10 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
                           стаб. {formatDecimal(h.stability, 1)} · дост. {formatDecimal(h.prosperity, 1)} · голод {formatPercent(h.hunger, 0)}
                         </span>
                         <span className="text-white/50 break-words">
-                          налог {format(h.tax)} · жалованье {format(h.wages)} · грант {format(h.grant_amount)}
+                          налог <BigMoney value={h.tax} /> · жалованье <BigMoney value={h.wages} /> · грант <BigMoney value={h.grant_amount} />
                         </span>
                         <span className="text-white/50 break-words">
-                          жители {format(h.purse)} · казна {format(h.treasury)}
+                          жители <BigMoney value={h.purse} /> · казна <BigMoney value={h.treasury} />
                         </span>
                       </span>
                     </button>

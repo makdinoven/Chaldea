@@ -1,4 +1,5 @@
 import type { EconAccountKind, EconLegType, EconMerchantReason } from '../../../types/economy';
+import { COMPACT_MONEY_FROM, compactNumber } from '../../../utils/compactNumber';
 
 /** Russian labels of ledger operation types (econ_core.OP_TYPES). */
 export const OP_TYPE_LABELS: Record<string, string> = {
@@ -128,6 +129,10 @@ export const formatPercent = (share: number, digits = 1): string =>
 /** Plain decimal with a Russian separator: stocks, multipliers. */
 export const formatDecimal = (n: number, digits = 2): string =>
   n.toLocaleString('ru-RU', { maximumFractionDigits: digits });
+
+/** Goods quantities (stocks, norms, flows): one decimal, compact from 100 000 («1.2 м»). */
+export const formatQty = (n: number): string =>
+  Math.abs(n) >= COMPACT_MONEY_FROM ? compactNumber(n) : formatDecimal(n, 1);
 
 /** «12.03.2026, 14:05» in the viewer's time zone; the server sends naive UTC timestamps. */
 export const formatDateTime = (iso: string): string => {

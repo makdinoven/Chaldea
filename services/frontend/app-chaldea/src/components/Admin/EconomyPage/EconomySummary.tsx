@@ -3,6 +3,8 @@ import { CheckCircle2, ChevronDown, ChevronRight, RefreshCw, TriangleAlert } fro
 import { useCurrency } from '../../../hooks/useCurrency';
 import type { EconCountryTreasury, EconSummary } from '../../../types/economy';
 import { accountKindLabel } from './economyLabels';
+import { BigMoney, useBigMoney } from './CompactValue';
+import { COMPACT_MONEY_FROM } from '../../../utils/compactNumber';
 
 interface EconomySummaryProps {
   summary: EconSummary;
@@ -12,17 +14,17 @@ interface EconomySummaryProps {
 
 const balanceClass = (n: number) => (n < 0 ? 'text-site-red' : 'text-white');
 
-const StatCard = ({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) => (
+const StatCard = ({ label, value, title, accent = false }: { label: string; value: string; title?: string; accent?: boolean }) => (
   <div className="bg-site-bg rounded-card border border-white/[0.07] p-3 sm:p-4 flex flex-col gap-1 min-w-0">
     <span className="text-white/50 text-[11px] sm:text-xs uppercase tracking-[0.06em]">{label}</span>
-    <span className={`text-sm sm:text-base font-medium break-words ${accent ? 'text-gold' : 'text-white'}`}>
+    <span className={`text-sm sm:text-base font-medium break-words ${accent ? 'text-gold' : 'text-white'}`} title={title}>
       {value}
     </span>
   </div>
 );
 
 const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
-  const { format } = useCurrency();
+  const { big, exact } = useBigMoney();
   const [open, setOpen] = useState(false);
   const regionsSum = country.regions.reduce((s, r) => s + r.balance, 0);
   const pursesSum = country.regions.reduce((s, r) => s + (r.purse_balance ?? 0), 0);
@@ -44,12 +46,18 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
           </span>
           {!country.is_active && !noCountry && <span className="ml-2 text-white/40 text-xs">закрыта</span>}
           <span className="block text-white/40 text-xs">
-            Регионов: {country.regions.length} · в казнах регионов {format(regionsSum)}
-            {hasPurses && ` · у жителей ${format(pursesSum)}`}
+            Регионов: {country.regions.length} · в казнах регионов{' '}
+            <span title={exact(regionsSum)}>{big(regionsSum)}</span>
+            {hasPurses && (
+              <>
+                {' · у жителей '}
+                <span title={exact(pursesSum)}>{big(pursesSum)}</span>
+              </>
+            )}
           </span>
         </span>
         {!noCountry && (
-          <span className={`text-sm shrink-0 text-right ${balanceClass(country.balance)}`}>{format(country.balance)}</span>
+          <BigMoney value={country.balance} className={`text-sm shrink-0 text-right ${balanceClass(country.balance)}`} />
         )}
       </button>
       {open && (
@@ -62,12 +70,12 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
                 {!r.is_active && <span className="ml-2 text-white/40 text-xs">закрыта</span>}
               </span>
               {r.purse_account_id != null && (
-                <span className="shrink-0 text-white/50 text-xs" title="Кошелёк жителей">
-                  жители {format(r.purse_balance ?? 0)}
+                <span className="shrink-0 text-white/50 text-xs" title={`Кошелёк жителей: ${exact(r.purse_balance ?? 0)}`}>
+                  жители {big(r.purse_balance ?? 0)}
                 </span>
               )}
-              <span className={`shrink-0 ${balanceClass(r.balance)}`} title="Казна региона">
-                {format(r.balance)}
+              <span className={`shrink-0 ${balanceClass(r.balance)}`} title={`Казна региона: ${exact(r.balance)}`}>
+                {big(r.balance)}
               </span>
             </li>
           ))}
@@ -80,6 +88,7 @@ const CountryRow = ({ country }: { country: EconCountryTreasury }) => {
 /** «Где деньги мира»: totals, the conservation check and the treasury tree. */
 const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps) => {
   const { format, forms } = useCurrency();
+  const { big } = useBigMoney();
   const { totals, invariant } = summary;
 
   const cards: { label: string; value: number; accent?: boolean }[] = [
@@ -174,7 +183,13 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {cards.map((c) => (
-          <StatCard key={c.label} label={c.label} value={format(c.value)} accent={c.accent} />
+          <StatCard
+            key={c.label}
+            label={c.label}
+            value={big(c.value)}
+            title={Math.abs(c.value) >= COMPACT_MONEY_FROM ? format(c.value) : undefined}
+            accent={c.accent}
+          />
         ))}
       </div>
 
@@ -198,7 +213,7 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
             {summary.system_accounts.map((a) => (
               <li key={a.account_id} className="flex items-baseline gap-2 text-sm">
                 <span className="flex-1 min-w-0 text-white/80 break-words">{a.name ?? accountKindLabel(a.kind)}</span>
-                <span className={`shrink-0 ${balanceClass(a.balance)}`}>{format(a.balance)}</span>
+                <BigMoney value={a.balance} className={`shrink-0 ${balanceClass(a.balance)}`} />
               </li>
             ))}
           </ul>

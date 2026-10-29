@@ -26,6 +26,8 @@ import type {
   EconRegionItem,
 } from '../../../types/economy';
 import { formatDateTime, formatDecimal, formatPercent } from './economyLabels';
+import { BigMoney, useBigMoney } from './CompactValue';
+import { COMPACT_MONEY_FROM } from '../../../utils/compactNumber';
 
 const COMMENT_MIN = 3;
 const COMMENT_MAX = 500;
@@ -156,21 +158,21 @@ const BankTitle = ({ b }: { b: EconBankAdminItem }) => {
   );
 };
 
-const Funds = ({ b, format }: { b: EconBankAdminItem; format: Format }) => (
+const Funds = ({ b }: { b: EconBankAdminItem }) => (
   <span className="flex flex-col gap-0.5 text-xs">
-    <span className="text-white/80 text-sm whitespace-nowrap">{format(b.own_funds, true)}</span>
-    <span className="text-white/40 whitespace-nowrap">резерв {format(b.reserve, true)}</span>
-    <span className="text-white/40 whitespace-nowrap">можно выдать {format(b.lendable, true)}</span>
+    <span className="text-white/80 text-sm whitespace-nowrap"><BigMoney value={b.own_funds} short /></span>
+    <span className="text-white/40 whitespace-nowrap">резерв <BigMoney value={b.reserve} short /></span>
+    <span className="text-white/40 whitespace-nowrap">можно выдать <BigMoney value={b.lendable} short /></span>
   </span>
 );
 
-const Vault = ({ b, format }: { b: EconBankAdminItem; format: Format }) => (
+const Vault = ({ b }: { b: EconBankAdminItem }) => (
   <span className="flex flex-col gap-0.5 text-xs">
     <span className={`text-sm whitespace-nowrap ${b.vault_ok ? 'text-white/80' : 'text-site-red'}`}>
-      {format(b.vault, true)}
+      <BigMoney value={b.vault} short />
     </span>
     {!b.vault_ok && (
-      <span className="text-site-red whitespace-nowrap">по вкладам {format(b.deposits_sum, true)}</span>
+      <span className="text-site-red whitespace-nowrap">по вкладам <BigMoney value={b.deposits_sum} short /></span>
     )}
     <span className="text-white/40 whitespace-nowrap">
       вкладов {b.deposits_count}
@@ -179,20 +181,20 @@ const Vault = ({ b, format }: { b: EconBankAdminItem; format: Format }) => (
   </span>
 );
 
-const Residents = ({ b, format }: { b: EconBankAdminItem; format: Format }) => (
+const Residents = ({ b }: { b: EconBankAdminItem }) => (
   <span className="flex flex-col gap-0.5 text-xs">
     <span className="text-white/60 whitespace-nowrap">
-      вклады <span className="text-white/80">{format(b.resident_deposits, true)}</span>
+      вклады <span className="text-white/80"><BigMoney value={b.resident_deposits} short /></span>
     </span>
     <span className="text-white/60 whitespace-nowrap">
-      займы <span className="text-white/80">{format(b.resident_loans, true)}</span>
+      займы <span className="text-white/80"><BigMoney value={b.resident_loans} short /></span>
     </span>
   </span>
 );
 
-const Loans = ({ b, format }: { b: EconBankAdminItem; format: Format }) => (
+const Loans = ({ b }: { b: EconBankAdminItem }) => (
   <span className="flex flex-col gap-0.5 text-xs">
-    <span className="text-white/80 text-sm whitespace-nowrap">{format(b.loans_debt, true)}</span>
+    <span className="text-white/80 text-sm whitespace-nowrap"><BigMoney value={b.loans_debt} short /></span>
     <span className="text-white/40 whitespace-nowrap">займов {b.loans_count}</span>
     {b.overdue_count > 0 && <span className="text-site-red whitespace-nowrap">просрочено {b.overdue_count}</span>}
   </span>
@@ -212,7 +214,7 @@ const Rates = ({ b }: { b: EconBankAdminItem }) => (
   </span>
 );
 
-const LastPass = ({ b, format }: { b: EconBankAdminItem; format: Format }) => {
+const LastPass = ({ b }: { b: EconBankAdminItem }) => {
   const entries = Object.entries((b.last_stats ?? {}) as EconBankStats).filter(
     ([, v]) => typeof v === 'number' && v !== 0,
   ) as [string, number][];
@@ -222,7 +224,7 @@ const LastPass = ({ b, format }: { b: EconBankAdminItem; format: Format }) => {
       {entries.map(([key, value]) => (
         <span key={key} className="break-words">
           {STAT_LABELS[key] ?? key}:{' '}
-          <span className="text-white/80">{STAT_COUNTS.has(key) ? value : format(value, true)}</span>
+          <span className="text-white/80">{STAT_COUNTS.has(key) ? value : <BigMoney value={value} short />}</span>
         </span>
       ))}
       {b.last_tick_at && entries.length === 0 && <span className="text-white/30">движений не было</span>}
@@ -674,6 +676,7 @@ interface EconomyBanksProps {
 /** «Банки» (FEAT-184): every bank — own funds, vault vs deposits, residents, loans, rates; flag, capital, write-offs. */
 const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
   const { format } = useCurrency();
+  const { big } = useBigMoney();
   const [data, setData] = useState<EconBanksResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -942,14 +945,14 @@ const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
       {totals && (
         <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           {[
-            ['Банков (работают)', `${totals.banks} (${totals.enabled})`],
-            ['Свои средства банков', format(totals.own_funds, true)],
-            ['Вклады игроков', format(totals.player_deposits, true)],
-            ['Вклады жителей', format(totals.resident_deposits, true)],
-            ['Долг игроков по займам', format(totals.player_loans_debt, true)],
-            ['Займы жителей', format(totals.resident_loans, true)],
-            ['Должников', String(totals.debtors)],
-          ].map(([label, value]) => (
+            ['Банков (работают)', `${totals.banks} (${totals.enabled})`, 0],
+            ['Свои средства банков', big(totals.own_funds, true), totals.own_funds],
+            ['Вклады игроков', big(totals.player_deposits, true), totals.player_deposits],
+            ['Вклады жителей', big(totals.resident_deposits, true), totals.resident_deposits],
+            ['Долг игроков по займам', big(totals.player_loans_debt, true), totals.player_loans_debt],
+            ['Займы жителей', big(totals.resident_loans, true), totals.resident_loans],
+            ['Должников', String(totals.debtors), 0],
+          ].map(([label, value, amount]) => (
             <div
               key={label}
               className="bg-site-bg rounded-card border border-white/[0.07] px-3 sm:px-4 py-3 flex flex-col gap-0.5 min-w-0"
@@ -959,6 +962,7 @@ const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
                 className={`text-base sm:text-lg break-words ${
                   label === 'Должников' && totals.debtors > 0 ? 'text-site-red' : 'text-white'
                 }`}
+                title={typeof amount === 'number' && Math.abs(amount) >= COMPACT_MONEY_FROM ? format(amount) : undefined}
               >
                 {value}
               </dd>
@@ -1029,22 +1033,22 @@ const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
                           )}
                         </td>
                         <td className="py-2 pr-3">
-                          <Funds b={b} format={format} />
+                          <Funds b={b} />
                         </td>
                         <td className="py-2 pr-3">
-                          <Vault b={b} format={format} />
+                          <Vault b={b} />
                         </td>
                         <td className="py-2 pr-3">
-                          <Residents b={b} format={format} />
+                          <Residents b={b} />
                         </td>
                         <td className="py-2 pr-3">
-                          <Loans b={b} format={format} />
+                          <Loans b={b} />
                         </td>
                         <td className="py-2 pr-3 max-w-[220px]">
                           <Rates b={b} />
                         </td>
                         <td className="py-2 max-w-[240px]">
-                          <LastPass b={b} format={format} />
+                          <LastPass b={b} />
                         </td>
                       </tr>
                       {open && (
@@ -1098,19 +1102,19 @@ const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
                   <div className="grid grid-cols-2 gap-3">
                     <span className="flex flex-col gap-0.5 min-w-0">
                       <span className="text-white/40 text-xs">Свои средства</span>
-                      <Funds b={b} format={format} />
+                      <Funds b={b} />
                     </span>
                     <span className="flex flex-col gap-0.5 min-w-0">
                       <span className="text-white/40 text-xs">Хранилище вкладов</span>
-                      <Vault b={b} format={format} />
+                      <Vault b={b} />
                     </span>
                     <span className="flex flex-col gap-0.5 min-w-0">
                       <span className="text-white/40 text-xs">Жители</span>
-                      <Residents b={b} format={format} />
+                      <Residents b={b} />
                     </span>
                     <span className="flex flex-col gap-0.5 min-w-0">
                       <span className="text-white/40 text-xs">Займы игроков</span>
-                      <Loans b={b} format={format} />
+                      <Loans b={b} />
                     </span>
                   </div>
                   <span className="flex flex-col gap-0.5">
@@ -1119,7 +1123,7 @@ const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
                   </span>
                   <span className="flex flex-col gap-0.5">
                     <span className="text-white/40 text-xs">Последний пересчёт</span>
-                    <LastPass b={b} format={format} />
+                    <LastPass b={b} />
                   </span>
                   {open && (
                     <div className="border-t border-white/10 pt-3">

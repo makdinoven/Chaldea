@@ -8,6 +8,7 @@ import {
   postEconomyMerchantsFund,
 } from '../../../api/economyAdmin';
 import { apiErrorMessage } from '../../../api/errors';
+import { BigMoney } from './CompactValue';
 import { useCurrency } from '../../../hooks/useCurrency';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type {
@@ -454,7 +455,7 @@ const EconomyMerchants = ({ canSettings, canEmit, onMoneyChanged }: EconomyMerch
           </div>
           <div className="bg-site-bg rounded-card border border-white/[0.07] px-4 py-3 flex flex-col gap-0.5">
             <dt className="text-white/50 text-xs uppercase tracking-[0.06em]">Деньги в кассах</dt>
-            <dd className="text-white text-lg">{format(data.totals.cash)}</dd>
+            <dd className="text-white text-lg"><BigMoney value={data.totals.cash} /></dd>
           </div>
         </dl>
       )}

@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { fetchEconomyBank, putEconomyBankFlag } from '../../../api/economyAdmin';
 import { apiErrorMessage } from '../../../api/errors';
+import { BigMoney } from './CompactValue';
 import { useCurrency } from '../../../hooks/useCurrency';
 import ConfirmDialog from '../../pages/LocationPage/ConfirmDialog';
 import type { EconBankAdminItem } from '../../../types/economy';
@@ -139,23 +140,23 @@ const RegionBankPanel = ({ regionId, regionName, canEdit, onChanged }: RegionBan
             <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm">
               <div className="flex flex-col gap-0.5 min-w-0">
                 <dt className="text-white/50 text-xs">Свои средства</dt>
-                <dd className={`break-words ${bank.own_funds < 0 ? 'text-site-red' : 'text-white'}`}>{format(bank.own_funds)}</dd>
+                <dd className={`break-words ${bank.own_funds < 0 ? 'text-site-red' : 'text-white'}`}><BigMoney value={bank.own_funds} /></dd>
               </div>
               <div className="flex flex-col gap-0.5 min-w-0">
                 <dt className="text-white/50 text-xs">Вклады игроков</dt>
                 <dd className={`break-words ${bank.vault_ok ? 'text-white' : 'text-site-red'}`}>
-                  {format(bank.vault)}
+                  <BigMoney value={bank.vault} />
                   {!bank.vault_ok && <span className="block text-xs">расхождение</span>}
                 </dd>
               </div>
               <div className="flex flex-col gap-0.5 min-w-0">
                 <dt className="text-white/50 text-xs">Можно выдать в займы</dt>
-                <dd className="text-white break-words">{format(bank.lendable)}</dd>
+                <dd className="text-white break-words"><BigMoney value={bank.lendable} /></dd>
               </div>
               <div className="flex flex-col gap-0.5 min-w-0">
                 <dt className="text-white/50 text-xs">Долг по займам игроков</dt>
                 <dd className="text-white break-words">
-                  {format(bank.loans_debt)}
+                  <BigMoney value={bank.loans_debt} />
                   {bank.overdue_count > 0 && <span className="block text-site-red text-xs">должников: {bank.overdue_count}</span>}
                 </dd>
               </div>

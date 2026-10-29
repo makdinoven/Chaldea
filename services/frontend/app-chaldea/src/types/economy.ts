@@ -182,7 +182,10 @@ export interface EconRegionItem {
   country_name: string | null;
   template_code: string | null;
   template_name: string | null;
+  /** FEAT-186: lore population (e.g. 4 000 000); the tick computes with population / `population_scale` */
   population: number;
+  /** FEAT-186: the population the tick computes with (read-only, optional — older backends don't send it) */
+  sim_population?: number | null;
   tax_rate: number;
   stability: number;
   prosperity: number;
@@ -250,6 +253,10 @@ export interface EconFillBody {
   treasury_to_reserve?: boolean;
   /** FEAT-184: open banks in capitals and ports (one-time capital seed after the treasury top-up; backend default true) */
   open_banks?: boolean;
+  /** FEAT-186: move the purse part above the starting purse back into emission (backend default false) */
+  return_purse_excess?: boolean;
+  /** FEAT-186: move the treasury part above the wage reserve back into emission (backend default false) */
+  return_treasury_excess?: boolean;
   comment: string;
 }
 
@@ -266,6 +273,14 @@ export interface EconFillResult {
   skipped_no_population: number[];
   /** FEAT-184: regions whose bank this fill switched on */
   banks_opened?: number[];
+  /** FEAT-186: returned_purses + returned_treasuries — excess moved back into emission */
+  returned?: number;
+  returned_purses?: number;
+  returned_treasuries?: number;
+  /** FEAT-186: residents' bank deposits above the scaled target paid back into the purse */
+  resident_deposits_out?: number;
+  /** FEAT-186: residents' bank loans above the scaled target repaid from the purse */
+  resident_loans_repaid?: number;
 }
 
 /** Per-group snapshot inside a history row. */
@@ -454,6 +469,8 @@ export interface EconSimParams {
   bank_resident_deposit_share: number;
   bank_resident_loan_share: number;
   bank_resident_adjust: number;
+  /* FEAT-186 lore population scale: the tick computes with population / population_scale */
+  population_scale: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';

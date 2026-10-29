@@ -24,6 +24,7 @@ export const GUIDE_SECTION_IDS = [
   'recipe-bank-interest',
   'recipe-invariant',
   'recipe-prices',
+  'recipe-population-scale',
 ] as const;
 
 export type GuideSectionId = (typeof GUIDE_SECTION_IDS)[number];
@@ -45,6 +46,7 @@ export const GUIDE_SECTION_TITLE: Record<GuideSectionId, string> = {
   'recipe-bank-interest': 'Банк не платит проценты',
   'recipe-invariant': 'Сводка пишет «Расхождение»',
   'recipe-prices': 'Цены растут или падают',
+  'recipe-population-scale': 'Перешли на масштаб населения (регионы раздуты)',
 };
 
 /** Tabs of the admin «Экономика» page (EconomyPage.tsx). */
