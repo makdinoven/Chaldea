@@ -18,7 +18,7 @@ const ERROR_TEXT = 'Не удалось загрузить состояние р
 
 /** States that deserve an alert tone in the phrase line. */
 const ALERT_STATES = new Set(['hunger', 'riot', 'unrest', 'debt']);
-const WARN_STATES = new Set(['tight', 'uneasy', 'low', 'very_high']);
+const WARN_STATES = new Set(['tight', 'uneasy', 'low', 'very_high', 'poor']);
 
 const LEVEL_TEXT: Record<RegionGroupLevel, string> = {
   very_low: 'очень дёшево',
@@ -43,7 +43,7 @@ const TREND_META: Record<RegionGroupTrend, { glyph: string; title: string; class
 };
 
 const phraseTone = (phrase: string, card: RegionCardData): string => {
-  const states = [card.food, card.stability, card.treasury, card.price_level];
+  const states = [card.prosperity, card.food, card.stability, card.treasury, card.price_level];
   const match = states.find((s) => s.label === phrase);
   if (match && ALERT_STATES.has(match.state)) return 'text-site-red';
   if (match && WARN_STATES.has(match.state)) return 'text-gold';

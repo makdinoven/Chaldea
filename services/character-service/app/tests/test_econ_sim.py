@@ -400,7 +400,7 @@ def test_region_card_lists_shortages_surpluses_and_has_no_numbers():
     assert card["treasury"]["state"] == "debt"
     assert card["shortages"] == ["Оружие"]
     assert card["surpluses"] == ["Продовольствие"]
-    assert card["phrases"][0] == "Крепость голодает"
+    assert card["phrases"][:2] == ["Бедная крепость", "Крепость голодает"]
     assert "Волнения" in card["phrases"] and "Казна в долгах" in card["phrases"]
     assert "Нехватка: оружие" in card["phrases"] and "Избыток: продовольствие" in card["phrases"]
     assert [g["code"] for g in card["groups"]] == CODES
@@ -412,7 +412,7 @@ def test_calm_region_card_is_short():
     region, goods, _purse = _fresh("port")
     region_ok = S.RegionState(population=region.population, tax_rate=0.1, treasury_target=1000)
     card = S.region_card(region_ok, goods, GROUPS, treasury=500, noun="Порт", gender="m", group_order=CODES)
-    assert card["phrases"] == ["Порт сыт", "Цены обычные"]
+    assert card["phrases"] == ["Зажиточный порт", "Порт сыт", "Цены обычные"]
     assert card["shortages"] == [] and card["surpluses"] == []
 
 

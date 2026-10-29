@@ -619,7 +619,7 @@ def region_card(
         "shortages": shortages,
         "surpluses": surpluses,
     }
-    phrases = [card["food"]["label"]]
+    phrases = [card["prosperity"]["label"], card["food"]["label"]]
     if stab != "calm":
         phrases.append(card["stability"]["label"])
     if treas in ("full", "low", "debt"):

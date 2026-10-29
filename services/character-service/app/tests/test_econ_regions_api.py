@@ -925,7 +925,8 @@ def test_card_shape_has_no_money_numbers(world):
         assert card["food"]["label"] == "Крепость сыта"
     assert [g["code"] for g in card["groups"]] == list(core.GOODS_GROUPS)
     assert all(set(g) == {"code", "name", "level", "trend"} for g in card["groups"])
-    assert card["phrases"][0] == card["food"]["label"]
+    assert card["phrases"][:2] == [card["prosperity"]["label"], card["food"]["label"]]
+    assert card["prosperity"]["label"].endswith("крепость")                  # «Зажиточная крепость»
     text_dump = resp.text
     for word in ("purse", "balance", "stock", "price_mult", "treasury_target", "population"):
         assert word not in text_dump
