@@ -164,7 +164,7 @@ async def test_revive_without_gold_keeps_the_member_dead(econ, world):
         await gameplay.interact_with_room(db, sid, 10, "revive_member", target_character_id=11)
 
     assert exc.value.status_code == 400
-    assert exc.value.detail == "Недостаточно золота для воскрешения (нужно 100 золотых)"
+    assert exc.value.detail == "Недостаточно марок для воскрешения (нужно 100 марок)"
     assert await _member_status(db, sid, 11) == "dead"
     assert await _balance(db, 10) == 99
     assert await _ops(db, "dungeon_expense") == 0

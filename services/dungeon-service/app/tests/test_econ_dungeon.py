@@ -99,7 +99,7 @@ async def test_merchant_pays_the_region_treasury_with_tax(econ, world):
 
     out = await gameplay.interact_with_room(db, st.session_id, 10, "merchant_buy", item_id=33)
 
-    assert out.gold_spent == 10 and "10 золотых" in out.message
+    assert out.gold_spent == 10 and "10 марок" in out.message
     assert await _balance(db, 10) == 990
     assert await _account(db, "region_treasury", REGION) == 9
     assert await _account(db, "country_treasury", COUNTRY) == 1
@@ -121,7 +121,7 @@ async def test_merchant_without_gold_moves_nothing(econ, world):
         await gameplay.interact_with_room(db, st.session_id, 10, "merchant_buy", item_id=33)
 
     assert exc.value.status_code == 400
-    assert exc.value.detail == "Недостаточно золота для покупки (нужно 10 золотых)"
+    assert exc.value.detail == "Недостаточно марок для покупки (нужно 10 марок)"
     assert await _balance(db, 10) == 5
     assert await _ops(db, "dungeon_expense") == 0
     await _assert_world_balanced(db)
@@ -177,7 +177,7 @@ async def test_rest_without_gold_is_refused(econ, world):
     with pytest.raises(HTTPException) as exc:
         await gameplay.interact_with_room(db, st.session_id, 10, "start_rest")
 
-    assert exc.value.detail == "Недостаточно золота для отдыха (нужно 40 золотых)"
+    assert exc.value.detail == "Недостаточно марок для отдыха (нужно 40 марок)"
     assert await _balance(db, 10) == 1
     await _assert_world_balanced(db)
 
@@ -196,7 +196,7 @@ async def test_revive_charges_the_leader_once(econ, world):
     await gameplay.move_to_room(db, sid, 10, cors["c7"].id)
 
     out = await gameplay.interact_with_room(db, sid, 10, "revive_member", target_character_id=11)
-    assert out.gold_spent == 100 and out.message.endswith("за 100 золотых!")
+    assert out.gold_spent == 100 and out.message.endswith("за 100 марок!")
     with pytest.raises(HTTPException):
         await gameplay.interact_with_room(db, sid, 10, "revive_member", target_character_id=11)
 
