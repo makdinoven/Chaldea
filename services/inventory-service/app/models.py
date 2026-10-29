@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint, Index, CheckConstraint
+from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint, Index, CheckConstraint, BigInteger
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
@@ -534,6 +534,7 @@ class AuctionListing(Base):
     __tablename__ = "auction_listings"
     __table_args__ = (
         Index('ix_auction_listings_status_expires', 'status', 'expires_at'),
+        Index('ix_auction_listings_region', 'region_id'),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -549,6 +550,10 @@ class AuctionListing(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False, index=True)
     completed_at = Column(DateTime, nullable=True)
+    # FEAT-181: auctioneer location / region at creation; the commission goes to this
+    # region's treasury (NULL on legacy rows -> world treasury).
+    location_id = Column(BigInteger, nullable=True)
+    region_id = Column(BigInteger, nullable=True)
 
     item = relationship("Items")
     bids = relationship("AuctionBid", back_populates="listing", cascade="all, delete-orphan")

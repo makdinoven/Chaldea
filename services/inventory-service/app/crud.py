@@ -8,9 +8,11 @@ import random
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, and_, or_, func
 from sqlalchemy.exc import IntegrityError
+import econ_ledger
 import house_workshop
 import models
 import schemas
+from econ_ledger import AccountRef, DuplicateOperation, EconomyError, InsufficientFunds, Leg, format_currency
 from rabbitmq_publisher import publish_auction_notification
 
 logger = logging.getLogger(__name__)
@@ -922,40 +924,28 @@ def get_character_gold(db: Session, character_id: int) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
-def log_gold_transaction(
-    db: Session,
-    character_id: int,
-    amount: int,
-    balance_after: int,
-    transaction_type: str,
-    source: str = None,
-    metadata: dict = None,
-):
-    """
-    Insert a record into gold_transactions (shared DB table, owned by character-service).
-    Called after every currency_balance modification so that
-    battle-pass earn_gold / spend_gold missions can query totals.
-    Wrapped in try/except — logging must never break existing functionality.
-    """
-    try:
-        meta_json = json.dumps(metadata) if metadata else None
-        db.execute(
-            text(
-                "INSERT INTO gold_transactions "
-                "(character_id, amount, balance_after, transaction_type, source, metadata) "
-                "VALUES (:character_id, :amount, :balance_after, :transaction_type, :source, :metadata)"
-            ),
-            {
-                "character_id": character_id,
-                "amount": amount,
-                "balance_after": balance_after,
-                "transaction_type": transaction_type,
-                "source": source,
-                "metadata": meta_json,
-            },
-        )
-    except Exception as e:
-        logger.warning(f"Failed to log gold transaction for character {character_id}: {e}")
+# ---------------------------------------------------------------------------
+# FEAT-181: world economy ledger (econ_ledger is a byte-identical copy of
+# character-service's; see docs/services/character-service.md «Economy ledger»).
+# Every gold change goes through econ_ledger.post_operation in the caller's
+# transaction — nothing here writes characters.currency_balance directly.
+# ---------------------------------------------------------------------------
+
+ECON_SOURCE_SERVICE = "inventory-service"
+
+
+def money_text(db: Session, amount: int) -> str:
+    """Short currency text for messages, e.g. «150 зол.», with the configured forms."""
+    return format_currency(amount, econ_ledger.get_currency_forms(db), short=True)
+
+
+def currency_genitive(db: Session) -> str:
+    """Genitive currency word for «Недостаточно …» style messages."""
+    return econ_ledger.get_currency_forms(db).genitive
+
+
+def not_enough_money_message(db: Session) -> str:
+    return f"Недостаточно {currency_genitive(db)}"
 
 
 def is_character_in_battle(db: Session, character_id: int) -> bool:
@@ -1025,10 +1015,13 @@ def create_trade_offer(
     return trade
 
 
-def get_trade_offer(db: Session, trade_id: int) -> Optional[models.TradeOffer]:
-    return db.query(models.TradeOffer).filter(
-        models.TradeOffer.id == trade_id
-    ).first()
+def get_trade_offer(db: Session, trade_id: int, for_update: bool = False) -> Optional[models.TradeOffer]:
+    """Trade offer by id. for_update=True locks the row (SELECT ... FOR UPDATE) and
+    refreshes the ORM copy, so concurrent confirms are serialised (FEAT-181)."""
+    query = db.query(models.TradeOffer).filter(models.TradeOffer.id == trade_id)
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.first()
 
 
 def update_trade_items(
@@ -1087,21 +1080,34 @@ def confirm_trade(db: Session, trade: models.TradeOffer, character_id: int) -> b
 def execute_trade(db: Session, trade: models.TradeOffer) -> None:
     """
     Execute trade atomically: transfer items and gold between characters.
-    Assumes caller manages the transaction (no commit here, caller commits).
+    Assumes caller manages the transaction (no commit here, caller commits) and
+    has locked the trade row (get_trade_offer(..., for_update=True)).
+
+    FEAT-181: the status is claimed with a conditional UPDATE first, so a trade
+    executes at most once even under concurrent confirms; both characters are
+    locked before the balance check; the gold moves as ONE ledger operation
+    `trade` (initiator -> target, target -> initiator) with conditional debits.
     """
     initiator_id = trade.initiator_character_id
     target_id = trade.target_character_id
 
-    # 1. Verify gold balances
-    if trade.initiator_gold > 0:
-        balance = get_character_gold(db, initiator_id)
-        if balance < trade.initiator_gold:
-            raise ValueError("У инициатора недостаточно золота для обмена")
+    # 0. Status check-and-set: only one confirm may execute the trade.
+    claimed = db.execute(
+        text(
+            "UPDATE trade_offers SET status = 'completed' "
+            "WHERE id = :tid AND status IN ('pending', 'negotiating')"
+        ),
+        {"tid": trade.id},
+    )
+    if claimed.rowcount == 0:
+        raise ValueError("Этот обмен уже завершён или отменён")
 
-    if trade.target_gold > 0:
-        balance = get_character_gold(db, target_id)
-        if balance < trade.target_gold:
-            raise ValueError("У второго участника недостаточно золота для обмена")
+    # 1. Lock both characters (ascending id) and verify gold balances
+    balances = econ_ledger.lock_characters(db, [initiator_id, target_id])
+    if trade.initiator_gold > 0 and balances.get(initiator_id, 0) < trade.initiator_gold:
+        raise ValueError(f"У инициатора недостаточно {currency_genitive(db)} для обмена")
+    if trade.target_gold > 0 and balances.get(target_id, 0) < trade.target_gold:
+        raise ValueError(f"У второго участника недостаточно {currency_genitive(db)} для обмена")
 
     # 2. Verify items
     trade_items = db.query(models.TradeOfferItem).filter(
@@ -1138,56 +1144,29 @@ def execute_trade(db: Session, trade: models.TradeOffer) -> None:
         # Add to receiver
         _add_items_to_inventory(db, receiver_id, ti.item_id, ti.quantity)
 
-    # 4. Transfer gold
-    if trade.initiator_gold > 0:
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance - :gold WHERE id = :cid"),
-            {"gold": trade.initiator_gold, "cid": initiator_id}
+    # 4. Transfer gold: one ledger operation, player <-> player directly
+    initiator_ref = AccountRef.character(initiator_id)
+    target_ref = AccountRef.character(target_id)
+    try:
+        econ_ledger.post_operation(
+            db,
+            op_type="trade",
+            legs=[
+                Leg(initiator_ref, target_ref, int(trade.initiator_gold or 0)),
+                Leg(target_ref, initiator_ref, int(trade.target_gold or 0)),
+            ],
+            source_service=ECON_SOURCE_SERVICE,
+            location_id=trade.location_id,
+            metadata={"trade_id": trade.id},
+            idempotency_key=f"trade:{trade.id}",
         )
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance + :gold WHERE id = :cid"),
-            {"gold": trade.initiator_gold, "cid": target_id}
-        )
-        # Log gold transactions for trade
-        trade_meta = {"trade_id": trade.id}
-        log_gold_transaction(
-            db, initiator_id, -trade.initiator_gold,
-            get_character_gold(db, initiator_id),
-            "trade", source=f"trade #{trade.id} to char #{target_id}",
-            metadata=trade_meta,
-        )
-        log_gold_transaction(
-            db, target_id, trade.initiator_gold,
-            get_character_gold(db, target_id),
-            "trade", source=f"trade #{trade.id} from char #{initiator_id}",
-            metadata=trade_meta,
-        )
+    except InsufficientFunds as exc:
+        who = "инициатора" if exc.account == initiator_ref else "второго участника"
+        raise ValueError(f"У {who} недостаточно {currency_genitive(db)} для обмена")
+    except DuplicateOperation:
+        raise ValueError("Этот обмен уже завершён или отменён")
 
-    if trade.target_gold > 0:
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance - :gold WHERE id = :cid"),
-            {"gold": trade.target_gold, "cid": target_id}
-        )
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance + :gold WHERE id = :cid"),
-            {"gold": trade.target_gold, "cid": initiator_id}
-        )
-        # Log gold transactions for trade
-        trade_meta = {"trade_id": trade.id}
-        log_gold_transaction(
-            db, target_id, -trade.target_gold,
-            get_character_gold(db, target_id),
-            "trade", source=f"trade #{trade.id} to char #{initiator_id}",
-            metadata=trade_meta,
-        )
-        log_gold_transaction(
-            db, initiator_id, trade.target_gold,
-            get_character_gold(db, initiator_id),
-            "trade", source=f"trade #{trade.id} from char #{target_id}",
-            metadata=trade_meta,
-        )
-
-    # 5. Mark trade as completed
+    # 5. Keep the ORM object in line with the claimed status
     trade.status = 'completed'
 
 
@@ -2570,7 +2549,47 @@ def delete_stale_conversions(db: Session, item: models.Items) -> int:
 
 AUCTION_DURATION_HOURS = 24
 AUCTION_MAX_LISTINGS = 5
-AUCTION_COMMISSION_RATE = 0.05  # 5%
+AUCTION_COMMISSION_PERCENT = 5  # commission of a sale, goes to the region treasury (FEAT-181)
+AUCTION_COMMISSION_RATE = AUCTION_COMMISSION_PERCENT / 100  # kept for readers of the old constant
+
+
+def auction_commission_split(price: int) -> Tuple[int, int]:
+    """(seller_gold, commission) for a sale price: seller gets floor(price * 95 %).
+
+    Integer arithmetic, so no float rounding; commission = price - seller_gold.
+    """
+    seller_gold = int(price) * (100 - AUCTION_COMMISSION_PERCENT) // 100
+    return seller_gold, int(price) - seller_gold
+
+
+def _auction_commission_account(listing: models.AuctionListing) -> AccountRef:
+    """Treasury of the region where the listing was put up; legacy listings -> world treasury."""
+    return AccountRef.region(int(listing.region_id)) if listing.region_id else AccountRef.world()
+
+
+def _post_auction_settlement(db: Session, listing: models.AuctionListing, op_type: str,
+                             extra_legs: List[Leg], price: int, metadata: dict) -> Tuple[int, int]:
+    """Post a sale of `listing` at `price`: `extra_legs` (buyout payment / refund) +
+    escrow -> auction storage (seller's share) + escrow -> region/world treasury (commission,
+    taxed in favour of the country by the ledger). Returns (seller_gold, commission).
+    The caller holds the listing lock and commits."""
+    seller_gold, commission = auction_commission_split(price)
+    legs = list(extra_legs) + [
+        Leg(AccountRef.escrow(), AccountRef.storage(), seller_gold),
+        Leg(AccountRef.escrow(), _auction_commission_account(listing), commission, "commission"),
+    ]
+    econ_ledger.post_operation(
+        db,
+        op_type=op_type,
+        legs=legs,
+        source_service=ECON_SOURCE_SERVICE,
+        location_id=listing.location_id,
+        region_id=listing.region_id,
+        metadata={**metadata, "listing_id": listing.id, "item_id": listing.item_id,
+                  "price": price, "seller_gold": seller_gold, "commission": commission},
+        idempotency_key=f"{op_type}:listing:{listing.id}",
+    )
+    return seller_gold, commission
 
 
 # ---------------------------------------------------------------------------
@@ -2584,7 +2603,7 @@ def check_auctioneer_at_character_location(db: Session, character_id: int):
     Returns a dict {"id": npc_id, "name": npc_name} if found, or None.
     """
     row = db.execute(text("""
-        SELECT npc.id, npc.name FROM characters AS npc
+        SELECT npc.id, npc.name, npc.current_location_id FROM characters AS npc
         JOIN characters AS pc ON pc.current_location_id = npc.current_location_id
         WHERE pc.id = :character_id
           AND npc.is_npc = 1
@@ -2593,7 +2612,7 @@ def check_auctioneer_at_character_location(db: Session, character_id: int):
         LIMIT 1
     """), {"character_id": character_id}).fetchone()
     if row:
-        return {"id": row[0], "name": row[1]}
+        return {"id": row[0], "name": row[1], "location_id": row[2]}
     return None
 
 
@@ -2717,8 +2736,12 @@ def expire_stale_listings(db: Session) -> int:
             )
             db.add(buyer_storage)
 
-            # Calculate commission: seller gets floor(price * 0.95)
-            sale_gold = math.floor(listing.current_bid * (1 - AUCTION_COMMISSION_RATE))
+            # FEAT-181: the winning bid leaves the escrow: seller's share -> auction
+            # storage, commission -> region (or world) treasury, one operation.
+            sale_gold, commission = _post_auction_settlement(
+                db, listing, "auction_settlement", [], listing.current_bid,
+                {"buyer_character_id": listing.current_bidder_id},
+            )
 
             # Create storage entry for seller (gold)
             seller_storage = models.AuctionStorage(
@@ -2735,11 +2758,14 @@ def expire_stale_listings(db: Session) -> int:
             # Notify seller
             seller_user_id = _get_user_id_for_character(db, listing.seller_character_id)
             if seller_user_id:
-                commission = listing.current_bid - sale_gold
+                sold_message = (
+                    f"Ваш предмет {item_name} продан за {money_text(db, listing.current_bid)}! "
+                    f"После комиссии {AUCTION_COMMISSION_PERCENT}% вы получите {money_text(db, sale_gold)}."
+                )
                 try:
                     publish_auction_notification(
                         target_user_id=seller_user_id,
-                        message=f"Ваш предмет {item_name} продан за {listing.current_bid} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                        message=sold_message,
                         ws_type="auction_sold",
                         ws_data={
                             "listing_id": listing.id,
@@ -2748,7 +2774,7 @@ def expire_stale_listings(db: Session) -> int:
                             "commission": commission,
                             "net_gold": sale_gold,
                             "buyer_name": get_character_name(db, listing.current_bidder_id),
-                            "message": f"Ваш предмет {item_name} продан за {listing.current_bid} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                            "message": sold_message,
                         },
                     )
                 except Exception as e:
@@ -2757,16 +2783,20 @@ def expire_stale_listings(db: Session) -> int:
             # Notify buyer
             buyer_user_id = _get_user_id_for_character(db, listing.current_bidder_id)
             if buyer_user_id:
+                won_message = (
+                    f"Вы выиграли аукцион! {item_name} за {money_text(db, listing.current_bid)}. "
+                    f"Заберите предмет у НПС-Аукциониста."
+                )
                 try:
                     publish_auction_notification(
                         target_user_id=buyer_user_id,
-                        message=f"Вы выиграли аукцион! {item_name} за {listing.current_bid} зол. Заберите предмет у НПС-Аукциониста.",
+                        message=won_message,
                         ws_type="auction_won",
                         ws_data={
                             "listing_id": listing.id,
                             "item_name": item_name,
                             "winning_bid": listing.current_bid,
-                            "message": f"Вы выиграли аукцион! {item_name} за {listing.current_bid} зол. Заберите предмет у НПС-Аукциониста.",
+                            "message": won_message,
                         },
                     )
                 except Exception as e:
@@ -2981,6 +3011,15 @@ def create_auction_listing(
     quantity = storage_entry.quantity
     enhancement_data = storage_entry.enhancement_data
 
+    # FEAT-181: remember where the listing is put up — its commission goes to this
+    # region's treasury. The seller stands at the auctioneer's location.
+    location_row = db.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id},
+    ).fetchone()
+    listing_location_id = int(location_row[0]) if location_row and location_row[0] else None
+    listing_region_id, _country_id = econ_ledger.resolve_location(db, listing_location_id)
+
     # 7. Delete the storage entry
     db.delete(storage_entry)
     db.flush()
@@ -2999,6 +3038,8 @@ def create_auction_listing(
         status='active',
         created_at=now,
         expires_at=now + timedelta(hours=AUCTION_DURATION_HOURS),
+        location_id=listing_location_id,
+        region_id=listing_region_id,
     )
     db.add(listing)
     db.commit()
@@ -3068,12 +3109,12 @@ def place_bid(
     if data.amount < listing.start_price:
         raise HTTPException(
             status_code=400,
-            detail=f"Ставка должна быть не менее начальной цены ({listing.start_price} зол.)"
+            detail=f"Ставка должна быть не менее начальной цены ({money_text(db, listing.start_price)})"
         )
     if listing.current_bid > 0 and data.amount <= listing.current_bid:
         raise HTTPException(
             status_code=400,
-            detail=f"Ставка должна быть выше текущей ({listing.current_bid} зол.)"
+            detail=f"Ставка должна быть выше текущей ({money_text(db, listing.current_bid)})"
         )
     if listing.buyout_price and data.amount >= listing.buyout_price:
         raise HTTPException(
@@ -3081,77 +3122,64 @@ def place_bid(
             detail="Ставка не может быть равна или выше цены выкупа. Используйте выкуп."
         )
 
-    # 7. Refund previous bidder (if any)
+    # 7. Money (FEAT-181): one `auction_bid` operation — bidder -> escrow, and the
+    #    previous winning bid escrow -> previous bidder (refund). Conditional debit.
     old_bidder_id = listing.current_bidder_id
     old_bid_amount = listing.current_bid
+    legs = [Leg(AccountRef.character(data.character_id), AccountRef.escrow(), data.amount)]
     if old_bidder_id:
-        # Refund gold to previous bidder
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
-            {"amount": old_bid_amount, "cid": old_bidder_id}
+        legs.append(Leg(AccountRef.escrow(), AccountRef.character(old_bidder_id), old_bid_amount, "refund"))
+    try:
+        econ_ledger.post_operation(
+            db,
+            op_type="auction_bid",
+            legs=legs,
+            source_service=ECON_SOURCE_SERVICE,
+            location_id=listing.location_id,
+            region_id=listing.region_id,
+            metadata={"listing_id": listing.id, "item_id": listing.item_id, "bid_amount": data.amount,
+                      "refunded_character_id": old_bidder_id,
+                      "refunded_amount": old_bid_amount if old_bidder_id else 0},
         )
-        # Log auction refund for previous bidder
-        log_gold_transaction(
-            db, old_bidder_id, old_bid_amount,
-            get_character_gold(db, old_bidder_id),
-            "auction_refund",
-            source=f"outbid on listing #{listing.id}",
-            metadata={"listing_id": listing.id, "item_id": listing.item_id},
-        )
-        # Mark previous active bid as outbid
+    except InsufficientFunds:
+        detail = not_enough_money_message(db)
+        db.rollback()
+        raise HTTPException(status_code=400, detail=detail)
+    except EconomyError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Недопустимая сумма ставки")
+
+    # 8. Previous bidder: mark the bid outbid and notify
+    if old_bidder_id:
         db.query(models.AuctionBid).filter(
             models.AuctionBid.listing_id == listing_id,
             models.AuctionBid.status == 'active',
         ).update({"status": "outbid"}, synchronize_session="fetch")
 
-        # Notify previous bidder
         item_obj = db.query(models.Items).get(listing.item_id)
         item_name = item_obj.name if item_obj else "Неизвестный предмет"
         old_bidder_user_id = _get_user_id_for_character(db, old_bidder_id)
         if old_bidder_user_id:
+            outbid_message = (
+                f"Вас перебили на аукционе! Лот: {item_name}. "
+                f"Новая ставка: {money_text(db, data.amount)}. "
+                f"Ваши {money_text(db, old_bid_amount)} возвращены."
+            )
             try:
                 publish_auction_notification(
                     target_user_id=old_bidder_user_id,
-                    message=(
-                        f"Вас перебили на аукционе! Лот: {item_name}. "
-                        f"Новая ставка: {data.amount} зол. "
-                        f"Ваши {old_bid_amount} зол. возвращены."
-                    ),
+                    message=outbid_message,
                     ws_type="auction_outbid",
                     ws_data={
                         "listing_id": listing.id,
                         "item_name": item_name,
                         "new_bid_amount": data.amount,
                         "refunded_amount": old_bid_amount,
-                        "message": (
-                            f"Вас перебили на аукционе! Лот: {item_name}. "
-                            f"Новая ставка: {data.amount} зол. "
-                            f"Ваши {old_bid_amount} зол. возвращены."
-                        ),
+                        "message": outbid_message,
                     },
                 )
             except Exception as e:
                 logger.warning(f"Failed to notify outbid for listing {listing.id}: {e}")
-
-    # 8. Deduct gold from bidder (atomic)
-    result = db.execute(
-        text(
-            "UPDATE characters SET currency_balance = currency_balance - :amount "
-            "WHERE id = :cid AND currency_balance >= :amount"
-        ),
-        {"amount": data.amount, "cid": data.character_id}
-    )
-    if result.rowcount == 0:
-        raise HTTPException(status_code=400, detail="Недостаточно золота")
-
-    # Log auction bid deduction
-    log_gold_transaction(
-        db, data.character_id, -data.amount,
-        get_character_gold(db, data.character_id),
-        "auction_buy",
-        source=f"bid on listing #{listing.id}",
-        metadata={"listing_id": listing.id, "item_id": listing.item_id, "bid_amount": data.amount},
-    )
 
     # 9. Create bid row
     bid = models.AuctionBid(
@@ -3234,73 +3262,63 @@ def execute_buyout(
 
     buyout_price = listing.buyout_price
 
-    # 7. Refund previous bidder (if any)
+    # 7. Money (FEAT-181): one `auction_buyout` operation — buyer -> escrow (price),
+    #    escrow -> previous bidder (refund), escrow -> auction storage (seller's 95 %),
+    #    escrow -> region/world treasury (5 % commission, taxed). Conditional debit.
     old_bidder_id = listing.current_bidder_id
     old_bid_amount = listing.current_bid
+    payment_legs = [Leg(AccountRef.character(data.character_id), AccountRef.escrow(), buyout_price)]
     if old_bidder_id:
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
-            {"amount": old_bid_amount, "cid": old_bidder_id}
+        payment_legs.append(
+            Leg(AccountRef.escrow(), AccountRef.character(old_bidder_id), old_bid_amount, "refund")
         )
-        # Log auction refund for previous bidder
-        log_gold_transaction(
-            db, old_bidder_id, old_bid_amount,
-            get_character_gold(db, old_bidder_id),
-            "auction_refund",
-            source=f"buyout on listing #{listing.id}",
-            metadata={"listing_id": listing.id, "item_id": listing.item_id},
+    try:
+        sale_gold, commission = _post_auction_settlement(
+            db, listing, "auction_buyout", payment_legs, buyout_price,
+            {"buyer_character_id": data.character_id, "refunded_character_id": old_bidder_id,
+             "refunded_amount": old_bid_amount if old_bidder_id else 0},
         )
+    except InsufficientFunds:
+        detail = not_enough_money_message(db)
+        db.rollback()
+        raise HTTPException(status_code=400, detail=detail)
+    except DuplicateOperation:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Лот не активен")
+    except EconomyError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Недопустимая сумма выкупа")
+
+    # 8. Previous bidder: mark the bid outbid and notify
+    if old_bidder_id:
         db.query(models.AuctionBid).filter(
             models.AuctionBid.listing_id == listing_id,
             models.AuctionBid.status == 'active',
         ).update({"status": "outbid"}, synchronize_session="fetch")
 
-        # Notify previous bidder
         item_obj = db.query(models.Items).get(listing.item_id)
         item_name = item_obj.name if item_obj else "Неизвестный предмет"
         old_bidder_user_id = _get_user_id_for_character(db, old_bidder_id)
         if old_bidder_user_id:
+            outbid_message = (
+                f"Лот {item_name} был выкуплен. "
+                f"Ваши {money_text(db, old_bid_amount)} возвращены."
+            )
             try:
                 publish_auction_notification(
                     target_user_id=old_bidder_user_id,
-                    message=(
-                        f"Лот {item_name} был выкуплен. "
-                        f"Ваши {old_bid_amount} зол. возвращены."
-                    ),
+                    message=outbid_message,
                     ws_type="auction_outbid",
                     ws_data={
                         "listing_id": listing.id,
                         "item_name": item_name,
                         "new_bid_amount": buyout_price,
                         "refunded_amount": old_bid_amount,
-                        "message": (
-                            f"Лот {item_name} был выкуплен. "
-                            f"Ваши {old_bid_amount} зол. возвращены."
-                        ),
+                        "message": outbid_message,
                     },
                 )
             except Exception as e:
                 logger.warning(f"Failed to notify outbid for buyout on listing {listing.id}: {e}")
-
-    # 8. Deduct buyout price from buyer (atomic)
-    result = db.execute(
-        text(
-            "UPDATE characters SET currency_balance = currency_balance - :amount "
-            "WHERE id = :cid AND currency_balance >= :amount"
-        ),
-        {"amount": buyout_price, "cid": data.character_id}
-    )
-    if result.rowcount == 0:
-        raise HTTPException(status_code=400, detail="Недостаточно золота")
-
-    # Log auction buyout deduction
-    log_gold_transaction(
-        db, data.character_id, -buyout_price,
-        get_character_gold(db, data.character_id),
-        "auction_buy",
-        source=f"buyout listing #{listing.id}",
-        metadata={"listing_id": listing.id, "item_id": listing.item_id, "buyout_price": buyout_price},
-    )
 
     # 9. Update listing
     listing.status = 'sold'
@@ -3329,10 +3347,7 @@ def execute_buyout(
     )
     db.add(buyer_storage)
 
-    # 12. Calculate commission and create storage for seller (gold)
-    sale_gold = math.floor(buyout_price * (1 - AUCTION_COMMISSION_RATE))
-    commission = buyout_price - sale_gold
-
+    # 12. Storage for seller (gold; the money itself was posted in step 7)
     seller_storage = models.AuctionStorage(
         character_id=listing.seller_character_id,
         item_id=None,
@@ -3350,10 +3365,14 @@ def execute_buyout(
     item_name = item_obj.name if item_obj else "Неизвестный предмет"
     seller_user_id = _get_user_id_for_character(db, listing.seller_character_id)
     if seller_user_id:
+        sold_message = (
+            f"Ваш предмет {item_name} выкуплен за {money_text(db, buyout_price)}! "
+            f"После комиссии {AUCTION_COMMISSION_PERCENT}% вы получите {money_text(db, sale_gold)}."
+        )
         try:
             publish_auction_notification(
                 target_user_id=seller_user_id,
-                message=f"Ваш предмет {item_name} выкуплен за {buyout_price} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                message=sold_message,
                 ws_type="auction_sold",
                 ws_data={
                     "listing_id": listing.id,
@@ -3362,7 +3381,7 @@ def execute_buyout(
                     "commission": commission,
                     "net_gold": sale_gold,
                     "buyer_name": get_character_name(db, data.character_id),
-                    "message": f"Ваш предмет {item_name} выкуплен за {buyout_price} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                    "message": sold_message,
                 },
             )
         except Exception as e:
@@ -3421,19 +3440,18 @@ def cancel_listing(
 
     now = datetime.utcnow()
 
-    # 6. Refund current bidder (if any)
+    # 6. Refund current bidder (if any): escrow -> bidder (FEAT-181)
     if listing.current_bidder_id:
-        db.execute(
-            text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
-            {"amount": listing.current_bid, "cid": listing.current_bidder_id}
-        )
-        # Log auction refund for bidder on cancel
-        log_gold_transaction(
-            db, listing.current_bidder_id, listing.current_bid,
-            get_character_gold(db, listing.current_bidder_id),
-            "auction_refund",
-            source=f"listing #{listing.id} cancelled by seller",
-            metadata={"listing_id": listing.id, "item_id": listing.item_id},
+        econ_ledger.post_operation(
+            db,
+            op_type="auction_refund",
+            legs=[Leg(AccountRef.escrow(), AccountRef.character(listing.current_bidder_id),
+                      listing.current_bid, "refund")],
+            source_service=ECON_SOURCE_SERVICE,
+            location_id=listing.location_id,
+            region_id=listing.region_id,
+            metadata={"listing_id": listing.id, "item_id": listing.item_id, "reason": "cancelled_by_seller"},
+            idempotency_key=f"auction_refund:cancel:{listing.id}",
         )
         db.query(models.AuctionBid).filter(
             models.AuctionBid.listing_id == listing_id,
@@ -3445,17 +3463,21 @@ def cancel_listing(
         item_name = item_obj.name if item_obj else "Неизвестный предмет"
         bidder_user_id = _get_user_id_for_character(db, listing.current_bidder_id)
         if bidder_user_id:
+            cancel_message = (
+                f"Лот отменён продавцом: {item_name}. "
+                f"Ваши {money_text(db, listing.current_bid)} возвращены."
+            )
             try:
                 publish_auction_notification(
                     target_user_id=bidder_user_id,
-                    message=f"Лот отменён продавцом: {item_name}. Ваши {listing.current_bid} зол. возвращены.",
+                    message=cancel_message,
                     ws_type="auction_outbid",
                     ws_data={
                         "listing_id": listing.id,
                         "item_name": item_name,
                         "new_bid_amount": 0,
                         "refunded_amount": listing.current_bid,
-                        "message": f"Лот отменён продавцом: {item_name}. Ваши {listing.current_bid} зол. возвращены.",
+                        "message": cancel_message,
                     },
                 )
             except Exception as e:
@@ -3588,16 +3610,17 @@ def claim_from_storage(
     if not auctioneer:
         raise HTTPException(status_code=403, detail="Для получения предметов нужен НПС-Аукционист")
 
-    # 3. Fetch storage entries
+    # 3. Fetch and lock storage entries (a concurrent second claim waits, then finds nothing)
     storage_entries = db.query(models.AuctionStorage).filter(
         models.AuctionStorage.id.in_(data.storage_ids),
         models.AuctionStorage.character_id == data.character_id,
-    ).all()
+    ).order_by(models.AuctionStorage.id).with_for_update().all()
     if not storage_entries:
         raise HTTPException(status_code=404, detail="Предметы на складе не найдены")
 
     claimed_items = 0
     claimed_gold = 0
+    gold_entries = []
 
     for entry in storage_entries:
         if entry.item_id and entry.quantity > 0:
@@ -3636,33 +3659,25 @@ def claim_from_storage(
             claimed_items += 1
 
         if entry.gold_amount > 0:
-            # Add gold to character balance
-            db.execute(
-                text(
-                    "UPDATE characters SET currency_balance = currency_balance + :amount "
-                    "WHERE id = :cid"
-                ),
-                {"amount": entry.gold_amount, "cid": data.character_id}
-            )
-            # Log auction sell income
-            log_gold_transaction(
-                db, data.character_id, entry.gold_amount,
-                get_character_gold(db, data.character_id),
-                "auction_sell",
-                source=f"claimed from storage #{entry.id}" + (
-                    f", listing #{entry.listing_id}" if entry.listing_id else ""
-                ),
-                metadata={
-                    "storage_id": entry.id,
-                    "listing_id": entry.listing_id,
-                    "gold_amount": entry.gold_amount,
-                },
-            )
             claimed_gold += entry.gold_amount
+            gold_entries.append({"storage_id": entry.id, "listing_id": entry.listing_id,
+                                 "gold_amount": entry.gold_amount})
 
         # Delete storage entry
         db.delete(entry)
 
+    # FEAT-181: sale proceeds leave the auction storage account, one operation
+    if claimed_gold > 0:
+        econ_ledger.post_operation(
+            db,
+            op_type="auction_claim",
+            legs=[Leg(AccountRef.storage(), AccountRef.character(data.character_id), claimed_gold)],
+            source_service=ECON_SOURCE_SERVICE,
+            location_id=auctioneer.get("location_id"),
+            metadata={"entries": gold_entries},
+        )
+
+    gold_label = currency_genitive(db)
     db.commit()
 
     new_balance = get_character_gold(db, data.character_id)
@@ -3671,7 +3686,7 @@ def claim_from_storage(
         "claimed_items": claimed_items,
         "claimed_gold": claimed_gold,
         "new_gold_balance": new_balance,
-        "message": f"Получено предметов: {claimed_items}, золота: {claimed_gold}",
+        "message": f"Получено предметов: {claimed_items}, {gold_label}: {claimed_gold}",
     }
 
 

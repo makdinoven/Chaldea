@@ -120,7 +120,21 @@ _CROSS_SERVICE_TABLE_DDL = [
     )""",
 ]
 
-_CROSS_SERVICE_TABLES = ["gathering_sessions", "battle_participants", "battles"]
+# FEAT-181: world economy ledger (owned by character-service) + world hierarchy
+# (owned by locations-service). Every gold change goes through econ_ledger, so
+# money flows need these tables; the DDL is the shared portable copy from
+# econ_contract_cases (minus `characters`, which each test file defines itself).
+from tests.econ_contract_cases import SQLITE_DDL as _ECON_SQLITE_DDL  # noqa: E402
+
+_CROSS_SERVICE_TABLE_DDL += [
+    ddl for ddl in _ECON_SQLITE_DDL if "TABLE IF NOT EXISTS characters" not in ddl
+]
+
+_CROSS_SERVICE_TABLES = [
+    "gathering_sessions", "battle_participants", "battles",
+    "econ_postings", "econ_operations", "econ_accounts", "econ_settings",
+    "Locations", "Districts", "Regions", "Countries",
+]
 
 
 def _create_cross_service_tables(conn):

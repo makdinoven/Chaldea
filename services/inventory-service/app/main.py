@@ -1762,13 +1762,16 @@ def trade_update_items(
 
     # Validate gold >= 0
     if req.gold < 0:
-        raise HTTPException(status_code=400, detail="Количество золота не может быть отрицательным")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Количество {crud.currency_genitive(db)} не может быть отрицательным",
+        )
 
-    # Validate character has enough gold
+    # Validate character has enough gold (re-checked under lock at execution)
     if req.gold > 0:
         balance = crud.get_character_gold(db, req.character_id)
         if balance < req.gold:
-            raise HTTPException(status_code=400, detail="Недостаточно золота")
+            raise HTTPException(status_code=400, detail=crud.not_enough_money_message(db))
 
     # Validate item ownership
     if req.items:
@@ -1789,7 +1792,9 @@ def trade_confirm(
     current_user=Depends(get_current_user_via_http),
 ):
     """Confirm trade from one side. If both confirmed, execute atomically."""
-    trade = crud.get_trade_offer(db, trade_id)
+    # FEAT-181: lock the trade row so two concurrent confirms are serialised and
+    # the second one sees the first one's flag / the completed status.
+    trade = crud.get_trade_offer(db, trade_id, for_update=True)
     if not trade:
         raise HTTPException(status_code=404, detail="Предложение обмена не найдено")
 

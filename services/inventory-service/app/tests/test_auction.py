@@ -387,6 +387,18 @@ def test_create_listing_enhancement_data_snapshot(mock_notify, auction_env):
 # place_bid
 # ---------------------------------------------------------------------------
 
+def _emit_to_ledger_account(db, ref, amount):
+    """FEAT-181: money held by the auction (bids in escrow, unclaimed proceeds) lives in
+    ledger accounts. Rows seeded straight into the auction tables must be backed by the
+    matching account balance, exactly as the genesis migration does on a real DB."""
+    import econ_ledger
+    econ_ledger.post_operation(
+        db, op_type="admin_emission", legs=[econ_ledger.Leg(econ_ledger.AccountRef.emission(), ref, amount)],
+        source_service="test", comment="test seed", apply_tax=False,
+    )
+    db.commit()
+
+
 def _create_listing(db, seller_id=1, item_id=201, qty=1, start=100, buyout=500):
     """Helper to create a listing directly in DB."""
     now = datetime.utcnow()
@@ -793,6 +805,8 @@ def test_claim_storage_gold(mock_notify, auction_env):
     db.add(storage)
     db.flush()
     db.commit()
+    import econ_ledger
+    _emit_to_ledger_account(db, econ_ledger.AccountRef.storage(), 475)
 
     req = schemas.AuctionClaimRequest(character_id=1, storage_ids=[storage.id])
     result = crud.claim_from_storage(db, data=req, user_id=1)
@@ -868,6 +882,8 @@ def test_expire_with_bids_sold(mock_notify, auction_env):
     db.add(bid)
     db.flush()
     db.commit()
+    import econ_ledger
+    _emit_to_ledger_account(db, econ_ledger.AccountRef.escrow(), 200)
 
     count = crud.expire_stale_listings(db)
     db.commit()

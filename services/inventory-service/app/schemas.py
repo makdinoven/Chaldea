@@ -2019,16 +2019,30 @@ class AuctionStorageSource(str, Enum):
 
 # --- Request schemas ---
 
+# Auction price columns are INT; anything above is rejected up front (422) instead of failing in the ledger
+AUCTION_MAX_PRICE = 2_147_483_647
+
+
+def _check_auction_price(v):
+    if v is not None and v > AUCTION_MAX_PRICE:
+        raise ValueError("Слишком большая сумма")
+    return v
+
+
 class AuctionCreateListingRequest(BaseModel):
     character_id: int
     storage_id: int           # auction_storage.id — item from auction storage
     start_price: int          # minimum bid (> 0)
     buyout_price: Optional[int] = None  # optional instant buy price (> start_price)
 
+    _price_cap = validator("start_price", "buyout_price", allow_reuse=True)(_check_auction_price)
+
 
 class AuctionBidRequest(BaseModel):
     character_id: int
     amount: int               # bid amount (> current_bid)
+
+    _amount_cap = validator("amount", allow_reuse=True)(_check_auction_price)
 
 
 class AuctionBuyoutRequest(BaseModel):
