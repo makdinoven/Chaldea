@@ -96,6 +96,27 @@ class SimParams:
     merchant_cash_target_mult: float = 2.0    # cash target = mult x wholesale value of a full restock at x1 prices
     merchant_cash_cap_mult: float = 3.0       # upkeep starts above cap_mult x cash target ...
     merchant_cash_release: float = 0.25       # ... and releases this share of the excess per tick to the purse
+    # FEAT-184 banks (3.5): rates per day, loan caps, fees, residents. Not in any migration seed either.
+    bank_demand_rate_day: float = 0.001       # base demand-deposit rate (x the bank's deposit_rate_factor)
+    bank_term_rate_day_7: float = 0.002       # base term rates (x factor, fixed at opening)
+    bank_term_rate_day_14: float = 0.0025
+    bank_term_rate_day_28: float = 0.003
+    bank_loan_rate_day: float = 0.005         # loans of players and residents, fixed at issue
+    bank_penalty_rate_day: float = 0.01       # added to the loan rate after due_at
+    bank_debt_cap_mult: float = 2.0           # interest + penalties stop at principal x mult
+    bank_loan_cap_base: int = 500             # loan cap = base + per_level x level
+    bank_loan_cap_per_level: int = 250
+    bank_min_amount: int = 10                 # minimum deposit / withdrawal / transfer / loan / repay
+    bank_transfer_fee_rate: float = 0.02      # commission share (ceil) ...
+    bank_transfer_fee_min: int = 1            # ... but at least this
+    bank_start_capital: int = 20000           # taken from the region treasury at the first switch-on
+    bank_reserve_ratio: float = 0.2           # share of residents' deposits never lent / never used for interest
+    bank_rate_cover: float = 1.25             # the bank wants loan income >= cover x deposit cost
+    bank_rate_factor_min: float = 0.2         # lowest deposit-rate factor
+    bank_rate_smoothing: float = 0.25         # the factor moves this share toward its target per pass
+    bank_resident_deposit_share: float = 0.2  # residents keep this share of their savings in the bank
+    bank_resident_loan_share: float = 0.1     # residents' loan target as a share of the purse
+    bank_resident_adjust: float = 0.25        # per 6 h residents move this share of the gap to their targets
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":

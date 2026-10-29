@@ -2448,19 +2448,30 @@ def admin_set_balance(db: Session, character_id: int, target: int, *, actor_user
 def post_character_deletion(db: Session, character: Character) -> int:
     """C8: before deleting a character, move its whole balance to the treasury of its current
     location (else «Казна Скитальцев») and deactivate its account. Same transaction as the
-    delete; never commits. Returns the amount moved."""
+    delete; never commits. Returns the amount moved from the wallet.
+
+    FEAT-184 (3.12): first (lock order 3.8: econ_banks → deposits → loans → character) the
+    open bank deposits go `bank_deposits(Y) → treasury(Y)` (world when region Y is gone) in
+    the same `character_deleted` operation, and an open loan is written off (no money)."""
+    import economy_bank_crud  # late: avoids an import cycle through economy_crud
     character_id = character.id
+    bank_legs, bank_meta = ([], {}) if character.is_npc else economy_bank_crud.close_character_positions(
+        db, character_id, economy_bank_crud.now_utc())
     locked = econ_ledger.lock_characters(db, [character_id])
     balance = locked.get(character_id, 0)
+    legs = list(bank_legs)
     if balance > 0:
+        legs.insert(0, econ_ledger.Leg(econ_ledger.AccountRef.character(character_id),
+                                       payer_account(db, character.current_location_id), balance))
+    if legs:
         econ_ledger.post_operation(
             db,
             op_type=econ_core.OP_CHARACTER_DELETED,
-            legs=[econ_ledger.Leg(econ_ledger.AccountRef.character(character_id),
-                                  payer_account(db, character.current_location_id), balance)],
+            legs=legs,
             source_service=ECON_SOURCE_SERVICE,
             location_id=character.current_location_id,
-            metadata={"character_id": character_id, "name": character.name, "is_npc": bool(character.is_npc)},
+            metadata={"character_id": character_id, "name": character.name, "is_npc": bool(character.is_npc),
+                      **bank_meta},
             idempotency_key=f"character_deleted:c:{character_id}",
         )
     econ_ledger.deactivate_account(db, econ_ledger.AccountRef.character(character_id))

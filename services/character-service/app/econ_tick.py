@@ -29,6 +29,16 @@ Lock order inside a region transaction (FEAT-183 3.5, shared with the player sho
 ``characters`` rows (ascending id) → ``econ_accounts`` ascending (done by ``post_operation``). The shop rows and NPC
 rows are locked **before** the ``region_tick`` posting so no account is held while waiting for them.
 
+Banks (FEAT-184, 3.7) run **after** the region loop in their own transactions (a region transaction never touches
+bank tables): orphan purge of banks of deleted regions (``treasury_closed`` ``bank -> world``, loans written off),
+then the **bank pass** — one transaction per bank (``econ_banks(X)`` FOR UPDATE, skipped when ``last_run_id`` is this
+run → its open deposits → its open loans → ``econ_bank.bank_step`` → one ``bank_tick`` op, key
+``bank_tick:<run>:b:<X>``), then the **collection pass** — one transaction per loan due by now (key
+``loan_collect:<run>:l:<loan>``). A failing bank / loan is rolled back alone and retried next run (accrual is
+time-based, nothing is lost). Global lock order (3.8, supersedes the FEAT-183 one): ``econ_regions →
+econ_region_goods → npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans
+(asc id) → characters (asc id) → econ_accounts (asc id)``.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -73,6 +83,8 @@ INTERRUPTED_ERROR = "прерван: процесс остановился во 
 # Run error text for regions whose merchant step failed (the region itself ticked); parsed back by
 # merchant_failures_from_error for the runs list (econ_tick_runs has no merchant columns — no migration).
 MERCHANT_ERROR_PREFIX = "торговцы — ошибка в регионах: "
+# FEAT-184: regions whose bank pass failed (parsed back by bank_failures_from_error, no migration).
+BANK_ERROR_PREFIX = "банки — ошибка в регионах: "
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -113,6 +125,16 @@ class RunSummary:
     merchant_failures: int = 0            # regions whose merchant step was rolled back (the region still ticked)
     merchant_failed_region_ids: List[int] = field(default_factory=list)
     shop_rows_purged: int = 0             # orphan rows of deleted NPCs + sold-out player-origin rows
+    # FEAT-184 banks (3.7)
+    banks_processed: int = 0              # banks that went through the bank pass in this call
+    bank_ops_posted: int = 0              # bank_tick operations posted
+    bank_failures: int = 0                # banks whose pass was rolled back (retried next run)
+    bank_failed_region_ids: List[int] = field(default_factory=list)
+    bank_interest_paid: int = 0           # deposit interest paid to players and residents
+    loans_overdue: int = 0                # overdue loans still owing after the collection pass
+    loans_collected: int = 0              # loans something was collected from
+    collected_amount: int = 0             # total collected
+    banks_closed: int = 0                 # banks of deleted regions purged
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -429,12 +451,21 @@ def lock_merchants(session: Session, region_id: int, npc_ids, for_update: bool) 
     return MerchantContext(merchants=merchants, rows={int(r[0]): tuple(r) for r in rows}, dropped=dropped)
 
 
+def _failures_from_error(error: Optional[str], prefix: str) -> int:
+    if not error or prefix not in error:
+        return 0
+    tail = error.split(prefix, 1)[1].split(";", 1)[0]
+    return len([part for part in tail.split(",") if part.strip().isdigit()])
+
+
 def merchant_failures_from_error(error: Optional[str]) -> int:
     """Number of regions listed after MERCHANT_ERROR_PREFIX in a run's error text (0 when none)."""
-    if not error or MERCHANT_ERROR_PREFIX not in error:
-        return 0
-    tail = error.split(MERCHANT_ERROR_PREFIX, 1)[1].split(";", 1)[0]
-    return len([part for part in tail.split(",") if part.strip().isdigit()])
+    return _failures_from_error(error, MERCHANT_ERROR_PREFIX)
+
+
+def bank_failures_from_error(error: Optional[str]) -> int:
+    """Number of regions listed after BANK_ERROR_PREFIX in a run's error text (0 when none)."""
+    return _failures_from_error(error, BANK_ERROR_PREFIX)
 
 
 def _merchant_step(session: Session, *, run_id: int, region_id: int, region: "models.EconRegion",
@@ -816,6 +847,11 @@ def run_tick(
                 summary.merchant_ops_posted += 1
         _heartbeat(session_factory, run_id, tick_clock(), summary.regions_done, summary.regions_failed)
 
+    # FEAT-184 (3.7): banks after the regions, own transactions (never inside a region transaction).
+    _prepare_banks(session_factory, run_id, summary, tick_clock)
+    _bank_pass(session_factory, run_id, summary, params, tick_clock)
+    _collection_pass(session_factory, run_id, summary, params, tick_clock)
+
     if summary.regions_failed == 0:
         summary.status = STATUS_DONE
     elif summary.regions_done == 0:
@@ -831,6 +867,8 @@ def run_tick(
             parts.append("ошибка в регионах: " + ", ".join(str(r) for r in summary.failed_region_ids))
         if summary.merchant_failed_region_ids:
             parts.append(MERCHANT_ERROR_PREFIX + ", ".join(str(r) for r in summary.merchant_failed_region_ids))
+        if summary.bank_failed_region_ids:
+            parts.append(BANK_ERROR_PREFIX + ", ".join(str(r) for r in summary.bank_failed_region_ids))
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -848,13 +886,105 @@ def run_tick(
     finally:
         session.close()
 
-    log = logger.warning if (summary.regions_failed or summary.merchant_failures) else logger.info
+    log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures) \
+        else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
-        "processed, %d sold, %d restocked, %d operations, %d failed regions",
+        "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
+        "%d failed, %d loans collected (%d), %d overdue, %d closed",
         run_id, summary.status, summary.regions_done, summary.regions_total, summary.regions_failed,
         summary.operations_posted, summary.merchants_processed, summary.merchant_items_sold,
-        summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures)
+        summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures,
+        summary.banks_processed, summary.bank_ops_posted, summary.bank_failures, summary.loans_collected,
+        summary.collected_amount, summary.loans_overdue, summary.banks_closed)
     return summary
+
+
+# --------------------------------------------------------------------------------------------- banks (FEAT-184)
+
+def _bank_ids(session_factory: SessionFactory, run_id: int, what: str, fetch) -> Optional[List[int]]:
+    """A plain read of the ids to process; None when the bank tables are not there (tick deployed before 031)."""
+    session = session_factory()
+    try:
+        return fetch(session)
+    except Exception as exc:
+        logger.warning("economy tick run %s: %s unavailable (%s), skipped", run_id, what, type(exc).__name__)
+        return None
+    finally:
+        session.rollback()
+        session.close()
+
+
+def _prepare_banks(session_factory: SessionFactory, run_id: int, summary: RunSummary,
+                   clock: Callable[[], datetime]) -> None:
+    """Orphan purge (3.7 step 1): banks of deleted regions, one transaction each, best effort."""
+    import economy_bank_crud as bank_crud  # late: economy_bank_crud imports this module lazily too
+    ids = _bank_ids(session_factory, run_id, "bank orphan purge", bank_crud.orphan_bank_ids)
+    for region_id in ids or ():
+        session = session_factory()
+        try:
+            if bank_crud.purge_orphan_bank(session, region_id, run_id=run_id,
+                                           now=_naive_utc(clock()).replace(microsecond=0)):
+                summary.banks_closed += 1
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.warning("economy tick run %s: purge of the bank of deleted region %s failed (%s)", run_id,
+                           region_id, type(exc).__name__)
+        finally:
+            session.close()
+
+
+def _bank_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,
+               clock: Callable[[], datetime]) -> None:
+    """Bank pass (3.7 step 2): one transaction per bank, ascending region id; a failure rolls back that bank only."""
+    import economy_bank_crud as bank_crud
+    ids = _bank_ids(session_factory, run_id, "bank pass", bank_crud.banks_to_tick)
+    for region_id in ids or ():
+        session = session_factory()
+        try:
+            result = bank_crud.tick_bank(session, region_id, run_id=run_id, params=params,
+                                         clock=lambda: _naive_utc(clock()))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            summary.bank_failures += 1
+            summary.bank_failed_region_ids.append(region_id)
+            logger.error("economy tick run %s: bank of region %s failed (%s), will be retried next tick",
+                         run_id, region_id, type(exc).__name__, exc_info=True)
+            continue
+        finally:
+            session.close()
+        if result.status == bank_crud.TICK_STATUS_DONE:
+            summary.banks_processed += 1
+            summary.bank_ops_posted += 1 if result.posted else 0
+            summary.bank_interest_paid += int(result.stats.get("interest_paid", 0)) + int(
+                result.stats.get("resident_interest_paid", 0))
+
+
+def _collection_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary,
+                     params: econ_sim.SimParams, clock: Callable[[], datetime]) -> None:
+    """Collection pass (3.7 step 3): loans due by now, one transaction per loan, ascending id."""
+    import economy_bank_crud as bank_crud
+    now = _naive_utc(clock()).replace(microsecond=0)
+    ids = _bank_ids(session_factory, run_id, "loan collection", lambda s: bank_crud.due_loan_ids(s, now))
+    for loan_id in ids or ():
+        session = session_factory()
+        try:
+            result = bank_crud.collect_loan(session, loan_id, run_id=run_id, params=params,
+                                            clock=lambda: _naive_utc(clock()))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.error("economy tick run %s: collection of loan %s failed (%s), will be retried next tick",
+                         run_id, loan_id, type(exc).__name__, exc_info=True)
+            continue
+        finally:
+            session.close()
+        if result.collected > 0:
+            summary.loans_collected += 1
+            summary.collected_amount += result.collected
+        if result.overdue:
+            summary.loans_overdue += 1
 
 
 def _prepare_merchants(session_factory: SessionFactory, run_id: int) -> Tuple[Dict[int, List[int]], int]:

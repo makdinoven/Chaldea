@@ -278,3 +278,50 @@ def notify_character_left_location_sync(
         )
         return False
     return True
+
+
+# ============================================================
+# FEAT-184 — FEAT-145 NPC gate for the bank (fail-closed)
+# ============================================================
+
+GATE_ACTION_NPC_DIALOGUE = "npc_dialogue"
+
+
+class GateUnavailable(Exception):
+    """locations-service could not answer the gate question (transport error / non-200 / bad payload)."""
+
+
+async def check_npc_gate(character_id: int, location_id: int, npc_id: int) -> bool:
+    """`GET /locations/internal/action-gate` — does the character hold an open
+    «Диалог с НПС» gate naming ``npc_id`` in ``location_id``?
+
+    Fail-closed: the caller must refuse the action on :class:`GateUnavailable`.
+    The gate is only read here, never consumed (same rule as the NPC shop).
+
+    :return: True / False — the answer of locations-service.
+    :raises GateUnavailable: transport failure, non-200 answer or a payload without ``open``.
+    """
+    url = f"{_base_url()}/locations/internal/action-gate"
+    params = {
+        "character_id": int(character_id),
+        "location_id": int(location_id),
+        "action_type": GATE_ACTION_NPC_DIALOGUE,
+        "target_ref": int(npc_id),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=INTERNAL_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, params=params, headers=_internal_headers())
+    except Exception as e:
+        logger.warning(f"action-gate недоступен для персонажа {character_id}, НПС {npc_id}: {e.__class__.__name__}")
+        raise GateUnavailable() from e
+
+    if response.status_code != 200:
+        logger.warning(f"action-gate вернул {response.status_code} для персонажа {character_id}, НПС {npc_id}")
+        raise GateUnavailable()
+    try:
+        value = (response.json() or {}).get("open")
+    except Exception as e:
+        raise GateUnavailable() from e
+    if not isinstance(value, bool):
+        raise GateUnavailable()
+    return value

@@ -712,6 +712,107 @@ class EconSimSettings(Base):
     updated_by_user_id = Column(Integer, nullable=True)
 
 
+# --------------------------------------------------------------------------- FEAT-184 banks (migration 031)
+
+class EconBank(Base):
+    """One bank per region. Money: ledger accounts ``bank`` / ``bank_deposits`` (ref = region_id)."""
+
+    __tablename__ = "econ_banks"
+
+    region_id = Column(BigInteger, primary_key=True, autoincrement=False)  # Regions.id (no FK)
+    is_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
+    deposit_rate_factor = Column(Numeric(5, 4), nullable=False, default=1, server_default="1.0000")
+    resident_deposits = Column(BigInteger, nullable=False, default=0, server_default="0")
+    resident_loans = Column(BigInteger, nullable=False, default=0, server_default="0")
+    resident_dep_carry = Column(Numeric(16, 6), nullable=False, default=0, server_default="0")
+    resident_loan_carry = Column(Numeric(16, 6), nullable=False, default=0, server_default="0")
+    accrued_at = Column(DateTime, nullable=True)
+    capital_seeded_at = Column(DateTime, nullable=True)
+    last_run_id = Column(BigInteger, nullable=True)
+    last_tick_at = Column(DateTime, nullable=True)
+    last_stats = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint("resident_deposits >= 0 AND resident_loans >= 0", name="ck_econ_banks_res"),
+    )
+
+
+class BankDeposit(Base):
+    """A player deposit: ``demand`` (current rate) or ``term`` (rate fixed at opening)."""
+
+    __tablename__ = "bank_deposits"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)        # characters.id (no FK; deletion hook closes rows)
+    region_id = Column(BigInteger, ForeignKey("econ_banks.region_id", name="fk_bank_deposits_bank"), nullable=False)
+    kind = Column(String(8), nullable=False)              # demand | term
+    status = Column(String(8), nullable=False, default="open", server_default="open")  # open | closed
+    amount = Column(BigInteger, nullable=False, default=0, server_default="0")
+    interest_base = Column(BigInteger, nullable=False, default=0, server_default="0")
+    interest_accrued = Column(BigInteger, nullable=False, default=0, server_default="0")
+    interest_total = Column(BigInteger, nullable=False, default=0, server_default="0")
+    interest_carry = Column(Numeric(16, 6), nullable=False, default=0, server_default="0")
+    rate_day = Column(Numeric(8, 6), nullable=True)       # term: fixed at opening; demand: NULL
+    term_days = Column(SmallInteger, nullable=True)
+    opened_at = Column(DateTime, nullable=False)
+    matures_at = Column(DateTime, nullable=True)
+    accrued_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    demand_owner_id = Column(Integer, nullable=True)      # = character_id while kind=demand AND open
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("region_id", "demand_owner_id", name="uq_bank_deposits_demand"),
+        Index("ix_bank_deposits_region_status", "region_id", "status"),
+        Index("ix_bank_deposits_char_status", "character_id", "status"),
+        CheckConstraint("kind IN ('demand', 'term')", name="ck_bank_deposits_kind"),
+        CheckConstraint("status IN ('open', 'closed')", name="ck_bank_deposits_status"),
+        CheckConstraint("amount >= 0 AND interest_accrued >= 0 AND interest_base >= 0",
+                        name="ck_bank_deposits_amounts"),
+    )
+
+
+class BankLoan(Base):
+    """A player loan; ``active_character_id`` = character_id while active|overdue (one open loan per character)."""
+
+    __tablename__ = "bank_loans"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    region_id = Column(BigInteger, ForeignKey("econ_banks.region_id", name="fk_bank_loans_bank"), nullable=False)
+    status = Column(String(12), nullable=False, default="active", server_default="active")
+    principal = Column(BigInteger, nullable=False)
+    debt = Column(BigInteger, nullable=False)
+    interest_total = Column(BigInteger, nullable=False, default=0, server_default="0")
+    penalty_total = Column(BigInteger, nullable=False, default=0, server_default="0")
+    paid_total = Column(BigInteger, nullable=False, default=0, server_default="0")
+    collected_total = Column(BigInteger, nullable=False, default=0, server_default="0")
+    written_off = Column(BigInteger, nullable=False, default=0, server_default="0")
+    rate_day = Column(Numeric(8, 6), nullable=False)
+    penalty_rate_day = Column(Numeric(8, 6), nullable=False)
+    term_days = Column(SmallInteger, nullable=False)
+    issued_at = Column(DateTime, nullable=False)
+    due_at = Column(DateTime, nullable=False)
+    accrued_at = Column(DateTime, nullable=False)
+    interest_carry = Column(Numeric(16, 6), nullable=False, default=0, server_default="0")
+    closed_at = Column(DateTime, nullable=True)
+    closed_by_user_id = Column(Integer, nullable=True)
+    note = Column(String(500), nullable=True)
+    active_character_id = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("active_character_id", name="uq_bank_loans_active"),
+        Index("ix_bank_loans_region_status", "region_id", "status"),
+        Index("ix_bank_loans_char", "character_id"),
+        Index("ix_bank_loans_status_due", "status", "due_at"),
+        CheckConstraint("principal > 0 AND debt >= 0", name="ck_bank_loans_amounts"),
+        CheckConstraint("status IN ('active', 'overdue', 'closed', 'written_off')", name="ck_bank_loans_status"),
+    )
+
+
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
 # ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
 # change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance

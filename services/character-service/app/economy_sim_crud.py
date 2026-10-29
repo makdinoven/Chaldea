@@ -17,6 +17,7 @@ import econ_core as core
 import econ_ledger
 import econ_sim
 import econ_tick
+import economy_bank_crud
 import models
 from economy_crud import EconomyApiError, _like_pattern
 
@@ -166,7 +167,7 @@ LEFT JOIN econ_region_templates t ON t.code = e.template_code
 """
 
 
-def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int]) -> dict:
+def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int], banks: Iterable[int] = ()) -> dict:
     region_id = int(row[0])
     has_econ = row[6] is not None
     population = _i(row[6])
@@ -192,6 +193,7 @@ def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int]) -> dic
         "last_grant": _i(row[16]),
         "last_tick_at": row[17],
         "simulated": row[4] is not None and population > 0,
+        "bank_enabled": region_id in banks,       # FEAT-184 «Банк есть»
     }
 
 
@@ -199,7 +201,8 @@ def list_regions(db: Session) -> List[dict]:
     purses = _balances(db, core.KIND_POPULATION_PURSE)
     treasuries = _balances(db, core.KIND_REGION_TREASURY)
     rows = db.execute(text(SQL_REGIONS + " ORDER BY co.name, r.name, r.id")).fetchall()
-    return [_region_item(row, purses, treasuries) for row in rows]
+    banks = economy_bank_crud.enabled_bank_ids(db)
+    return [_region_item(row, purses, treasuries, banks) for row in rows]
 
 
 def get_region(db: Session, region_id: int) -> dict:
@@ -208,7 +211,8 @@ def get_region(db: Session, region_id: int) -> dict:
         raise EconomyApiError(404, ERR_REGION_NOT_FOUND)
     purse = econ_tick.account_balance(db, core.AccountRef.purse(region_id))
     treasury = econ_tick.account_balance(db, core.AccountRef.region(region_id))
-    item = _region_item(row, {region_id: purse}, {region_id: treasury})
+    item = _region_item(row, {region_id: purse}, {region_id: treasury},
+                        economy_bank_crud.enabled_bank_ids(db, [region_id]))
     groups = econ_tick.load_groups(db)
     rows = _goods_rows(db, region_id)
     order = list(groups) + sorted(code for code in rows if code not in groups)
@@ -317,7 +321,7 @@ def region_history(db: Session, region_id: int, limit: int) -> List[dict]:
 
 def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_from_template: bool,
                  reset_stocks: bool, fund_purses: bool, treasury_to_reserve: bool, comment: str,
-                 actor_user_id: Optional[int]) -> dict:
+                 actor_user_id: Optional[int], open_banks: bool = False) -> dict:
     """Apply template goods (stocks → norm), optionally population from the template (rows with population 0), and
     top up money via admin emission: the population purse to ``starting_purse`` and (``treasury_to_reserve``, added
     by B6) the region treasury to its wage reserve target. Top-up = ``max(0, target − balance)``, so a re-click emits 0.
@@ -355,6 +359,9 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
     groups = econ_tick.load_groups(db)
     templates = _templates(db)
     country_tax_rate = float(econ_ledger.get_economy_settings(db).country_tax_rate)
+    bank_targets = _bank_targets(targets, templates, population_from_template) if open_banks else []
+    # FEAT-184 lock order: econ_banks before any account the fill's postings lock.
+    bank_rows = economy_bank_crud.lock_banks(db, bank_targets)
 
     processed, skipped = 0, []
     operation_ids: List[int] = []
@@ -407,6 +414,7 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
             operation_ids.append(int(result.operation_id))
             emitted_purses += purse_amount
             emitted_treasuries += treasury_amount
+    banks_opened = _open_banks(db, bank_targets, bank_rows, sim_params, actor_user_id)
     db.flush()
     return {
         "regions": processed,
@@ -416,7 +424,37 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
         "emitted_purses": emitted_purses,
         "emitted_treasuries": emitted_treasuries,
         "skipped_no_population": skipped,
+        "banks_opened": banks_opened,
     }
+
+
+def _bank_targets(targets, templates, population_from_template: bool) -> List[int]:
+    """FEAT-184: regions of the fill whose template opens a bank and that will have residents after it."""
+    ids = []
+    for region in targets:
+        if region.template_code not in economy_bank_crud.BANK_TEMPLATE_CODES:
+            continue
+        population = _i(region.population)
+        template = templates.get(region.template_code)
+        if population == 0 and population_from_template and template is not None:
+            population = int(template.default_population)
+        if population > 0:
+            ids.append(int(region.region_id))
+    return sorted(ids)
+
+
+def _open_banks(db: Session, region_ids: List[int], rows: dict, sim_params, actor_user_id: Optional[int]) -> List[int]:
+    """Switch the banks on (rows created when missing) and seed the start capital once — after the treasury
+    top-up. Returns the regions whose bank this fill switched on."""
+    opened = []
+    now = economy_bank_crud.now_utc()
+    for region_id in region_ids:
+        bank = rows.get(region_id) or economy_bank_crud.ensure_bank_row(db, region_id, now)
+        if not bank.is_enabled:
+            bank.is_enabled = True
+            opened.append(region_id)
+        economy_bank_crud.seed_capital(db, bank, params=sim_params, actor_user_id=actor_user_id, now=now)
+    return opened
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +689,13 @@ def _merchant_ops(db: Session, run_id: int) -> int:
     ), {"op": core.OP_MERCHANT_TRADE, "key": f"merchant_trade:{int(run_id)}:r:%"}).scalar())
 
 
+def _run_ops(db: Session, op_type: str, key_prefix: str) -> int:
+    """Operations of one type posted by a run, by idempotency-key prefix (FEAT-184 bank / collection counters)."""
+    return _i(db.execute(text(
+        "SELECT COUNT(*) FROM econ_operations WHERE op_type = :op AND idempotency_key LIKE :key"
+    ), {"op": op_type, "key": f"{key_prefix}%"}).scalar())
+
+
 def _run_dict(run: "models.EconTickRun", db: Optional[Session] = None) -> dict:
     return {
         "id": int(run.id), "slot": run.slot, "trigger_kind": run.trigger_kind, "actor_user_id": run.actor_user_id,
@@ -660,6 +705,11 @@ def _run_dict(run: "models.EconTickRun", db: Optional[Session] = None) -> dict:
         # FEAT-183: derived (econ_tick_runs has no merchant columns)
         "merchant_ops_posted": _merchant_ops(db, int(run.id)) if db is not None else 0,
         "merchant_failures": econ_tick.merchant_failures_from_error(run.error),
+        # FEAT-184: derived the same way (banks_processed is only in the run-now summary)
+        "bank_ops_posted": _run_ops(db, core.OP_BANK_TICK, f"bank_tick:{int(run.id)}:b:") if db is not None else 0,
+        "bank_failures": econ_tick.bank_failures_from_error(run.error),
+        "loans_collected": (_run_ops(db, core.OP_LOAN_COLLECT, f"loan_collect:{int(run.id)}:l:")
+                            if db is not None else 0),
     }
 
 
@@ -703,9 +753,10 @@ def update_sim(db: Session, *, tick_enabled: bool, params_in: dict, user_id: Opt
 # ---------------------------------------------------------------------------
 
 def region_card(db: Session, region_id: int) -> dict:
-    hidden = {"region_id": region_id, "participating": False}
     if region_id <= 0:
-        return hidden
+        return {"region_id": region_id, "participating": False, "has_bank": False}
+    has_bank = bool(economy_bank_crud.enabled_bank_ids(db, [region_id]))   # FEAT-184, in both shapes
+    hidden = {"region_id": region_id, "participating": False, "has_bank": has_bank}
     region = db.get(models.EconRegion, region_id)
     if region is None or region.template_code is None or _i(region.population) <= 0:
         return hidden
@@ -721,4 +772,5 @@ def region_card(db: Session, region_id: int) -> dict:
         gender=template.noun_gender if template is not None else "m",
         group_order=list(groups),
     )
-    return {"region_id": region_id, "participating": True, "updated_at": region.last_tick_at, **card}
+    return {"region_id": region_id, "participating": True, "updated_at": region.last_tick_at, **card,
+            "has_bank": has_bank}

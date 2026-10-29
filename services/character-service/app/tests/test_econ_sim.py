@@ -56,9 +56,10 @@ def _finite(*values):
 # --------------------------------------------------------------------------------------------- params / seed
 
 def test_default_params_match_the_migration_seed():
-    # FEAT-183 merchant keys are newer than the 028 seed (no migration): missing keys use the SimParams defaults.
+    # FEAT-183 merchant / FEAT-184 bank keys are newer than the 028 seed (no migration): missing keys use the
+    # SimParams defaults.
     defaults = S.SimParams().to_dict()
-    seeded = {k: v for k, v in defaults.items() if not k.startswith("merchant_")}
+    seeded = {k: v for k, v in defaults.items() if not k.startswith(("merchant_", "bank_"))}
     assert seeded == pytest.approx(mig.DEFAULT_PARAMS)
     assert S.SimParams.from_mapping(mig.DEFAULT_PARAMS) == S.SimParams()
 

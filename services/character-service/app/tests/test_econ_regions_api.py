@@ -266,7 +266,7 @@ def test_public_card_needs_no_auth(world):
 REGION_KEYS = {"region_id", "name", "country_id", "country_name", "template_code", "template_name", "population",
                "tax_rate", "stability", "prosperity", "hunger", "satisfaction", "purse", "treasury",
                "treasury_target", "last_income", "last_tax", "last_wages", "last_grant", "last_tick_at",
-               "simulated"}
+               "simulated", "bank_enabled"}
 GOOD_KEYS = {"group_code", "name", "production_per_1000", "consumption_mult", "stock", "norm_stock", "price_mult",
              "prev_price_mult", "last_produced", "last_consumed", "last_demand", "last_spoiled"}
 
@@ -408,7 +408,7 @@ def test_fill_shape_and_idempotent_top_up(world, engine):
     assert resp.status_code == 200, resp.text
     first = resp.json()
     assert set(first) == {"regions", "operation_id", "operation_ids", "emitted", "emitted_purses",
-                          "emitted_treasuries", "skipped_no_population"}
+                          "emitted_treasuries", "skipped_no_population", "banks_opened"}
     assert first["regions"] == 3
     assert first["skipped_no_population"] == [20]
     assert len(first["operation_ids"]) == 2 and first["operation_id"] == first["operation_ids"][-1]
@@ -895,7 +895,7 @@ def test_summary_population_purses(world, engine):
 # --------------------------------------------------------------------------------------------- public card
 
 CARD_KEYS = {"region_id", "participating", "updated_at", "food", "treasury", "stability", "prosperity",
-             "price_level", "shortages", "surpluses", "phrases", "groups"}
+             "price_level", "shortages", "surpluses", "phrases", "groups", "has_bank"}  # FEAT-184 has_bank
 
 
 def _numbers(value, path=""):
@@ -941,7 +941,7 @@ def test_card_participating_false(world):
     for region_id in (20, 30, 40, 999, 0, -5):                # pop 0, no template, no row, unknown, bad ids
         resp = client.get(f"/characters/economy/regions/{region_id}/card")
         assert resp.status_code == 200
-        assert resp.json() == {"region_id": region_id, "participating": False}
+        assert resp.json() == {"region_id": region_id, "participating": False, "has_bank": False}
     assert client.get("/characters/economy/regions/abc/card").status_code == 422
 
 

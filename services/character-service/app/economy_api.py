@@ -5,6 +5,9 @@ Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,
          FEAT-182: /characters/admin/economy/{regions[/{id}[/apply-template|/history]],regions/fill,
                    goods-groups[/{code}],templates[/{code}],item-groups,sim[/run]}
          FEAT-183: /characters/admin/economy/merchants[/fund]
+         FEAT-184: /characters/admin/economy/banks[/debtors|/{region_id}[/capital]|/loans/{loan_id}/write-off]
+Player:  FEAT-184 banks: /characters/economy/bank/{npc/{npc_id}[/deposit|/withdraw|/transfer|/send|/loan|/repay],
+                          summary,regions} (JWT + ownership; POST also the FEAT-145 gate via locations-service)
 RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings
 (regions/fill and merchants/fund need economy:settings AND economy:emit).
 
@@ -16,10 +19,11 @@ never shadow these static paths.
 import logging
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session, sessionmaker
 
 import database
@@ -27,7 +31,9 @@ import econ_core as core
 import econ_ledger
 import econ_scheduler
 import econ_tick
+import economy_bank_crud
 import economy_crud
+import locations_client
 import economy_merchants_crud
 import economy_sim_crud
 import schemas
@@ -269,7 +275,7 @@ def post_regions_fill(
     result = _run_write(db, lambda: economy_sim_crud.fill_regions(
         db, region_ids=body.region_ids, population_from_template=body.population_from_template,
         reset_stocks=body.reset_stocks, fund_purses=body.fund_purses, treasury_to_reserve=body.treasury_to_reserve,
-        comment=body.comment, actor_user_id=current_user.id,
+        comment=body.comment, actor_user_id=current_user.id, open_banks=body.open_banks,
     ))
     logger.info("economy fill: user=%s regions=%s emitted=%s ops=%s", current_user.id, result["regions"],
                 result["emitted"], result["operation_ids"])
@@ -480,3 +486,200 @@ def post_sim_run(
     data["id"] = data.pop("run_id")
     data["trigger_kind"] = data.pop("trigger")
     return data
+
+
+# ---------------------------------------------------------------------------
+# FEAT-184 banks — player API (contract 3.9)
+# ---------------------------------------------------------------------------
+# Banker check order (fixed, tests assert it): 1 JWT + ownership + player character -> 2 banker exists / role /
+# alive -> 3 activity lock (POST) -> 4 same location -> 5 FEAT-145 gate (POST, fail-closed, awaited with NO open
+# DB transaction) -> 6 the banker's region. POST handlers are `async def`: the sync DB work runs in the threadpool.
+
+BANK_REJECTED = "Операция отклонена"
+
+
+@router.get("/economy/bank/regions", response_model=List[schemas.BankRegionOut])
+def list_bank_regions(db: Session = Depends(get_db)):
+    """Public: enabled banks (transfer destinations)."""
+    return _read(db, lambda: economy_bank_crud.list_bank_regions(db))
+
+
+@router.get("/economy/bank/summary", response_model=schemas.BankSummary)
+def get_bank_summary(
+    character_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """All own deposits and the loan, any bank. Owner, or an admin with economy:read."""
+    is_admin = "economy:read" in (current_user.permissions or [])
+    return _read_or_error(db, lambda: economy_bank_crud.get_summary(db, character_id, current_user.id,
+                                                                     is_admin=is_admin))
+
+
+@router.get("/economy/bank/npc/{npc_id}", response_model=schemas.BankView)
+def get_bank_view(
+    npc_id: int,
+    character_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """The bank window at this banker (read-only, no gate)."""
+    def action():
+        ctx = economy_bank_crud.banker_context(db, npc_id, character_id, current_user.id, write=False)
+        return economy_bank_crud.build_view(db, ctx)
+    return _read_or_error(db, action)
+
+
+def _bank_precheck(db: Session, npc_id: int, character_id: int, user_id: int):
+    """Steps 1-4; the read transaction is always closed before the gate's HTTP call."""
+    try:
+        return economy_bank_crud.resolve_banker(db, npc_id, character_id, user_id, write=True)
+    except economy_crud.EconomyApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except SQLAlchemyError:
+        logger.exception("bank precheck failed")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить данные банка")
+    finally:
+        db.rollback()
+
+
+def _bank_commit(db: Session, npc_id: int, character_id: int, user_id: int, flow, body) -> dict:
+    """Steps 1-4 again + 6 inside the transaction, the flow, COMMIT, then the fresh view."""
+    try:
+        ctx = economy_bank_crud.banker_context(db, npc_id, character_id, user_id, write=True)
+        result = flow(db, ctx, body)
+        db.commit()
+    except economy_crud.EconomyApiError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except IntegrityError:
+        db.rollback()
+        logger.warning("bank operation conflict: npc=%s character=%s flow=%s", npc_id, character_id, flow.__name__)
+        raise HTTPException(status_code=409, detail=economy_bank_crud.MSG_RETRY)
+    except core.EconomyError:
+        db.rollback()
+        logger.exception("bank operation rejected: npc=%s character=%s flow=%s", npc_id, character_id, flow.__name__)
+        raise HTTPException(status_code=400, detail=BANK_REJECTED)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("bank operation failed: npc=%s character=%s flow=%s", npc_id, character_id, flow.__name__)
+        raise HTTPException(status_code=500, detail=GENERIC_ERROR)
+    view = _read(db, lambda: economy_bank_crud.build_view(db, ctx))
+    return {"message": result["message"], "operation_id": result["operation_id"], "wallet": view["wallet"],
+            "view": view}
+
+
+async def _bank_action(db: Session, user: UserRead, npc_id: int, body, flow) -> dict:
+    ctx = await run_in_threadpool(_bank_precheck, db, npc_id, body.character_id, user.id)
+    try:
+        gate_open = await locations_client.check_npc_gate(body.character_id, ctx.location_id, npc_id)
+    except locations_client.GateUnavailable:
+        raise HTTPException(status_code=503, detail=economy_bank_crud.MSG_GATE_UNAVAILABLE)
+    if not gate_open:
+        raise HTTPException(status_code=403, detail=economy_bank_crud.MSG_GATE_CLOSED)
+    return await run_in_threadpool(_bank_commit, db, npc_id, body.character_id, user.id, flow, body)
+
+
+@router.post("/economy/bank/npc/{npc_id}/deposit", response_model=schemas.BankActionOut)
+async def post_bank_deposit(npc_id: int, body: schemas.BankDepositIn, db: Session = Depends(get_db),
+                            current_user: UserRead = Depends(get_current_user_via_http)):
+    return await _bank_action(db, current_user, npc_id, body, economy_bank_crud.deposit)
+
+
+@router.post("/economy/bank/npc/{npc_id}/withdraw", response_model=schemas.BankActionOut)
+async def post_bank_withdraw(npc_id: int, body: schemas.BankWithdrawIn, db: Session = Depends(get_db),
+                             current_user: UserRead = Depends(get_current_user_via_http)):
+    return await _bank_action(db, current_user, npc_id, body, economy_bank_crud.withdraw)
+
+
+@router.post("/economy/bank/npc/{npc_id}/transfer", response_model=schemas.BankActionOut)
+async def post_bank_transfer(npc_id: int, body: schemas.BankTransferIn, db: Session = Depends(get_db),
+                             current_user: UserRead = Depends(get_current_user_via_http)):
+    return await _bank_action(db, current_user, npc_id, body, economy_bank_crud.transfer)
+
+
+@router.post("/economy/bank/npc/{npc_id}/send", response_model=schemas.BankActionOut)
+async def post_bank_send(npc_id: int, body: schemas.BankSendIn, db: Session = Depends(get_db),
+                         current_user: UserRead = Depends(get_current_user_via_http)):
+    return await _bank_action(db, current_user, npc_id, body, economy_bank_crud.send)
+
+
+@router.post("/economy/bank/npc/{npc_id}/loan", response_model=schemas.BankActionOut)
+async def post_bank_loan(npc_id: int, body: schemas.BankLoanIn, db: Session = Depends(get_db),
+                         current_user: UserRead = Depends(get_current_user_via_http)):
+    return await _bank_action(db, current_user, npc_id, body, economy_bank_crud.take_loan)
+
+
+@router.post("/economy/bank/npc/{npc_id}/repay", response_model=schemas.BankActionOut)
+async def post_bank_repay(npc_id: int, body: schemas.BankRepayIn, db: Session = Depends(get_db),
+                          current_user: UserRead = Depends(get_current_user_via_http)):
+    return await _bank_action(db, current_user, npc_id, body, economy_bank_crud.repay)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-184 banks — admin API (contract 3.10): reads economy:read, changes economy:settings
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/economy/banks")
+def list_banks_admin(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_bank_crud.list_banks_admin(db))
+
+
+@router.get("/admin/economy/banks/debtors")       # declared before /banks/{region_id}
+def list_bank_debtors(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_bank_crud.list_debtors(db))
+
+
+@router.get("/admin/economy/banks/{region_id}")
+def get_bank_admin(
+    region_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read_or_error(db, lambda: economy_bank_crud.get_bank_admin(db, region_id))
+
+
+@router.put("/admin/economy/banks/{region_id}")
+def put_bank_flag(
+    region_id: int,
+    body: schemas.BankFlagIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    """«Банк есть»: creates the row; the first switch-on with seed_capital takes the start capital once."""
+    result = _run_write(db, lambda: economy_bank_crud.set_bank_flag(
+        db, region_id, is_enabled=body.is_enabled, seed=body.seed_capital, actor_user_id=current_user.id))
+    logger.info("bank flag: user=%s region=%s enabled=%s own_funds=%s", current_user.id, region_id,
+                body.is_enabled, result["own_funds"])
+    return result
+
+
+@router.post("/admin/economy/banks/{region_id}/capital")
+def post_bank_capital(
+    region_id: int,
+    body: schemas.BankCapitalIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    """«Капитал из казны» (in) / «Вернуть капитал в казну» (out)."""
+    return _run_write(db, lambda: economy_bank_crud.move_capital(
+        db, region_id, direction=body.direction, amount=body.amount, comment=body.comment,
+        actor_user_id=current_user.id))
+
+
+@router.post("/admin/economy/banks/loans/{loan_id}/write-off", response_model=schemas.BankLoanOut)
+def post_bank_loan_write_off(
+    loan_id: int,
+    body: schemas.BankWriteOffIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    """«Списать долг»: the bank's loss, no money moves; clears «Должник»."""
+    return _run_write(db, lambda: economy_bank_crud.write_off_loan(
+        db, loan_id, comment=body.comment, actor_user_id=current_user.id))

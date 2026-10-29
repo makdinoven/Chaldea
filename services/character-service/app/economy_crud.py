@@ -26,11 +26,14 @@ SOURCE_SERVICE = "character-service"
 EMISSION_TARGET_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_COUNTRY_TREASURY,
                                    core.KIND_WORLD_TREASURY, core.KIND_POPULATION_PURSE})
 # Account kinds that belong to a region (name taken from Regions, operation tagged with region_id).
-REGION_ACCOUNT_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_POPULATION_PURSE})
+REGION_ACCOUNT_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_POPULATION_PURSE,
+                                  core.KIND_BANK, core.KIND_BANK_DEPOSITS})
 # Accounts an admin correction must never touch: the money sources themselves and the auction
-# accounts, whose balances must equal the auction tables (sub-invariants).
+# accounts, whose balances must equal the auction tables (sub-invariants). FEAT-184: bank accounts too — the vault
+# must equal the deposit rows, the bank's own money moves only via the capital endpoint.
 ADJUST_FORBIDDEN_KINDS = frozenset({core.KIND_EMISSION, core.KIND_ADJUSTMENT,
-                                    core.KIND_AUCTION_ESCROW, core.KIND_AUCTION_STORAGE})
+                                    core.KIND_AUCTION_ESCROW, core.KIND_AUCTION_STORAGE,
+                                    core.KIND_BANK, core.KIND_BANK_DEPOSITS})
 
 MAX_DRIFTING_CHARACTERS = 50
 # LIKE escape character; '!' instead of a backslash so the same SQL works in MySQL and SQLite.
@@ -166,6 +169,8 @@ def get_summary(db: Session) -> dict:
     countries_total = kind_sums.get(core.KIND_COUNTRY_TREASURY, 0)
     world = kind_sums.get(core.KIND_WORLD_TREASURY, 0)
     purses = kind_sums.get(core.KIND_POPULATION_PURSE, 0)
+    banks = kind_sums.get(core.KIND_BANK, 0)
+    vaults = kind_sums.get(core.KIND_BANK_DEPOSITS, 0)
     sources = sum(kind_sums.get(k, 0) for k in core.SOURCE_KINDS)
 
     held = players + npcs + sum(v for k, v in kind_sums.items() if k not in core.SOURCE_KINDS)
@@ -177,6 +182,10 @@ def get_summary(db: Session) -> dict:
         "WHERE status = 'active' AND current_bidder_id IS NOT NULL"
     ))
     storage_expected = _scalar(db, "SELECT COALESCE(SUM(gold_amount), 0) FROM auction_storage")
+    # FEAT-184 sub-invariant: the vaults hold exactly the open player deposit rows
+    vaults_expected = _scalar(db, (
+        "SELECT COALESCE(SUM(amount + interest_accrued), 0) FROM bank_deposits WHERE status = 'open'"
+    ))
 
     drifting = [
         {"character_id": int(r[0]), "name": r[1], "balance": _int(r[2]), "ledger": _int(r[3])}
@@ -184,12 +193,15 @@ def get_summary(db: Session) -> dict:
     ]
 
     invariant = {
-        "ok": ledger_sum == 0 and escrow_expected == escrow and storage_expected == storage and not drifting,
+        "ok": (ledger_sum == 0 and escrow_expected == escrow and storage_expected == storage
+               and vaults_expected == vaults and not drifting),
         "ledger_sum": ledger_sum,
         "escrow_expected": escrow_expected,
         "escrow_actual": escrow,
         "storage_expected": storage_expected,
         "storage_actual": storage,
+        "bank_deposits_expected": vaults_expected,
+        "bank_deposits_actual": vaults,
         "drifting_characters": drifting,
     }
 
@@ -199,7 +211,7 @@ def get_summary(db: Session) -> dict:
             "issued": issued, "held": held, "players": players, "npcs": npcs, "escrow": escrow,
             "auction_storage": storage, "region_treasuries": regions_total,
             "country_treasuries": countries_total, "world_treasury": world,
-            "population_purses": purses,
+            "population_purses": purses, "banks": banks, "bank_deposits": vaults,
         },
         "invariant": invariant,
         "countries": _treasury_tree(db),
@@ -253,7 +265,8 @@ def _treasury_tree(db: Session) -> List[dict]:
 def _system_accounts(db: Session) -> List[dict]:
     rows = db.execute(text(
         "SELECT id, kind, name, balance FROM econ_accounts "
-        "WHERE kind NOT IN ('character', 'region_treasury', 'country_treasury', 'population_purse') "
+        "WHERE kind NOT IN ('character', 'region_treasury', 'country_treasury', 'population_purse', 'bank', "
+        "'bank_deposits') "
         "ORDER BY id"
     )).fetchall()
     return [{"account_id": int(r[0]), "kind": r[1], "name": r[2], "balance": _int(r[3])} for r in rows]
@@ -270,7 +283,8 @@ SELECT * FROM (
     SELECT a.id AS account_id, a.kind AS kind, a.ref_id AS ref_id,
            COALESCE(r.name, co.name, a.name) AS name, a.balance AS balance, a.is_active AS is_active
     FROM econ_accounts a
-    LEFT JOIN Regions r ON a.kind IN ('region_treasury', 'population_purse') AND r.id = a.ref_id
+    LEFT JOIN Regions r ON a.kind IN ('region_treasury', 'population_purse', 'bank', 'bank_deposits')
+                       AND r.id = a.ref_id
     LEFT JOIN Countries co ON a.kind = 'country_treasury' AND co.id = a.ref_id
     WHERE a.kind <> 'character'
     UNION ALL
@@ -317,7 +331,8 @@ def _account_infos(db: Session, account_ids: List[int]) -> Dict[int, dict]:
         "SELECT a.id, a.kind, a.ref_id, COALESCE(c.name, r.name, co.name, a.name) "
         "FROM econ_accounts a "
         "LEFT JOIN characters c ON a.kind = 'character' AND c.id = a.ref_id "
-        "LEFT JOIN Regions r ON a.kind IN ('region_treasury', 'population_purse') AND r.id = a.ref_id "
+        "LEFT JOIN Regions r ON a.kind IN ('region_treasury', 'population_purse', 'bank', 'bank_deposits') "
+        "AND r.id = a.ref_id "
         "LEFT JOIN Countries co ON a.kind = 'country_treasury' AND co.id = a.ref_id "
         f"WHERE a.id IN ({placeholders})"
     ), params).fetchall()

@@ -1794,6 +1794,8 @@ class EconTotals(BaseModel):
     country_treasuries: int
     world_treasury: int
     population_purses: int = 0               # FEAT-182: all population purses (already part of `held`)
+    banks: int = 0                           # FEAT-184: own money of all banks (`bank` accounts)
+    bank_deposits: int = 0                   # FEAT-184: vaults of player deposits (`bank_deposits` accounts)
 
 
 class EconDriftingCharacter(BaseModel):
@@ -1810,6 +1812,8 @@ class EconInvariant(BaseModel):
     escrow_actual: int
     storage_expected: int
     storage_actual: int
+    bank_deposits_expected: int = 0          # FEAT-184: Σ open deposit rows (amount + interest_accrued)
+    bank_deposits_actual: int = 0            # FEAT-184: Σ vault balances — part of `ok`
     drifting_characters: List[EconDriftingCharacter]
 
 
@@ -1919,8 +1923,32 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "merchant_cash_target_mult": (0.0, 20.0),
     "merchant_cash_cap_mult": (1.0, 20.0),
     "merchant_cash_release": (0.0, 1.0),
+    # FEAT-184 banks
+    "bank_demand_rate_day": (0.0, 0.05),
+    "bank_term_rate_day_7": (0.0, 0.05),
+    "bank_term_rate_day_14": (0.0, 0.05),
+    "bank_term_rate_day_28": (0.0, 0.05),
+    "bank_loan_rate_day": (0.0, 0.1),
+    "bank_penalty_rate_day": (0.0, 0.1),
+    "bank_debt_cap_mult": (1.0, 10.0),
+    "bank_loan_cap_base": (0, 1_000_000_000),
+    "bank_loan_cap_per_level": (0, 1_000_000_000),
+    "bank_min_amount": (1, 1_000_000),
+    "bank_transfer_fee_rate": (0.0, 0.5),
+    "bank_transfer_fee_min": (0, 1_000_000),
+    "bank_start_capital": (0, 1_000_000_000),
+    "bank_reserve_ratio": (0.0, 1.0),
+    "bank_rate_cover": (0.5, 5.0),
+    "bank_rate_factor_min": (0.0, 1.0),
+    "bank_rate_smoothing": (0.0, 1.0),
+    "bank_resident_deposit_share": (0.0, 0.9),
+    "bank_resident_loan_share": (0.0, 0.9),
+    "bank_resident_adjust": (0.0, 1.0),
 }
-ECON_SIM_INT_PARAMS = frozenset({"treasury_release_ticks", "history_retention_days"})
+ECON_SIM_INT_PARAMS = frozenset({
+    "treasury_release_ticks", "history_retention_days",
+    "bank_loan_cap_base", "bank_loan_cap_per_level", "bank_min_amount", "bank_transfer_fee_min", "bank_start_capital",
+})
 
 
 def _econ_number(v, lo, hi, label: str, integer: bool = False):
@@ -2051,6 +2079,8 @@ class EconFillRequest(BaseModel):
     # Added by B6: also top up each region treasury to its wage reserve target (otherwise wages stay 0 until the
     # treasury fills from taxes, ~a week, and purses only shrink after a fill).
     treasury_to_reserve: StrictBool = True
+    # FEAT-184: open banks (one-time capital seed after the treasury top-up) in capital / port regions
+    open_banks: StrictBool = True
     comment: str
 
     _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
@@ -2235,6 +2265,26 @@ class EconSimParamsIn(BaseModel):
     merchant_cash_target_mult: Optional[float] = None
     merchant_cash_cap_mult: Optional[float] = None
     merchant_cash_release: Optional[float] = None
+    bank_demand_rate_day: Optional[float] = None
+    bank_term_rate_day_7: Optional[float] = None
+    bank_term_rate_day_14: Optional[float] = None
+    bank_term_rate_day_28: Optional[float] = None
+    bank_loan_rate_day: Optional[float] = None
+    bank_penalty_rate_day: Optional[float] = None
+    bank_debt_cap_mult: Optional[float] = None
+    bank_loan_cap_base: Optional[int] = None
+    bank_loan_cap_per_level: Optional[int] = None
+    bank_min_amount: Optional[int] = None
+    bank_transfer_fee_rate: Optional[float] = None
+    bank_transfer_fee_min: Optional[int] = None
+    bank_start_capital: Optional[int] = None
+    bank_reserve_ratio: Optional[float] = None
+    bank_rate_cover: Optional[float] = None
+    bank_rate_factor_min: Optional[float] = None
+    bank_rate_smoothing: Optional[float] = None
+    bank_resident_deposit_share: Optional[float] = None
+    bank_resident_loan_share: Optional[float] = None
+    bank_resident_adjust: Optional[float] = None
 
     class Config:
         extra = Extra.forbid
@@ -2250,3 +2300,206 @@ class EconSimParamsIn(BaseModel):
 class EconSimUpdateRequest(BaseModel):
     tick_enabled: StrictBool
     params: EconSimParamsIn = EconSimParamsIn()
+
+
+# ===========================================================================
+# FEAT-184 banks — player API (contract 3.9 / 3.11; app/economy_bank_crud.py)
+# ===========================================================================
+
+from typing import Literal  # noqa: E402
+from pydantic import conint, constr, root_validator  # noqa: E402
+
+BANK_TERMS = (7, 14, 28)
+BANK_MAX_AMOUNT = 1_000_000_000
+_BANK_REQ_ID = constr(regex=r"^[A-Za-z0-9-]{8,64}$")
+# strict: a float / bool / numeric string is a 422, never silently truncated
+_BANK_AMOUNT = conint(strict=True, ge=1, le=BANK_MAX_AMOUNT)
+_BANK_ID = conint(strict=True, gt=0)
+_BANK_TERM_ERROR = "Срок — 7, 14 или 28 дней"
+
+
+def _bank_term(v):
+    if isinstance(v, bool) or not isinstance(v, int) or v not in BANK_TERMS:
+        raise ValueError(_BANK_TERM_ERROR)
+    return v
+
+
+class BankDepositIn(BaseModel):
+    character_id: _BANK_ID
+    kind: Literal["demand", "term"]
+    term_days: Optional[int] = None
+    amount: _BANK_AMOUNT
+    request_id: Optional[_BANK_REQ_ID] = None
+
+    @validator("term_days", pre=True, always=True)
+    def _term(cls, v, values):
+        kind = values.get("kind")
+        if kind == "term":
+            return _bank_term(v)
+        if v is not None:
+            raise ValueError("У вклада до востребования нет срока")
+        return None
+
+
+class BankWithdrawIn(BaseModel):
+    character_id: _BANK_ID
+    deposit_id: _BANK_ID
+    amount: Optional[_BANK_AMOUNT] = None      # demand: required (handler 400 «Укажите сумму»); term: ignored
+    request_id: Optional[_BANK_REQ_ID] = None
+
+
+class BankTransferIn(BaseModel):
+    character_id: _BANK_ID
+    deposit_id: _BANK_ID
+    to_region_id: _BANK_ID
+    amount: _BANK_AMOUNT
+    request_id: Optional[_BANK_REQ_ID] = None
+
+
+class BankSendIn(BaseModel):
+    character_id: _BANK_ID
+    source: Literal["wallet", "deposit"]
+    deposit_id: Optional[_BANK_ID] = None      # required iff source == 'deposit'
+    recipient_name: constr(strip_whitespace=True, min_length=1, max_length=255)
+    to_region_id: _BANK_ID
+    amount: _BANK_AMOUNT
+    request_id: Optional[_BANK_REQ_ID] = None
+
+    @root_validator(skip_on_failure=True)
+    def _source(cls, values):
+        if values.get("source") == "deposit":
+            if values.get("deposit_id") is None:
+                raise ValueError("Выберите вклад, с которого отправить деньги")
+        elif values.get("deposit_id") is not None:
+            raise ValueError("Вклад указывается только при переводе со вклада")
+        return values
+
+
+class BankLoanIn(BaseModel):
+    character_id: _BANK_ID
+    amount: _BANK_AMOUNT
+    term_days: int
+    request_id: Optional[_BANK_REQ_ID] = None
+
+    _term = validator("term_days", pre=True, allow_reuse=True)(_bank_term)
+
+
+class BankRepayIn(BaseModel):
+    character_id: _BANK_ID
+    amount: _BANK_AMOUNT
+    request_id: Optional[_BANK_REQ_ID] = None
+
+
+class BankTermRate(BaseModel):
+    term_days: int
+    rate_day: float
+
+
+class BankRatesOut(BaseModel):
+    demand_rate_day: float                      # current (base x factor)
+    term_rates: List[BankTermRate]              # for new term deposits
+    loan_rate_day: float
+    penalty_rate_day: float
+    transfer_fee_rate: float
+    transfer_fee_min: int
+    min_amount: int
+
+
+class BankDepositOut(BaseModel):
+    id: int
+    region_id: int
+    region_name: Optional[str]                  # None -> «удалённый регион»
+    kind: str                                   # demand | term
+    amount: int
+    interest_accrued: int
+    interest_total: int
+    rate_day: Optional[float]                   # demand: current rate of its bank (0 when that bank is disabled)
+    term_days: Optional[int]
+    opened_at: datetime
+    matures_at: Optional[datetime]
+    matured: bool
+    here: bool                                  # in the banker's bank
+
+    class Config:
+        orm_mode = True
+
+
+class BankLoanOut(BaseModel):
+    id: int
+    region_id: int
+    region_name: Optional[str]
+    status: str
+    principal: int
+    debt: int                                   # projected to now
+    interest_total: int
+    penalty_total: int
+    paid_total: int
+    collected_total: int
+    rate_day: float
+    penalty_rate_day: float
+    term_days: int
+    issued_at: datetime
+    due_at: datetime
+    overdue: bool
+
+    class Config:
+        orm_mode = True
+
+
+class BankRegionOut(BaseModel):
+    region_id: int
+    name: str
+    country_name: Optional[str]
+
+
+class BankView(BaseModel):
+    npc_id: int
+    npc_name: str
+    region_id: Optional[int]
+    region_name: Optional[str]
+    bank_enabled: bool
+    rates: BankRatesOut                         # rates of this bank (factor 1 when no row)
+    wallet: int
+    deposits: List[BankDepositOut]              # ALL own open deposits, any bank, `here` first
+    loan: Optional[BankLoanOut]
+    debtor: bool
+    loan_cap: int
+    max_loan_now: int                           # 0 when disabled / has loan / debtor; else min(cap, lendable)
+    loan_refusal: Optional[str]                 # Russian reason when max_loan_now == 0
+    bank_regions: List[BankRegionOut]           # enabled banks (transfer destinations)
+
+
+class BankActionOut(BaseModel):
+    message: str                                # Russian, shown as a toast
+    operation_id: Optional[int]
+    wallet: int
+    view: BankView
+
+
+class BankSummary(BaseModel):
+    character_id: int
+    total_deposits: int                         # Σ amount + interest_accrued
+    deposits: List[BankDepositOut]              # here = False
+    loan: Optional[BankLoanOut]
+    debtor: bool
+
+
+# FEAT-184 banks — admin API (contract 3.10; responses are plain dicts like the other FEAT-182/183 admin reads)
+
+class BankFlagIn(BaseModel):
+    is_enabled: StrictBool
+    seed_capital: StrictBool = True             # first switch-on takes the start capital from the treasury once
+
+
+class BankCapitalIn(BaseModel):
+    direction: Literal["in", "out"]
+    amount: _BANK_AMOUNT
+    comment: str
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+
+class BankWriteOffIn(BaseModel):
+    comment: str
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)

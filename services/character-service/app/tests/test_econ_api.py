@@ -21,6 +21,10 @@ EXTRA_DDL = [
     """CREATE TABLE auction_listings (id INTEGER PRIMARY KEY, current_bid INTEGER NOT NULL DEFAULT 0,
         current_bidder_id INTEGER NULL, status VARCHAR(20) NOT NULL DEFAULT 'active')""",
     "CREATE TABLE auction_storage (id INTEGER PRIMARY KEY, gold_amount INTEGER NOT NULL DEFAULT 0)",
+    # FEAT-184: the summary checks the vaults against the open deposit rows
+    """CREATE TABLE bank_deposits (id INTEGER PRIMARY KEY, region_id INTEGER NOT NULL,
+        status VARCHAR(8) NOT NULL DEFAULT 'open', amount INTEGER NOT NULL DEFAULT 0,
+        interest_accrued INTEGER NOT NULL DEFAULT 0)""",
 ]
 
 ALL_PERMS = ["economy:read", "economy:emit", "economy:adjust", "economy:settings"]
@@ -176,9 +180,10 @@ def test_summary_shape(client):
     assert s["currency"] == CURRENCY
     assert s["totals"] == {"issued": 150, "held": 150, "players": 100, "npcs": 50, "escrow": 0,
                            "auction_storage": 0, "region_treasuries": 0, "country_treasuries": 0,
-                           "world_treasury": 0, "population_purses": 0}
+                           "world_treasury": 0, "population_purses": 0, "banks": 0, "bank_deposits": 0}
     assert s["invariant"] == {"ok": True, "ledger_sum": 0, "escrow_expected": 0, "escrow_actual": 0,
-                              "storage_expected": 0, "storage_actual": 0, "drifting_characters": []}
+                              "storage_expected": 0, "storage_actual": 0, "bank_deposits_expected": 0,
+                              "bank_deposits_actual": 0, "drifting_characters": []}
     assert s["settings"] == {"country_tax_rate": 0.1}
     # Treasuries of every existing country / region are created for the page.
     assert [(c["country_id"], c["name"], [r["region_id"] for r in c["regions"]]) for c in s["countries"]] == [
@@ -437,7 +442,7 @@ def test_accounts_search_is_parameterised(client, econ_db, q):
 
 
 @pytest.mark.parametrize("params,status", [
-    ({"kind": "bank"}, 400),
+    ({"kind": "unknown_kind"}, 400),
     ({"kind": "character'--"}, 400),
     ({"q": "x" * 101}, 400),
     ({"page": 0}, 422),

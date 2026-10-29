@@ -21,6 +21,10 @@ EXTRA_DDL = [
     """CREATE TABLE auction_listings (id INTEGER PRIMARY KEY, current_bid INTEGER NOT NULL DEFAULT 0,
         current_bidder_id INTEGER NULL, status VARCHAR(20) NOT NULL DEFAULT 'active')""",
     "CREATE TABLE auction_storage (id INTEGER PRIMARY KEY, gold_amount INTEGER NOT NULL DEFAULT 0)",
+    # FEAT-184: the summary checks the vaults against the open deposit rows
+    """CREATE TABLE bank_deposits (id INTEGER PRIMARY KEY, region_id INTEGER NOT NULL,
+        status VARCHAR(8) NOT NULL DEFAULT 'open', amount INTEGER NOT NULL DEFAULT 0,
+        interest_accrued INTEGER NOT NULL DEFAULT 0)""",
 ]
 
 ALL_PERMS = ["economy:read", "economy:emit", "economy:adjust", "economy:settings"]
