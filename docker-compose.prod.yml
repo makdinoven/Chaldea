@@ -154,6 +154,8 @@ services:
       # FEAT-162: общий токен для internal service-to-service эндпоинтов
       # (/characters/internal/...). Значение — только из окружения.
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
+      # FEAT-182: фоновый пересчёт экономики регионов раз в 6 часов (1 = включён).
+      ECON_TICK_ENABLED: ${ECON_TICK_ENABLED:-1}
     depends_on:
       mysql:
         condition: service_healthy
