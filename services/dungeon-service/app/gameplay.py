@@ -87,6 +87,9 @@ import ws_manager
 import http_clients
 import challenges
 import chat
+import econ_core
+import econ_ledger
+from econ_ledger import AccountRef, DuplicateOperation, InsufficientFunds, Leg, format_currency
 
 logger = logging.getLogger("dungeon-service.gameplay")
 
@@ -3731,13 +3734,66 @@ async def _handle_open_chest(
                             loot_gained=loot_gained or None, key_found=key_found)
 
 
+# =====================================================================
+# Gold (FEAT-181): in-transaction postings against the dungeon region's treasury
+# =====================================================================
+
+ECON_SOURCE_SERVICE = "dungeon-service"
+
+
+async def _dungeon_treasury(db: AsyncSession, location_id: Optional[int]) -> Tuple[AccountRef, Optional[int]]:
+    """Treasury of the dungeon's region («Казна Скитальцев» when it has none) + its region id."""
+    ref = await econ_ledger.treasury_for_location(db, location_id)
+    return ref, (ref.ref_id if ref.kind == econ_core.KIND_REGION_TREASURY else None)
+
+
+async def _charge_gold(db: AsyncSession, dungeon: Dungeon, character_id: int, amount: int, *,
+                       metadata: Optional[dict] = None) -> bool:
+    """`dungeon_expense`: the character pays `amount` into the treasury of the dungeon's region,
+    inside the caller's transaction. False when the gold is not enough (nothing moved — the
+    caller rolls back). Never commits."""
+    if amount <= 0:
+        return True
+    location_id = dungeon.location_id
+    payee, region_id = await _dungeon_treasury(db, location_id)
+    try:
+        await econ_ledger.post_operation(
+            db, op_type=econ_core.OP_DUNGEON_EXPENSE,
+            legs=[Leg(AccountRef.character(int(character_id)), payee, int(amount))],
+            source_service=ECON_SOURCE_SERVICE, location_id=location_id, region_id=region_id,
+            metadata=metadata,
+        )
+    except InsufficientFunds:
+        return False
+    return True
+
+
+async def _pay_gold(db: AsyncSession, dungeon: Dungeon, character_id: int, amount: int, *,
+                    idempotency_key: Optional[str] = None, metadata: Optional[dict] = None) -> None:
+    """`dungeon_reward`: the treasury of the dungeon's region pays the character (a treasury may
+    go negative in stage 1), inside the caller's transaction. A reused key pays nothing. Never commits."""
+    if amount <= 0:
+        return
+    location_id = dungeon.location_id
+    payer, region_id = await _dungeon_treasury(db, location_id)
+    try:
+        await econ_ledger.post_operation(
+            db, op_type=econ_core.OP_DUNGEON_REWARD,
+            legs=[Leg(payer, AccountRef.character(int(character_id)), int(amount))],
+            source_service=ECON_SOURCE_SERVICE, location_id=location_id, region_id=region_id,
+            metadata=metadata, idempotency_key=idempotency_key,
+        )
+    except DuplicateOperation:
+        logger.warning("Награда %s уже выплачена — повтор пропущен", idempotency_key)
+
+
 async def _handle_event_choice(
     db: AsyncSession, session_obj: DungeonSession, dungeon: Dungeon,
     room: DungeonRoom, room_state: DungeonRoomState, choice_index: Optional[int],
 ) -> InteractResponse:
     """Handle an event room choice. The choice is recorded in the same
-    transaction as its DB effects; HTTP side effects (gold, HP) run after the
-    commit so a failure can never be applied twice."""
+    transaction as its DB effects, gold included (FEAT-181); HTTP side effects
+    (HP) run after the commit so a failure can never be applied twice."""
     if room.room_type != "event":
         raise HTTPException(status_code=400, detail="Выбор доступен только в комнате-событии")
     if room_state.event_choice_index is not None:
@@ -3820,14 +3876,15 @@ async def _handle_event_choice(
                                 effect_applied=effect_applied)
         return resp
 
+    if gold > 0:
+        # FEAT-181: the treasury of the dungeon's region pays the leader in this very transaction —
+        # the choice and the gold commit together (or not at all).
+        await _pay_gold(db, dungeon, session_obj.leader_character_id, gold,
+                        idempotency_key=f"{econ_core.OP_DUNGEON_REWARD}:s:{session_id}:r:{room.id}",
+                        metadata={"session_id": session_id, "room_id": room.id, "event_choice": choice_index})
     await db.commit()
     await _sync_inventory_cache(db, session_id)
 
-    if gold > 0:
-        try:
-            await http_clients.add_gold(session_obj.leader_character_id, gold)
-        except Exception:
-            logger.warning("Не удалось начислить %d золота лидеру %d", gold, session_obj.leader_character_id)
     if post_commit and post_commit[0] == "damage":
         await _damage_party(_alive_ids(session_obj), post_commit[1])
     elif post_commit and post_commit[0] == "heal":
@@ -3895,9 +3952,12 @@ async def _handle_start_rest(
     await db.flush()
     gold_spent = None
     if gold_cost > 0:
-        if not await http_clients.deduct_gold(session_obj.leader_character_id, gold_cost):
+        if not await _charge_gold(db, dungeon, session_obj.leader_character_id, gold_cost,
+                                  metadata={"session_id": session_obj.id, "room_id": room.id, "reason": "rest"}):
+            forms = await econ_ledger.get_currency_forms(db)
             await db.rollback()
-            raise HTTPException(status_code=400, detail=f"Недостаточно золота для отдыха (нужно {gold_cost})")
+            raise HTTPException(status_code=400, detail=f"Недостаточно {forms.genitive} для отдыха "
+                                                        f"(нужно {format_currency(gold_cost, forms)})")
         gold_spent = gold_cost
     await db.commit()
     await session_state.set_phase(session_obj.id, PHASE_RESTING)
@@ -4003,9 +4063,13 @@ async def _handle_revive_member(
     revive_cost = cfg.get("revive_gold_cost", DEFAULT_REVIVE_COST)
     target.status = "alive"
     await db.flush()
-    if not await http_clients.deduct_gold(session_obj.leader_character_id, revive_cost):
+    forms = await econ_ledger.get_currency_forms(db)
+    if not await _charge_gold(db, dungeon, session_obj.leader_character_id, revive_cost,
+                              metadata={"session_id": session_obj.id, "room_id": room.id, "reason": "revive",
+                                        "target_character_id": target_character_id}):
         await db.rollback()
-        raise HTTPException(status_code=400, detail=f"Недостаточно золота для воскрешения (нужно {revive_cost})")
+        raise HTTPException(status_code=400, detail=f"Недостаточно {forms.genitive} для воскрешения "
+                                                    f"(нужно {format_currency(revive_cost, forms)})")
     await db.commit()
     await session_state.update_member_status(session_obj.id, str(target_character_id), "alive")
 
@@ -4017,7 +4081,7 @@ async def _handle_revive_member(
         logger.warning("Не удалось восстановить HP воскрешённому персонажу %d", target_character_id)
 
     target_name = await _character_name(target_character_id)
-    message = f"{target_name} воскрешён(а) за {revive_cost} золота!"
+    message = f"{target_name} воскрешён(а) за {format_currency(revive_cost, forms)}!"
     await ws_manager.broadcast_to_session(session_obj.id, {
         "type": "member_status_changed",
         "data": {"character_id": target_character_id, "name": target_name,
@@ -4060,9 +4124,15 @@ async def _handle_merchant_buy(
     room_state.extra_data = extra
     await _add_to_group_inventory(db, session_obj.id, buy_item_id, buy_quantity, f"Торговец: {room.name}")
     await db.flush()
-    if total_cost > 0 and not await http_clients.deduct_gold(buyer_character_id, total_cost):
+    forms = await econ_ledger.get_currency_forms(db)
+    if total_cost > 0 and not await _charge_gold(
+        db, dungeon, buyer_character_id, total_cost,
+        metadata={"session_id": session_obj.id, "room_id": room.id, "reason": "merchant",
+                  "item_id": buy_item_id, "quantity": buy_quantity},
+    ):
         await db.rollback()
-        raise HTTPException(status_code=400, detail=f"Недостаточно золота для покупки (нужно {total_cost})")
+        raise HTTPException(status_code=400, detail=f"Недостаточно {forms.genitive} для покупки "
+                                                    f"(нужно {format_currency(total_cost, forms)})")
     await db.commit()
     await _sync_inventory_cache(db, session_obj.id)
 
@@ -4071,10 +4141,10 @@ async def _handle_merchant_buy(
     await ws_manager.broadcast_to_session(session_obj.id, {
         "type": "loot_added",
         "data": {"source": f"Торговец: {room.name}", "items": items_out, "item_name": name,
-                 "gold_spent": total_cost, "message": f"Куплен предмет за {total_cost} золота."},
+                 "gold_spent": total_cost, "message": f"Куплен предмет за {format_currency(total_cost, forms)}."},
     })
     return InteractResponse(action="merchant_buy", success=True,
-                            message=f"Покупка совершена за {total_cost} золота.",
+                            message=f"Покупка совершена за {format_currency(total_cost, forms)}.",
                             loot_gained=items_out, gold_spent=total_cost)
 
 

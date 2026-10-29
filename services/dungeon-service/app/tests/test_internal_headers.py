@@ -120,25 +120,6 @@ async def test_missing_token_yields_an_empty_header_not_a_crash(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_add_gold_sends_the_token(monkeypatch, token):
-    """FEAT-169 — `POST /characters/{cid}/add_rewards` (`http_clients.py:406`)
-    is gated now. Dungeon gold payouts run through it."""
-    calls = _patch_client(monkeypatch, _Resp(200, {"new_balance": 150}))
-
-    result = await http_clients.add_gold(11, 50)
-
-    assert len(calls) == 1, "the dungeon gold payout never left dungeon-service"
-    url, kwargs = calls[0]
-    assert url.endswith("/characters/11/add_rewards"), url
-    assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
-        "dungeon-service dropped X-Internal-Token on add_rewards — "
-        "character-service answers 401 and the dungeon gold is lost"
-    )
-    assert kwargs["json"] == {"xp": 0, "gold": 50}
-    assert result == {"new_balance": 150}
-
-
-@pytest.mark.asyncio
 async def test_party_active_members_sends_the_token(monkeypatch, token):
     """FEAT-169 — the whole `/party/internal/` prefix is gated
     (`http_clients.py:63`). This caller swallows failures and returns `{}`,
@@ -245,9 +226,9 @@ async def test_token_is_read_at_call_time(monkeypatch):
     call — two values must produce two different headers."""
     calls = _patch_client(monkeypatch)
     monkeypatch.setattr(settings, "INTERNAL_SERVICE_TOKEN", "first")
-    await http_clients.add_gold(1, 1)
+    await http_clients.consume_stamina(1, 1)
     monkeypatch.setattr(settings, "INTERNAL_SERVICE_TOKEN", "second")
-    await http_clients.add_gold(1, 1)
+    await http_clients.consume_stamina(1, 1)
     assert [c[1]["headers"]["X-Internal-Token"] for c in calls] == \
         ["first", "second"]
 
@@ -273,7 +254,7 @@ class TestEveryInternalCallSiteSendsHeaders:
     #: Floor so that a URL refactor cannot silently empty the sweep. All six
     #: live in `http_clients.py` as of FEAT-170: party active-members,
     #: locations action-gate/consume, characters spawn-dungeon-mobs, inventory
-    #: item grant, battles state poll, characters deduct-gold.
+    #: item grant, battles state poll (characters deduct-gold left in FEAT-181).
     MIN_CHECKED = 6
 
     @staticmethod

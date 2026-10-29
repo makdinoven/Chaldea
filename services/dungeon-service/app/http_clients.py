@@ -447,64 +447,8 @@ async def get_battle_state(battle_id: int) -> Optional[dict]:
         raise HTTPException(status_code=503, detail="Боевая система недоступна")
 
 
-# =====================================================================
-# Character Service — Gold Operations  (http://character-service:8005)
-# =====================================================================
-
-async def add_gold(character_id: int, gold: int) -> dict:
-    """
-    POST /characters/{character_id}/add_rewards
-    Body: {"xp": 0, "gold": N}
-
-    Adds gold to the character's currency_balance via the existing add_rewards endpoint.
-    Returns the response from character-service.
-    """
-    url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/add_rewards"
-    payload = {"xp": 0, "gold": gold}
-    try:
-        async with _client() as client:
-            resp = await client.post(url, json=payload, headers=_internal_token_headers())
-            resp.raise_for_status()
-            return resp.json()
-    except httpx.HTTPStatusError as e:
-        logger.error("Ошибка при начислении золота персонажу %d: %s", character_id, e)
-        raise HTTPException(status_code=502, detail="Ошибка при начислении золота")
-    except httpx.RequestError as e:
-        logger.error("Ошибка соединения с character-service (add_gold %d): %s", character_id, e)
-        raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
-
-
-async def deduct_gold(character_id: int, amount: int) -> bool:
-    """
-    POST /characters/internal/deduct-gold
-    Body: {"character_id": N, "amount": N}
-
-    Deducts gold from the character's currency_balance.
-    Returns True if successful, False if insufficient gold (400).
-
-    Note: this internal endpoint in character-service needs to be created.
-    The existing add_rewards endpoint validates gold >= 0 so it cannot be
-    used for deductions. The new endpoint should:
-    1. Check currency_balance >= amount
-    2. Subtract amount from currency_balance
-    3. Log gold_transaction with negative amount
-    """
-    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/deduct-gold"
-    payload = {"character_id": character_id, "amount": amount}
-    try:
-        async with _client() as client:
-            resp = await client.post(url, json=payload, headers=_internal_token_headers())
-            if resp.status_code == 400:
-                # Insufficient gold
-                return False
-            resp.raise_for_status()
-            return True
-    except httpx.HTTPStatusError as e:
-        logger.error("Ошибка при списании золота у персонажа %d: %s", character_id, e)
-        raise HTTPException(status_code=502, detail="Ошибка при списании золота")
-    except httpx.RequestError as e:
-        logger.error("Ошибка соединения с character-service (deduct_gold %d): %s", character_id, e)
-        raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
+# Gold: no HTTP any more — FEAT-181 posts dungeon rest/revive/merchant/event gold
+# in dungeon-service's own transaction (gameplay._charge_gold / _pay_gold, econ_ledger).
 
 
 # =====================================================================

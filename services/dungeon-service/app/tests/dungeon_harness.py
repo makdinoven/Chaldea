@@ -252,15 +252,16 @@ class FakeWorld:
     async def surface_busy(self, db, cid):
         return self.busy.get(cid)
 
-    async def deduct_gold(self, cid, amount):
+    # Gold is posted in dungeon-service's own transaction (FEAT-181, gameplay._charge_gold /
+    # _pay_gold). The harness keeps it in `self.gold`; test_econ_dungeon.py runs the real ledger.
+    async def charge_gold(self, db, dungeon, cid, amount, **kw):
         if self.gold.get(cid, 0) < amount:
             return False
         self.gold[cid] -= amount
         return True
 
-    async def add_gold(self, cid, amount):
+    async def pay_gold(self, db, dungeon, cid, amount, **kw):
         self.gold[cid] = self.gold.get(cid, 0) + amount
-        return {}
 
     async def add_item_to_character(self, cid, item_id, quantity):
         if item_id in self.give_fail_items:
@@ -283,12 +284,14 @@ class FakeWorld:
             "knockout_characters", "get_party_active_members", "consume_dungeon_gate",
             "spawn_dungeon_mobs", "despawn_dungeon_mobs", "create_dungeon_battle",
             "get_battle_state", "get_battle_result", "get_character_attributes",
-            "consume_stamina", "recover_character", "deduct_gold", "add_gold",
+            "consume_stamina", "recover_character",
             "add_item_to_character", "get_item_info",
         ):
             monkeypatch.setattr(http_clients, name, getattr(self, name))
         monkeypatch.setattr(ws_manager, "broadcast_to_session", self.broadcast)
         monkeypatch.setattr(gameplay, "_surface_busy", self.surface_busy)
+        monkeypatch.setattr(gameplay, "_charge_gold", self.charge_gold)
+        monkeypatch.setattr(gameplay, "_pay_gold", self.pay_gold)
 
         async def _noop(*a, **kw):
             return None
