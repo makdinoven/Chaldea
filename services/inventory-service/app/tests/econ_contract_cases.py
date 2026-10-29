@@ -25,6 +25,10 @@ BID_CAP_GRID (pure econ_core functions) and a separate merchant SQL smoke world
 (MERCHANT_SQLITE_DDL, MERCHANT_QUERY_CASES, MERCHANT_STATUS_SQL_CASES, MERCHANT_STOCK_STEPS);
 see the comments there for how a runner executes them.
 
+FEAT-184 (banks) appends bank ledger CASES (`bank` = the bank's own money, `bank_deposits` = the
+vault of player deposits, both per region and never negative) and BANK_KIND_CASES /
+BANK_OP_TYPE_NAMES, which a runner checks against econ_core's constants directly.
+
 Only econ_core is imported here, so this module is identical in every service.
 """
 
@@ -551,6 +555,166 @@ CASES += [
         expected_tax_legs=0, expected_leg_counts={"trade_tax": 1},
     ),
 ]
+
+# ---------------------------------------------------------------------------
+# FEAT-184 banks: ledger scenarios, appended to CASES
+#   B10/B20 = the bank's own money, V10/V20 = the vault of player deposits of regions 10/20
+# ---------------------------------------------------------------------------
+
+B10, B20 = AccountRef.bank(10), AccountRef.bank(20)
+V10, V20 = AccountRef.bank_deposits(10), AccountRef.bank_deposits(20)
+
+CASES += [
+    # (a) deposit and withdrawal are a round trip
+    ContractCase(
+        name="bank_deposit_withdraw_round_trip",
+        steps=[_fund((C1, 1000)),
+               Step("bank_deposit", [Leg(C1, V10, 400)], {"location_id": 1000, "region_id": 10}),
+               Step("bank_withdraw", [Leg(V10, C1, 150)], {"location_id": 1000, "region_id": 10}),
+               Step("bank_withdraw", [Leg(V10, C1, 250)], {"location_id": 1000, "region_id": 10})],
+        expected_characters={1: 1000},
+        expected_accounts={("bank_deposits", 10): 0},
+        expected_operations=4, expected_postings=4, expected_tax_legs=0,
+    ),
+    # (b) neither the vault nor the bank's own money may go below zero
+    ContractCase(
+        name="bank_and_vault_debit_above_balance_moves_nothing",
+        steps=[_fund((C1, 100)),
+               Step("bank_deposit", [Leg(C1, V10, 100)], {"region_id": 10}),
+               Step("bank_withdraw", [Leg(V10, C1, 101)], {"region_id": 10}, error="InsufficientFunds"),
+               Step("loan_issue", [Leg(B10, C2, 1)], {"region_id": 10}, error="InsufficientFunds"),
+               Step("bank_capital", [Leg(R10, B10, 50)], {"region_id": 10, "apply_tax": False}),
+               Step("loan_issue", [Leg(B10, C2, 51)], {"region_id": 10}, error="InsufficientFunds"),
+               Step("loan_issue", [Leg(B10, C2, 50)], {"region_id": 10})],
+        expected_characters={1: 0, 2: 50},
+        expected_accounts={("bank_deposits", 10): 100, ("bank", 10): 0, ("region_treasury", 10): -50},
+        expected_operations=4, expected_postings=4, expected_tax_legs=0,
+    ),
+    # (c)+(d) own transfer between banks: the commission from the vault is taxed like wallet money
+    ContractCase(
+        name="bank_transfer_vault_commission_is_taxed_to_country",
+        steps=[_fund((C1, 1000)),
+               Step("bank_deposit", [Leg(C1, V10, 500)], {"region_id": 10}),
+               Step("bank_transfer", [Leg(V10, V20, 300), Leg(V10, R10, 30, "commission")],
+                    {"location_id": 1000, "region_id": 10, "idempotency_key": "bank:tr:c1:abcdef12"})],
+        # commission 30 -> tax floor(3.0) = 3 to country 1
+        expected_characters={1: 500},
+        expected_accounts={("bank_deposits", 10): 170, ("bank_deposits", 20): 300,
+                           ("region_treasury", 10): 27, ("country_treasury", 1): 3},
+        expected_operations=3, expected_postings=5, expected_tax_legs=1,
+        expected_leg_counts={"main": 3, "commission": 1, "tax": 1},
+    ),
+    # (d) send to another player from a deposit, at a banker of a third region (commission to his treasury)
+    ContractCase(
+        name="bank_send_from_deposit_keeps_world_sum",
+        steps=[_fund((C1, 1000)),
+               Step("bank_deposit", [Leg(C1, V10, 1000)], {"region_id": 10}),
+               Step("bank_transfer", [Leg(V10, V20, 400), Leg(V10, R20, 20, "commission")],
+                    {"location_id": 1001, "region_id": 20, "metadata": {"recipient_character_id": 2}})],
+        expected_characters={1: 0, 2: 0},
+        expected_accounts={("bank_deposits", 10): 580, ("bank_deposits", 20): 400,
+                           ("region_treasury", 20): 18, ("country_treasury", 2): 2},
+        expected_operations=3, expected_postings=5, expected_tax_legs=1,
+    ),
+    # (c) send from the wallet: the character -> treasury commission is taxed too
+    ContractCase(
+        name="bank_send_from_wallet_commission_is_taxed",
+        steps=[_fund((C1, 1000)),
+               Step("bank_transfer", [Leg(C1, V20, 500), Leg(C1, R10, 10, "commission")],
+                    {"location_id": 1000, "region_id": 10})],
+        expected_characters={1: 490},
+        expected_accounts={("bank_deposits", 20): 500, ("region_treasury", 10): 9, ("country_treasury", 1): 1},
+        expected_operations=2, expected_postings=4, expected_tax_legs=1,
+    ),
+    # (c) the bank's own money is not a tax source: capital back to the treasury is never taxed
+    ContractCase(
+        name="bank_capital_moves_are_not_taxed",
+        steps=[_fund((R10, 1000)),
+               Step("bank_capital", [Leg(R10, B10, 600)], {"region_id": 10, "apply_tax": False,
+                                                           "idempotency_key": "bank_capital:r:10:seed"}),
+               Step("bank_capital", [Leg(B10, R10, 150)], {"region_id": 10, "apply_tax": False}),
+               Step("bank_capital", [Leg(B10, R10, 50)], {"region_id": 10}),
+               Step("bank_capital", [Leg(R10, B10, 600)], {"region_id": 10, "apply_tax": False,
+                                                           "idempotency_key": "bank_capital:r:10:seed"},
+                    error="DuplicateOperation")],
+        expected_accounts={("region_treasury", 10): 600, ("bank", 10): 400},
+        expected_operations=4, expected_postings=4, expected_tax_legs=0,
+    ),
+    # (e) a reversal mirrors every leg (incl. the generated tax) and restores all balances
+    ContractCase(
+        name="bank_transfer_reversal_restores_every_balance",
+        steps=[_fund((C1, 1000)),
+               Step("bank_transfer", [Leg(C1, V20, 500), Leg(C1, R10, 10, "commission")], {"region_id": 10}),
+               Step("bank_transfer", [Leg(V20, C1, 500, "refund"), Leg(R10, C1, 10, "refund"),
+                                      Leg(K1, R10, 1, "refund")], {"region_id": 10, "apply_tax": False})],
+        expected_characters={1: 1000},
+        expected_accounts={("bank_deposits", 20): 0, ("region_treasury", 10): 0, ("country_treasury", 1): 0},
+        expected_operations=3, expected_postings=7, expected_tax_legs=1,
+        expected_leg_counts={"refund": 3, "commission": 1},
+    ),
+    # (f) the `interest` leg is accepted from callers: tick interest, residents, early-close forfeit
+    ContractCase(
+        name="bank_tick_interest_legs_and_early_close_forfeit",
+        steps=[_fund((C1, 100), (P10, 100)),
+               Step("bank_capital", [Leg(R10, B10, 1000)], {"region_id": 10, "apply_tax": False}),
+               Step("bank_tick", [Leg(B10, V10, 25, "interest"), Leg(B10, P10, 10, "interest"),
+                                  Leg(P10, B10, 5, "interest"), Leg(P10, B10, 40)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "bank_tick:1:b:10"}),
+               Step("bank_tick", [Leg(B10, V10, 25, "interest")],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "bank_tick:1:b:10"},
+                    error="DuplicateOperation"),
+               Step("bank_deposit", [Leg(C1, V10, 100)], {"region_id": 10}),
+               # early close: the amount back to the player, the credited interest back to the bank
+               Step("bank_withdraw", [Leg(V10, C1, 100), Leg(V10, B10, 25, "interest")], {"region_id": 10})],
+        # bank 1000 - 25 - 10 + 5 + 40 + 25 = 1035; purse 100 + 10 - 5 - 40 = 65
+        expected_characters={1: 100},
+        expected_accounts={("bank", 10): 1035, ("bank_deposits", 10): 0, ("population_purse", 10): 65,
+                           ("region_treasury", 10): -1000},
+        expected_operations=5, expected_postings=10, expected_tax_legs=0,
+        expected_leg_counts={"interest": 4},
+    ),
+    # (f) loan cycle and overdue collection from a deposit in another bank plus the wallet
+    ContractCase(
+        name="bank_loan_issue_repay_collect",
+        steps=[_fund((C2, 300)),
+               Step("bank_capital", [Leg(R10, B10, 500)], {"region_id": 10, "apply_tax": False}),
+               Step("loan_issue", [Leg(B10, C1, 400)], {"region_id": 10}),
+               Step("bank_deposit", [Leg(C1, V20, 300)], {"region_id": 20}),
+               Step("loan_repay", [Leg(C1, B10, 60)], {"region_id": 10}),
+               # the wallet holds 40: one ṃ more refuses the whole collection
+               Step("loan_collect", [Leg(V20, B10, 300), Leg(C1, B10, 41)],
+                    {"region_id": 10, "idempotency_key": "loan_collect:1:l:1"}, error="InsufficientFunds"),
+               Step("loan_collect", [Leg(V20, B10, 300), Leg(C1, B10, 40)],
+                    {"region_id": 10, "idempotency_key": "loan_collect:1:l:1"})],
+        expected_characters={1: 0, 2: 300},
+        expected_accounts={("bank", 10): 500, ("bank_deposits", 20): 0, ("region_treasury", 10): -500},
+        expected_operations=6, expected_postings=7, expected_tax_legs=0,
+    ),
+    # (f) bank accounts are region-scoped (ref_id > 0) and bank ops may not touch the money sources
+    ContractCase(
+        name="bank_accounts_need_a_region_and_bank_ops_no_sources",
+        steps=[_fund((C1, 10)),
+               Step("bank_deposit", [Leg(C1, AccountRef.bank_deposits(0), 1)], error="EconomyError"),
+               Step("bank_tick", [Leg(AccountRef.bank(0), P10, 1, "interest")], error="EconomyError"),
+               Step("bank_capital", [Leg(EMISSION, B10, 5)], {"apply_tax": False}, error="EconomyError"),
+               Step("bank_tick", [Leg(B10, ADJUSTMENT, 0)], error="EconomyError"),
+               Step("bank_deposit", [Leg(C1, V10, 5, "tax")], error="EconomyError")],
+        expected_characters={1: 10},
+        expected_operations=1, expected_postings=1,
+    ),
+]
+
+# FEAT-184: (kind, region-scoped, may go negative, taxed when flowing into a region treasury)
+BANK_KIND_CASES: List[Tuple[str, bool, bool, bool]] = [
+    ("bank", True, False, False),
+    ("bank_deposits", True, False, True),
+]
+
+# FEAT-184: every bank op type; a runner checks == BANK_OP_TYPES, subset of OP_TYPES, none in SOURCE_OP_TYPES
+BANK_OP_TYPE_NAMES: Tuple[str, ...] = (
+    "bank_deposit", "bank_withdraw", "bank_transfer", "bank_tick", "bank_capital",
+    "loan_issue", "loan_repay", "loan_collect",
+)
 
 # location_id -> (region_id, country_id)
 RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] = [

@@ -14,6 +14,9 @@ This module never touches a database driver. It holds:
   * FEAT-183 NPC merchants: the "living merchant" predicate, item -> effective group and the
     pure price functions (ask / bid / wholesale / charisma / units / trade tax) with the SQL
     both locations-service (player shop) and character-service (6 h tick) read them with;
+  * FEAT-184 banks: the bank's own money (`bank`) and the vault of player deposits
+    (`bank_deposits`), both per region and never negative, the bank op types and the
+    `interest` leg; the bank maths itself lives in character-service (`econ_bank.py`);
   * a small TTL cache for the economy settings row.
 
 World invariant: the sum of all balances (characters.currency_balance plus
@@ -41,15 +44,23 @@ KIND_EMISSION = "emission"
 KIND_ADJUSTMENT = "adjustment"
 # FEAT-182: the money of a region's inhabitants (ref_id = Regions.id). Never negative.
 KIND_POPULATION_PURSE = "population_purse"
+# FEAT-184 (ref_id = Regions.id, never negative): the bank's own money (capital, residents' deposits,
+# loan repayments and interest; loans and all interest are paid only from here) and the vault of player
+# deposits (always equals the sum of the open deposit rows of that bank; never lent).
+KIND_BANK = "bank"
+KIND_BANK_DEPOSITS = "bank_deposits"
 
 ACCOUNT_KINDS = frozenset({
     KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_WORLD_TREASURY,
     KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_EMISSION, KIND_ADJUSTMENT,
-    KIND_POPULATION_PURSE,
+    KIND_POPULATION_PURSE, KIND_BANK, KIND_BANK_DEPOSITS,
 })
 
 # Kinds identified by a foreign id (ref_id > 0); every other kind is a singleton (ref_id = 0).
-REF_KINDS = frozenset({KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_POPULATION_PURSE})
+REF_KINDS = frozenset({
+    KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_POPULATION_PURSE,
+    KIND_BANK, KIND_BANK_DEPOSITS,
+})
 
 # Display names of singleton accounts (snapshotted into econ_accounts.name on creation).
 SINGLETON_NAMES = {
@@ -69,7 +80,11 @@ NEGATIVE_ALLOWED_KINDS = frozenset({
 SOURCE_KINDS = frozenset({KIND_EMISSION, KIND_ADJUSTMENT})
 
 # Inflows into a region treasury from these kinds are taxed in favour of the country.
-TAX_SOURCE_KINDS = frozenset({KIND_CHARACTER, KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_POPULATION_PURSE})
+# FEAT-184: player deposit money (`bank_deposits`) is taxed like wallet money (transfer commission,
+# deletion payout); the bank's own money (`bank`) is not a tax source (capital return is not income).
+TAX_SOURCE_KINDS = frozenset({
+    KIND_CHARACTER, KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_POPULATION_PURSE, KIND_BANK_DEPOSITS,
+})
 
 # ---------------------------------------------------------------------------
 # Operation types
@@ -103,6 +118,20 @@ OP_TREASURY_CLOSED = "treasury_closed"
 OP_REGION_TICK = "region_tick"            # FEAT-182: purse <-> region <-> country flows of one simulation step
 # FEAT-183: a merchant's 6 h trade with the residents of his region (purse <-> NPC, NPC -> region trade_tax)
 OP_MERCHANT_TRADE = "merchant_trade"
+# FEAT-184 banks
+OP_BANK_DEPOSIT = "bank_deposit"          # character -> vault
+OP_BANK_WITHDRAW = "bank_withdraw"        # vault -> character (+ forfeited interest vault -> bank)
+OP_BANK_TRANSFER = "bank_transfer"        # vault/character -> vault (+ commission -> region treasury)
+OP_BANK_TICK = "bank_tick"                # 6 h bank pass: interest, residents' deposits / loans
+OP_BANK_CAPITAL = "bank_capital"          # region treasury <-> bank
+OP_LOAN_ISSUE = "loan_issue"              # bank -> character
+OP_LOAN_REPAY = "loan_repay"              # character -> bank
+OP_LOAN_COLLECT = "loan_collect"          # vault / character -> bank (overdue debt collection)
+
+BANK_OP_TYPES = frozenset({
+    OP_BANK_DEPOSIT, OP_BANK_WITHDRAW, OP_BANK_TRANSFER, OP_BANK_TICK, OP_BANK_CAPITAL,
+    OP_LOAN_ISSUE, OP_LOAN_REPAY, OP_LOAN_COLLECT,
+})
 
 OP_TYPES = frozenset({
     OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST, OP_STARTER_KIT, OP_BATTLE_REWARD,
@@ -111,7 +140,7 @@ OP_TYPES = frozenset({
     OP_NPC_SHOP_BUY, OP_NPC_SHOP_BUY_REFUND, OP_NPC_SHOP_SELL, OP_QUEST_REWARD,
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
-})
+}) | BANK_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
 SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST})
@@ -130,10 +159,12 @@ LEG_TAX = "tax"
 # FEAT-183: a merchant's sales tax `NPC -> region treasury`. Passed by callers (unlike the generated
 # `tax` leg); being a character -> region inflow it is itself taxed 10 % to the country.
 LEG_TRADE_TAX = "trade_tax"
+# FEAT-184: deposit / loan interest (bank -> vault / purse, purse -> bank, forfeited vault -> bank).
+LEG_INTEREST = "interest"
 
-LEG_TYPES = frozenset({LEG_MAIN, LEG_REFUND, LEG_COMMISSION, LEG_TAX, LEG_TRADE_TAX})
+LEG_TYPES = frozenset({LEG_MAIN, LEG_REFUND, LEG_COMMISSION, LEG_TAX, LEG_TRADE_TAX, LEG_INTEREST})
 # Tax legs are generated by plan_operation, callers never pass them.
-CALLER_LEG_TYPES = frozenset({LEG_MAIN, LEG_REFUND, LEG_COMMISSION, LEG_TRADE_TAX})
+CALLER_LEG_TYPES = frozenset({LEG_MAIN, LEG_REFUND, LEG_COMMISSION, LEG_TRADE_TAX, LEG_INTEREST})
 
 # ---------------------------------------------------------------------------
 # Limits
@@ -200,6 +231,14 @@ class AccountRef:
     @classmethod
     def purse(cls, region_id: int) -> "AccountRef":
         return cls(KIND_POPULATION_PURSE, int(region_id))
+
+    @classmethod
+    def bank(cls, region_id: int) -> "AccountRef":
+        return cls(KIND_BANK, int(region_id))
+
+    @classmethod
+    def bank_deposits(cls, region_id: int) -> "AccountRef":
+        return cls(KIND_BANK_DEPOSITS, int(region_id))
 
     @classmethod
     def world(cls) -> "AccountRef":
@@ -583,6 +622,8 @@ SQL_ACCOUNT_NAME = {
     KIND_REGION_TREASURY: "SELECT name FROM Regions WHERE id = :ref_id",
     KIND_COUNTRY_TREASURY: "SELECT name FROM Countries WHERE id = :ref_id",
     KIND_POPULATION_PURSE: "SELECT name FROM Regions WHERE id = :ref_id",
+    KIND_BANK: "SELECT name FROM Regions WHERE id = :ref_id",
+    KIND_BANK_DEPOSITS: "SELECT name FROM Regions WHERE id = :ref_id",
 }
 
 SQL_DEBIT_CHARACTER = (

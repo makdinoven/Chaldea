@@ -259,3 +259,27 @@ def test_merchant_shop_stock_statements(merchant_db):
         assert dict(s.execute(text(cc.MERCHANT_STOCK_SQL)).fetchall()) == cc.MERCHANT_STOCK_EXPECTED
     finally:
         s.close()
+
+
+# --------------------------------------------------------------------------------------------- FEAT-184 banks
+
+@pytest.mark.parametrize("kind,region_scoped,negative,taxed", cc.BANK_KIND_CASES,
+                         ids=[c[0] for c in cc.BANK_KIND_CASES])
+def test_bank_account_kinds(kind, region_scoped, negative, taxed):
+    assert kind in econ_core.ACCOUNT_KINDS
+    assert (kind in econ_core.REF_KINDS) is region_scoped
+    assert (kind in econ_core.NEGATIVE_ALLOWED_KINDS) is negative
+    assert (kind in econ_core.TAX_SOURCE_KINDS) is taxed
+    assert kind not in econ_core.SOURCE_KINDS
+    assert kind in econ_core.SQL_ACCOUNT_NAME
+    factory = econ_core.AccountRef.bank if kind == econ_core.KIND_BANK else econ_core.AccountRef.bank_deposits
+    assert factory(7) == econ_core.AccountRef(kind, 7)
+    assert not factory(7).allow_negative
+
+
+def test_bank_op_types_and_interest_leg():
+    assert frozenset(cc.BANK_OP_TYPE_NAMES) == econ_core.BANK_OP_TYPES
+    assert econ_core.BANK_OP_TYPES <= econ_core.OP_TYPES
+    assert not econ_core.BANK_OP_TYPES & econ_core.SOURCE_OP_TYPES
+    assert econ_core.LEG_INTEREST in econ_core.LEG_TYPES
+    assert econ_core.LEG_INTEREST in econ_core.CALLER_LEG_TYPES

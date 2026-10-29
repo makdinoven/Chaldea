@@ -185,7 +185,7 @@ def test_admin_ops_require_comment(op_type, comment):
 
 @pytest.mark.parametrize("legs,kwargs", [
     ([Leg(C1, R10, 5)], {"op_type": "unknown_op"}),
-    ([Leg(AccountRef("bank", 1), R10, 5)], {}),                     # unknown kind
+    ([Leg(AccountRef("unknown_kind", 1), R10, 5)], {}),             # unknown kind
     ([Leg(AccountRef(core.KIND_WORLD_TREASURY, 3), C1, 5)], {}),    # singleton with ref_id
     ([Leg(AccountRef.character(0), R10, 5)], {}),                   # ref kind needs ref_id > 0
     ([Leg(AccountRef(core.KIND_CHARACTER, -4), R10, 5)], {}),

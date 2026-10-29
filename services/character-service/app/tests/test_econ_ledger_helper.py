@@ -171,7 +171,7 @@ def test_singleton_names_and_get_or_create_is_stable(Session):
     assert s.execute(text("SELECT name, allow_negative FROM econ_accounts WHERE id = :i"),
                      {"i": escrow}).first() == ("Ставки аукциона", 0)
     with pytest.raises(econ_core.EconomyError):
-        econ_ledger.get_or_create_account(s, AccountRef("bank", 1))
+        econ_ledger.get_or_create_account(s, AccountRef("unknown_kind", 1))
 
 
 def test_account_for_missing_region_row_has_no_name(Session):
