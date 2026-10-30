@@ -37,6 +37,14 @@ import type {
   EconBankFlagBody,
   EconBankLoan,
   EconBanksResponse,
+  EconEventStartBody,
+  EconEventStartResult,
+  EconEventTemplate,
+  EconEventTemplateCreate,
+  EconEventTemplateUpdate,
+  EconEventsHistoryParams,
+  EconRegionEvent,
+  EconRegionEventsPage,
 } from '../types/economy';
 
 /** Admin «Экономика» API (FEAT-181, character-service). Auth header comes from axiosSetup. */
@@ -231,5 +239,58 @@ export const postEconomyBankCapital = async (
 /** «Списать долг» — the bank's loss, no money moves. */
 export const postEconomyBankLoanWriteOff = async (loanId: number, comment: string): Promise<EconBankLoan> => {
   const { data } = await axios.post<EconBankLoan>(`${BASE}/banks/loans/${loanId}/write-off`, { comment });
+  return data;
+};
+
+/* ---------------------------------------------- FEAT-187 — region events (feature file 3.7) */
+
+const EVENTS = `${BASE}/events`;
+
+/** Templates ordered by kind, name; each carries `active_count`. */
+export const fetchEconomyEventTemplates = async (): Promise<EconEventTemplate[]> => {
+  const { data } = await axios.get<EconEventTemplate[] | { items: EconEventTemplate[] }>(`${EVENTS}/templates`);
+  return unwrapList(data);
+};
+
+export const postEconomyEventTemplate = async (body: EconEventTemplateCreate): Promise<EconEventTemplate> => {
+  const { data } = await axios.post<EconEventTemplate>(`${EVENTS}/templates`, body);
+  return data;
+};
+
+export const putEconomyEventTemplate = async (
+  templateId: number,
+  body: EconEventTemplateUpdate,
+): Promise<EconEventTemplate> => {
+  const { data } = await axios.put<EconEventTemplate>(`${EVENTS}/templates/${templateId}`, body);
+  return data;
+};
+
+/** 409 when other templates' chains refer to it; running instances keep their snapshot. */
+export const deleteEconomyEventTemplate = async (templateId: number): Promise<void> => {
+  await axios.delete(`${EVENTS}/templates/${templateId}`);
+};
+
+/** Active events (ends_at ascending), optionally of one region. */
+export const fetchEconomyActiveEvents = async (regionId?: number): Promise<EconRegionEvent[]> => {
+  const { data } = await axios.get<EconRegionEvent[] | { items: EconRegionEvent[] }>(`${EVENTS}/active`, {
+    params: clean({ region_id: regionId }),
+  });
+  return unwrapList(data);
+};
+
+/** Manual start on a region (+ scope expansion); one-shot effects apply at the next recount. */
+export const postEconomyEventStart = async (body: EconEventStartBody): Promise<EconEventStartResult> => {
+  const { data } = await axios.post<EconEventStartResult>(`${EVENTS}/start`, body);
+  return data;
+};
+
+/** Stops the ongoing effects; one-shot results are not rolled back. */
+export const postEconomyEventCancel = async (eventId: number, comment: string): Promise<EconRegionEvent> => {
+  const { data } = await axios.post<EconRegionEvent>(`${EVENTS}/${eventId}/cancel`, { comment });
+  return data;
+};
+
+export const fetchEconomyEventsHistory = async (params: EconEventsHistoryParams): Promise<EconRegionEventsPage> => {
+  const { data } = await axios.get<EconRegionEventsPage>(`${EVENTS}/history`, { params: clean(params) });
   return data;
 };

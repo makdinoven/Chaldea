@@ -38,6 +38,7 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   loan_issue: 'Выдача займа',
   loan_repay: 'Погашение займа',
   loan_collect: 'Взыскание долга',
+  region_event: 'Событие региона',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;

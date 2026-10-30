@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { fetchRegionEconomyCard } from '../../api/regionEconomy';
-import type { RegionCardData, RegionGroupLevel, RegionGroupTrend } from '../../api/regionEconomy';
+import type { RegionCardData, RegionCardEvent, RegionGroupLevel, RegionGroupTrend } from '../../api/regionEconomy';
 import { apiErrorMessage } from '../../api/errors';
+import { parseServerDate } from '../../utils/serverDate';
+import EventIcon from '../common/EventIcon';
 
 /**
  * Player-facing "how is the region doing" card (FEAT-182, F4).
@@ -52,6 +54,58 @@ const phraseTone = (phrase: string, card: RegionCardData): string => {
   return 'text-white/80';
 };
 
+const MS_HOUR = 3_600_000;
+const HOURS_PER_DAY = 24;
+/** Re-render the «ещё N ч» line now and then while the card stays open. */
+const CLOCK_REFRESH_MS = 60_000;
+
+/** «ещё 6 дн.» / «ещё 5 ч» / «скоро закончится» — from `ends_at` vs now (FEAT-187 3.10). */
+const eventTimeLeft = (endsAt: string, now: number): string => {
+  const end = parseServerDate(endsAt);
+  if (!end) return '';
+  const hours = Math.floor((end.getTime() - now) / MS_HOUR);
+  if (hours < 1) return 'скоро закончится';
+  if (hours < HOURS_PER_DAY) return `ещё ${hours} ч`;
+  return `ещё ${Math.floor(hours / HOURS_PER_DAY)} дн.`;
+};
+
+/** Active region events (FEAT-187): icon, name, flavour text and time left — never effect numbers. */
+const RegionEvents = ({ events }: { events: RegionCardEvent[] }) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), CLOCK_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="mb-3 pb-3 border-b border-gold/15">
+      <p className="gold-text text-xs uppercase tracking-wider text-center mb-2">События</p>
+      <ul className="flex flex-col gap-2">
+        {events.map((ev) => {
+          const good = ev.kind === 'good';
+          const left = eventTimeLeft(ev.ends_at, now);
+          return (
+            <li key={`${ev.code}-${ev.started_at}`} className="flex items-start gap-2 text-sm min-w-0">
+              <EventIcon
+                name={ev.icon}
+                size={18}
+                className={`shrink-0 mt-0.5 ${good ? 'text-gold' : 'text-site-red'}`}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="flex flex-wrap items-baseline gap-x-2">
+                  <span className={`font-medium ${good ? 'text-gold' : 'text-site-red'}`}>{ev.name}</span>
+                  {left && <span className="text-white/50 text-xs whitespace-nowrap">{left}</span>}
+                </p>
+                <p className="text-white/75 text-xs leading-snug break-words">{ev.text}</p>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
 const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   const [card, setCard] = useState<RegionCardData | null>(null);
   const [hasBank, setHasBank] = useState(false);
@@ -97,6 +151,8 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
       aria-label="Состояние региона"
       className="mx-auto mb-4 w-full max-w-3xl px-1 sm:px-0"
     >
+      {card.events && card.events.length > 0 && <RegionEvents events={card.events} />}
+
       <ul className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm">
         {card.phrases.map((phrase, i) => (
           <li key={`${i}-${phrase}`} className="flex items-center gap-3">

@@ -19,6 +19,7 @@ import EconomyTemplates from './EconomyTemplates';
 import EconomyTick from './EconomyTick';
 import EconomyMerchants from './EconomyMerchants';
 import EconomyBanks from './EconomyBanks';
+import EconomyEvents from './EconomyEvents';
 import EconomyGuide from './EconomyGuide';
 import { GuideIntro } from './GuideLink';
 import { EconomyGuideContext, type EconomyTabId, type GuideSectionId, type OpenGuide } from './guideSections';
@@ -36,6 +37,7 @@ const TAB_LABEL: Record<EconomyTab, string> = {
   templates: 'Шаблоны',
   merchants: 'Торговцы',
   banks: 'Банки',
+  events: 'События',
   tick: 'Пересчёт',
   settings: 'Настройки',
 };
@@ -80,6 +82,10 @@ const TAB_INTRO: Partial<Record<EconomyTab, { section: GuideSectionId; text: Rea
   banks: {
     section: 'banks',
     text: 'Банки регионов: свои деньги, вклады игроков и жителей, займы и должники.',
+  },
+  events: {
+    section: 'events',
+    text: 'Засухи, чума, праздники и другие события регионов: идущие сейчас, ручной запуск, шаблоны и история. Сами события начинаются в плановых пересчётах — в среднем одно на регион за игровой сезон.',
   },
 };
 
@@ -131,6 +137,7 @@ const EconomyPage = () => {
     'templates',
     'merchants',
     'banks',
+    'events',
     'tick',
     'settings',
   ];
@@ -207,6 +214,7 @@ const EconomyPage = () => {
           <EconomyMerchants canSettings={canSettings} canEmit={canEmit} onMoneyChanged={loadSummary} />
         )}
         {tab === 'banks' && <EconomyBanks canSettings={canSettings} onMoneyChanged={loadSummary} />}
+        {tab === 'events' && <EconomyEvents canSettings={canSettings} />}
         {tab === 'tick' && <EconomyTick canSettings={canSettings} onMoneyChanged={loadSummary} />}
         {tab === 'settings' && <EconomySettings canEdit={canSettings} onSaved={loadSummary} />}
       </div>

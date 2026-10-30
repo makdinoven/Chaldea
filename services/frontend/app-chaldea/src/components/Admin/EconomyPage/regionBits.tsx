@@ -1,5 +1,7 @@
 /** Small shared pieces of the «Регионы» tab (FEAT-182): 0–100 bars, hunger badge, price multiplier, bank badge. */
 import { formatDecimal } from './economyLabels';
+import EventIcon from '../../common/EventIcon';
+import type { EconEventBadge } from '../../../types/economy';
 
 /** Same thresholds as the player card: fed < 0.03 ≤ tight < 0.15 ≤ hunger. */
 const HUNGER_TIGHT = 0.03;
@@ -72,3 +74,23 @@ export const BankBadge = ({ className = '' }: { className?: string }) => (
     Банк
   </span>
 );
+
+/** Small icons of the region's active events (FEAT-187, `EconRegionItem.active_events`); name in the tooltip. */
+export const EventBadges = ({ events, className = '' }: { events?: EconEventBadge[]; className?: string }) => {
+  if (!events || events.length === 0) return null;
+  return (
+    <span className={`inline-flex flex-wrap items-center gap-1 ${className}`}>
+      {events.map((ev, i) => (
+        <span
+          key={`${i}-${ev.name}`}
+          title={`Событие: ${ev.name}`}
+          className={`inline-flex items-center justify-center rounded-full border w-5 h-5 ${
+            ev.kind === 'good' ? 'border-stat-energy/40 bg-stat-energy/10 text-stat-energy' : 'border-site-red/40 bg-site-red/10 text-site-red'
+          }`}
+        >
+          <EventIcon name={ev.icon} size={12} title={ev.name} />
+        </span>
+      ))}
+    </span>
+  );
+};

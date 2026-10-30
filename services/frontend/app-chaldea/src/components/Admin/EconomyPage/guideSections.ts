@@ -17,6 +17,7 @@ export const GUIDE_SECTION_IDS = [
   'regions',
   'merchants',
   'banks',
+  'events',
   'recipes',
   'recipe-hunger',
   'recipe-empty-treasury',
@@ -25,6 +26,7 @@ export const GUIDE_SECTION_IDS = [
   'recipe-invariant',
   'recipe-prices',
   'recipe-population-scale',
+  'recipe-events',
 ] as const;
 
 export type GuideSectionId = (typeof GUIDE_SECTION_IDS)[number];
@@ -47,6 +49,8 @@ export const GUIDE_SECTION_TITLE: Record<GuideSectionId, string> = {
   'recipe-invariant': 'Сводка пишет «Расхождение»',
   'recipe-prices': 'Цены растут или падают',
   'recipe-population-scale': 'Перешли на масштаб населения (регионы раздуты)',
+  events: 'События регионов',
+  'recipe-events': 'Событий слишком много, мало или нет',
 };
 
 /** Tabs of the admin «Экономика» page (EconomyPage.tsx). */
@@ -61,6 +65,7 @@ export type EconomyTabId =
   | 'templates'
   | 'merchants'
   | 'banks'
+  | 'events'
   | 'tick'
   | 'settings';
 

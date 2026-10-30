@@ -42,6 +42,19 @@ export interface RegionCardData {
   groups: RegionCardGroup[];
   /** FEAT-184: the region has an enabled bank */
   has_bank?: boolean;
+  /** FEAT-187: active region events (optional — older backends don't send it) */
+  events?: RegionCardEvent[];
+}
+
+/** FEAT-187: an active region event as players see it — no effect numbers. */
+export interface RegionCardEvent {
+  code: string;
+  name: string;
+  icon: string;
+  kind: 'good' | 'bad';
+  text: string;
+  started_at: string;
+  ends_at: string;
 }
 
 export type RegionCardResponse = RegionCardHidden | RegionCardData;

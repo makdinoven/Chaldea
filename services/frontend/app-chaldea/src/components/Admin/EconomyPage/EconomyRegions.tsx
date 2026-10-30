@@ -8,7 +8,7 @@ import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type { EconFillResult, EconRegionItem } from '../../../types/economy';
 import RegionEconomyEditor from './RegionEconomyEditor';
 import { formatDateTime } from './economyLabels';
-import { BankBadge, HungerBadge, ScaleBar } from './regionBits';
+import { BankBadge, EventBadges, HungerBadge, ScaleBar } from './regionBits';
 import { BigMoney, Population } from './CompactValue';
 
 const COMMENT_MIN = 3;
@@ -371,6 +371,7 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                       <span className="block text-white break-words">
                         {regionTitle(r)}
                         {r.bank_enabled && <BankBadge className="ml-2 align-middle" />}
+                        <EventBadges events={r.active_events} className="ml-2 align-middle" />
                       </span>
                       <span className="block text-white/40 text-xs">{r.country_name ?? 'Без страны'}</span>
                     </td>
@@ -412,6 +413,7 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                       <span className="block text-white text-sm font-medium break-words">
                         {regionTitle(r)}
                         {r.bank_enabled && <BankBadge className="ml-2 align-middle" />}
+                        <EventBadges events={r.active_events} className="ml-2 align-middle" />
                       </span>
                       <span className="block text-white/40 text-xs break-words">
                         {r.country_name ?? 'Без страны'} · {r.template_name ?? 'без шаблона'}

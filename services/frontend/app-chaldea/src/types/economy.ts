@@ -202,6 +202,8 @@ export interface EconRegionItem {
   simulated: boolean;
   /** FEAT-184: «Банк есть» (an enabled `econ_banks` row) */
   bank_enabled?: boolean;
+  /** FEAT-187: active events of the region (optional — older backends don't send it) */
+  active_events?: EconEventBadge[];
 }
 
 export interface EconRegionGoods {
@@ -471,6 +473,17 @@ export interface EconSimParams {
   bank_resident_adjust: number;
   /* FEAT-186 lore population scale: the tick computes with population / population_scale */
   population_scale: number;
+  /* FEAT-187 region events (feature file 3.5) */
+  events_enabled: number;
+  event_rate_per_season: number;
+  event_season_days: number;
+  event_max_active: number;
+  event_mult_min: number;
+  event_mult_max: number;
+  event_delta_max: number;
+  event_spread_max_depth: number;
+  event_riot_stability: number;
+  event_riot_after_days: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -513,6 +526,15 @@ export interface EconTickRun {
   loans_collected?: number;
   collected_amount?: number;
   banks_closed?: number;
+  /** FEAT-187: events pass counters (`RunSummary`, 3.6 step 7) — the run-now summary; the runs list may carry some */
+  events_ended?: number;
+  events_started?: number;
+  events_spread?: number;
+  events_chained?: number;
+  riots_started?: number;
+  events_applied?: number;
+  event_expense_ops?: number;
+  events_failed?: number;
 }
 
 export interface EconSimState {
@@ -770,4 +792,166 @@ export interface EconBankCapitalResult {
   operation_id: number;
   bank_balance: number;
   treasury_balance: number;
+}
+
+/* ---------------------------------------------- FEAT-187 — region events (feature file 3.7 / 3.8) */
+
+export type EconEventEffectType =
+  | 'production'
+  | 'consumption'
+  | 'labor'
+  | 'price'
+  | 'tax_income'
+  | 'stability'
+  | 'prosperity'
+  | 'merchants_halt'
+  | 'bank_panic'
+  | 'loan_boom'
+  | 'stock_loss'
+  | 'treasury_expense'
+  | 'population';
+
+/** One effect of an event template: only the fields of its type are sent (the backend rejects extra ones). */
+export interface EconEventEffect {
+  type: EconEventEffectType;
+  /** Goods group codes, `["*"]` = every group. */
+  groups?: string[] | null;
+  mult?: number | null;
+  share?: number | null;
+  delta?: number | null;
+  pct?: number | null;
+}
+
+export type EconEventKind = 'good' | 'bad';
+export type EconEventTrigger = 'random' | 'low_stability' | 'manual';
+export type EconEventScope = 'region' | 'neighbours' | 'country' | 'world';
+export type EconEventOrigin = 'random' | 'manual' | 'spread' | 'chain' | 'riot';
+export type EconEventStatus = 'active' | 'ended' | 'cancelled';
+
+export interface EconEventChain {
+  code: string;
+  /** 0..1 — chance over the source event's lifetime */
+  chance: number;
+}
+
+/** Body of `PUT /admin/economy/events/templates/{id}` (`EventTemplateUpdate`): everything except the code. */
+export interface EconEventTemplateUpdate {
+  name: string;
+  icon: string;
+  kind: EconEventKind;
+  player_text: string;
+  admin_note: string | null;
+  trigger_kind: EconEventTrigger;
+  weight: number;
+  duration_min_days: number;
+  duration_max_days: number;
+  scope: EconEventScope;
+  /** 0..1 */
+  spread_chance: number;
+  /** Region template codes; [] = any */
+  region_templates: string[];
+  /** Calendar segment names; [] = any */
+  seasons: string[];
+  effects: EconEventEffect[];
+  chains: EconEventChain[];
+  is_enabled: boolean;
+}
+
+/** Body of `POST /admin/economy/events/templates` (`EventTemplateIn`). */
+export interface EconEventTemplateCreate extends EconEventTemplateUpdate {
+  code: string;
+}
+
+export interface EconEventTemplate extends EconEventTemplateCreate {
+  id: number;
+  /** Running instances of this template */
+  active_count: number;
+  updated_at: string | null;
+}
+
+/** One `econ_region_events` row (`RegionEventOut`) — active or history. */
+export interface EconRegionEvent {
+  id: number;
+  region_id: number;
+  region_name: string | null;
+  country_id: number | null;
+  template_id: number | null;
+  template_code: string;
+  name: string;
+  icon: string;
+  kind: EconEventKind;
+  player_text: string;
+  trigger_kind: EconEventTrigger;
+  effects: EconEventEffect[];
+  origin: EconEventOrigin;
+  parent_event_id: number | null;
+  root_event_id: number | null;
+  generation: number;
+  status: EconEventStatus;
+  started_at: string;
+  ends_at: string;
+  ended_at: string | null;
+  game_segment: string | null;
+  started_by_user_id: number | null;
+  cancelled_by_user_id: number | null;
+  cancel_comment: string | null;
+  applied_at: string | null;
+  population_before: number | null;
+  population_after: number | null;
+  /** `{"stock_lost": {code: units}, "treasury_expense": n, "operation_id": id}` once the one-shots applied */
+  outcome: EconRegionEventOutcome | null;
+}
+
+export interface EconRegionEventOutcome {
+  stock_lost?: Record<string, number> | null;
+  treasury_expense?: number | null;
+  operation_id?: number | null;
+}
+
+export interface EconEventStartBody {
+  template_id: number;
+  region_id: number;
+  /** Overrides the template scope */
+  scope?: EconEventScope | null;
+  /** Overrides the rolled duration */
+  duration_days?: number | null;
+  /** One per submit — a repeated request answers 409 «Событие уже запущено» */
+  request_id?: string | null;
+}
+
+export interface EconEventSkip {
+  region_id: number;
+  region_name: string | null;
+  reason: string;
+}
+
+export interface EconEventStartResult {
+  started: EconRegionEvent[];
+  skipped: EconEventSkip[];
+}
+
+export interface EconRegionEventsPage {
+  items: EconRegionEvent[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface EconEventsHistoryParams {
+  region_id?: number;
+  template_code?: string;
+  kind?: EconEventKind;
+  status?: EconEventStatus;
+  origin?: EconEventOrigin;
+  date_from?: string;
+  date_to?: string;
+  page?: number;
+  page_size?: number;
+}
+
+/** Small marker of an active event (`EventBadge` — admin regions list, F2). */
+export interface EconEventBadge {
+  name: string;
+  icon: string;
+  kind: EconEventKind;
 }

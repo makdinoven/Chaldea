@@ -144,6 +144,23 @@ const SECTIONS: ParamSection[] = [
     ],
   },
   {
+    title: 'События',
+    intro:
+      'Засухи, чума, праздники и другие события регионов: как часто они начинаются сами, как складываются и когда вспыхивает бунт. Шаблоны событий — во вкладке «События».',
+    params: [
+      { key: 'events_enabled', label: 'Автоматические события (1 — да, 0 — нет)', hint: '0 — сами не начинаются; идущие доживают, ручной запуск работает.', min: 0, max: 1, def: 1, integer: true },
+      { key: 'event_rate_per_season', label: 'Частота, событий на регион за сезон', hint: 'В среднем столько случайных событий выпадает региону за игровой сезон.', min: 0, max: 10, def: 1 },
+      { key: 'event_season_days', label: 'Длина сезона, реальных дней', hint: 'Только для частоты: сезон 39 дней + праздник 10.', min: 1, max: 400, def: 49 },
+      { key: 'event_max_active', label: 'Предел событий в регионе', hint: 'Столько идущих — и новые сами в регион не приходят (кроме бунта).', min: 1, max: 10, def: 3, integer: true },
+      { key: 'event_mult_min', label: 'Минимальный общий множитель', hint: 'Несколько событий вместе не опустят производство, спрос, цену или налог ниже.', min: 0.01, max: 1, def: 0.1 },
+      { key: 'event_mult_max', label: 'Максимальный общий множитель', hint: 'И не поднимут выше.', min: 1, max: 10, def: 3 },
+      { key: 'event_delta_max', label: 'Предел изменения стабильности и достатка', hint: 'Сумма всех событий региона за пересчёт, в каждую сторону.', min: 0, max: 50, def: 10 },
+      { key: 'event_spread_max_depth', label: 'Глубина распространения', hint: 'Сколько раз событие может перекинуться дальше; 0 — не перекидываются.', min: 0, max: 5, def: 2, integer: true },
+      { key: 'event_riot_stability', label: 'Порог бунта, стабильность', hint: 'Ниже этого идут «часы бунта».', min: 0, max: 100, def: 25 },
+      { key: 'event_riot_after_days', label: 'Бунт через, дней низкой стабильности', hint: 'Столько реальных дней подряд ниже порога — и начинается бунт.', min: 0.25, max: 60, def: 3 },
+    ],
+  },
+  {
     title: 'Служебное',
     intro: 'Менять только осознанно.',
     params: [
@@ -275,6 +292,40 @@ const BanksCell = ({ run }: { run: EconTickRun }) => {
   );
 };
 
+/** Labels of the events pass counters (FEAT-187, `RunSummary` 3.6 step 7), in display order. */
+const EVENT_COUNTERS: [keyof EconTickRun, string][] = [
+  ['events_started', 'случайных'],
+  ['events_spread', 'перекинулось'],
+  ['events_chained', 'цепочкой'],
+  ['riots_started', 'бунтов'],
+  ['events_applied', 'разовых последствий'],
+  ['event_expense_ops', 'расходов казны'],
+  ['events_ended', 'закончилось'],
+];
+
+const eventCounterParts = (run: EconTickRun): string[] =>
+  EVENT_COUNTERS.flatMap(([key, label]) => {
+    const n = run[key];
+    return typeof n === 'number' && n > 0 ? [`${label}: ${n}`] : [];
+  });
+
+/** Events pass counters of a run (FEAT-187); zero counters are hidden. */
+const EventsCell = ({ run }: { run: EconTickRun }) => {
+  const parts = eventCounterParts(run);
+  const failed = run.events_failed ?? 0;
+  if (parts.length === 0 && failed === 0) return <span className="text-white/30">—</span>;
+  return (
+    <span className="flex flex-col">
+      {parts.map((p) => (
+        <span key={p} className="text-white/80 whitespace-nowrap">
+          {p}
+        </span>
+      ))}
+      {failed > 0 && <span className="text-site-red whitespace-nowrap">сбоев: {failed}</span>}
+    </span>
+  );
+};
+
 const RegionsCell = ({ run }: { run: EconTickRun }) => (
   <span className="whitespace-nowrap">
     <span className="text-white/80">
@@ -362,6 +413,10 @@ const RunConfirm = ({ nextSlotAt, onClose, onDone, onConflict }: RunConfirmProps
           симуляции будут произведены и потреблены товары, изменятся запасы и цены, стабильность и достаток; жители
           заплатят налог, казна выплатит жалованье, страны раздадут дотации, торговцы-НПС продадут жителям товар и
           пополнят склады, а банки начислят проценты и взыщут просроченные долги.
+        </p>
+        <p>
+          События регионов действуют на этом шаге как обычно, разовые последствия только что запущенных событий
+          применятся сейчас. Новые события ручной шаг не бросает и идущие не ускоряет — их срок идёт по часам.
         </p>
         <p>Отменить шаг нельзя. Он попадёт в журнал операций и в список пересчётов как ручной.</p>
         <p className="text-white/50">
@@ -486,7 +541,7 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
     <div className="flex flex-col gap-6">
       <GuideIntro section="tick">
         Здесь — расписание пересчёта мира (каждые 6 часов), ручной шаг и общие параметры симуляции: цены, производство,
-        деньги жителей, стабильность, достаток, торговцы и банки. У каждого параметра есть «?» с объяснением.
+        деньги жителей, стабильность, достаток, торговцы, банки и события регионов. У каждого параметра есть «?» с объяснением.
       </GuideIntro>
 
       {/* ---------------------------------------------------------------- status */}
@@ -623,6 +678,15 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                 )}
               </span>
             )}
+            {lastResult.events_ended !== undefined && (
+              <span className="text-white/60">
+                События: {eventCounterParts(lastResult).join(', ') || 'ничего не изменилось'}
+                {(lastResult.events_failed ?? 0) > 0 && (
+                  <span className="text-site-red">, сбоев: {lastResult.events_failed}</span>
+                )}
+                . Ручной пересчёт новых событий не бросает — только заканчивает истёкшие и применяет разовые последствия.
+              </span>
+            )}
           </div>
         )}
       </section>
@@ -645,6 +709,7 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                     <th className="py-2 pr-3 font-normal">Регионы</th>
                     <th className="py-2 pr-3 font-normal">Торговцы</th>
                     <th className="py-2 pr-3 font-normal">Банки</th>
+                    <th className="py-2 pr-3 font-normal">События</th>
                     <th className="py-2 pr-3 font-normal">Статус</th>
                     <th className="py-2 font-normal">Ошибка</th>
                   </tr>
@@ -669,6 +734,9 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                       </td>
                       <td className="py-2 pr-3 text-xs">
                         <BanksCell run={r} />
+                      </td>
+                      <td className="py-2 pr-3 text-xs">
+                        <EventsCell run={r} />
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap">
                         <StatusText status={r.status} />
@@ -702,6 +770,10 @@ const EconomyTick = ({ canSettings, onMoneyChanged }: EconomyTickProps) => {
                   <span className="text-xs text-white/50">
                     Банки: <BanksCell run={r} />
                   </span>
+                  <div className="text-xs text-white/50 flex gap-1 min-w-0">
+                    <span className="shrink-0">События:</span>
+                    <EventsCell run={r} />
+                  </div>
                   {r.error && <span className="text-site-red text-xs break-words">{r.error}</span>}
                 </li>
               ))}
