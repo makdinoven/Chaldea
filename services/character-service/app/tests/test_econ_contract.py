@@ -240,3 +240,13 @@ def test_bank_op_types_and_interest_leg():
     assert not econ_core.BANK_OP_TYPES & econ_core.SOURCE_OP_TYPES
     assert econ_core.LEG_INTEREST in econ_core.LEG_TYPES
     assert econ_core.LEG_INTEREST in econ_core.CALLER_LEG_TYPES
+
+
+# --------------------------------------------------------------------------------------------- FEAT-187 region events
+
+def test_region_event_op_type():
+    assert cc.REGION_EVENT_OP_TYPE_NAME == econ_core.OP_REGION_EVENT
+    assert econ_core.OP_REGION_EVENT in econ_core.OP_TYPES
+    assert econ_core.OP_REGION_EVENT not in econ_core.SOURCE_OP_TYPES
+    assert econ_core.OP_REGION_EVENT not in econ_core.BANK_OP_TYPES
+    assert econ_core.OP_REGION_EVENT not in econ_core.COMMENT_REQUIRED_OP_TYPES

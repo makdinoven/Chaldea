@@ -29,6 +29,10 @@ FEAT-184 (banks) appends bank ledger CASES (`bank` = the bank's own money, `bank
 vault of player deposits, both per region and never negative) and BANK_KIND_CASES /
 BANK_OP_TYPE_NAMES, which a runner checks against econ_core's constants directly.
 
+FEAT-187 (region events) appends `region_event` ledger CASES (one-shot treasury expense
+T(R) -> P(R), untaxed, idempotent per event) and REGION_EVENT_OP_TYPE_NAME, which a runner
+checks is in econ_core.OP_TYPES and not in SOURCE_OP_TYPES / BANK_OP_TYPES.
+
 Only econ_core is imported here, so this module is identical in every service.
 """
 
@@ -715,6 +719,41 @@ BANK_OP_TYPE_NAMES: Tuple[str, ...] = (
     "bank_deposit", "bank_withdraw", "bank_transfer", "bank_tick", "bank_capital",
     "loan_issue", "loan_repay", "loan_collect",
 )
+
+# ---------------------------------------------------------------------------
+# FEAT-187 region events: the one-shot treasury expense of an event, appended to CASES
+# ---------------------------------------------------------------------------
+
+REGION_EVENT_OP_TYPE_NAME = "region_event"
+
+CASES += [
+    # «восстановление»: region treasury -> its population purse, no tax leg, idempotent per event
+    ContractCase(
+        name="region_event_treasury_to_purse_untaxed_and_idempotent",
+        steps=[_fund((R10, 1000)),
+               Step("region_event", [Leg(R10, P10, 300)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "region_event:e1",
+                     "metadata": {"event_id": 1, "template_code": "flood", "run_id": 1}}),
+               Step("region_event", [Leg(R10, P10, 300)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "region_event:e1"},
+                    error="DuplicateOperation"),
+               Step("region_event", [Leg(R10, P10, 100)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "region_event:e2"})],
+        expected_accounts={("region_treasury", 10): 600, ("population_purse", 10): 400},
+        expected_operations=3, expected_postings=3, expected_tax_legs=0,
+    ),
+    # the treasury may go negative (debt), the event op may never touch the money sources
+    ContractCase(
+        name="region_event_may_overdraw_treasury_but_not_touch_sources",
+        steps=[Step("region_event", [Leg(R10, P10, 50)], {"region_id": 10, "apply_tax": False}),
+               Step("region_event", [Leg(EMISSION, P10, 5)], {"region_id": 10, "apply_tax": False},
+                    error="EconomyError"),
+               Step("region_event", [Leg(R10, ADJUSTMENT, 5)], {"region_id": 10, "apply_tax": False},
+                    error="EconomyError")],
+        expected_accounts={("region_treasury", 10): -50, ("population_purse", 10): 50},
+        expected_operations=1, expected_postings=1, expected_tax_legs=0,
+    ),
+]
 
 # location_id -> (region_id, country_id)
 RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] = [

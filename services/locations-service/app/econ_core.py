@@ -17,6 +17,9 @@ This module never touches a database driver. It holds:
   * FEAT-184 banks: the bank's own money (`bank`) and the vault of player deposits
     (`bank_deposits`), both per region and never negative, the bank op types and the
     `interest` leg; the bank maths itself lives in character-service (`econ_bank.py`);
+  * FEAT-187 region events: the `region_event` op type (one-shot treasury expense of an
+    event, region treasury -> population purse, untaxed); the event maths lives in
+    character-service (`econ_events.py`);
   * a small TTL cache for the economy settings row.
 
 World invariant: the sum of all balances (characters.currency_balance plus
@@ -118,6 +121,8 @@ OP_TREASURY_CLOSED = "treasury_closed"
 OP_REGION_TICK = "region_tick"            # FEAT-182: purse <-> region <-> country flows of one simulation step
 # FEAT-183: a merchant's 6 h trade with the residents of his region (purse <-> NPC, NPC -> region trade_tax)
 OP_MERCHANT_TRADE = "merchant_trade"
+# FEAT-187: one-shot money effect of a region event («восстановление»: region treasury -> population purse)
+OP_REGION_EVENT = "region_event"
 # FEAT-184 banks
 OP_BANK_DEPOSIT = "bank_deposit"          # character -> vault
 OP_BANK_WITHDRAW = "bank_withdraw"        # vault -> character (+ forfeited interest vault -> bank)
@@ -140,6 +145,7 @@ OP_TYPES = frozenset({
     OP_NPC_SHOP_BUY, OP_NPC_SHOP_BUY_REFUND, OP_NPC_SHOP_SELL, OP_QUEST_REWARD,
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
+    OP_REGION_EVENT,
 }) | BANK_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
