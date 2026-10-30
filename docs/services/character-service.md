@@ -977,3 +977,89 @@ bank_loans (asc id) → characters (asc id) → econ_accounts (asc id)`. Люб�
 расхождение роняет `ok`; счета `bank` / `bank_deposits` — региональные (имя из `Regions`, операции с `region_id`), в
 «системные счета» сводки не попадают, ручная корректировка их запрещена (`ADJUST_FORBIDDEN_KINDS`), эмиссия в них
 невозможна.
+
+## Region events (FEAT-187)
+
+Временные модификаторы регионов — кризисы (засуха, чума, потоп…) и благоприятные события (урожайный год, ярмарка…).
+Всё живёт в character-service: таблицы и сид — миграция `033_econ_region_events`, чистая математика —
+`app/econ_events.py`, проход событий в тике — `app/econ_tick.py`, БД-помощники и админ-логика —
+`app/economy_events_crud.py`, маршруты — `app/economy_api.py`. Подробности решения — `features/FEAT-187-*.md` §3.
+
+### Таблицы (миграция `033_econ_region_events`)
+
+- `econ_event_templates` — шаблоны, которые заводит админ: `code` (неизменяемый slug, на него ссылаются цепочки),
+  `name`, `icon` (белый список `EVENT_ICONS`), `kind` good/bad, `player_text` (≤ 500, видят игроки), `admin_note`,
+  `trigger_kind` random / low_stability (бунт) / manual (только руками), `weight`, `duration_min_days` /
+  `duration_max_days`, `scope` region / neighbours / country / world, `spread_chance` (за жизнь события),
+  `region_templates` и `seasons` (JSON, пусто = любые), `effects` (JSON, ≤ 12), `chains` (`[{code, chance}]`),
+  `is_enabled`. Сид — 14 стартовых шаблонов (`EVENT_TEMPLATES` в миграции).
+- `econ_region_events` — **один экземпляр события в одном регионе: и активное состояние, и вечная история**. Снимок
+  шаблона на момент старта (`template_code, name, icon, kind, player_text, trigger_kind, effects, chains,
+  spread_chance`) + `region_name` / `country_id`; `origin` random / manual / spread / chain / riot, `parent_event_id`
+  (источник распространения/цепочки), `root_event_id` (первый экземпляр многорегионного старта), `generation`;
+  `status` active / ended / cancelled, `started_at`, `ends_at`, `ended_at`; `origin_key` UNIQUE (идемпотентность
+  бросков и ручного `request_id`), `active_key` UNIQUE (`r<region>:<code>` пока активно — один активный экземпляр
+  шаблона в регионе); итоги разовых эффектов: `applied_at`, `applied_run_id`, `population_before/after`, `outcome`
+  (`{stock_lost: {group: units}, treasury_expense, operation_id}`); аудит: `started_by_user_id`,
+  `cancelled_by_user_id`, `cancel_comment`. Нет FK на `Regions` / `econ_regions` / `econ_tick_runs` (история
+  переживает их), `template_id` → SET NULL при удалении шаблона.
+- `econ_regions.low_stability_since` — «часы бунта» (ставит/сбрасывает тик).
+
+### Эффекты (3.4)
+
+| type | поля | когда | рычаг |
+|---|---|---|---|
+| `production` / `consumption` | groups, mult 0…5 | каждый шаг | копия производства / потребления группы × m |
+| `labor` («больные жители») | mult 0…1.5 | каждый шаг | производство всех групп × m |
+| `price` | groups, mult 0.2…5 | каждый шаг | `price_mult × m` в пределах `price_min…price_max` |
+| `tax_income` | mult 0…5 | каждый шаг | налог × m |
+| `stability` / `prosperity` | delta −10…10 | каждый шаг | ± к показателю |
+| `merchants_halt` | — | каждый шаг | торговцы не докупают |
+| `bank_panic` / `loan_boom` | — / mult 1…5 | проход банков | жители забирают вклады / больше займов |
+| `stock_loss` | groups, share 0…0.9 | один раз | запасы × (1 − share) |
+| `treasury_expense` | share 0…0.9 | один раз | операция `region_event` казна → кошелёк жителей, без налога, ключ `region_event:e<id>` |
+| `population` | pct −0.5…0.5 | один раз | лорное население × (1 + pct), не ниже масштаба |
+
+Несколько событий складываются (произведения множителей, суммы дельт) и обрезаются параметрами
+`event_mult_min/max`, `event_delta_max`. Без активных событий `simulate_region(mods=None)` считает побитово как раньше.
+Разовые эффекты применяются **один раз** в транзакции региона первого пересчёта (авто или ручного) после старта.
+
+### Тик (3.6)
+
+Проход событий после подготовки торговцев, до цикла регионов, best effort (ошибка → `события — ошибка: …` в
+`econ_tick_runs.error`, регионы всё равно считаются): окончание по часам в **каждом** прогоне; броски (бунт →
+случайное → цепочки → распространение) — **только в плановых слотах** и при `events_enabled = 1`, RNG от
+`слот:регион:цель`, ключи `auto:<slot>:r<R>`, `riot:…`, `chain:…`, `spread:…`. Сезон — `GET /locations/game-time`
+(3 с; сбой → только шаблоны без сезона). Соседи — `region_transition_arrows` в обе стороны, иначе регионы той же
+страны. Параметры (`/admin/economy/sim`): `events_enabled, event_rate_per_season, event_season_days, event_max_active,
+event_mult_min, event_mult_max, event_delta_max, event_spread_max_depth, event_riot_stability, event_riot_after_days`.
+
+**Порядок блокировок (3.6.1, заменяет FEAT-184 3.8):** `econ_regions → econ_region_goods → econ_region_events (asc id)
+→ npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits → bank_loans → characters → econ_accounts`.
+Проход событий и админ-потоки трогают только строки событий (вставки / UPDATE / `FOR UPDATE` одной строки при отмене).
+
+### API (B4, контракт 3.7; префикс `/characters`)
+
+Чтение — `economy:read`, изменения — `economy:settings` (новых прав нет). 401 без токена, 403 без права.
+
+| Метод и путь | Тело / запрос | Ответ и отказы |
+|---|---|---|
+| `GET /admin/economy/events/templates` | — | `List[EventTemplateOut]` (kind, name) + `active_count` |
+| `POST /admin/economy/events/templates` | `EventTemplateIn` | 201 `EventTemplateOut`; 409 «Шаблон с кодом «{code}» уже есть»; 400 «Неизвестная группа товаров: {code}» / «Неизвестный шаблон региона: {code}» / «Цепочка ссылается на неизвестное событие: {code}» / «Событие не может вызывать само себя»; 422 — границы 3.8 (лишнее / недостающее поле эффекта, иконка, сезон, длительность…) с русским `msg` |
+| `PUT /admin/economy/events/templates/{id}` | `EventTemplateUpdate` (всё, кроме `code`; `code` в теле игнорируется) | `EventTemplateOut`; 404 «Шаблон события не найден»; те же 400. Идущие экземпляры сохраняют снимок |
+| `DELETE /admin/economy/events/templates/{id}` | — | 204; 404; 409 «На это событие ссылаются цепочки: «…»»; у экземпляров `template_id = NULL` |
+| `GET /admin/economy/events/active?region_id=` | — | `List[RegionEventOut]` (status active, `ends_at > now`, по `ends_at`) |
+| `POST /admin/economy/events/start` | `EventStartIn {template_id, region_id, scope?, duration_days? 0…365, request_id? [A-Za-z0-9-]{8,64}}` | `{started: [RegionEventOut], skipped: [{region_id, region_name, reason (русский текст)}]}`; 404 шаблон / «Регион не найден»; 409 «Регион не участвует в пересчёте — у него нет шаблона или населения»; ничего не запущено → 409 с первой причиной («В регионе уже идёт «…» — отмените его или дождитесь конца»); тот же `request_id` → 409 «Событие уже запущено». Выключенные шаблоны и любой триггер запускаются; `event_max_active` не действует; разовые эффекты — при следующем пересчёте |
+| `POST /admin/economy/events/{id}/cancel` | `EventCancelIn {comment 3…500}` | `RegionEventOut` (cancelled, `ended_at = now`, `active_key = NULL`); 404 «Событие не найдено»; 409 «Событие уже закончилось». Разовые итоги не откатываются |
+| `GET /admin/economy/events/history` | `region_id, template_code, kind, status, origin, date_from, date_to (YYYY-MM-DD, по started_at), page, page_size ≤ 200` | `{items, total, page, page_size}` (новые сначала); 422 на плохой запрос; 400 «Дата начала периода позже даты конца» |
+| `GET /economy/regions/{id}/card` (публичный) | — | `+ events: [{code, name, icon, kind, text, started_at, ends_at}]` в **обеих** формах (`[]` для неучаствующих); без чисел эффектов |
+| `GET /admin/economy/regions` | — | у элемента `+ active_events: [{name, icon, kind}]` |
+| `GET /admin/economy/sim`, `POST …/sim/run` | — | счётчики `events_ended, events_started, events_spread, events_chained, riots_started, events_applied, event_expense_ops, events_failed`; у ручного прогона — из `RunSummary`, в списке прогонов — **выведены** из экземпляров (`run_id` / `applied_run_id` / `outcome.operation_id`; `events_ended` — окончания между стартом предыдущего прогона и этого, приблизительно; `events_failed` — части текста ошибки) |
+
+### Контракт для будущей газеты (3.1.2)
+
+Читать `econ_region_events` напрямую: `SELECT … ORDER BY started_at`. Строки **никогда не удаляются** (`purge_old` их
+не трогает), содержат снимки имени региона и шаблона — переименование/удаление региона или шаблона историю не ломает.
+Поля для текста: `region_name, name, icon, kind, player_text, origin, started_at, ends_at, ended_at, status,
+cancel_comment` (только для админов), итоги — `population_before/after`, `outcome`. Объём ≈ 1 строка на регион за
+49 дней. Публичного читателя истории пока нет — его добавит фича газеты.
