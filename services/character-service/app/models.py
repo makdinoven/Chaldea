@@ -610,6 +610,7 @@ class EconRegion(Base):
     last_grant = Column(BigInteger, nullable=False, default=0, server_default="0")
     last_run_id = Column(BigInteger, nullable=True)
     last_tick_at = Column(DateTime, nullable=True)
+    low_stability_since = Column(DateTime, nullable=True)  # FEAT-187 riot clock (set / cleared by the tick)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -810,6 +811,109 @@ class BankLoan(Base):
         Index("ix_bank_loans_status_due", "status", "due_at"),
         CheckConstraint("principal > 0 AND debt >= 0", name="ck_bank_loans_amounts"),
         CheckConstraint("status IN ('active', 'overdue', 'closed', 'written_off')", name="ck_bank_loans_status"),
+    )
+
+
+# --------------------------------------------------------------------------- FEAT-187 region events (migration 033)
+
+class EconEventTemplate(Base):
+    """An admin-defined region event (crisis / boon): effects built from the sim levers, see econ_events."""
+
+    __tablename__ = "econ_event_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(32), nullable=False)                 # stable slug, immutable (chains refer to it)
+    name = Column(String(100), nullable=False)
+    icon = Column(String(32), nullable=False, default="alert", server_default="alert")
+    kind = Column(String(4), nullable=False)                  # good | bad
+    player_text = Column(String(500), nullable=False)
+    admin_note = Column(String(1000), nullable=True)
+    trigger_kind = Column(String(16), nullable=False, default="random", server_default="random")
+    weight = Column(Numeric(7, 2), nullable=False, default=1, server_default="1.00")
+    duration_min_days = Column(Numeric(6, 2), nullable=False)
+    duration_max_days = Column(Numeric(6, 2), nullable=False)
+    scope = Column(String(12), nullable=False, default="region", server_default="region")
+    spread_chance = Column(Numeric(5, 4), nullable=False, default=0, server_default="0")
+    region_templates = Column(JSON, nullable=True)            # econ_region_templates codes; NULL / [] = any
+    seasons = Column(JSON, nullable=True)                     # econ_events.GAME_SEGMENTS; NULL / [] = any
+    effects = Column(JSON, nullable=False)
+    chains = Column(JSON, nullable=True)                      # [{"code": ..., "chance": ...}]
+    is_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    updated_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_econ_event_templates_code"),
+        CheckConstraint("kind IN ('good', 'bad')", name="ck_eet_kind"),
+        CheckConstraint("trigger_kind IN ('random', 'low_stability', 'manual')", name="ck_eet_trigger"),
+        CheckConstraint("scope IN ('region', 'neighbours', 'country', 'world')", name="ck_eet_scope"),
+        CheckConstraint("duration_min_days > 0 AND duration_max_days >= duration_min_days", name="ck_eet_duration"),
+        CheckConstraint("weight >= 0 AND spread_chance >= 0 AND spread_chance <= 1", name="ck_eet_numbers"),
+    )
+
+
+class EconRegionEvent(Base):
+    """One event instance in one region — active state AND the permanent history (never purged).
+
+    Carries a snapshot of the template taken at start; no FK to Regions / econ_regions / econ_tick_runs
+    (history outlives regions and purged runs).
+    """
+
+    __tablename__ = "econ_region_events"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    region_id = Column(BigInteger, nullable=False)
+    region_name = Column(String(255), nullable=True)
+    country_id = Column(BigInteger, nullable=True)
+    template_id = Column(Integer, ForeignKey("econ_event_templates.id", name="fk_ere_template", ondelete="SET NULL"),
+                         nullable=True)
+    template_code = Column(String(32), nullable=False)
+    name = Column(String(100), nullable=False)
+    icon = Column(String(32), nullable=False)
+    kind = Column(String(4), nullable=False)
+    player_text = Column(String(500), nullable=False)
+    trigger_kind = Column(String(16), nullable=False)
+    effects = Column(JSON, nullable=False)
+    chains = Column(JSON, nullable=True)
+    spread_chance = Column(Numeric(5, 4), nullable=False, default=0, server_default="0")
+    origin = Column(String(8), nullable=False)                # random | manual | spread | chain | riot
+    parent_event_id = Column(_EconId, ForeignKey("econ_region_events.id", name="fk_ere_parent", ondelete="SET NULL"),
+                             nullable=True)
+    root_event_id = Column(BigInteger, nullable=True)
+    generation = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    origin_key = Column(String(96), nullable=True)
+    active_key = Column(String(48), nullable=True)            # 'r<region>:<code>' while active, else NULL
+    status = Column(String(10), nullable=False, default="active", server_default="active")
+    started_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    game_segment = Column(String(16), nullable=True)
+    run_id = Column(BigInteger, nullable=True)
+    started_by_user_id = Column(Integer, nullable=True)
+    cancelled_by_user_id = Column(Integer, nullable=True)
+    cancel_comment = Column(String(500), nullable=True)
+    applied_at = Column(DateTime, nullable=True)
+    applied_run_id = Column(BigInteger, nullable=True)
+    population_before = Column(Integer, nullable=True)
+    population_after = Column(Integer, nullable=True)
+    outcome = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("origin_key", name="uq_ere_origin_key"),
+        UniqueConstraint("active_key", name="uq_ere_active_key"),
+        Index("ix_ere_template", "template_id"),
+        Index("ix_ere_parent", "parent_event_id"),
+        Index("ix_ere_region_status", "region_id", "status"),
+        Index("ix_ere_status_ends", "status", "ends_at"),
+        Index("ix_ere_root", "root_event_id"),
+        Index("ix_ere_started", "started_at"),
+        Index("ix_ere_ended", "ended_at"),
+        CheckConstraint("status IN ('active', 'ended', 'cancelled')", name="ck_ere_status"),
+        CheckConstraint("origin IN ('random', 'manual', 'spread', 'chain', 'riot')", name="ck_ere_origin"),
+        CheckConstraint("ends_at >= started_at", name="ck_ere_time"),
     )
 
 

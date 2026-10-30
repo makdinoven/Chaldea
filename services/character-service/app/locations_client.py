@@ -147,6 +147,40 @@ async def get_default_starting_point_id() -> Optional[int]:
     return None
 
 
+# FEAT-187 — calendar segment for region events. Sync (the economy tick runs in a worker thread) and short: a slow
+# calendar must not hold a scheduled run.
+GAME_SEGMENT_TIMEOUT_SECONDS = 3.0
+
+
+def get_game_segment_sync() -> Optional[str]:
+    """
+    Current calendar segment (``computed.segment_name`` of ``GET /locations/game-time``:
+    spring, beltane, summer, ...).
+
+    :return: the segment name, or ``None`` on any failure (transport, non-200,
+             malformed payload) — the caller then rolls only season-free events.
+    """
+    url = f"{_base_url()}/locations/game-time"
+    try:
+        with httpx.Client(timeout=GAME_SEGMENT_TIMEOUT_SECONDS) as client:
+            response = client.get(url)
+    except Exception as e:
+        logger.warning(f"locations-service недоступен при чтении сезона для событий: {type(e).__name__}")
+        return None
+    if response.status_code != 200:
+        logger.warning(f"locations-service вернул {response.status_code} на /locations/game-time (сезон событий)")
+        return None
+    try:
+        segment = ((response.json() or {}).get("computed") or {}).get("segment_name")
+    except Exception as e:
+        logger.warning(f"Некорректный ответ /locations/game-time: {type(e).__name__}")
+        return None
+    if isinstance(segment, str) and segment:
+        return segment
+    logger.warning("Ответ /locations/game-time не содержит computed.segment_name")
+    return None
+
+
 # ============================================================
 # FEAT-162 — internal calls to locations-service
 # ============================================================

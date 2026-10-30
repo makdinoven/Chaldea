@@ -288,7 +288,7 @@ def test_regions_list_shape_includes_every_world_region(world):
     items = {r["region_id"]: r for r in resp.json()["items"]}
     assert set(items) == {10, 20, 30, 40}
     for item in items.values():
-        assert set(item) == REGION_KEYS
+        assert set(item) == REGION_KEYS | {"active_events"}          # FEAT-187: list only
     assert items[10]["template_code"] == "fortress" and items[10]["template_name"] == "Пограничная крепость"
     assert items[10]["country_name"] == "Мидденгерд" and items[30]["country_name"] == "Пустошь"
     assert items[10]["simulated"] is True and items[30]["simulated"] is True
@@ -962,7 +962,8 @@ def test_summary_population_purses(world, engine):
 # --------------------------------------------------------------------------------------------- public card
 
 CARD_KEYS = {"region_id", "participating", "updated_at", "food", "treasury", "stability", "prosperity",
-             "price_level", "shortages", "surpluses", "phrases", "groups", "has_bank"}  # FEAT-184 has_bank
+             "price_level", "shortages", "surpluses", "phrases", "groups", "has_bank",
+             "events"}  # FEAT-184 has_bank, FEAT-187 events
 
 
 def _numbers(value, path=""):
@@ -1008,7 +1009,8 @@ def test_card_participating_false(world):
     for region_id in (20, 30, 40, 999, 0, -5):                # pop 0, no template, no row, unknown, bad ids
         resp = client.get(f"/characters/economy/regions/{region_id}/card")
         assert resp.status_code == 200
-        assert resp.json() == {"region_id": region_id, "participating": False, "has_bank": False}
+        assert resp.json() == {"region_id": region_id, "participating": False, "has_bank": False,
+                               "events": []}
     assert client.get("/characters/economy/regions/abc/card").status_code == 422
 
 

@@ -6,6 +6,7 @@ Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,
                    goods-groups[/{code}],templates[/{code}],item-groups,sim[/run]}
          FEAT-183: /characters/admin/economy/merchants[/fund]
          FEAT-184: /characters/admin/economy/banks[/debtors|/{region_id}[/capital]|/loans/{loan_id}/write-off]
+         FEAT-187: /characters/admin/economy/events/{templates[/{id}],active,start,history,{event_id}/cancel}
 Player:  FEAT-184 banks: /characters/economy/bank/{npc/{npc_id}[/deposit|/withdraw|/transfer|/send|/loan|/repay],
                           summary,regions} (JWT + ownership; POST also the FEAT-145 gate via locations-service)
 RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings
@@ -21,7 +22,7 @@ from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session, sessionmaker
@@ -33,6 +34,7 @@ import econ_scheduler
 import econ_tick
 import economy_bank_crud
 import economy_crud
+import economy_events_crud
 import locations_client
 import economy_merchants_crud
 import economy_sim_crud
@@ -487,6 +489,114 @@ def post_sim_run(
     data["id"] = data.pop("run_id")
     data["trigger_kind"] = data.pop("trigger")
     return data
+
+
+# ---------------------------------------------------------------------------
+# FEAT-187 region events (contract 3.7). Static paths are declared before /events/{event_id}/cancel.
+# ---------------------------------------------------------------------------
+
+EVENTS = "/admin/economy/events"
+
+
+@router.get(f"{EVENTS}/templates", response_model=List[schemas.EventTemplateOut])
+def list_event_templates(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_events_crud.list_event_templates(db))
+
+
+@router.post(f"{EVENTS}/templates", response_model=schemas.EventTemplateOut, status_code=201)
+def post_event_template(
+    body: schemas.EventTemplateIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    result = _run_write(db, lambda: economy_events_crud.create_template(db, body, current_user.id))
+    logger.info("economy event template created: user=%s template=%s", current_user.id, result["id"])
+    return result
+
+
+@router.put(f"{EVENTS}/templates/{{template_id}}", response_model=schemas.EventTemplateOut)
+def put_event_template(
+    template_id: int,
+    body: schemas.EventTemplateUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    result = _run_write(db, lambda: economy_events_crud.update_template(db, template_id, body, current_user.id))
+    logger.info("economy event template updated: user=%s template=%s", current_user.id, template_id)
+    return result
+
+
+@router.delete(f"{EVENTS}/templates/{{template_id}}", status_code=204)
+def delete_event_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    _run_write(db, lambda: economy_events_crud.delete_template(db, template_id))
+    logger.info("economy event template deleted: user=%s template=%s", current_user.id, template_id)
+    return Response(status_code=204)
+
+
+@router.get(f"{EVENTS}/active", response_model=List[schemas.RegionEventOut])
+def list_active_events(
+    region_id: Optional[int] = Query(None, ge=1, le=schemas.ECON_MAX_ID),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_events_crud.list_active_events(db, region_id))
+
+
+@router.post(f"{EVENTS}/start", response_model=schemas.EventStartOut)
+def post_event_start(
+    body: schemas.EventStartIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    """Manual start (any template, scope expansion); one-shot effects apply at the next recount."""
+    # The calendar segment is only recorded on the instance; None (calendar unreachable) is fine. Fetched before
+    # any DB work so no transaction is open during the HTTP call.
+    segment = locations_client.get_game_segment_sync()
+    result = _run_write(db, lambda: economy_events_crud.start_manual(db, body, user_id=current_user.id,
+                                                                       segment=segment))
+    logger.info("economy event started: user=%s template=%s region=%s started=%s skipped=%s", current_user.id,
+                body.template_id, body.region_id, [e["id"] for e in result["started"]], len(result["skipped"]))
+    return result
+
+
+@router.get(f"{EVENTS}/history", response_model=schemas.RegionEventsPage)
+def list_events_history(
+    region_id: Optional[int] = Query(None, ge=1, le=schemas.ECON_MAX_ID),
+    template_code: Optional[str] = Query(None, pattern=schemas.EVENT_CODE_RE),
+    kind: Optional[str] = Query(None, pattern=r"^(good|bad)$"),
+    status: Optional[str] = Query(None, pattern=r"^(active|ended|cancelled)$"),
+    origin: Optional[str] = Query(None, pattern=r"^(random|manual|spread|chain|riot)$"),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    page: int = Query(1, ge=1, le=100_000),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=schemas.EVENT_HISTORY_MAX_PAGE_SIZE),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read_or_error(db, lambda: economy_events_crud.history_page(
+        db, region_id=region_id, template_code=template_code, kind=kind, status=status, origin=origin,
+        date_from=date_from, date_to=date_to, page=page, page_size=page_size))
+
+
+@router.post(f"{EVENTS}/{{event_id}}/cancel", response_model=schemas.RegionEventOut)
+def post_event_cancel(
+    event_id: int,
+    body: schemas.EventCancelIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    """Stops the ongoing effects from the next recount; one-shot results are not rolled back."""
+    result = _run_write(db, lambda: economy_events_crud.cancel_event(db, event_id, comment=body.comment,
+                                                                       user_id=current_user.id))
+    logger.info("economy event cancelled: user=%s event=%s", current_user.id, event_id)
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -1946,11 +1946,23 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "bank_resident_adjust": (0.0, 1.0),
     # FEAT-186 population scale: the sim uses lore population / scale
     "population_scale": (1, 10_000),
+    # FEAT-187 region events
+    "events_enabled": (0, 1),
+    "event_rate_per_season": (0.0, 10.0),
+    "event_season_days": (1.0, 400.0),
+    "event_max_active": (1, 10),
+    "event_mult_min": (0.01, 1.0),
+    "event_mult_max": (1.0, 10.0),
+    "event_delta_max": (0.0, 50.0),
+    "event_spread_max_depth": (0, 5),
+    "event_riot_stability": (0.0, 100.0),
+    "event_riot_after_days": (0.25, 60.0),
 }
 ECON_SIM_INT_PARAMS = frozenset({
     "treasury_release_ticks", "history_retention_days",
     "bank_loan_cap_base", "bank_loan_cap_per_level", "bank_min_amount", "bank_transfer_fee_min", "bank_start_capital",
     "population_scale",
+    "events_enabled", "event_max_active", "event_spread_max_depth",
 })
 
 
@@ -2292,6 +2304,16 @@ class EconSimParamsIn(BaseModel):
     bank_resident_loan_share: Optional[float] = None
     bank_resident_adjust: Optional[float] = None
     population_scale: Optional[int] = None
+    events_enabled: Optional[int] = None
+    event_rate_per_season: Optional[float] = None
+    event_season_days: Optional[float] = None
+    event_max_active: Optional[int] = None
+    event_mult_min: Optional[float] = None
+    event_mult_max: Optional[float] = None
+    event_delta_max: Optional[float] = None
+    event_spread_max_depth: Optional[int] = None
+    event_riot_stability: Optional[float] = None
+    event_riot_after_days: Optional[float] = None
 
     class Config:
         extra = Extra.forbid
@@ -2510,3 +2532,253 @@ class BankWriteOffIn(BaseModel):
     comment: str
 
     _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+
+# ===========================================================================
+# FEAT-187 region events — admin & public API (contract 3.7 / 3.8; app/economy_events_crud.py)
+# ===========================================================================
+
+from pydantic import confloat, conlist  # noqa: E402
+
+import econ_events as _econ_events  # noqa: E402
+
+EVENT_ICONS = _econ_events.EVENT_ICONS          # mirrored in the frontend icon map
+GAME_SEGMENTS = _econ_events.GAME_SEGMENTS
+EVENT_MAX_DURATION_DAYS = 365
+EVENT_MAX_WEIGHT = 1000
+EVENT_MAX_CHAINS = 10
+EVENT_MAX_REGION_TEMPLATES = 50
+EVENT_HISTORY_MAX_PAGE_SIZE = 200
+EVENT_CODE_RE = r"^[a-z][a-z0-9_]{1,31}$"
+_EVENT_CODE = constr(regex=EVENT_CODE_RE)
+_EVENT_GROUP = constr(regex=r"^(\*|[a-z][a-z0-9_]{0,31})$")
+_EVENT_SCOPE = Literal["region", "neighbours", "country", "world"]
+
+# Russian labels of effect types / fields (validation messages only; the UI has its own labels)
+EVENT_EFFECT_LABELS = {
+    "production": "производство", "consumption": "потребление", "labor": "больные жители", "price": "цены",
+    "tax_income": "доход казны", "stability": "стабильность", "prosperity": "достаток",
+    "merchants_halt": "торговцы не докупают", "bank_panic": "паника в банке", "loan_boom": "бум займов",
+    "stock_loss": "потеря запасов", "treasury_expense": "расход казны", "population": "население",
+}
+_EVENT_FIELD_LABELS = {"groups": "группы товаров", "mult": "множитель", "share": "долю", "delta": "изменение",
+                       "pct": "изменение населения"}
+_EVENT_VALUE_FIELDS = ("groups", "mult", "share", "delta", "pct")
+
+
+def _event_number(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
+
+
+class EventEffectIn(BaseModel):
+    """One effect of a template (3.4): exactly the fields of its type; null fields count as absent."""
+
+    type: Literal["production", "consumption", "labor", "price", "tax_income", "stability", "prosperity",
+                  "merchants_halt", "bank_panic", "loan_boom", "stock_loss", "treasury_expense", "population"]
+    groups: Optional[conlist(_EVENT_GROUP, min_items=1, max_items=12)] = None
+    mult: Optional[confloat(ge=0, le=5)] = None
+    share: Optional[confloat(ge=0, le=0.9)] = None
+    delta: Optional[confloat(ge=-10, le=10)] = None
+    pct: Optional[confloat(ge=-0.5, le=0.5)] = None
+
+    class Config:
+        extra = Extra.forbid
+
+    @root_validator(skip_on_failure=True)
+    def _fields_of_type(cls, values):
+        kind = values.get("type")
+        label = EVENT_EFFECT_LABELS.get(kind, kind)
+        allowed = _econ_events.EFFECT_FIELDS.get(kind, ())
+        for name in _EVENT_VALUE_FIELDS:
+            present = values.get(name) is not None
+            if present and name not in allowed:
+                raise ValueError(f"Лишнее поле «{name}» для эффекта «{label}»")
+            if not present and name in allowed:
+                raise ValueError(f"Для эффекта «{label}» нужно указать {_EVENT_FIELD_LABELS[name]}")
+        bounds = _econ_events.EFFECT_BOUNDS.get(kind)
+        if bounds is not None:
+            name, lo, hi = bounds
+            if not lo <= float(values[name]) <= hi:
+                raise ValueError(f"Для эффекта «{label}» значение — от {_event_number(lo)} до {_event_number(hi)}")
+        if values.get("groups") is not None:
+            groups = list(dict.fromkeys(values["groups"]))
+            values["groups"] = [_econ_events.ALL_GROUPS] if _econ_events.ALL_GROUPS in groups else groups
+        return values
+
+    def stored(self) -> dict:
+        """The JSON object kept in ``effects`` (only the fields of the type)."""
+        return {k: v for k, v in self.dict().items() if v is not None}
+
+
+class EventChainIn(BaseModel):
+    code: _EVENT_CODE
+    chance: confloat(ge=0, le=1)
+
+
+class EventTemplateUpdate(BaseModel):
+    """Body of ``PUT /admin/economy/events/templates/{id}`` — every field of a template except the immutable code."""
+
+    name: constr(strip_whitespace=True, min_length=2, max_length=100)
+    icon: str
+    kind: Literal["good", "bad"]
+    player_text: constr(strip_whitespace=True, min_length=3, max_length=500)
+    admin_note: Optional[constr(strip_whitespace=True, max_length=1000)] = None
+    trigger_kind: Literal["random", "low_stability", "manual"] = "random"
+    weight: confloat(ge=0, le=EVENT_MAX_WEIGHT) = 1.0
+    duration_min_days: confloat(gt=0, le=EVENT_MAX_DURATION_DAYS)
+    duration_max_days: confloat(gt=0, le=EVENT_MAX_DURATION_DAYS)
+    scope: _EVENT_SCOPE = "region"
+    spread_chance: confloat(ge=0, le=1) = 0.0
+    region_templates: conlist(constr(strip_whitespace=True, min_length=1, max_length=32),
+                              max_items=EVENT_MAX_REGION_TEMPLATES) = []
+    seasons: conlist(str, max_items=len(GAME_SEGMENTS) * 2) = []
+    effects: conlist(EventEffectIn, min_items=1, max_items=_econ_events.MAX_EFFECTS)
+    chains: conlist(EventChainIn, max_items=EVENT_MAX_CHAINS) = []
+    is_enabled: StrictBool = True
+
+    @validator("icon")
+    def _icon_known(cls, v):
+        if v not in EVENT_ICONS:
+            raise ValueError("Неизвестная иконка")
+        return v
+
+    @validator("admin_note")
+    def _note_empty_is_none(cls, v):
+        return v or None
+
+    @validator("region_templates", "seasons", "chains", pre=True)
+    def _none_is_empty(cls, v):
+        return [] if v is None else v
+
+    @validator("region_templates")
+    def _region_templates_unique(cls, v):
+        return list(dict.fromkeys(v))
+
+    @validator("seasons")
+    def _seasons_known(cls, v):
+        for name in v:
+            if name not in GAME_SEGMENTS:
+                raise ValueError(f"Неизвестный сезон: {name}")
+        return list(dict.fromkeys(v))
+
+    @validator("chains")
+    def _chains_unique(cls, v):
+        codes = [c.code for c in v]
+        for code in codes:
+            if codes.count(code) > 1:
+                raise ValueError(f"Цепочка на «{code}» указана дважды")
+        return v
+
+    @root_validator(skip_on_failure=True)
+    def _duration_range(cls, values):
+        if values["duration_max_days"] < values["duration_min_days"]:
+            raise ValueError("Максимальная длительность меньше минимальной")
+        return values
+
+
+class EventTemplateIn(EventTemplateUpdate):
+    code: _EVENT_CODE
+
+
+class EventTemplateOut(BaseModel):
+    """A template as the admin sees it (lenient: stored JSON is echoed as is)."""
+
+    id: int
+    code: str
+    name: str
+    icon: str
+    kind: str
+    player_text: str
+    admin_note: Optional[str]
+    trigger_kind: str
+    weight: float
+    duration_min_days: float
+    duration_max_days: float
+    scope: str
+    spread_chance: float
+    region_templates: List[str] = []
+    seasons: List[str] = []
+    effects: List[Dict[str, Any]] = []
+    chains: List[Dict[str, Any]] = []
+    is_enabled: bool
+    active_count: int = 0
+    updated_at: Optional[datetime]
+
+
+class EventStartIn(BaseModel):
+    template_id: conint(gt=0, le=2 ** 31 - 1)
+    region_id: conint(gt=0, le=ECON_MAX_ID)
+    scope: Optional[_EVENT_SCOPE] = None              # None = as the template
+    duration_days: Optional[confloat(gt=0, le=EVENT_MAX_DURATION_DAYS)] = None   # None = rolled from the template
+    request_id: Optional[constr(regex=r"^[A-Za-z0-9-]{8,64}$")] = None
+
+
+class EventCancelIn(BaseModel):
+    comment: str
+
+    _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
+
+
+class RegionEventOut(BaseModel):
+    id: int
+    region_id: int
+    region_name: Optional[str]
+    country_id: Optional[int]
+    template_id: Optional[int]
+    template_code: str
+    name: str
+    icon: str
+    kind: str
+    player_text: str
+    trigger_kind: str
+    effects: List[Dict[str, Any]] = []
+    origin: str
+    parent_event_id: Optional[int]
+    root_event_id: Optional[int]
+    generation: int
+    status: str
+    started_at: datetime
+    ends_at: datetime
+    ended_at: Optional[datetime]
+    game_segment: Optional[str]
+    started_by_user_id: Optional[int]
+    cancelled_by_user_id: Optional[int]
+    cancel_comment: Optional[str]
+    applied_at: Optional[datetime]
+    population_before: Optional[int]
+    population_after: Optional[int]
+    outcome: Optional[Dict[str, Any]]
+
+
+class EventSkip(BaseModel):
+    region_id: int
+    region_name: Optional[str]
+    reason: str                                   # Russian text (shown as is)
+
+
+class EventStartOut(BaseModel):
+    started: List[RegionEventOut]
+    skipped: List[EventSkip]
+
+
+class RegionEventsPage(BaseModel):
+    items: List[RegionEventOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class RegionCardEvent(BaseModel):
+    code: str
+    name: str
+    icon: str
+    kind: str
+    text: str
+    started_at: datetime
+    ends_at: datetime
+
+
+class EventBadge(BaseModel):
+    name: str
+    icon: str
+    kind: str

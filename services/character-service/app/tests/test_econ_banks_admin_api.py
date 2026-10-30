@@ -443,7 +443,7 @@ def test_region_card_has_bank_in_both_shapes(api, engine):
     app.dependency_overrides.pop(get_current_user_via_http, None)
     client = TestClient(app)
     hidden = client.get("/characters/economy/regions/40/card").json()
-    assert hidden == {"region_id": 40, "participating": False, "has_bank": True}
+    assert hidden == {"region_id": 40, "participating": False, "has_bank": True, "events": []}
     assert client.get("/characters/economy/regions/30/card").json()["has_bank"] is False
     assert client.get("/characters/economy/regions/0/card").json()["has_bank"] is False
 

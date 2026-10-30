@@ -126,6 +126,17 @@ class SimParams:
     bank_resident_adjust: float = 0.25        # per 6 h residents move this share of the gap to their targets
     # FEAT-186: the sim runs on lore population / scale (4 000 000 inhabitants -> 40 000 at 100). Not in a seed.
     population_scale: int = 100
+    # FEAT-187 region events (3.5): frequency, stacking caps, spreading, riot clock. Not in a seed either.
+    events_enabled: int = 1                   # 0 = no automatic starts (random / spread / chain / riot)
+    event_rate_per_season: float = 1.0        # average random events per region per «season»
+    event_season_days: float = 49.0           # real days of one «season» (calendar: season 39 + festival 10)
+    event_max_active: int = 3                 # automatic starts skip a region with this many active events
+    event_mult_min: float = 0.1               # clamp of a stacked multiplier ...
+    event_mult_max: float = 3.0               # ... from both sides
+    event_delta_max: float = 10.0             # cap of the summed stability / prosperity change per recount
+    event_spread_max_depth: int = 2           # hops a spreading event may make (0 = no spreading)
+    event_riot_stability: float = 25.0        # the riot clock runs while stability is below this
+    event_riot_after_days: float = 3.0        # days of continuous low stability before a riot starts
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":
@@ -191,6 +202,22 @@ class RegionState:
     hunger: float = 0.0
     satisfaction: float = 1.0
     treasury_target: int = 0
+
+
+@dataclass(frozen=True)
+class RegionModifiers:
+    """Per-step levers of the active region events (FEAT-187 3.4), built by ``econ_events.aggregate``.
+
+    Maps hold only the groups an event touches (missing group -> 1.0); ``production`` already includes the
+    ``labor`` multiplier. All fields at their defaults = identity.
+    """
+
+    production: Mapping[str, float] = field(default_factory=dict)
+    consumption: Mapping[str, float] = field(default_factory=dict)
+    price: Mapping[str, float] = field(default_factory=dict)
+    tax_income_mult: float = 1.0
+    stability_delta: float = 0.0
+    prosperity_delta: float = 0.0
 
 
 @dataclass
@@ -405,11 +432,16 @@ def simulate_region(
     grant: int = 0,
     country_tax_rate: float = 0.1,
     params: SimParams = DEFAULT_PARAMS,
+    mods: Optional[RegionModifiers] = None,
 ) -> SimResult:
     """One tick of one region (3.4 steps 1-10). Inputs are not mutated.
 
     ``purse`` / ``treasury`` are the ledger balances before the tick, ``grant`` the country grant planned for this
     region, ``country_tax_rate`` the rate the ledger applies on purse -> region inflows.
+
+    ``mods`` (FEAT-187) are the aggregated levers of the region's active events: production / consumption multiply
+    the working copies (never persisted), prices are multiplied after step 7, the tax after step 8 inputs, stability /
+    prosperity deltas after steps 9 / 10. ``None`` executes none of these statements (results unchanged).
     """
     dt = params.dt
     pop = sim_population(region.population, params)
@@ -421,6 +453,10 @@ def simulate_region(
     for good in new.values():
         good.prev_price_mult = good.price_mult
         good.last_produced = good.last_consumed = good.last_demand = good.last_spoiled = 0.0
+    if mods is not None:
+        for code, good in new.items():
+            good.production_per_1000 = float(good.production_per_1000) * float(mods.production.get(code, 1.0))
+            good.consumption_mult = float(good.consumption_mult) * float(mods.consumption.get(code, 1.0))
 
     # 1. multipliers
     stab_factor = 0.5 + 0.5 * min(1.0, max(0.0, float(region.stability)) / max(params.full_stability, 1e-9))
@@ -473,11 +509,19 @@ def simulate_region(
             good.last_spoiled = good.stock - cap
             good.stock = cap
         good.price_mult = price_mult(good.stock, good.norm_stock, params)
+    if mods is not None:
+        for code, mult in mods.price.items():
+            if code in new:
+                new[code].price_mult = _clamp(new[code].price_mult * float(mult), params.price_min, params.price_max)
 
     # 8. money
     income_f = sum(g.last_produced * float(groups[c].base_price) * g.price_mult for c, g in new.items())
     income = int(math.floor(max(0.0, income_f)))
-    tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate)))))
+    if mods is None:
+        tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate)))))
+    else:
+        tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate))
+                                        * max(0.0, float(mods.tax_income_mult)))))
     country_tax = int(math.floor(tax * max(0.0, float(country_tax_rate))))
     net_tax = tax - country_tax
     treasury_target = int(math.floor(tax * (1.0 / dt) * params.treasury_reserve_days))
@@ -495,6 +539,8 @@ def simulate_region(
     stability = float(region.stability)
     rate = params.stab_rate_up if stab_target > stability else params.stab_rate_down
     stability = _clamp(stability + rate * (stab_target - stability), 0.0, 100.0)
+    if mods is not None:
+        stability = _clamp(stability + float(mods.stability_delta), 0.0, 100.0)
 
     # 10. prosperity
     liq_base = cost_day * params.prosp_liq_days
@@ -504,6 +550,8 @@ def simulate_region(
                           0.0, 100.0)
     prosperity = float(region.prosperity)
     prosperity = _clamp(prosperity + params.prosp_rate * (prosp_target - prosperity), 0.0, 100.0)
+    if mods is not None:
+        prosperity = _clamp(prosperity + float(mods.prosperity_delta), 0.0, 100.0)
 
     new_region = replace(region, stability=stability, prosperity=prosperity, hunger=hunger,
                          satisfaction=satisfaction, treasury_target=treasury_target)

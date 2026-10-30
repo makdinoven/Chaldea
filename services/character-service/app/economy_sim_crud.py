@@ -19,6 +19,7 @@ import econ_bank
 import econ_sim
 import econ_tick
 import economy_bank_crud
+import economy_events_crud
 import models
 from economy_crud import EconomyApiError, _like_pattern
 
@@ -209,7 +210,11 @@ def list_regions(db: Session) -> List[dict]:
     rows = db.execute(text(SQL_REGIONS + " ORDER BY co.name, r.name, r.id")).fetchall()
     banks = economy_bank_crud.enabled_bank_ids(db)
     params = econ_tick.load_params(db)
-    return [_region_item(row, purses, treasuries, banks, params) for row in rows]
+    badges = economy_events_crud.badges_by_region(db)        # FEAT-187: running events per region
+    items = [_region_item(row, purses, treasuries, banks, params) for row in rows]
+    for item in items:
+        item["active_events"] = badges.get(item["region_id"], [])
+    return items
 
 
 def get_region(db: Session, region_id: int) -> dict:
@@ -762,8 +767,10 @@ def _run_ops(db: Session, op_type: str, key_prefix: str) -> int:
     ), {"op": op_type, "key": f"{key_prefix}%"}).scalar())
 
 
-def _run_dict(run: "models.EconTickRun", db: Optional[Session] = None) -> dict:
+def _run_dict(run: "models.EconTickRun", db: Optional[Session] = None, events: Optional[dict] = None) -> dict:
     return {
+        # FEAT-187: events pass counters derived from the instances (economy_events_crud.run_counters)
+        **(events or {}),
         "id": int(run.id), "slot": run.slot, "trigger_kind": run.trigger_kind, "actor_user_id": run.actor_user_id,
         "status": run.status, "regions_total": _i(run.regions_total), "regions_done": _i(run.regions_done),
         "regions_failed": _i(run.regions_failed), "error": run.error, "started_at": run.started_at,
@@ -784,14 +791,16 @@ def sim_state(db: Session, *, env_enabled: bool, now: Optional[datetime] = None)
     running = (db.query(models.EconTickRun).filter(models.EconTickRun.status == econ_tick.STATUS_RUNNING)
                .order_by(models.EconTickRun.id.desc()).first())
     runs = db.query(models.EconTickRun).order_by(models.EconTickRun.id.desc()).limit(RUNS_LIMIT).all()
+    counters = economy_events_crud.run_counters(db, runs + ([running] if running is not None else []),
+                                                econ_tick.EVENTS_ERROR_PREFIX)
     return {
         "tick_enabled": econ_tick.is_tick_enabled(db),
         "env_enabled": env_enabled,
         "params": econ_tick.load_params(db).to_dict(),
         "current_slot_start": econ_tick.slot_start(slot),
         "next_slot_at": econ_tick.slot_start(slot + 1),
-        "running": _run_dict(running, db) if running is not None else None,
-        "runs": [_run_dict(run, db) for run in runs],
+        "running": _run_dict(running, db, counters.get(int(running.id))) if running is not None else None,
+        "runs": [_run_dict(run, db, counters.get(int(run.id))) for run in runs],
     }
 
 
@@ -820,9 +829,10 @@ def update_sim(db: Session, *, tick_enabled: bool, params_in: dict, user_id: Opt
 
 def region_card(db: Session, region_id: int) -> dict:
     if region_id <= 0:
-        return {"region_id": region_id, "participating": False, "has_bank": False}
+        return {"region_id": region_id, "participating": False, "has_bank": False, "events": []}
     has_bank = bool(economy_bank_crud.enabled_bank_ids(db, [region_id]))   # FEAT-184, in both shapes
-    hidden = {"region_id": region_id, "participating": False, "has_bank": has_bank}
+    # FEAT-187: in both shapes too; events only ever run in participating regions -> [] in the hidden one
+    hidden = {"region_id": region_id, "participating": False, "has_bank": has_bank, "events": []}
     region = db.get(models.EconRegion, region_id)
     if region is None or region.template_code is None or _i(region.population) <= 0:
         return hidden
@@ -839,4 +849,4 @@ def region_card(db: Session, region_id: int) -> dict:
         group_order=list(groups),
     )
     return {"region_id": region_id, "participating": True, "updated_at": region.last_tick_at, **card,
-            "has_bank": has_bank}
+            "has_bank": has_bank, "events": economy_events_crud.card_events(db, region_id)}

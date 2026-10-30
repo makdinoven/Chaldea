@@ -39,7 +39,18 @@ time-based, nothing is lost). Global lock order (3.8, supersedes the FEAT-183 on
 econ_region_goods → npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans
 (asc id) → characters (asc id) → econ_accounts (asc id)``.
 
-Pure math lives in ``econ_sim`` / ``econ_merchant``; this module only loads, stores and posts. The scheduler thread is
+Region events (FEAT-187, 3.6) — the **events pass** runs after the merchant preparation, before the region loop:
+expiry by wall clock (every run), then — in scheduled runs only (``slot`` set) — riots (long low stability), random
+rolls (seeded per slot / region / purpose, :func:`econ_events.rng_for`), chains and spreading; each start is its own
+transaction of INSERTs whose ``UNIQUE(origin_key)`` makes a resumed run insert nothing twice. Inside the region
+transaction the region's active event rows are locked after its goods rows; one-shot effects (population, stock loss,
+treasury expense = one ``region_event`` op ``treasury -> purse`` without tax, key ``region_event:e<id>``) are applied
+once per instance (``applied_at``); the per-step effects reach :func:`econ_sim.simulate_region` as ``mods`` and the
+merchant step / bank pass as replaced params. Lock order (3.6.1, supersedes the FEAT-184 one): ``econ_regions →
+econ_region_goods → econ_region_events (asc id) → npc_shop_items (asc id) → econ_banks (asc region_id) →
+bank_deposits (asc id) → bank_loans (asc id) → characters (asc id) → econ_accounts (asc id)``.
+
+Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
 
@@ -57,9 +68,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import econ_core as core
+import econ_events
 import econ_ledger
 import econ_merchant
 import econ_sim
+import locations_client
 import models
 
 logger = logging.getLogger("character-service.econ_tick")
@@ -85,6 +98,8 @@ INTERRUPTED_ERROR = "прерван: процесс остановился во 
 MERCHANT_ERROR_PREFIX = "торговцы — ошибка в регионах: "
 # FEAT-184: regions whose bank pass failed (parsed back by bank_failures_from_error, no migration).
 BANK_ERROR_PREFIX = "банки — ошибка в регионах: "
+# FEAT-187: the events pass (or some of its starts) failed; regions still ticked.
+EVENTS_ERROR_PREFIX = "события — ошибка: "
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -135,6 +150,15 @@ class RunSummary:
     loans_collected: int = 0              # loans something was collected from
     collected_amount: int = 0             # total collected
     banks_closed: int = 0                 # banks of deleted regions purged
+    # FEAT-187 region events (3.6)
+    events_ended: int = 0                 # instances whose time ran out (ended by this run)
+    events_started: int = 0               # instances started by random rolls (scope expansion counted per region)
+    events_spread: int = 0                # instances started by spreading to a neighbour
+    events_chained: int = 0               # instances started by chains (flood -> plague ...)
+    riots_started: int = 0                # instances started by long low stability
+    events_applied: int = 0               # instances whose one-shot effects were applied in this run
+    event_expense_ops: int = 0            # region_event treasury expense operations posted
+    events_failed: int = 0                # failed starts / a failed events pass (regions still ticked)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -160,6 +184,8 @@ class _RegionOutcome:
     status: str                 # done | already | skipped | failed
     posted: bool = False
     merchants: Optional[_MerchantOutcome] = None
+    events_applied: int = 0     # FEAT-187: instances whose one-shots were applied
+    expense_ops: int = 0        # FEAT-187: region_event operations posted
 
 
 # --------------------------------------------------------------------------------------------- time
@@ -617,9 +643,12 @@ def _process_region(
     country_tax_rate: float,
     now: datetime,
     merchant_npcs: Sequence[int] = (),
+    with_events: bool = True,
 ) -> _RegionOutcome:
     session = session_factory()
     merchants: Optional[_MerchantOutcome] = None
+    events_applied = 0
+    expense_ops = 0
     try:
         for_update = core.supports_for_update(session.get_bind().dialect.name)
         query = session.query(models.EconRegion).filter(models.EconRegion.region_id == region_id)
@@ -636,6 +665,47 @@ def _process_region(
                        .filter(models.EconRegionGood.region_id == region_id)
                        .order_by(models.EconRegionGood.group_code))
         goods_rows = (goods_query.with_for_update() if for_update else goods_query).all()
+
+        # FEAT-187 (3.6): the region's active events are locked after its goods rows (lock order 3.6.1); one-shot
+        # effects of instances not applied yet change the population / the stock before the simulation.
+        event_rows: List[models.EconRegionEvent] = []
+        expenses: List[Tuple[models.EconRegionEvent, float]] = []
+        if with_events:
+            event_query = (session.query(models.EconRegionEvent)
+                           .filter(models.EconRegionEvent.region_id == region_id,
+                                   models.EconRegionEvent.status == "active",
+                                   models.EconRegionEvent.ends_at > now)
+                           .order_by(models.EconRegionEvent.id))
+            event_rows = (event_query.with_for_update() if for_update else event_query).all()
+        group_codes = list(groups)
+        parsed = [econ_events.parse_effects(row.effects) for row in event_rows]
+        for row, effects in zip(event_rows, parsed):
+            if row.applied_at is not None:
+                continue
+            shots = econ_events.one_shots(effects, group_codes)
+            outcome_data = dict(_json(row.outcome) or {})
+            if shots.population_pct:
+                before = int(region.population or 0)
+                after = econ_events.population_after(before, shots.population_pct, int(params.population_scale))
+                region.population = after
+                row.population_before, row.population_after = before, after
+            if shots.stock_loss:
+                lost_map: Dict[str, float] = {}
+                for good_row in goods_rows:
+                    share = shots.stock_loss.get(good_row.group_code)
+                    if not share:
+                        continue
+                    new_stock, lost = econ_events.stock_after_loss(_float(good_row.stock), share)
+                    good_row.stock = _round(new_stock, _SCALE_STOCK)
+                    lost_map[good_row.group_code] = round(lost, _SCALE_STOCK)
+                outcome_data["stock_lost"] = lost_map
+            if shots.treasury_share > 0:
+                expenses.append((row, shots.treasury_share))
+            row.outcome = outcome_data
+            row.applied_at = now
+            row.applied_run_id = run_id
+            events_applied += 1
+        ev = econ_events.aggregate(parsed, group_codes, params) if event_rows else None
 
         # FEAT-183: shop rows → NPC rows are locked now (lock order 3.5), before region_tick locks any account.
         merchant_ctx: Optional[MerchantContext] = None
@@ -665,6 +735,7 @@ def _process_region(
             region_state(region), {row.group_code: good_state(row) for row in goods_rows}, groups,
             purse=purse, treasury=treasury, grant=grant,
             country_tax_rate=country_tax_rate if country_id is not None else 0.0, params=params,
+            mods=ev.mods if ev is not None else None,
         )
 
         state = result.region
@@ -679,6 +750,11 @@ def _process_region(
         region.last_grant = result.grant
         region.last_run_id = run_id
         region.last_tick_at = now
+        # FEAT-187 riot clock: when stability first dropped below the threshold (a timestamp — runs do not count)
+        if state.stability < float(params.event_riot_stability):
+            region.low_stability_since = region.low_stability_since or now
+        else:
+            region.low_stability_since = None
         for row in goods_rows:
             good = result.goods.get(row.group_code)
             if good is None:
@@ -709,6 +785,24 @@ def _process_region(
                 run_id, region_id, state.hunger,
             )
 
+        # FEAT-187 (3.2): one-shot treasury expense («восстановление») of each newly applied event — a share of the
+        # positive treasury goes to the residents' purse, once per event (key region_event:e<id>).
+        for row, share in expenses:
+            amount = econ_events.treasury_expense(account_balance(session, treasury_ref), share)
+            outcome_data = dict(_json(row.outcome) or {})
+            outcome_data["treasury_expense"] = amount
+            if amount > 0:
+                event_posting = econ_ledger.post_operation(
+                    session, op_type=core.OP_REGION_EVENT, legs=[core.Leg(treasury_ref, purse_ref, amount)],
+                    source_service=SOURCE_SERVICE, region_id=region_id, apply_tax=False,
+                    idempotency_key=f"region_event:e{int(row.id)}",
+                    metadata={"event_id": int(row.id), "template_code": row.template_code, "run_id": run_id},
+                )
+                if event_posting.operation_id is not None:
+                    outcome_data["operation_id"] = int(event_posting.operation_id)
+                    expense_ops += 1
+            row.outcome = outcome_data
+
         merchant_stock: Dict[str, float] = {}
         if merchant_ctx is not None and merchant_ctx.merchants:
             step_outcome = _MerchantOutcome()
@@ -717,7 +811,8 @@ def _process_region(
                 with session.begin_nested():
                     merchant_stock = _merchant_step(
                         session, run_id=run_id, region_id=region_id, region=region, goods_rows=goods_rows,
-                        result=result, groups=groups, params=params, ctx=merchant_ctx, outcome=step_outcome)
+                        result=result, groups=groups, params=econ_events.merchant_params(params, ev),
+                        ctx=merchant_ctx, outcome=step_outcome)
                 merchants = step_outcome
             except core.DuplicateOperation:
                 logger.info("economy tick run %s: region %s merchants already posted by another runner",
@@ -741,7 +836,8 @@ def _process_region(
                    for code, g in result.goods.items()},
         ))
         session.commit()
-        return _RegionOutcome("done", posted=posting.operation_id is not None, merchants=merchants)
+        return _RegionOutcome("done", posted=posting.operation_id is not None, merchants=merchants,
+                              events_applied=events_applied, expense_ops=expense_ops)
     except core.DuplicateOperation:
         # Posted by an overlapping runner of the same run: the region is done, nothing moved twice.
         session.rollback()
@@ -754,6 +850,232 @@ def _process_region(
         return _RegionOutcome("failed")
     finally:
         session.close()
+
+
+# --------------------------------------------------------------------------------------------- events (FEAT-187)
+
+@dataclass(frozen=True)
+class _ActiveSource:
+    """Plain copy of an active instance as the events pass saw it (step 4) — survives the per-start commits."""
+
+    event_id: int
+    code: str
+    trigger_kind: str
+    chains: list
+    spread_chance: float
+    generation: int
+    template_id: Optional[int]
+    run_id: Optional[int]
+    duration_seconds: float
+    snapshot: object
+
+
+def _chain_entries(raw) -> List[Tuple[str, float]]:
+    entries = []
+    for item in _json(raw) or []:
+        if not isinstance(item, dict) or not isinstance(item.get("code"), str):
+            continue
+        try:
+            chance = float(item.get("chance") or 0)
+        except (TypeError, ValueError):
+            continue
+        if chance > 0:
+            entries.append((item["code"], chance))
+    return entries
+
+
+def _events_pass(session_factory: SessionFactory, run_id: int, slot: Optional[int], summary: RunSummary,
+                 params: econ_sim.SimParams, now: datetime, groups: Mapping[str, econ_sim.GroupDef],
+                 ) -> Tuple[bool, Dict[int, list], List[str]]:
+    """Events pass (3.6 steps 1-7), best effort: ``(events_on, {region_id: [effects JSON of active instances]},
+    error parts)``. ``events_on`` is False when the event tables are missing (before 033): regions then tick
+    without events. Never raises."""
+    import economy_events_crud as ev_crud  # late: the crud module is also used by the admin API
+    errors: List[str] = []
+    session = session_factory()
+    try:
+        try:
+            if not ev_crud.events_available(session):
+                logger.warning("economy tick run %s: region event tables are missing, events skipped", run_id)
+                return False, {}, errors
+        except Exception as exc:
+            logger.warning("economy tick run %s: region events unavailable (%s), skipped", run_id,
+                           type(exc).__name__)
+            return False, {}, errors
+        finally:
+            session.rollback()
+
+        # 1. expiry by wall clock — every run, auto and manual
+        try:
+            summary.events_ended += ev_crud.expire_events(session, now)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            summary.events_failed += 1
+            errors.append("окончание событий")
+            logger.error("economy tick run %s: event expiry failed (%s)", run_id, type(exc).__name__, exc_info=True)
+
+        # 2-6. automatic starts — scheduled runs only (a manual recount never rolls)
+        if slot is not None and int(params.events_enabled):
+            try:
+                _roll_events(session, ev_crud, run_id=run_id, slot=int(slot), summary=summary, params=params,
+                             now=now, errors=errors)
+            except Exception as exc:
+                session.rollback()
+                summary.events_failed += 1
+                errors.append("проход событий")
+                logger.error("economy tick run %s: events pass failed (%s), regions tick without new events",
+                             run_id, type(exc).__name__, exc_info=True)
+
+        # 7. active map for the bank pass (plain effects JSON: the rows do not outlive the session)
+        active: Dict[int, list] = {}
+        try:
+            for region_id, rows in ev_crud.load_active(session, now).items():
+                active[region_id] = [_json(row.effects) for row in rows]
+        except Exception as exc:
+            summary.events_failed += 1
+            errors.append("список событий")
+            logger.error("economy tick run %s: active events could not be loaded (%s)", run_id,
+                         type(exc).__name__, exc_info=True)
+        session.rollback()
+        return True, active, errors
+    finally:
+        session.close()
+
+
+def _roll_events(session: Session, ev_crud, *, run_id: int, slot: int, summary: RunSummary,
+                 params: econ_sim.SimParams, now: datetime, errors: List[str]) -> None:
+    """3.6 steps 3-6: per participating region (ascending id) riot -> random roll -> chains -> spreading.
+
+    Every roll uses :func:`econ_events.rng_for` (slot, region, purpose) and every start an ``origin_key`` derived from
+    the slot, so a resumed run repeats the same rolls and inserts nothing twice. Each start is its own transaction
+    (INSERTs into ``econ_region_events`` only)."""
+    regions = ev_crud.load_event_regions(session)
+    templates = []
+    for t in ev_crud.load_templates(session):
+        templates.append({
+            "id": int(t.id), "code": t.code, "is_enabled": bool(t.is_enabled), "trigger_kind": t.trigger_kind,
+            "weight": float(t.weight or 0), "region_templates": _json(t.region_templates),
+            "seasons": _json(t.seasons), "snap": ev_crud.snapshot_of_template(t),
+            "duration_min_days": float(t.duration_min_days), "duration_max_days": float(t.duration_max_days),
+        })
+    by_code = {t["code"]: t for t in templates}
+    by_id = {t["id"]: t for t in templates}
+    riot_codes = {t["code"] for t in templates if t["trigger_kind"] == ev_crud.TRIGGER_LOW_STABILITY}
+    sources: Dict[int, List[_ActiveSource]] = {}
+    codes: Dict[int, List[str]] = {}
+    for region_id, rows in ev_crud.load_active(session, now).items():
+        for row in rows:
+            codes.setdefault(region_id, []).append(row.template_code)
+            sources.setdefault(region_id, []).append(_ActiveSource(
+                event_id=int(row.id), code=row.template_code, trigger_kind=row.trigger_kind,
+                chains=_chain_entries(row.chains), spread_chance=float(row.spread_chance or 0),
+                generation=int(row.generation or 0), template_id=row.template_id,
+                run_id=int(row.run_id) if row.run_id is not None else None,
+                duration_seconds=(row.ends_at - row.started_at).total_seconds(),
+                snapshot=ev_crud.snapshot_of_instance(row)))
+    riot_ends = ev_crud.last_riot_ends(session)
+    neighbours = ev_crud.neighbour_map(session, regions)
+    session.rollback()  # plain reads done; the starts below are short transactions of their own
+
+    max_active = int(params.event_max_active)
+    chance = econ_events.tick_chance(params)
+    seasonal = any(t["seasons"] for t in templates if t["is_enabled"] and t["trigger_kind"] == "random")
+    segment_cache: Dict[str, Optional[str]] = {}
+
+    def segment() -> Optional[str]:
+        # One calendar call per scheduled run, and only when something is about to start.
+        if "value" not in segment_cache:
+            value = locations_client.get_game_segment_sync()
+            if value is not None and value not in econ_events.GAME_SEGMENTS:
+                logger.warning("economy tick run %s: unknown calendar segment, seasonal events skipped", run_id)
+                value = None
+            segment_cache["value"] = value
+        return segment_cache["value"]
+
+    def start(source, region_id: int, origin: str, key: str, *, rng, parent: Optional[int] = None,
+              generation: int = 0, scope: Optional[str] = None, duration: Optional[int] = None,
+              limit: Optional[int] = None) -> int:
+        try:
+            result = ev_crud.start_event(
+                session, source, region_id, origin=origin, origin_key=key, now=now, run_id=run_id,
+                segment=segment(), parent=parent, generation=generation, scope=scope, duration_seconds=duration,
+                rng=rng, regions=regions, neighbours=neighbours, max_active=limit)
+            started = [(int(row.region_id), row.template_code) for row in result.started]
+            session.commit()
+        except IntegrityError:
+            session.rollback()  # resumed run / a concurrent admin start took the key first
+            logger.info("economy tick run %s: start %s already exists, skipped", run_id, key)
+            return 0
+        except Exception as exc:
+            session.rollback()
+            summary.events_failed += 1
+            errors.append(f"регион {region_id}")
+            logger.error("economy tick run %s: event start %s failed (%s)", run_id, key, type(exc).__name__,
+                         exc_info=True)
+            return 0
+        for target, code in started:
+            codes.setdefault(target, []).append(code)
+        return len(started)
+
+    for region_id in sorted(regions):
+        info = regions[region_id]
+        here = codes.setdefault(region_id, [])
+
+        # a. riot after long low stability (ignores event_max_active)
+        riot_active = any(c in riot_codes for c in here) or any(
+            s.trigger_kind == ev_crud.TRIGGER_LOW_STABILITY for s in sources.get(region_id, ()))
+        if econ_events.riot_due(info.low_stability_since, riot_ends.get(region_id), riot_active, now,
+                                float(params.event_riot_after_days)):
+            rng = econ_events.rng_for(slot, region_id, "riot")
+            pick = econ_events.pick_weighted(rng, [t for t in templates if t["is_enabled"] and t["code"] in riot_codes
+                                                   and t["code"] not in here])
+            if pick is not None:
+                summary.riots_started += start(pick["snap"], region_id, "riot", f"riot:{slot}:r{region_id}", rng=rng)
+
+        # b. random roll
+        if len(here) < max_active:
+            rng = econ_events.rng_for(slot, region_id, "auto")
+            if rng.random() < chance:
+                candidates = econ_events.eligible(templates, region_template=info.template_code,
+                                                  segment=segment() if seasonal else None, active_codes=here)
+                pick = econ_events.pick_weighted(rng, candidates)
+                if pick is not None:
+                    summary.events_started += start(pick["snap"], region_id, "random", f"auto:{slot}:r{region_id}",
+                                                    rng=rng, limit=max_active)
+
+        for src in sources.get(region_id, ()):
+            if src.run_id == run_id:   # started by this very run (resumed): no chains / spreading in its own slot
+                continue
+            # c. chains (ignore season / region-template filters, respect event_max_active)
+            for code, lifetime in src.chains:
+                target_tpl = by_code.get(code)
+                if target_tpl is None or not target_tpl["is_enabled"] or code in here:
+                    continue
+                if len(here) >= max_active:
+                    break
+                rng = econ_events.rng_for(slot, region_id, f"chain:{src.event_id}:{code}")
+                if rng.random() < econ_events.per_tick_chance(lifetime, src.duration_seconds):
+                    summary.events_chained += start(target_tpl["snap"], region_id, "chain",
+                                                    f"chain:{slot}:e{src.event_id}:{code}", rng=rng,
+                                                    parent=src.event_id, limit=max_active)
+            # d. spreading to one neighbour (source snapshot, fresh duration from the template range)
+            if src.spread_chance <= 0 or src.generation >= int(params.event_spread_max_depth):
+                continue
+            rng = econ_events.rng_for(slot, region_id, f"spread:{src.event_id}")
+            if rng.random() >= econ_events.per_tick_chance(src.spread_chance, src.duration_seconds):
+                continue
+            candidates = [n for n in neighbours.get(region_id, ())
+                          if src.code not in codes.get(n, []) and len(codes.get(n, [])) < max_active]
+            if not candidates:
+                continue
+            target = candidates[rng.randrange(len(candidates))]
+            tpl = by_id.get(src.template_id) if src.template_id is not None else None
+            duration = (econ_events.roll_duration_seconds(rng, tpl["duration_min_days"], tpl["duration_max_days"])
+                        if tpl is not None else int(src.duration_seconds))
+            summary.events_spread += start(src.snapshot, target, "spread", f"spread:{slot}:e{src.event_id}",
+                                           rng=rng, parent=src.event_id, generation=src.generation + 1,
+                                           scope="region", duration=duration, limit=max_active)
 
 
 # --------------------------------------------------------------------------------------------- the run
@@ -820,13 +1142,18 @@ def run_tick(
         session.close()
 
     merchant_map, summary.shop_rows_purged = _prepare_merchants(session_factory, run_id)
+    # FEAT-187 (3.6): expiry always, rolls / spreading / chains / riots in scheduled runs only.
+    events_on, active_map, events_errors = _events_pass(session_factory, run_id, summary.slot, summary, params,
+                                                        start, groups)
 
     logger.info("economy tick run %s (%s, slot %s)%s: %d regions, %d living merchants", run_id, summary.trigger,
                 summary.slot, " resumed" if resumed else "", len(plan), sum(len(v) for v in merchant_map.values()))
     for region_id, grant in sorted(plan.items()):
         outcome = _process_region(session_factory, run_id=run_id, region_id=region_id, grant=grant, groups=groups,
                                   params=params, country_tax_rate=country_tax_rate, now=start,
-                                  merchant_npcs=merchant_map.get(region_id, ()))
+                                  merchant_npcs=merchant_map.get(region_id, ()), with_events=events_on)
+        summary.events_applied += outcome.events_applied
+        summary.event_expense_ops += outcome.expense_ops
         if outcome.status == "failed":
             summary.regions_failed += 1
             summary.failed_region_ids.append(region_id)
@@ -849,7 +1176,11 @@ def run_tick(
 
     # FEAT-184 (3.7): banks after the regions, own transactions (never inside a region transaction).
     _prepare_banks(session_factory, run_id, summary, tick_clock)
-    _bank_pass(session_factory, run_id, summary, params, tick_clock)
+    # FEAT-187: bank panic / loan boom of the region's active events replace its bank params.
+    bank_effects = {rid: econ_events.aggregate([econ_events.parse_effects(e) for e in rows], list(groups), params)
+                    for rid, rows in active_map.items() if rows}
+    _bank_pass(session_factory, run_id, summary, params, tick_clock,
+               params_for=lambda rid: econ_events.bank_params(params, bank_effects.get(rid)))
     _collection_pass(session_factory, run_id, summary, params, tick_clock)
 
     if summary.regions_failed == 0:
@@ -869,6 +1200,8 @@ def run_tick(
             parts.append(MERCHANT_ERROR_PREFIX + ", ".join(str(r) for r in summary.merchant_failed_region_ids))
         if summary.bank_failed_region_ids:
             parts.append(BANK_ERROR_PREFIX + ", ".join(str(r) for r in summary.bank_failed_region_ids))
+        if events_errors:
+            parts.append(EVENTS_ERROR_PREFIX + ", ".join(events_errors))
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -886,16 +1219,20 @@ def run_tick(
     finally:
         session.close()
 
-    log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures) \
+    log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures
+                             or summary.events_failed) \
         else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
         "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
-        "%d failed, %d loans collected (%d), %d overdue, %d closed",
+        "%d failed, %d loans collected (%d), %d overdue, %d closed; events: %d ended, %d started, %d spread, "
+        "%d chained, %d riots, %d applied, %d expense operations, %d failed",
         run_id, summary.status, summary.regions_done, summary.regions_total, summary.regions_failed,
         summary.operations_posted, summary.merchants_processed, summary.merchant_items_sold,
         summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures,
         summary.banks_processed, summary.bank_ops_posted, summary.bank_failures, summary.loans_collected,
-        summary.collected_amount, summary.loans_overdue, summary.banks_closed)
+        summary.collected_amount, summary.loans_overdue, summary.banks_closed, summary.events_ended,
+        summary.events_started, summary.events_spread, summary.events_chained, summary.riots_started,
+        summary.events_applied, summary.event_expense_ops, summary.events_failed)
     return summary
 
 
@@ -935,14 +1272,16 @@ def _prepare_banks(session_factory: SessionFactory, run_id: int, summary: RunSum
 
 
 def _bank_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,
-               clock: Callable[[], datetime]) -> None:
+               clock: Callable[[], datetime],
+               params_for: Optional[Callable[[int], econ_sim.SimParams]] = None) -> None:
     """Bank pass (3.7 step 2): one transaction per bank, ascending region id; a failure rolls back that bank only."""
     import economy_bank_crud as bank_crud
     ids = _bank_ids(session_factory, run_id, "bank pass", bank_crud.banks_to_tick)
     for region_id in ids or ():
         session = session_factory()
         try:
-            result = bank_crud.tick_bank(session, region_id, run_id=run_id, params=params,
+            bank_params = params_for(region_id) if params_for is not None else params
+            result = bank_crud.tick_bank(session, region_id, run_id=run_id, params=bank_params,
                                          clock=lambda: _naive_utc(clock()))
             session.commit()
         except Exception as exc:
