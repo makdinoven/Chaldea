@@ -38,7 +38,7 @@ inventory-service/app/
 |-------|------|----------|
 | GET | `/inventory/{id}/equipment` | Слоты экипировки. FEAT-167: у каждого слота есть `effective_damage` — фактический урон оружия в этом слоте. **FEAT-171 (I2): приватно**, та же зависимость и те же коды, что у `/items`. Тело для владельца/админа прежнее, вместе с рядами `fast_slot_*`. Этим закрыт обход гейта быстрых слотов из FEAT-169 |
 | GET | `/inventory/{id}/equipment/public` | **FEAT-171 (I2p): публичная витрина** — `[{slot_type, item: PublicItemCard\|null}]`, доступна всем, включая гостей. Ряды пояса (`fast_slot_*`) отсекаются **на уровне запроса** (`slot_type NOT LIKE 'fast_slot_%'` в `crud.get_public_equipment_slots`), а не пост-фильтром. Ни `effective_damage`, ни `enhancement_*`, ни `socketed_gems`, ни `current_durability`, ни `is_enabled`, ни `item_id`, ни `character_id`. Несуществующий персонаж → 404 |
-| POST | `/inventory/{id}/equip` | Экипировать предмет (транзакция с модификаторами) |
+| POST | `/inventory/{id}/equip` | Экипировать предмет (транзакция с модификаторами). Предмет с `item_level` выше уровня персонажа (`characters.level`) → 400 «Предмет доступен с N-го уровня (у персонажа M-й)». НПС-экипировка админом (`/admin/npc/{id}/equip`) уровень не проверяет. Уже надетое при этом не снимается |
 | POST | `/inventory/{id}/unequip` | Снять предмет (обратные модификаторы) |
 | POST | `/inventory/{id}/use_item` | Использовать расходник (еду — нельзя, 400 «Еду нужно съесть») |
 | POST | `/inventory/{id}/eat-food` | FEAT-164: съесть еду `{inventory_item_id}` → сытость на 24 ч (JWT + владелец) |
@@ -171,6 +171,10 @@ FEAT-171 §3.4 D9).
 
 ### character_inventory
 - id, character_id, item_id (FK -> items), quantity
+- **Другие писатели таблицы:** locations-service (`houses._take_materials`, стройка/ремонт домов) и character-service
+  (FEAT-191, чеканка руды у Монетчика — `economy_mint_crud._take_ore`): списывают только обычные стопки
+  (`enhancement_points_spent = 0`, `socketed_gems IS NULL`, `current_durability IS NULL`) напрямую SQL в одной
+  транзакции со своей проводкой книги счетов.
 
 ### equipment_slots
 - id, character_id, slot_type (enum: head/body/cloak/belt/ring/necklace/bracelet/main_weapon/additional_weapons/fast_slot_1..10), item_id (FK), is_enabled

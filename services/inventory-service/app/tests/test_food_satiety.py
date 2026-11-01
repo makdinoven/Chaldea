@@ -74,7 +74,7 @@ def env(client, db_session):
 
     db_session.execute(text("DROP TABLE IF EXISTS characters"))
     db_session.execute(text(
-        "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)"
+        "CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, user_id INTEGER, name TEXT)"
     ))
     db_session.execute(text("INSERT INTO characters (id, user_id, name) VALUES (1, 1, 'Hero'), (2, 99, 'Other')"))
     db_session.execute(text("DROP TABLE IF EXISTS dungeon_sessions"))

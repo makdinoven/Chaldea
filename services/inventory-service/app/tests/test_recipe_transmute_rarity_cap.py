@@ -54,7 +54,7 @@ def _profession(db, prof_id=1, slug="blacksmith", name="Кузнец"):
 
 def _characters_table(db):
     db.execute(text("DROP TABLE IF EXISTS characters"))
-    db.execute(text("CREATE TABLE characters (id INTEGER PRIMARY KEY, name TEXT, user_id INTEGER)"))
+    db.execute(text("CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, name TEXT, user_id INTEGER)"))
     db.execute(text("INSERT INTO characters (id, name, user_id) VALUES (1, 'Hero', 1), (2, 'Other', 5)"))
     db.commit()
 

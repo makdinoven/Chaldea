@@ -30,7 +30,7 @@ def env(client, db_session):
     for t in _LOCATION_TABLES:
         db.execute(text(f"DROP TABLE IF EXISTS {t}"))
     db.execute(text(
-        "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, is_npc INTEGER DEFAULT 0, "
+        "CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, user_id INTEGER, name TEXT, is_npc INTEGER DEFAULT 0, "
         "current_location_id INTEGER, currency_balance INTEGER DEFAULT 0, dungeon_session_id INTEGER, "
         "unconscious_until DATETIME, asleep_since DATETIME, reading_since DATETIME, house_room_id INTEGER)"))
     # Stage 7: everybody stands in the storage (room 2) unless a test moves them.

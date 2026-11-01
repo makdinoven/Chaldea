@@ -45,7 +45,7 @@ USER = 1
 _DDL = [
     "DROP TABLE IF EXISTS characters",
     """CREATE TABLE characters (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1,
         user_id INTEGER,
         id_class INTEGER,
         is_npc INTEGER DEFAULT 0
@@ -76,7 +76,7 @@ def world(db_session):
     for stmt in _DDL:
         db_session.execute(text(stmt))
     db_session.execute(text("INSERT INTO classes VALUES (1, 'Воин'), (2, 'Плут'), (3, 'Маг')"))
-    db_session.execute(text(f"INSERT INTO characters VALUES ({CHAR}, {USER}, 1, 0)"))
+    db_session.execute(text(f"INSERT INTO characters (id, user_id, id_class, is_npc) VALUES ({CHAR}, {USER}, 1, 0)"))
     db_session.execute(text("INSERT INTO tree_nodes VALUES (10, 'subclass_choice', 'warrior_guardian')"))
     db_session.commit()
     for slot_type in ("head", "body", "main_weapon", "additional_weapons"):
@@ -229,6 +229,33 @@ class TestTokens:
 # ===========================================================================
 # 2. Equip
 # ===========================================================================
+
+class TestEquipLevel:
+    """An item can be equipped only from its level on (item_level <= character level)."""
+
+    def _level(self, db, level):
+        db.execute(text(f"UPDATE characters SET level = {level} WHERE id = {CHAR}"))
+        db.commit()
+
+    def test_item_above_character_level_rejected(self, player, world):
+        robe = _item(world, "Роба мастера", item_type="body")
+        robe.item_level = 15
+        world.commit()
+        _give(world, robe)
+        resp = _equip(player, robe)
+        assert resp.status_code == 400
+        assert "15-го уровня" in resp.json()["detail"]
+        assert _slot(world, "body").item_id is None
+
+    def test_item_at_character_level_equips(self, player, world):
+        self._level(world, 15)
+        robe = _item(world, "Роба мастера", item_type="body")
+        robe.item_level = 15
+        world.commit()
+        _give(world, robe)
+        assert _equip(player, robe).status_code == 200
+        assert _slot(world, "body").item_id == robe.id
+
 
 class TestEquip:
 

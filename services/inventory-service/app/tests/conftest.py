@@ -233,7 +233,7 @@ def private_viewer(db_session):
         db_session.execute(text("DROP TABLE IF EXISTS characters"))
         db_session.execute(text(
             """CREATE TABLE characters (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1,
                 name TEXT NOT NULL DEFAULT 'TestChar',
                 user_id INTEGER,
                 current_location_id INTEGER DEFAULT 1,

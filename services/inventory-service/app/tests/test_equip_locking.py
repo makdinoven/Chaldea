@@ -31,7 +31,7 @@ def authed_client(client, db_session):
     db_session.execute(text("DROP TABLE IF EXISTS characters"))
     db_session.execute(text(
         """CREATE TABLE characters (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1,
             user_id INTEGER
         )"""
     ))

@@ -23,9 +23,9 @@ USER = 1
 def world(db_session):
     db_session.execute(text("DROP TABLE IF EXISTS characters"))
     db_session.execute(text(
-        "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER, id_class INTEGER, is_npc INTEGER DEFAULT 0)"
+        "CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, user_id INTEGER, id_class INTEGER, is_npc INTEGER DEFAULT 0)"
     ))
-    db_session.execute(text(f"INSERT INTO characters VALUES ({CHAR}, {USER}, 1, 0)"))
+    db_session.execute(text(f"INSERT INTO characters (id, user_id, id_class, is_npc) VALUES ({CHAR}, {USER}, 1, 0)"))
     for slot_type in ("body", "belt", "fast_slot_1"):
         db_session.add(models.EquipmentSlot(character_id=CHAR, slot_type=slot_type, is_enabled=True))
     belt = models.Items(name="Пояс", item_type="belt", item_rarity="common", item_level=1,

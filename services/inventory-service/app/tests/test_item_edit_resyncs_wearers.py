@@ -23,7 +23,7 @@ BYSTANDER = 8
 def robe(db_session):
     db_session.execute(text("DROP TABLE IF EXISTS characters"))
     db_session.execute(text(
-        "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER, id_class INTEGER, is_npc INTEGER DEFAULT 0)"
+        "CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, user_id INTEGER, id_class INTEGER, is_npc INTEGER DEFAULT 0)"
     ))
     db_session.commit()
     item = models.Items(name="Одеяние", item_type="body", item_rarity="common", item_level=1,

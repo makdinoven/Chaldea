@@ -1245,6 +1245,15 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.rollback()
             raise HTTPException(status_code=400, detail="Предмет не опознан")
 
+        # 2.55) Уровень предмета: надеть можно только вещь не выше уровня персонажа
+        char_level = crud.get_character_level(db, character_id)
+        if (db_item.item_level or 0) > char_level:
+            db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Предмет доступен с {db_item.item_level}-го уровня (у персонажа {char_level}-й)",
+            )
+
         # 2.6) Правила класса/подкласса
         rules = equipment_rules.rules_for_character(db, character_id)
         if not equipment_rules.armor_allowed(rules, db_item):

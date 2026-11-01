@@ -38,7 +38,7 @@ def _internal_token(monkeypatch):
 def characters(db_session):
     db_session.execute(text("DROP TABLE IF EXISTS characters"))
     db_session.execute(text(
-        "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER)"))
+        "CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, user_id INTEGER)"))
     db_session.execute(text("INSERT INTO characters (id, user_id) VALUES (7, 1)"))
     db_session.commit()
     yield

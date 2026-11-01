@@ -50,7 +50,7 @@ def _drop(db):
 def house(db_session):
     db = db_session
     _drop(db)
-    db.execute(text("CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, "
+    db.execute(text("CREATE TABLE characters (id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1, user_id INTEGER, name TEXT, "
                     "current_location_id INTEGER, dungeon_session_id INTEGER, unconscious_until DATETIME, "
                     "asleep_since DATETIME, reading_since DATETIME)"))
     db.execute(text("INSERT INTO characters (id, user_id, name, current_location_id) VALUES "

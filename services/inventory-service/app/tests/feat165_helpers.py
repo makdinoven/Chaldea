@@ -38,7 +38,7 @@ def ensure_characters(db, rows=((1, OWNER.id, "Hero"), (2, OTHER_USER_ID, "Stran
     db.execute(text("DROP TABLE IF EXISTS characters"))
     db.execute(text(
         """CREATE TABLE characters (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY, level INTEGER DEFAULT 1,
             name TEXT NOT NULL DEFAULT 'TestChar',
             user_id INTEGER NOT NULL,
             current_location_id INTEGER DEFAULT 1,

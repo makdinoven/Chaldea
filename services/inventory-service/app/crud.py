@@ -897,6 +897,15 @@ def get_character_location(db: Session, character_id: int) -> Optional[int]:
     return row[0] if row else None
 
 
+def get_character_level(db: Session, character_id: int) -> int:
+    """Character level from the shared DB (owned by character-service); 1 if unknown."""
+    row = db.execute(
+        text("SELECT level FROM characters WHERE id = :cid"),
+        {"cid": character_id}
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else 1
+
+
 def get_character_name(db: Session, character_id: int) -> str:
     """Get character name from shared DB."""
     row = db.execute(
