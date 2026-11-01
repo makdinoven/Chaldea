@@ -806,6 +806,35 @@ class TestRemoveEffectsLimit:
         assert _names(removed) == ["Bleeding", "Curse"]
 
 
+class TestRemoveEffectsAllyBuffs:
+    """An effect laid by an ally is a buff — the debuff cleanse keeps it."""
+
+    def _state_with_ally(self):
+        state = _cleanse_state()
+        state["participants"]["3"] = dict(state["participants"]["1"], character_id=30)
+        state["active_effects"]["1"].append(
+            {"name": "Inspiration", "attribute": "damage_all", "magnitude": 3,
+             "duration": 2, "owner_id": 3})
+        return state
+
+    def test_debuff_keeps_an_allys_buff(self):
+        state = self._state_with_ally()
+        removed = remove_effects(state, 1, selector="debuff")
+        assert _names(removed) == ["Bleeding", "Curse", "Knockdown"]
+        assert "Inspiration" in _names(_effects_of(state, 1))
+
+    def test_unknown_owner_still_counts_as_debuff(self):
+        state = _cleanse_state()
+        state["active_effects"]["1"] = [
+            {"name": "Bleeding", "attribute": "bleeding", "magnitude": 5,
+             "duration": 3, "owner_id": 99}]
+        assert _names(remove_effects(state, 1, selector="debuff")) == ["Bleeding"]
+
+    def test_all_selector_still_removes_ally_buffs(self):
+        state = self._state_with_ally()
+        assert "Inspiration" in _names(remove_effects(state, 1, selector="all"))
+
+
 class TestRemoveEffectsLegacyRecords:
     """Records written before FEAT-143/168 carry no owner_id / fresh / source."""
 

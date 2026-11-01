@@ -1024,6 +1024,12 @@ class TestTricksterRedirect:
         assert r.dodge.call_count == 1              # only the Trickster's roll
         assert [list(c.args[0]) for c in r.pick.call_args_list] == [[FOURTH]]
 
+    def test_redirected_blow_is_not_damage_dealt_by_the_attacker(self):
+        r = self._go(_trick_group())
+        parts = r.state["participants"]
+        assert parts[str(ATT)].get("total_damage_dealt", 0) == 0
+        assert parts[str(FOURTH)]["total_damage_received"] == round(RAW * 0.5)
+
     def test_no_attacker_passives_on_the_redirected_blow(self):
         st = _trick_group(BERSERK, att={"hp": 200})
         r = self._go(st)

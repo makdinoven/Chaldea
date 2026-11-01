@@ -3193,7 +3193,10 @@ async def _make_action_core(
         )
         dealt_int = int(round(dealt))
         attacker_p = battle_state["participants"][str(actor_pid)]
-        attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
+        if redirect_from is None:
+            # A blow «Обман» turned into the attacker's own ally is not damage
+            # dealt to the enemy — keep it out of the attacker's stats/records.
+            attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
         target_state["total_damage_received"] = (
             target_state.get("total_damage_received", 0) + dealt_int
         )

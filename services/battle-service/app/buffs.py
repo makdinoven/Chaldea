@@ -635,11 +635,27 @@ def _is_stat_down(eff: Dict) -> bool:
     return any((value or 0) < 0 for value in mods.values())
 
 
-def _matches_selector(eff: Dict, selector: str, list_pid: int) -> bool:
+def _is_hostile_effect(eff: Dict, list_pid: int, participants: Dict) -> bool:
+    """A cleanse-able "debuff" = an effect laid by an ENEMY. Buffs from allies
+    (ally skills, «Вдохновение», «Шёпот духов») are not debuffs. Own effects
+    and legacy rows without owner_id are not debuffs either. An owner missing
+    from `participants` keeps the old rule (any foreign owner = debuff)."""
+    owner = int(eff.get("owner_id", list_pid))
+    if owner == list_pid:
+        return False
+    me = participants.get(str(list_pid)) if isinstance(participants, dict) else None
+    them = participants.get(str(owner)) if isinstance(participants, dict) else None
+    if isinstance(me, dict) and isinstance(them, dict):
+        return me.get("team") != them.get("team")
+    return True
+
+
+def _matches_selector(eff: Dict, selector: str, list_pid: int,
+                      participants: Dict | None = None) -> bool:
     if selector == SELECTOR_ALL:
         return True
     if selector == SELECTOR_DEBUFF:
-        return int(eff.get("owner_id", list_pid)) != list_pid
+        return _is_hostile_effect(eff, list_pid, participants)
     if selector == SELECTOR_PERIODIC_DAMAGE:
         return _is_periodic_damage(eff)
     if selector == SELECTOR_CONTROL_PARTIAL:
@@ -685,6 +701,7 @@ def remove_effects(
         return []
 
     sel = (selector or "").strip().lower() or DEFAULT_CLEANSE_SELECTOR
+    participants = state.get("participants") or {}
     max_removals = int(limit or 0)
     list_pid = int(pid)
 
@@ -697,7 +714,7 @@ def remove_effects(
         if max_removals > 0 and len(removed) >= max_removals:
             kept.append(eff)
             continue
-        if _matches_selector(eff, sel, list_pid):
+        if _matches_selector(eff, sel, list_pid, participants):
             removed.append(eff)
         else:
             kept.append(eff)
