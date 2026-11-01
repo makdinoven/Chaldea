@@ -55,7 +55,8 @@ battle-service/app/
 - **battle_snapshots** - battle_id, participants[] (полные данные на начало боя)
 
 ### Redis (runtime state)
-- `battle:{id}:state` - JSON: participants (hp/mana/energy/stamina/cooldowns/fast_slots/weapon_coating), active_effects, turn_order, turn_number, next_actor (TTL: 48h)
+- `battle:{id}:state` - JSON: participants (hp/mana/energy/stamina/cooldowns/fast_slots/weapon_coating/passive_key/is_npc/passive_state), active_effects, turn_order, turn_number, next_actor, dungeon_session_id (TTL: 48h)
+- `battle:passive:saber_run:{dungeon_session_id}:{character_id}` - int, стаки Сейбера за забег (FEAT-189, TTL 14 дней)
 - `battle:{id}:snapshot` - кэш снапшота из MongoDB (TTL: 24h)
 - `battle:{id}:turns` - ZSET номеров ходов
 - `battle:deadlines` - ZSET дедлайнов: `{battle_id}:{participant_id}` -> unix_timestamp. **Читается свипером** (FEAT-163), держит не более одной записи на бой
@@ -275,6 +276,7 @@ battle-service/app/
 |--------|----------|-----------|
 | character-attributes:8002 | GET `/attributes/internal/{id}` | Боевые характеристики. **FEAT-171:** игровой `/attributes/{id}` уходит под гейт владельца, бой читает внутренний двойник с `X-Internal-Token` (`battle_engine._internal_token_headers()`). У мобов и НПС владельца нет, проверка владения для них невозможна |
 | character:8005 | GET `/characters/{id}/profile` | Имя, аватар |
+| skills:8003 | GET `/skills/internal/characters/{id}/subclass` | **FEAT-188:** подкласс и пассивка участника на старте боя (`skills_client.get_character_subclass`). Заголовок **`X-Internal-Token`** (`skills_client._internal_headers()`), а не Bearer — `/skills/internal/*` закрыты `verify_internal_token`, Bearer там даёт 401. Таймаут `SUBCLASS_LOOKUP_TIMEOUT_S = 3.0`. Ошибка мягкая: `logger.error`, участник без пассивки, бой стартует |
 | skills:8003 | GET `/skills/admin/skill_ranks/{id}` | Данные навыка |
 | skills:8003 | GET `/skills/characters/{id}/skills` | Навыки персонажа |
 | inventory:8004 | GET `/inventory/internal/characters/{id}/equipment` | Экипировка (полное тело: `effective_damage`, заточка, вставки, прочность, включая `fast_slot_*`). **FEAT-171:** игровой `/inventory/{id}/equipment` уходит под гейт владельца, бой читает внутренний двойник с `X-Internal-Token`. Два вызывающих: `battle_engine.fetch_weapons` и `inventory_client.get_equipment_durability` |
@@ -639,3 +641,174 @@ FEAT-171 объявила приватным.
 character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
 сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
 «не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.
+
+## FEAT-188: пассивки подклассов
+
+**Загрузка.** `build_participant_info` (общая для всех 4 мест сборки боя: `_assemble_battle`,
+принятие PvP-вызова, PvP-нападение, одобрение вступления в идущий бой) шестым мягким вызовом
+спрашивает skills-service `GET /skills/internal/characters/{id}/subclass`. Результат —
+два ключа в записи снимка (`battle_snapshots` / `battle:{id}:snapshot`):
+`subclass: {key, name} | null` и `passive: {key, name, description, implemented} | null`.
+Снимок уже отдаётся всеми runtime-эндпоинтами и WS как есть — правок в пяти билдерах не нужно.
+`is_npc: true` → у моба ни подкласса, ни пассивки. skills-service недоступен / 401 / таймаут →
+`logger.error`, оба ключа `null`, бой стартует.
+
+**Состояние.** Payload участника собирает один хелпер `_participant_payload(snap, participant_objs)`
+(раньше три копии), он добавляет `passive_key` (из `_passive_key_of(snap)`);
+`redis_state.init_battle_state` копирует `p.get("passive_key")`. Путь вступления в бой кладёт
+`passive_key` в рукописный dict участника. Пассивка фиксируется на старте и в бою не меняется.
+Бои, начатые до деплоя: ключа нет → пассивки нет (всё читается через `.get`).
+
+**Цифры и математика** — `app/passives.py` (чистый модуль): `PASSIVE_BERSERKER_RAGE`,
+`RAGE_HP_STEP_PCT = 10`, `RAGE_PCT_PER_STEP = 4`, `RAGE_MAX_STEPS = 9`, `rage_bonus_pct(hp, max_hp)`,
+`passive_damage_bonus(participant_state) -> (pct, key)` (таблица диспетчеризации). Название и
+описание пассивки — в реестре skills-service `subclasses.py`; меняешь константу — правь описание.
+
+**«Ярость» Берсерка** (единственная живая пассивка): +4% к урону за каждые полные 10% потерянного
+HP, максимум +36%. `max_hp` нет/0 → 0; HP зажимается в `[0, max_hp]`. Бонус добавляется в
+`percent_buffs["all"]` атакующего в `_make_action_core` в двух местах — урон навыка (после
+`build_percent_damage_buffs(attacker_buff_modifiers)`) и урон предмета (после `_item_pct_damage`);
+считается один раз за атаку по текущему HP. `compute_damage_with_rolls` не менялся. Периодический
+урон (DoT) пассивку не получает. Вампиризм ниже 25% HP — FEAT-190 (см. ниже).
+
+**Журнал.** Каждое не-уклонённое событие `damage` от навыка или предмета при бонусе > 0 несёт
+`passive_key` и `passive_pct`; `buff_pct` уже включает эту долю. События уклонения не меняются.
+
+## FEAT-189: пассивки подклассов — волна 1
+
+Включены 13 пассивок на существующих механиках боя (Инквизитор, Сейбер, Гладиатор, Агент,
+Лансер, Механик, Арчер, Ассасин, Фокусник ч.1, Монах, Саламандр, Кастер, Искромаг) + «Ярость»
+из FEAT-188. `passives.IMPLEMENTED_PASSIVES` — зеркало флага `implemented` реестра skills-service.
+
+**Где живёт логика.** Вся математика, состояние и **все случайные броски пассивок** — в
+`app/passives.py` (гейты `roll_pct` / `pick` на собственном `_rng`; бросок делается только у
+владельца пассивки, поэтому случайность остальных боёв не меняется). `passives` не импортирует
+`buffs` / `battle_engine` (их подменяют `MagicMock` в ~30 наборах тестов). `main.py` вызывает только
+хуки H0–H13.
+
+**Точки подключения** (`_make_action_core`, блок «5.1» общих хелперов):
+| Хелпер / место | Хуки | Что делает |
+|---|---|---|
+| сразу после `evaluate_control` | H1 `on_turn_start` | счётчик своих ходов Гладиатора (ход, сорванный оглушением/параличом, не считается) |
+| `_roll_enemy_effects` | H11a | бросок шанса вражеских строк актёра; `_filter_effects_by_chance(bonus_pp_fn=, failed_out=)` — Монах +10/+5 п.п., сбор проваленных строк для Агента |
+| `_land_enemy_effects` | H11c → H11d | единая обёртка над **всеми 8** местами наложения вражеских эффектов (support/defense/attack enemy и all_enemies, вражеские строки предмета, яд на оружии): +1 ход (Фокусник — все кроме жёсткого контроля и мгновенных ресурсов; Саламандр — только Burn), затем Монах сбрасывает первый контроль (`passive_proc control_immune`) |
+| `_build_target_ctx` / `_finish_target_ctx` | H5, H4, H6 | контекст цели на атаку: кража Лансера (статы цели не ниже 0) → дельты сопротивлений защитника (стаки ереси −3×n на все не-физические, Гладиатор +4×перевес, Сейбер PvP +2×n) на копии словаря → бросок уклонения → «Обман» Фокусника 10% (только если не уклонился и цель — враг). FEAT-190: при «Обмане» `deceit_redirect_target` выбирает союзника атакующего (`ctx["redirect_pid"]`), см. ниже |
+| `_strike` | H3, H8 | один бросок урона по одной цели — общий для цикла навыка, цикла предмета и доп. ударов: процент по цели (копия `percent_buffs`), `force_crit` / `crit_damage_bonus` / `resist_ignore` в `compute_damage_with_rolls` (передаются только если не по умолчанию), HP/статистика, `record_strike` |
+| `_finish_passive_attack` | H9, H11b, H10, H7 | после цикла урона: стаки за попадания (ересь, Лансер, Сейбер-PvP, Саламандр, «первая кровь» израсходована) → пере-бросок Агента для проваленных до урона строк по целям с критом (`passive_proc weak_spot`) → один доп. удар Механика/Искромага (свежий контекст цели: своё уклонение/обман, без H3 и без on-hit, только по живой цели) |
+| атака навыка / урон предмета | H2 `begin_attack` | открывает атаку; `actx["pct"]` (Гладиатор, Сейбер-убийства) добавляется **один раз** в `percent_damage_buffs["all"]`; «Ярость» идёт прежним путём FEAT-188 |
+| реальное уклонение (навык, предмет, доп. удар) | H7 `on_dodged` | Ассасин: «Из тени» готов (`passive_proc shadow_ready`); на «Обман» не срабатывает |
+| `_pay_skill_costs` | H12 `mana_cost` | Кастер −10% маны за ранг, `(raw×90+50)//100`, до проверки «хватает ли»; в `spend` ключ `mana_discount` (только у Кастера) |
+| шаг 9.5 | H13 `on_kills` | все новые погибшие враги актёра — его убийства (прямой урон, свитки, доп. удары и DoT его эффектов); Сейбер в данже +2%/убийство (макс. 10%), сразу в этом же бою |
+
+Яд на оружии бросается после урона — Агенту бонус +20/+10 п.п. добавляется прямо в этот бросок
+по целям, получившим от него крит.
+
+**Состояние** (Redis, все ключи читаются через `.get`): у участника `is_npc`, `passive_state`
+(`used_magic`, `heresy_stacks`, `saber_kills`, `saber_pvp`, `own_turns`, `lancer_stacks`,
+`lancer_gain`, `stolen`, `first_blood_done`, `shadow_ready`, `control_immunity_used`,
+`kindling_target`, `kindling_stacks`); у боя `dungeon_session_id`. Старые бои без ключей — все
+хуки нейтральны. Стаки Сейбера за забег: ключ
+`battle:passive:saber_run:{dungeon_session_id}:{character_id}` (TTL 14 дней, обновляется при
+записи), читается при сборке боя/вступлении, пишется после каждого убийства Сейбера
+(`redis_state.set_saber_run_stacks`, мягкий отказ).
+
+**Журнал** (все поля опциональны; бой без пассивок даёт прежние события байт-в-байт):
+- `damage`: `passives: [{key, kind, value?, owner?}]` — вклады атакующего и защитника, kind ∈
+  `damage_pct`, `resist_pct`, `forced_crit`, `resist_ignore`, `extra_hit`, `deceit`; от движка —
+  `forced_crit`, `resist_ignored_pct`; доп. удар — `extra_hit: splash|chain|echo`, `extra_mult`.
+  «Ярость» по-прежнему пишет `passive_key`/`passive_pct` и попадает в `passives`, только когда в
+  списке есть что-то ещё (лог только с «Яростью» = формат FEAT-188).
+- «Обман»: `{"event":"damage", ..., "dodged":true, "final":0, "deceived":true,
+  "passives":[{"key":"trickster_deceit","kind":"deceit","owner":t}]}` — 3D анимирует как уклонение.
+- `apply_effects`: `passives` с `duration_plus` (Фокусник/Саламандр); `effects` — уже с +1 ходом.
+- `resource_spend`: `mana_discount` и `passives: [{kind:"mana_discount", value}]`.
+- `passive_proc`: `{who, key, kind, target?, value?, stacks?, effects?, stolen?}`, kind ∈
+  `heresy_stack`, `pin`, `saber_kill`, `saber_resolve`, `shadow_ready`, `control_immune`, `weak_spot`.
+
+## FEAT-190: пассивки подклассов — волна 2 (новые механики)
+
+Включены оставшиеся 7 пассивок (Паладин, Хранитель, Бард, Некромант, Эфириад, Ауромант, Жрец) и
+доделаны две (вампиризм «Ярости» Берсерка, перенаправление «Обмана» Фокусника) — все 21 живые,
+`passives.IMPLEMENTED_PASSIVES` = 21. Правила FEAT-189 в силе: логика, числа и броски (`pick`) —
+только в `passives.py`, `passives` не импортирует `buffs` / `battle_engine`.
+
+**`buffs.py`** получил два необязательных колбэка (по умолчанию `None` → поведение байт-в-байт
+прежнее): `absorb_fn(pid, amount) -> remaining` (щиты съедают снятие HP) и
+`overheal_fn(pid, intended, applied, owner)` (каждая положительная доза HP) в
+`apply_new_effects`, `tick_periodic_effects`, `_tick_resource`. `main.py` всегда передаёт оба
+замыкания; в бою без пассивок они ничего не меняют.
+
+**Хуки** (H14–H25 + заполненный H6 + расширенный H13):
+| Хук | Где вызывается | Что делает |
+|---|---|---|
+| H14 `shield_total(p)` | все 6 runtime-билдеров, поля событий | сумма щитов участника (int, 0 у старых боёв) |
+| H15 `absorb(state, pid, amount)` | `land_hit`, `retaliate`, замыкание `_absorb_fn` | щиты поглощают урон: сначала срочные (меньше ходов — раньше), потом вечные |
+| H16 `add_shield` | обет, «Прилив» | новый щит / доливка «Прилива» того же Ауроманта до потолка, ходы → 3 |
+| H17 `tick_shields(state, actor)` | 9.4, сразу после `decrement_durations` | срочные щиты, наложенные актёром, теряют ход (свежий пропускает первый тик) |
+| H18 `check_vow` / `snapshot_hp` / `check_vows` | `land_hit` ④, `retaliate`, обёртки эффектов, после DoT | «Священный обет»: `0 < HP < 30%`, раз за бой — щит 20% макс. HP + снятие последнего вражеского эффекта (кроме оглушения/паралича) |
+| H19 `lifesteal` | `land_hit` ⑤ | Берсерк ниже 25% HP — 15%, Жрец — 10% (святым `sainting` — 15%) от реально снятого HP |
+| H20 `retaliate` | `land_hit` ⑥ | «Возмездие»: 15% полученного (щит + HP, без overkill) атакующему, без движка, без рекурсии |
+| H21 `heal` | вампиризм, лечение за убийство | лечение с потолком `max_hp`, мёртвых не лечит |
+| H22 `on_heal` | `_overheal_fn`, зелья (`health_recovery`) | «Прилив»: переизбыток лечения Ауроманта → щит цели (≤ 20% её макс. HP, 3 его хода) |
+| H23 `blood_price` | `_pay_skill_costs` | «Плата кровью»: нехватка маны × 1.5 HP (вверх), после оплаты должно остаться ≥ 1 HP, иначе 400 |
+| H24 `end_of_action` | после `resource_spend`, до 9.4a, только живой актёр | Бард «Вдохновение», Эфириад «Шёпот духов» — строки StatModifier, `main` накладывает их `apply_new_effects(..., owner_pid=actor, source=("passive", key))` |
+| H25 `on_deaths` | 9.5 (`_newly_defeated`), `handle_expired_turn` | у мёртвых/выбывших снимаются их эффекты Барда/Эфириада и щиты (свои и наложенные), `inspiration_end` |
+| H6 `deceit_redirect_target` | `_finish_target_ctx(allow_redirect=True)` | «Обман» → случайный живой союзник атакующего (`ctx["redirect_pid"]`), нет такого → атака просто не проходит |
+| H13 `on_kills` | 9.5 | + Некромант: за каждое убийство лечение 10% макс. HP (`kill_heal`) |
+
+**Порядок внутри `_strike` (E7)** — через `passives.land_hit` вместо `hp -= dealt`:
+урон движка → ② щит цели → ③ HP (`hp_removed` без overkill) → ④ обет цели → ⑤ вампиризм
+атакующего → ⑥ отражение Хранителя (→ щит атакующего → его HP → обет атакующего). `_strike`
+возвращает `(dealt_int, event, post_events)`; вызывающий добавляет `event`, затем `post_events`.
+`total_damage_dealt/received` по-прежнему считают `dealt_int` (включая поглощённое щитом).
+Перенаправленный удар и удар не по врагу (`actx is None`) — `direct=False`: только щит и HP.
+**Атакующий, убитый отражением**, дальше не бьёт (`_actor_alive()`): цикл AoE навыка/свитка
+прерывается, доп. удар пропускается. Убит в шаге свитка — шаг 9 (атакующий навык) пропускается
+целиком: ни урона, ни строк эффектов 9.0–9.0e, ни H2. Убит посреди атаки — не накладываются эффекты яда
+с оружия и перебросы Агента; убит уроном своего же предмета — яд на оружие не наносится. Стоимость и кулдауны выбранных навыков списываются
+как обычно (действие совершено); `end_of_action` — только для живого.
+
+**Щиты** — не эффект, а `passive_state["shields"] = [{key, owner, amount, cap, turns_left, fresh}]`
+у защищаемого. Поглощают любой урон: удары, отражение, мгновенный урон эффектов, DoT, отрицательные
+дозы HP. Не трогают оплату HP Некромантом и выбывание по таймауту. Паладин — до конца боя или пока
+не пробит; Ауромант — 3 его хода.
+
+**Обёртки эффектов.** Все места наложения в `_make_action_core` идут через `_apply_with_passives`
+(`_land_enemy_effects` — вражеские; `_apply_effects` — self/ally/all_allies/строки предмета не по
+врагу): колбэки + проверка обета по снимку HP. Procs `shield_absorb` / `tide` / `vow`, возникшие
+при наложении, **откладываются** и выгружаются (`_flush_absorbs`) при следующем вызове хелпера /
+`_strike`, перед `resource_spend` и после тика DoT — поэтому в журнале они идут после своего
+`apply_effects`. На шаге 9.4a: `snapshot_hp` → `tick_periodic_effects(..., absorb_fn, overheal_fn)`
+→ periodic-события → `_flush_absorbs` → `check_vows`.
+
+**«Обман» (E19).** Каждая строка урона, направленная в обманувшего Фокусника, после события
+промаха бьёт `redirect_pid` с `× 0.5`: «чистый» контекст союзника (`_plain_ctx` — атрибуты и
+сопротивления от эффектов, без уклонения, без H4/H5), атрибуты атакующего без кражи Лансера, процент
+урона только от эффектов (снимок до «Ярости» и H2), `actx=None`, без вампиризма/отражения/обета.
+Доп. удары не перенаправляются (`allow_redirect=False`).
+
+**Некромант.** `_pay_skill_costs`: при `mana < cost` вся мана уходит, остаток — HP
+(`spend["hp_paid"]`), щиты не участвуют, ничего не триггерит. Не хватает HP → 400
+«Недостаточно маны: нужно X, есть Y. Доплатить здоровьем нельзя: нужно Z HP, есть W (должно
+остаться хотя бы 1)» — ход срывается целиком (состояние не сохраняется). Уже мёртвый (отражение) —
+доплата не берётся. Автобой здоровьем не платит.
+
+**Runtime.** Поле `shield` (int) во всех 6 билдерах: `get_state_internal`, `get_state`,
+`spectate_battle`, `get_battle_preview`, `admin_get_battle_state`, `_build_runtime` (WS).
+Для `GET /battles/{id}/preview` поле объявлено в схеме `BattlePreviewParticipant` (`shield: int = 0`),
+иначе Pydantic его отбрасывает.
+Новые ключи `passive_state`: `shields`, `vow_used`, `bard_stacks`, `bard_mode`.
+
+**Журнал** (новые поля опциональны):
+- `damage`: `absorbed`, `shield_left` (только если щит что-то поглотил); `passives` + `lifesteal`
+  (`{key: priest_faith|berserker_rage, kind: "lifesteal", value, owner}`).
+- отражение: `{"event":"damage","source":хранитель,"target":атакующий,"final":R,"reflected":true,
+  "absorbed":n,"passives":[{"key":"guardian_retribution","kind":"reflect","value":R,"owner":хранитель}]}`.
+- перенаправление: `damage` с `redirected: true`, `deceived_by: фокусник`,
+  `passives: [{"key":"trickster_deceit","kind":"redirect","value":50,"owner":фокусник}]` (после промаха по Фокуснику);
+  `aoe_falloff` у перенаправленного удара не пишется (×0.5 — не затухание AoE).
+- `resource_spend`: `hp_paid` + `passives: [{kind:"blood_price", value}]` (вместе с `mana_discount` Кастера, если есть).
+- `passive_proc` kind: `vow` (`value`, `shield`, `effects?`), `tide` (`target`, `value`, `shield`),
+  `shield_absorb` (`value`, `shield`; только эффекты/DoT), `kill_heal` (`target`, `value`),
+  `inspiration` (`stacks`, `value`, `mode` group/solo, `targets`), `inspiration_end` (`targets`),
+  `spirit_whisper` (`target`, `mode` ward/curse/might, `value` ±8).
