@@ -265,14 +265,35 @@ class MultipleSkillsAssignRequest(BaseModel):
 
 # --- Class Skill Tree ---
 
+class PassiveRead(BaseModel):
+    """Subclass passive from the registry (FEAT-188). ``implemented`` = has a battle effect."""
+    key: str
+    name: str
+    description: str
+    implemented: bool
+
+    class Config:
+        orm_mode = True
+
+
 class SubclassRead(BaseModel):
     key: str
     class_id: int
     name: str
     description: str
+    passive: Optional[PassiveRead] = None  # always filled for registry entries
 
     class Config:
         orm_mode = True
+
+
+class CharacterSubclassRead(BaseModel):
+    """Internal: a character's subclass and its passive (FEAT-188)."""
+    character_id: int
+    is_npc: bool
+    subclass_key: Optional[str] = None     # raw key from the chosen subclass_choice node
+    subclass_name: Optional[str] = None    # None if the key is unknown to the registry
+    passive: Optional[PassiveRead] = None  # None if no subclass / unknown key
 
 
 class ClassSkillTreeBase(BaseModel):

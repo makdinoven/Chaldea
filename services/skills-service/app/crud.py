@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, or_, func
+from sqlalchemy import select, delete, or_, func, text
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
@@ -1278,3 +1278,41 @@ async def get_class_tree_by_class_id(
     result = await db.execute(stmt)
     return result.scalars().first()
 
+
+# ====================================================================
+# (FEAT-188) Character -> subclass (official lookup for other services)
+# ====================================================================
+
+async def get_character_subclass_key(db: AsyncSession, character_id: int) -> str | None:
+    """Subclass key of the character = latest chosen subclass_choice node with a key.
+
+    Same rule as inventory-service ``equipment_rules.load_character_scope``.
+    """
+    stmt = (
+        select(models.TreeNode.subclass_key)
+        .join(
+            models.CharacterTreeProgress,
+            models.CharacterTreeProgress.node_id == models.TreeNode.id,
+        )
+        .where(
+            models.CharacterTreeProgress.character_id == character_id,
+            models.TreeNode.node_type == "subclass_choice",
+            models.TreeNode.subclass_key.isnot(None),
+        )
+        .order_by(models.CharacterTreeProgress.id.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_character_is_npc(db: AsyncSession, character_id: int) -> bool | None:
+    """``characters.is_npc`` (table owned by character-service). None = no such character."""
+    result = await db.execute(
+        text("SELECT is_npc FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if row is None:
+        return None
+    return bool(row[0])

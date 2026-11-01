@@ -426,6 +426,41 @@ async def list_subclasses(class_id: Optional[int] = None):
 
 
 # -----------------------------------------------------------
+# 6a-ter) (FEAT-188) Internal: character -> subclass + passive
+# Registered BEFORE the generic "/{skill_id}" routes so the path is never parsed as a
+# skill id. Caller: battle-service build_participant_info (X-Internal-Token only).
+# -----------------------------------------------------------
+@router.get(
+    "/internal/characters/{character_id}/subclass",
+    response_model=schemas.CharacterSubclassRead,
+)
+async def get_character_subclass_internal(
+    character_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Official "which subclass does this character have" lookup.
+
+    No subclass chosen yet -> 200 with nulls (not 404).
+    """
+    if character_id <= 0:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    is_npc = await crud.get_character_is_npc(db, character_id)
+    if is_npc is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    subclass_key = await crud.get_character_subclass_key(db, character_id)
+    subclass = subclass_registry.get_subclass(subclass_key)
+    return schemas.CharacterSubclassRead(
+        character_id=character_id,
+        is_npc=is_npc,
+        subclass_key=subclass_key,
+        subclass_name=subclass.name if subclass else None,
+        passive=schemas.PassiveRead.from_orm(subclass.passive) if subclass else None,
+    )
+
+
+# -----------------------------------------------------------
 # 6a-bis) (FEAT-154) Public: bulk skill resolve
 # Registered BEFORE "/{skill_id}" so "bulk" is not parsed as a skill id.
 # -----------------------------------------------------------
