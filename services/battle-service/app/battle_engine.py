@@ -9,7 +9,7 @@ from random import random
 
 import httpx
 import os
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 ATTR_SERVICE_URL = os.getenv(
     "ATTRIBUTES_SERVICE_URL",
@@ -118,12 +118,25 @@ async def compute_damage_with_rolls(
     percent_resists: Dict[str, float],
     class_id: int = 1,
     apply_dodge: bool = True,
+    force_crit: bool = False,
+    crit_damage_bonus: float = 0,
+    resist_ignore: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, Dict]:
     """
     • roll_dodge, roll_chance, roll_crit
     • применяет +%баффы, криты, −%резисты
     • class_id определяет основной атрибут урона (1=strength, 2=agility, 3=intelligence)
     • luck атакующего добавляет +0.1% за единицу ко всем шансовым проверкам
+
+    FEAT-189 (subclass passives, all optional — defaults keep the old
+    behaviour and the old log shape):
+    • force_crit — the hit is a crit without rolling (the hit roll must still
+      land; the crit roll is NOT consumed); log["forced_crit"] = True.
+    • crit_damage_bonus — added to critical_damage before /100 on any crit
+      (+50 at the default 125 ⇒ ×1.75).
+    • resist_ignore — {resolved damage type: fraction 0..1}; ignores that
+      share of a POSITIVE resist only (vulnerability is never reduced);
+      log["resist_ignored_pct"] = points ignored.
     """
     # 1) базовый урон = основной атрибут класса + база damage + урон оружия слота.
     #    FEAT-167: урон оружия учитывается РОВНО ОДИН РАЗ и берётся только из
@@ -170,16 +183,24 @@ async def compute_damage_with_rolls(
     log["hit_chance_failed"] = False
 
     # crit (luck improves crit chance for attacker)
-    if roll_crit(attacker_attr["critical_hit_chance"] + luck_bonus):
-        crit_mul = attacker_attr["critical_damage"] / 100.0
+    if force_crit or roll_crit(attacker_attr["critical_hit_chance"] + luck_bonus):
+        crit_mul = (attacker_attr["critical_damage"] + crit_damage_bonus) / 100.0
         raw *= crit_mul
         log["critical"] = True
         log["crit_mul"] = crit_mul
+        if force_crit:
+            log["forced_crit"] = True
     else:
         log["critical"] = False
 
     # resist
     resist_pct = percent_resists.get("all", 0) + percent_resists.get(dmg_type, 0)
+    if resist_ignore and resist_pct > 0:
+        ignore_frac = min(1.0, max(0.0, float(resist_ignore.get(dmg_type, 0) or 0)))
+        if ignore_frac > 0:
+            ignored = resist_pct * ignore_frac
+            resist_pct -= ignored
+            log["resist_ignored_pct"] = round(ignored, 2)
     final = raw * (1 - resist_pct / 100.0)
     # Урон не может быть отрицательным (отрицательный урон = лечение врага)
     final = max(0.0, final)

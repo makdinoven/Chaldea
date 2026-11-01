@@ -52,11 +52,13 @@ from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, b
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative, \
-    utc_now, parse_deadline, deadline_epoch, STATE_TTL_HOURS
+    utc_now, parse_deadline, deadline_epoch, STATE_TTL_HOURS, get_saber_run_stacks, set_saber_run_stacks
 from config import settings
 from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
-from skills_client import character_has_skill, get_resolved_skill, get_item, character_skills
+from skills_client import character_has_skill, get_resolved_skill, get_item, character_skills, get_character_subclass
+from passives import passive_damage_bonus, PASSIVE_SABER
+import passives
 import httpx
 import logging
 import activity_lock
@@ -178,7 +180,8 @@ async def fetch_character_class_id(db: AsyncSession, character_id: int) -> int:
 
 
 def _filter_effects_by_chance(
-    effects: list, luck_bonus: float, defender_res_effects: float = 0
+    effects: list, luck_bonus: float, defender_res_effects: float = 0,
+    bonus_pp_fn=None, failed_out: list | None = None,
 ) -> list:
     """Filter effects by their chance field, applying the attacker's luck
     bonus and the defender's effect resistance.
@@ -193,16 +196,27 @@ def _filter_effects_by_chance(
     here, which quietly meant equipment with `res_effects_modifier` did
     nothing in combat and the number on the profile was decorative.
     Returns only effects that passed the roll.
+
+    FEAT-189 (both optional, defaults = old behaviour):
+      bonus_pp_fn — callable(row) -> extra percentage points added to the
+                    row's chance before clamping (Monk «Гармония», Agent bonus
+                    on weapon coating; see passives H11a/H11b).
+      failed_out  — list; every row that FAILED its roll is appended as
+                    `(row, effective_chance)` (Agent post-damage re-roll).
     """
     resist_penalty = defender_res_effects or 0
     passed = []
     for eff in effects:
         base_chance = eff.get("chance", 100)
         actual_chance = base_chance + luck_bonus - resist_penalty
+        if bonus_pp_fn is not None:
+            actual_chance += bonus_pp_fn(eff) or 0
         if actual_chance < 0:
             actual_chance = 0
         if roll_chance(actual_chance):
             passed.append(eff)
+        elif failed_out is not None:
+            failed_out.append((eff, actual_chance))
     return passed
 
 
@@ -347,6 +361,30 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         logger.warning(f"Не удалось получить прочность экипировки персонажа {char_id}: {e}")
         equip_durability = {}
 
+    # FEAT-188: subclass + its passive, fixed for the whole battle (like
+    # initiative). Soft-fail: skills-service being down must never block the
+    # battle start — the participant simply fights without a passive.
+    subclass = None
+    passive = None
+    # FEAT-189: NPC flag from the same lookup (fallback for the PvP / join
+    # paths; `_assemble_battle` overrides it with `characters.is_npc`).
+    is_npc = False
+    try:
+        sub_info = await get_character_subclass(char_id)
+        is_npc = bool(sub_info.get("is_npc"))
+        if not is_npc:
+            if sub_info.get("subclass_key"):
+                subclass = {
+                    "key": sub_info["subclass_key"],
+                    "name": sub_info.get("subclass_name"),
+                }
+            passive = sub_info.get("passive") or None
+    except Exception as e:
+        logger.error(f"Не удалось получить подкласс/пассивку персонажа {char_id}: {e}")
+        subclass = None
+        passive = None
+        is_npc = False
+
     return {
         "participant_id": participant_id,
         "character_id"  : char_id,
@@ -356,7 +394,73 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         "skills"        : ranks,
         "fast_slots"    : slots,
         "equipment_durability": equip_durability,
+        "subclass"      : subclass,
+        "passive"       : passive,
+        "is_npc"        : is_npc,
     }
+
+
+def _passive_key_of(snap: dict):
+    """Passive key of a snapshot entry (FEAT-188); None for old snapshots,
+    mobs and characters without a subclass."""
+    passive = snap.get("passive") or {}
+    if not isinstance(passive, dict):
+        return None
+    return passive.get("key")
+
+
+def _participant_payload(snap: dict, participant_objs) -> dict:
+    """Per-participant payload for `init_battle_state`, built from a
+    `build_participant_info` snapshot entry. Shared by `_assemble_battle` and
+    both inline PvP start paths so a new state key cannot be forgotten in one
+    of them.
+
+    `passive_state` (FEAT-189) starts empty; `_assemble_battle` overwrites it
+    with the Saber run seed on the payload (never on the Mongo snapshot).
+    """
+    return {
+        "participant_id": snap["participant_id"],
+        "character_id": snap["character_id"],
+        "team": next(
+            pl.team for pl in participant_objs
+            if pl.id == snap["participant_id"]
+        ),
+        "hp": snap["attributes"]["current_health"],
+        "mana": snap["attributes"]["current_mana"],
+        "energy": snap["attributes"]["current_energy"],
+        "stamina": snap["attributes"]["current_stamina"],
+        "max_hp": snap["attributes"]["max_health"],
+        "max_mana": snap["attributes"]["max_mana"],
+        "max_energy": snap["attributes"]["max_energy"],
+        "max_stamina": snap["attributes"]["max_stamina"],
+        "fast_slots": snap["fast_slots"],
+        "equipment_durability": snap.get("equipment_durability", {}),
+        # Initiative + agility drive the turn order (FEAT-143). Agility is
+        # kept for tie-breaks; initiative is the weighted stat sum.
+        "agility": snap["attributes"].get("agility", 0),
+        "initiative": compute_initiative(snap["attributes"]),
+        # FEAT-188: engine-side passive key (display data lives in the snapshot).
+        "passive_key": _passive_key_of(snap),
+        # FEAT-189: NPC flag (Saber rules) + per-battle passive state.
+        "is_npc": bool(snap.get("is_npc")),
+        "passive_state": {},
+    }
+
+
+async def _saber_seed(snap: dict, dungeon_session_id) -> dict:
+    """Initial `passive_state` of a participant (FEAT-189, D12): a Saber in a
+    dungeon run starts with the kill stacks of the run's previous battles.
+    Everyone else (and any read failure) → {}."""
+    if not dungeon_session_id or _passive_key_of(snap) != PASSIVE_SABER:
+        return {}
+    try:
+        stacks = await get_saber_run_stacks(dungeon_session_id, snap["character_id"])
+    except Exception as e:
+        logger.error(
+            f"Не удалось получить стаки Сейбера персонажа {snap.get('character_id')}: {e}"
+        )
+        return {}
+    return {"saber_kills": stacks} if stacks else {}
 
 
 async def _distribute_pve_rewards(
@@ -524,25 +628,59 @@ async def _pay_skill_costs(state: dict, pid: int, ranks: list[dict]) -> dict:
     для переданных рангов. Возвращает словарь списанных величин,
     чтобы записать в лог события.
     """
+    pstate = state["participants"][str(pid)]
+
+    # FEAT-189 H12: Caster «Чистая энергия» — mana per rank through
+    # passives.mana_cost, BEFORE the affordability check (others: unchanged).
     spend = {"energy": 0, "mana": 0, "stamina": 0}
+    raw_mana = 0
     for r in ranks:
         spend["energy"]  += r.get("cost_energy",   0)
-        spend["mana"]    += r.get("cost_mana",     0)
+        rank_mana = r.get("cost_mana", 0)
+        raw_mana += rank_mana
+        spend["mana"]    += passives.mana_cost(pstate, rank_mana)
         spend["stamina"] += r.get("cost_stamina",  0)
 
-    pstate = state["participants"][str(pid)]
+    # FEAT-190 H23: Necromancer «Плата кровью» — a mana shortfall is paid with
+    # HP (final check here, at payment). None for everyone else → old path.
+    blood = passives.blood_price(pstate, spend["mana"])
 
     # Проверка «хватает ли»
     res_names_ru = {"energy": "энергии", "mana": "маны", "stamina": "выносливости"}
     for res, value in spend.items():
+        if res == "mana" and blood is not None:
+            if not blood["affordable"]:
+                raise HTTPException(
+                    400,
+                    f"Недостаточно маны: нужно {value}, есть {pstate[res]}. "
+                    f"Доплатить здоровьем нельзя: нужно {blood['hp_cost']} HP, "
+                    f"есть {float(pstate.get('hp', 0)):g} "
+                    f"(должно остаться хотя бы {passives.BLOOD_MIN_HP_LEFT})",
+                )
+            continue
         if pstate[res] < value:
             raise HTTPException(
                 400, f"Недостаточно {res_names_ru[res]}: нужно {value}, есть {pstate[res]}"
             )
 
+    if blood is not None:
+        # All the mana goes (mana → 0); the rest is HP, bypassing shields and
+        # triggering nothing (self-payment, not damage). Waived when dead.
+        spend["mana"] = blood["mana_paid"]
+        if blood["hp_cost"] > 0 and not blood["waived"]:
+            pstate["hp"] = pstate.get("hp", 0) - blood["hp_cost"]
+            spend["hp_paid"] = blood["hp_cost"]
+
     # Списываем
-    for res, value in spend.items():
-        pstate[res] -= value
+    for res in ("energy", "mana", "stamina"):
+        pstate[res] -= spend[res]
+
+    # Saved mana goes into the log (`resource_spend.mana_discount`); only a
+    # Caster can have it, so other participants keep the old 3-key dict.
+    if pstate.get("passive_key") == passives.PASSIVE_CASTER:
+        discount = raw_mana - spend["mana"]
+        if discount > 0:
+            spend["mana_discount"] = discount
 
     return spend
 
@@ -785,30 +923,32 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dung
     for p in participant_objs:
         participants_info.append(await build_participant_info(p.character_id, p.id))
 
-    participants_payload = []
+    # FEAT-189: `characters.is_npc` is the source of truth for the NPC flag
+    # (snapshot + Redis state). The same per-participant query feeds the
+    # autobattle registration below. A failed query keeps the skills-service
+    # fallback in the snapshot and skips registration (as before).
+    npc_flags: dict = {}
+    for p in participant_objs:
+        try:
+            result = await db.execute(
+                text("SELECT is_npc FROM characters WHERE id = :cid"),
+                {"cid": p.character_id},
+            )
+            row = result.fetchone()
+            npc_flags[p.id] = bool(row and row[0])
+        except Exception as e:
+            logger.error(f"Ошибка при проверке NPC для participant {p.id}: {e}")
     for snap in participants_info:
-        participants_payload.append({
-            "participant_id": snap["participant_id"],
-            "character_id": snap["character_id"],
-            "team": next(
-                pl.team for pl in participant_objs
-                if pl.id == snap["participant_id"]
-            ),
-            "hp": snap["attributes"]["current_health"],
-            "mana": snap["attributes"]["current_mana"],
-            "energy": snap["attributes"]["current_energy"],
-            "stamina": snap["attributes"]["current_stamina"],
-            "max_hp": snap["attributes"]["max_health"],
-            "max_mana": snap["attributes"]["max_mana"],
-            "max_energy": snap["attributes"]["max_energy"],
-            "max_stamina": snap["attributes"]["max_stamina"],
-            "fast_slots": snap["fast_slots"],
-            "equipment_durability": snap.get("equipment_durability", {}),
-            # Initiative + agility drive the turn order (FEAT-143). Agility is
-            # kept for tie-breaks; initiative is the weighted stat sum.
-            "agility": snap["attributes"].get("agility", 0),
-            "initiative": compute_initiative(snap["attributes"]),
-        })
+        if snap["participant_id"] in npc_flags:
+            snap["is_npc"] = npc_flags[snap["participant_id"]]
+
+    participants_payload = [
+        _participant_payload(snap, participant_objs) for snap in participants_info
+    ]
+    # FEAT-189: per-battle passive seed (Saber run stacks) goes into the Redis
+    # payload only — never into the snapshot that is saved to Mongo.
+    for snap, payload in zip(participants_info, participants_payload):
+        payload["passive_state"] = await _saber_seed(snap, dungeon_session_id)
 
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
@@ -820,34 +960,30 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dung
         first_actor_participant_id=first_actor_pid,
         deadline_at=deadline,
         location_id=location_id,
+        dungeon_session_id=dungeon_session_id,
     )
     await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 
     # Auto-register NPC/mob participants with autobattle-service
     for p in participant_objs:
+        if not npc_flags.get(p.id):
+            continue
         try:
-            result = await db.execute(
-                text("SELECT is_npc FROM characters WHERE id = :cid"),
-                {"cid": p.character_id},
-            )
-            row = result.fetchone()
-            if row and row[0]:
-                try:
-                    async with httpx.AsyncClient(timeout=5.0) as client:
-                        reg_resp = await client.post(
-                            f"{settings.AUTOBATTLE_SERVICE_URL}/internal/register",
-                            json={"participant_id": p.id, "battle_id": battle_obj.id},
-                            headers=_internal_token_headers(),
-                        )
-                        if reg_resp.status_code != 200:
-                            logger.warning(
-                                f"Не удалось зарегистрировать моба в autobattle: "
-                                f"{reg_resp.status_code} - {reg_resp.text}"
-                            )
-                except httpx.RequestError as e:
-                    logger.error(f"Ошибка при регистрации моба в autobattle: {e}")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                reg_resp = await client.post(
+                    f"{settings.AUTOBATTLE_SERVICE_URL}/internal/register",
+                    json={"participant_id": p.id, "battle_id": battle_obj.id},
+                    headers=_internal_token_headers(),
+                )
+                if reg_resp.status_code != 200:
+                    logger.warning(
+                        f"Не удалось зарегистрировать моба в autobattle: "
+                        f"{reg_resp.status_code} - {reg_resp.text}"
+                    )
+        except httpx.RequestError as e:
+            logger.error(f"Ошибка при регистрации моба в autobattle: {e}")
         except Exception as e:
-            logger.error(f"Ошибка при проверке NPC для participant {p.id}: {e}")
+            logger.error(f"Ошибка при регистрации NPC participant {p.id} в autobattle: {e}")
 
     return battle_obj, participant_objs, first_actor_pid, deadline
 
@@ -1623,6 +1759,8 @@ async def get_state_internal(battle_id: int):
                 "team": state["participants"][pid]["team"],
                 "character_id": state["participants"][pid]["character_id"],
                 "max_hp": state["participants"][pid].get("max_hp", 0),
+                # FEAT-190 E20: total passive shield (0 for old states).
+                "shield": passives.shield_total(state["participants"][pid]),
                 "max_mana": state["participants"][pid].get("max_mana", 0),
                 "max_energy": state["participants"][pid].get("max_energy", 0),
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
@@ -1735,6 +1873,8 @@ async def get_state(
                             ),
                             # FEAT-168: яд на оружии (или None).
                             "weapon_coating": state["participants"][pid].get("weapon_coating"),
+                            # FEAT-190 E20: total passive shield (0 for old states).
+                            "shield": passives.shield_total(state["participants"][pid]),
                         }
                             for pid in state["participants"]
                     },
@@ -1824,6 +1964,8 @@ async def spectate_battle(
                 "team": state["participants"][pid]["team"],
                 "character_id": state["participants"][pid]["character_id"],
                 "max_hp": state["participants"][pid].get("max_hp", 0),
+                # FEAT-190 E20: total passive shield (0 for old states).
+                "shield": passives.shield_total(state["participants"][pid]),
                 "max_mana": state["participants"][pid].get("max_mana", 0),
                 "max_energy": state["participants"][pid].get("max_energy", 0),
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
@@ -1943,6 +2085,8 @@ async def get_battle_preview(
                 "is_alive": hp > 0,
                 "hp": hp,
                 "max_hp": pdata.get("max_hp", 0),
+                # FEAT-190 E20: total passive shield (0 for old states).
+                "shield": passives.shield_total(pdata),
                 "mana": pdata.get("mana", 0),
                 "max_mana": pdata.get("max_mana", 0),
             }
@@ -2658,6 +2802,10 @@ async def _make_action_core(
                     "skill_type": _bt,
                 })
 
+    # FEAT-189 H1: turn start for passives (Gladiator ramp counts only turns
+    # not lost to Stun / Poison-paralysis).
+    passives.on_turn_start(battle_state, request.participant_id, bool(_full_skip))
+
     # --- First cycle (FEAT-143): one skill type per turn until every fighter has
     # had one turn. The flag is cleared when the turn order wraps — see the turn
     # advance below. Tying the unlock to the initiator's 2nd turn used to strand
@@ -2757,6 +2905,399 @@ async def _make_action_core(
         return float(_a.get("res_effects") or 0) - float(_a.get("vul_effects") or 0)
 
     # ------------------------------------------------------------------------------
+    # 5.1. FEAT-189: subclass passives — shared helpers.
+    # All passive logic and every passive random roll live in passives.py; the
+    # helpers below are the ONLY places this function touches passives, so a
+    # passive cannot be wired into one path and forgotten in another. For a
+    # participant without a passive every helper reduces to the old code path
+    # (same calls, same objects, same events).
+    # ------------------------------------------------------------------------------
+    actor_pid: int = request.participant_id
+
+    def _chance_bonus_fn(target_pid: int | None = None, crit_targets=None):
+        """bonus_pp_fn for enemy-side rows of the actor: Monk H11a, plus the
+        Agent's H11b bonus for rows rolled after a crit on `target_pid`."""
+        agent_bonus = crit_targets is not None and target_pid in crit_targets
+
+        def _fn(row):
+            bonus = passives.effect_chance_bonus_pp(participant_info, row)
+            if agent_bonus:
+                bonus += passives.weak_spot_bonus_pp(participant_info, row)
+            return bonus
+        return _fn
+
+    async def _roll_enemy_effects(rows, target_pid: int, failed_out=None, crit_targets=None):
+        """Chance roll for the actor's ENEMY-side rows on `target_pid`."""
+        return _filter_effects_by_chance(
+            rows,
+            attacker_luck_bonus,
+            await _res_effects_now(target_pid),
+            bonus_pp_fn=_chance_bonus_fn(target_pid, crit_targets),
+            failed_out=failed_out,
+        )
+
+    def _land_enemy_effects(target_pid: int, rows, **apply_kw):
+        """Applies the actor's ENEMY-side rows that passed their roll.
+
+        H11c (Trickster / Salamander +1 turn, on copies) → H11d (Monk's first
+        control is dropped, `control_immune` event) → apply_new_effects.
+        Returns `(applied_rows, contributions)`; callers log `applied_rows`
+        (nothing applied → no apply_effects event)."""
+        adjusted, contribs = passives.adjust_outgoing_enemy_rows(
+            participant_info, rows, actor_pid
+        )
+        if not contribs:
+            adjusted = rows
+        kept, immune_events = passives.filter_incoming_control(
+            participants_map.get(str(target_pid)), adjusted, target_pid
+        )
+        if not immune_events:
+            kept = adjusted
+        turn_events.extend(immune_events)
+        if kept:
+            apply_kw.setdefault("is_enemy", True)
+            _apply_with_passives(target_pid, kept, owner_pid=actor_pid, **apply_kw)
+        return kept, contribs
+
+    # --- FEAT-190: shields / heals / vow around every HP change ---------------
+    # buffs only CALLS these closures (absorb_fn / overheal_fn); the logic is
+    # in passives.py. Passive-less battles: absorb returns the amount as-is
+    # and on_heal returns [] → identical state and events.
+    # Procs raised while effects land (shield_absorb, tide, vow) are DEFERRED
+    # and flushed at the next helper call / checkpoint, so they follow the
+    # caller's own `apply_effects` event in the log.
+    _pending_absorbs: Dict[int, float] = {}
+    _pending_procs: List[Dict] = []
+
+    def _absorb_fn(pid: int, amount):
+        remaining, absorbed = passives.absorb(battle_state, pid, amount)
+        if absorbed > 0:
+            _pending_absorbs[pid] = _pending_absorbs.get(pid, 0.0) + absorbed
+        return remaining
+
+    def _overheal_fn(pid: int, intended, applied, owner_id):
+        _pending_procs.extend(
+            passives.on_heal(battle_state, owner_id, pid, intended, applied)
+        )
+
+    def _flush_absorbs() -> None:
+        """Appends the deferred passive procs: one `shield_absorb` per holder
+        (effect / DoT damage), then tide / vow procs in raise order."""
+        for _pid, _amount in list(_pending_absorbs.items()):
+            _ev = passives.shield_absorb_event(battle_state, _pid, _amount)
+            if _ev is not None:
+                turn_events.append(_ev)
+        _pending_absorbs.clear()
+        if _pending_procs:
+            turn_events.extend(_pending_procs)
+            _pending_procs.clear()
+
+    def _apply_with_passives(target_pid: int, rows, **apply_kw) -> None:
+        """apply_new_effects with the shield / tide callbacks + vow check on
+        the target (E12). Used by every apply site of `_make_action_core`
+        except the passive-sourced rows of `end_of_action`."""
+        _flush_absorbs()
+        _before = passives.snapshot_hp(battle_state)
+        apply_new_effects(
+            battle_state, target_pid, rows,
+            absorb_fn=_absorb_fn, overheal_fn=_overheal_fn, **apply_kw,
+        )
+        _pending_procs.extend(passives.check_vows(battle_state, _before))
+
+    def _apply_effects(target_pid: int, rows, **apply_kw) -> None:
+        """Non-enemy rows of the actor (self / ally / all_allies / item)."""
+        apply_kw.setdefault("owner_pid", actor_pid)
+        _apply_with_passives(target_pid, rows, **apply_kw)
+
+    def _actor_alive() -> bool:
+        """E10: an actor killed by a reflect strikes no more this action."""
+        return participants_map.get(str(actor_pid), {}).get("hp", 0) > 0
+
+    # Enemies the actor LANDED a hit on this action (Etheriad, E17).
+    _landed_enemies: List[int] = []
+
+    def _note_landed(actx) -> None:
+        for _t in passives.landed_targets(actx):
+            if _t not in _landed_enemies:
+                _landed_enemies.append(_t)
+
+    def _effects_event(who: int, kind: str, rows, contribs=None, **extra) -> Dict:
+        ev = {"event": "apply_effects", "who": who, "kind": kind, **extra,
+              "effects": [_normalize_effect(e) for e in rows]}
+        if contribs:
+            ev["passives"] = list(contribs)
+        return ev
+
+    def _finish_target_ctx(pid: int, tattrs, resists, allow_redirect: bool = True) -> Dict:
+        """Target ctx of one attack: H5 (Lancer stat deltas) → H4 (defender
+        resist deltas, on a copy) → dodge roll → H6 (Trickster deceit, only
+        if not dodged; FEAT-190 E19: `redirect_pid` = the attacker's ally the
+        deceived attack goes into, None → the attack just fails; extra hits
+        pass `allow_redirect=False`). Untouched objects when no passive
+        applies."""
+        deltas = passives.stat_deltas(battle_state, pid)
+        if deltas:
+            tattrs = passives.apply_stat_deltas(tattrs, deltas)
+        res_delta, res_contribs = passives.defender_resist_mods(battle_state, pid, actor_pid)
+        if res_delta:
+            resists = dict(resists)
+            for _t, _d in res_delta.items():
+                resists[_t] = resists.get(_t, 0) + _d
+        dodged = roll_dodge(tattrs.get("dodge", 0))
+        deceived = False
+        redirect_pid = None
+        if (not dodged
+                and participants_map.get(str(pid), {}).get("team") != attacker_team
+                and passives.roll_deceit(battle_state, pid)):
+            deceived = True
+            if allow_redirect:
+                redirect_pid = passives.deceit_redirect_target(battle_state, actor_pid, pid)
+        ctx = {
+            "attrs": tattrs,
+            "resists": resists,
+            "dodged": dodged,
+            "deceived": deceived,
+            "contributions": res_contribs,
+        }
+        if redirect_pid is not None:
+            ctx["redirect_pid"] = redirect_pid
+        return ctx
+
+    async def _build_target_ctx(pid: int, allow_redirect: bool = True) -> Dict:
+        _mods = aggregate_modifiers(
+            battle_state.get("active_effects", {}).get(str(pid), [])
+        )
+        _tattrs = apply_flat_modifiers(
+            await attrs(participants_map[str(pid)]["character_id"]), _mods
+        )
+        return _finish_target_ctx(
+            pid, _tattrs, build_percent_resist_buffs(_mods, _tattrs), allow_redirect,
+        )
+
+    async def _plain_ctx(pid: int) -> Dict:
+        """FEAT-190 E19: ctx for an ally hit by a redirected «Обман» blow —
+        attrs + effect mods and resists only: no H4/H5, no dodge, no deceit."""
+        _mods = aggregate_modifiers(
+            battle_state.get("active_effects", {}).get(str(pid), [])
+        )
+        _tattrs = apply_flat_modifiers(
+            await attrs(participants_map[str(pid)]["character_id"]), _mods
+        )
+        return {
+            "attrs": _tattrs,
+            "resists": build_percent_resist_buffs(_mods, _tattrs),
+            "dodged": False,
+            "deceived": False,
+            "contributions": [],
+        }
+
+    def _copy_buffs(pct_buffs):
+        """Snapshot of the effects-only % damage buffs, taken BEFORE rage /
+        H2 pct are added in place (E19 redirect strikes use it)."""
+        return dict(pct_buffs) if isinstance(pct_buffs, dict) else pct_buffs
+
+    def _redirect_target(ctx: Dict):
+        """The living ally a deceived ctx redirects into, or None."""
+        _r = ctx.get("redirect_pid")
+        if _r is None:
+            return None
+        if participants_map.get(str(_r), {}).get("hp", 0) <= 0:
+            return None
+        return _r
+
+    def _actor_attrs(base_attrs):
+        """Attacker attrs copy with Lancer gains (H5); unchanged otherwise."""
+        deltas = passives.stat_deltas(battle_state, actor_pid)
+        return passives.apply_stat_deltas(base_attrs, deltas) if deltas else base_attrs
+
+    def _miss_event(target_pid: int, ctx: Dict, extra: Dict) -> Dict:
+        """Event for a dodged / deceived (target, attack) pair."""
+        ev = {
+            "event": "damage", "source": actor_pid,
+            "target": target_pid, "dodged": True, "final": 0, **extra,
+        }
+        if ctx.get("deceived"):
+            ev["deceived"] = True
+            ev.setdefault("passives", []).append(passives.deceit_contribution(target_pid))
+        return ev
+
+    def _log_miss(target_pid: int, ctx: Dict, extra: Dict) -> None:
+        turn_events.append(_miss_event(target_pid, ctx, extra))
+        if ctx.get("dodged"):
+            # H7 — a real dodge (never deceit): Assassin's shadow.
+            turn_events.extend(passives.on_dodged(battle_state, target_pid))
+
+    async def _strike(target_pid: int, dmg: Dict, mult: float, ctx: Dict, actx,
+                      pct_buffs, attacker_attrs, weapon, event_extra: Dict,
+                      rage_pct: float, rage_key, entry_slot_default: str,
+                      extra_plan: Dict | None = None, redirect_from: int | None = None):
+        """One damage roll on one target — shared by the skill loop, the item
+        loop and passive extra hits. Returns `(dealt_int, event, post_events)`;
+        nothing is appended — the caller appends `event`, then `post_events`.
+
+        `actx` = AttackCtx from H2, or None (non-enemy item rows). H3 is
+        skipped for extra hits (`extra_plan` set): they ride on the
+        attack-level buffs only and never record on-hit state.
+
+        FEAT-190 E7: the HP change goes through `passives.land_hit` — target
+        shield absorb → HP loss → target vow → attacker lifesteal → Guardian
+        reflect (`post_events` = vow / reflect / attacker-vow events).
+        `redirect_from` = the Trickster whose «Обман» sent this blow into the
+        attacker's ally (E19): caller passes a plain ctx, `actx=None`,
+        rage 0; only the ally's shields act, no passives of either side."""
+        _flush_absorbs()
+        tmods = None
+        if actx is not None and extra_plan is None:
+            dtype = passives.resolve_entry_type(dmg, attacker_weapons, entry_slot_default)
+            tmods = passives.target_damage_mods(
+                actx, battle_state, target_pid, dtype, target_pid == actx.get("primary")
+            )
+        buffs_now = pct_buffs
+        engine_kw = {}
+        if tmods:
+            if tmods["pct_by_type"]:
+                buffs_now = dict(pct_buffs)
+                for _t, _v in tmods["pct_by_type"].items():
+                    buffs_now[_t] = buffs_now.get(_t, 0) + _v
+            if tmods["force_crit"]:
+                engine_kw["force_crit"] = True
+            if tmods["crit_damage_bonus"]:
+                engine_kw["crit_damage_bonus"] = tmods["crit_damage_bonus"]
+            if tmods["resist_ignore"]:
+                engine_kw["resist_ignore"] = tmods["resist_ignore"]
+        dealt, log = await compute_damage_with_rolls(
+            damage_entry=dmg,
+            attacker_attr=attacker_attrs,
+            weapon=weapon,
+            percent_buffs=buffs_now,
+            defender_attr=ctx["attrs"],
+            percent_resists=ctx["resists"],
+            class_id=attacker_class_id,
+            apply_dodge=False,
+            **engine_kw,
+        )
+        if extra_plan is not None:
+            dealt *= extra_plan["mult"]
+            log = {**log, "final": round(dealt, 2)}
+        elif mult != 1.0:
+            dealt *= mult
+            log = {**log, "final": round(dealt, 2)}
+            # A redirected blow's 50% is not AoE falloff (E19) — tag only real falloff.
+            if redirect_from is None:
+                log["aoe_falloff"] = mult
+        target_state = battle_state["participants"][str(target_pid)]
+        # FEAT-190 E7 (replaces `hp -= dealt`). Not direct → shields only.
+        _hit = passives.land_hit(
+            battle_state, actor_pid, target_pid, dealt, log.get("damage_type"),
+            direct=actx is not None and redirect_from is None,
+        )
+        dealt_int = int(round(dealt))
+        attacker_p = battle_state["participants"][str(actor_pid)]
+        attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
+        target_state["total_damage_received"] = (
+            target_state.get("total_damage_received", 0) + dealt_int
+        )
+        if actx is not None:
+            passives.record_strike(
+                actx, target_pid, dmg, log,
+                is_extra=extra_plan is not None, target_attrs=ctx["attrs"],
+            )
+        event = {"event": "damage", "source": actor_pid, "target": target_pid, **log, **event_extra}
+        if _hit["absorbed"] > 0:
+            event["absorbed"] = int(round(_hit["absorbed"]))
+            event["shield_left"] = _hit["shield_left"]
+        if redirect_from is not None:
+            # E19: a redirected blow carries only the redirect contribution.
+            event["redirected"] = True
+            event["deceived_by"] = redirect_from
+            event["passives"] = [passives.redirect_contribution(redirect_from)]
+            return dealt_int, event, _hit["post_events"]
+        if rage_pct > 0:
+            event["passive_key"] = rage_key
+            event["passive_pct"] = rage_pct
+        contribs: List[Dict] = []
+        if rage_pct > 0:
+            contribs.append(passives.contribution(
+                rage_key, passives.KIND_DAMAGE_PCT, rage_pct, actor_pid))
+        if actx is not None:
+            contribs.extend(actx.get("contributions") or [])
+        if tmods:
+            contribs.extend(passives.attacker_contribs_for_log(
+                tmods["contributions"], log))
+        contribs.extend(passives.defender_contribs_for_type(
+            ctx.get("contributions"), log.get("damage_type")))
+        if extra_plan is not None:
+            event["extra_hit"] = extra_plan["kind"]
+            event["extra_mult"] = extra_plan["mult"]
+            contribs.append(extra_plan["contribution"])
+        # FEAT-190 E11: lifesteal / «Вера» of the attacker.
+        contribs.extend(_hit["contributions"])
+        # FEAT-188 logs (rage only) keep their exact shape; the list appears
+        # only when some wave-1 passive touched the blow.
+        if contribs and not (len(contribs) == 1 and rage_pct > 0):
+            event["passives"] = contribs
+        return dealt_int, event, _hit["post_events"]
+
+    async def _finish_passive_attack(actx, failed_by_target: Dict, rage_pct, rage_key,
+                                     pct_buffs, attacker_attrs, weapon_of, event_extra: Dict,
+                                     entry_slot_default: str, apply_kw: Dict) -> int:
+        """After an attack's damage loop: H9 (on-hit stacks) → Agent re-roll
+        of failed pre-damage enemy rows on critted targets (D5) → H10 extra
+        hit (Mechanic / Sparkmage). Returns extra damage dealt (int)."""
+        turn_events.extend(passives.finish_attack(actx, battle_state))
+
+        # FEAT-190 E10: a dead attacker lands no Agent re-roll rows either.
+        for _t in (passives.critted_targets(actx) if _actor_alive() else []):
+            _failed = failed_by_target.get(_t) or []
+            _tp = participants_map.get(str(_t))
+            if not _failed or not _tp or _tp.get("hp", 0) <= 0:
+                continue
+            _won = [dict(row) for row, chance in _failed
+                    if passives.weak_spot_reroll(participant_info, row, chance)]
+            if not _won:
+                continue
+            _applied, _ = _land_enemy_effects(_t, _won, **apply_kw)
+            if _applied:
+                turn_events.append(passives.weak_spot_event(
+                    actor_pid, _t, [_normalize_effect(r) for r in _applied]))
+
+        # FEAT-190 E17: enemies landed by the attack itself (before the extra
+        # hit, which never records on-hit state).
+        _note_landed(actx)
+
+        # FEAT-190 E10: an attacker killed by a reflect gets no extra hit.
+        if not _actor_alive():
+            return 0
+        plan = passives.plan_extra_hit(actx, battle_state)
+        if not plan:
+            return 0
+        _tpid = plan["target_pid"]
+        _tp = participants_map.get(str(_tpid))
+        if not _tp or _tp.get("hp", 0) <= 0:
+            return 0
+        # Extra hits never redirect (E19): a deceived extra hit is a miss.
+        _ctx = await _build_target_ctx(_tpid, allow_redirect=False)
+        _extra_tag = {**event_extra, "extra_hit": plan["kind"], "extra_mult": plan["mult"]}
+        if _ctx["dodged"] or _ctx["deceived"]:
+            _ev = _miss_event(_tpid, _ctx, _extra_tag)
+            _ev.setdefault("passives", []).append(plan["contribution"])
+            turn_events.append(_ev)
+            if _ctx["dodged"]:
+                turn_events.extend(passives.on_dodged(battle_state, _tpid))
+            return 0
+        _dealt, _ev, _post = await _strike(
+            _tpid, plan["entry"], 1.0, _ctx, actx, pct_buffs, attacker_attrs,
+            weapon_of(plan["entry"]), event_extra, rage_pct, rage_key,
+            entry_slot_default, extra_plan=plan,
+        )
+        turn_events.append(_ev)
+        turn_events.extend(_post)
+        if (not _ev.get("dodged") and not _ev.get("hit_chance_failed")
+                and _tpid not in _landed_enemies):
+            _landed_enemies.append(_tpid)
+        return _dealt
+
+    # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)
     # ------------------------------------------------------------------------------
     support_id = request.skills.support_skill_id
@@ -2767,8 +3308,8 @@ async def _make_action_core(
         self_effects = [e for e in support_rank.get("effects", [])
                         if e.get("target_side") == "self"]
         if self_effects:
-            apply_new_effects(
-                battle_state, request.participant_id, self_effects,
+            _apply_effects(
+                request.participant_id, self_effects,
                 owner_pid=request.participant_id,
             )
             turn_events.append({
@@ -2779,27 +3320,18 @@ async def _make_action_core(
         # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in support_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
-        enemy_effects = _filter_effects_by_chance(
-            enemy_effects,
-            attacker_luck_bonus,
-            await _res_effects_now(defender_pid),
-        )
+        enemy_effects = await _roll_enemy_effects(enemy_effects, defender_pid)
         if enemy_effects:
-            apply_new_effects(
-                battle_state, defender_pid, enemy_effects, is_enemy=True,
-                owner_pid=request.participant_id,
-            )
-            turn_events.append({
-                "event": "apply_effects", "who": defender_pid,
-                "kind": "support", "effects": [_normalize_effect(e) for e in enemy_effects],
-            })
+            _applied, _pc = _land_enemy_effects(defender_pid, enemy_effects)
+            if _applied:
+                turn_events.append(_effects_event(defender_pid, "support", _applied, _pc))
 
         # ally-эффекты — баф/лечение выбранного союзника (FEAT-143 ally targeting)
         ally_effects = [e for e in support_rank.get("effects", [])
                         if e.get("target_side") == "ally"]
         if ally_effects:
-            apply_new_effects(
-                battle_state, ally_target_pid, ally_effects,
+            _apply_effects(
+                ally_target_pid, ally_effects,
                 owner_pid=request.participant_id,
             )
             turn_events.append({
@@ -2812,8 +3344,8 @@ async def _make_action_core(
                               if e.get("target_side") == "all_allies"]
         if all_allies_effects:
             for _ally_pid in alive_allies:
-                apply_new_effects(
-                    battle_state, _ally_pid, [dict(e) for e in all_allies_effects],
+                _apply_effects(
+                    _ally_pid, [dict(e) for e in all_allies_effects],
                     owner_pid=request.participant_id,
                 )
                 turn_events.append({
@@ -2827,21 +3359,12 @@ async def _make_action_core(
                                if e.get("target_side") == "all_enemies"]
         if all_enemies_effects:
             for _enemy_pid in alive_enemies:
-                _epd = participants_map[str(_enemy_pid)]
-                _eff = _filter_effects_by_chance(
-                    all_enemies_effects, attacker_luck_bonus,
-                    await _res_effects_now(_enemy_pid),
-                )
+                _eff = await _roll_enemy_effects(all_enemies_effects, _enemy_pid)
                 if not _eff:
                     continue
-                apply_new_effects(
-                    battle_state, _enemy_pid, [dict(e) for e in _eff], is_enemy=True,
-                    owner_pid=request.participant_id,
-                )
-                turn_events.append({
-                    "event": "apply_effects", "who": _enemy_pid, "kind": "support",
-                    "effects": [_normalize_effect(e) for e in _eff],
-                })
+                _applied, _pc = _land_enemy_effects(_enemy_pid, [dict(e) for e in _eff])
+                if _applied:
+                    turn_events.append(_effects_event(_enemy_pid, "support", _applied, _pc))
 
     # ------------------------------------------------------------------------------
     # 7. DEFENSE-навык (баффы на self)
@@ -2853,8 +3376,8 @@ async def _make_action_core(
         self_effects = [e for e in defense_rank.get("effects", [])
                         if e.get("target_side") == "self"]
         if self_effects:
-            apply_new_effects(
-                battle_state, request.participant_id, self_effects,
+            _apply_effects(
+                request.participant_id, self_effects,
                 owner_pid=request.participant_id,
             )
             turn_events.append({
@@ -2865,27 +3388,18 @@ async def _make_action_core(
         # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in defense_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
-        enemy_effects = _filter_effects_by_chance(
-            enemy_effects,
-            attacker_luck_bonus,
-            await _res_effects_now(defender_pid),
-        )
+        enemy_effects = await _roll_enemy_effects(enemy_effects, defender_pid)
         if enemy_effects:
-            apply_new_effects(
-                battle_state, defender_pid, enemy_effects, is_enemy=True,
-                owner_pid=request.participant_id,
-            )
-            turn_events.append({
-                "event": "apply_effects", "who": defender_pid,
-                "kind": "defense", "effects": [_normalize_effect(e) for e in enemy_effects],
-            })
+            _applied, _pc = _land_enemy_effects(defender_pid, enemy_effects)
+            if _applied:
+                turn_events.append(_effects_event(defender_pid, "defense", _applied, _pc))
 
         # ally-эффекты — на выбранного союзника (FEAT-143 ally targeting)
         ally_effects = [e for e in defense_rank.get("effects", [])
                         if e.get("target_side") == "ally"]
         if ally_effects:
-            apply_new_effects(
-                battle_state, ally_target_pid, ally_effects,
+            _apply_effects(
+                ally_target_pid, ally_effects,
                 owner_pid=request.participant_id,
             )
             turn_events.append({
@@ -2898,8 +3412,8 @@ async def _make_action_core(
                               if e.get("target_side") == "all_allies"]
         if all_allies_effects:
             for _ally_pid in alive_allies:
-                apply_new_effects(
-                    battle_state, _ally_pid, [dict(e) for e in all_allies_effects],
+                _apply_effects(
+                    _ally_pid, [dict(e) for e in all_allies_effects],
                     owner_pid=request.participant_id,
                 )
                 turn_events.append({
@@ -2912,21 +3426,12 @@ async def _make_action_core(
                                if e.get("target_side") == "all_enemies"]
         if all_enemies_effects:
             for _enemy_pid in alive_enemies:
-                _epd = participants_map[str(_enemy_pid)]
-                _eff = _filter_effects_by_chance(
-                    all_enemies_effects, attacker_luck_bonus,
-                    await _res_effects_now(_enemy_pid),
-                )
+                _eff = await _roll_enemy_effects(all_enemies_effects, _enemy_pid)
                 if not _eff:
                     continue
-                apply_new_effects(
-                    battle_state, _enemy_pid, [dict(e) for e in _eff], is_enemy=True,
-                    owner_pid=request.participant_id,
-                )
-                turn_events.append({
-                    "event": "apply_effects", "who": _enemy_pid, "kind": "defense",
-                    "effects": [_normalize_effect(e) for e in _eff],
-                })
+                _applied, _pc = _land_enemy_effects(_enemy_pid, [dict(e) for e in _eff])
+                if _applied:
+                    turn_events.append(_effects_event(_enemy_pid, "defense", _applied, _pc))
 
     # ------------------------------------------------------------------------------
     # 8. Использование предмета из fast-слота (одноразовое)
@@ -3002,6 +3507,11 @@ async def _make_action_core(
                     mx = part[f"max_{res if res != 'health' else 'hp'}"]
                     new = min(old + delta, mx)
                     part[res if res != "health" else "hp"] = new
+                    if res == "health":
+                        # FEAT-190 E18c: the Auromancer's potion overheal → tide.
+                        _pending_procs.extend(passives.on_heal(
+                            battle_state, actor_pid, actor_pid, delta, new - old,
+                        ))
 
                 # ── 5) Боевые эффекты предмета (FEAT-168).
                 # Строки приходят в той же форме, что у навыков, поэтому их
@@ -3023,9 +3533,6 @@ async def _make_action_core(
                         return list(alive_allies)
                     return [request.participant_id]
 
-                async def _res_effects_of(pid: int) -> float:
-                    return await _res_effects_now(pid)
-
                 # Яд на оружие: его enemy-строки — это то, что получает цель ПРИ
                 # ПОПАДАНИИ, а не сейчас. Они уезжают в weapon_coating.
                 coating_effect_rows: List[Dict] = []
@@ -3038,6 +3545,8 @@ async def _make_action_core(
 
                 applied_effect_log: List[Dict] = []
                 removed_effect_log: List[Dict] = []
+                # FEAT-189: failed enemy rows -> Agent re-roll after the damage.
+                _item_failed_rows: Dict[int, list] = {}
 
                 for row in item_effect_rows:
                     side = row["target_side"]
@@ -3046,11 +3555,18 @@ async def _make_action_core(
                     for _tpid in targets:
                         # Бросок шанса — та же формула, что у навыков
                         # (удача атакующего, стойкость цели для вражеских строк).
-                        _passed = _filter_effects_by_chance(
-                            [row],
-                            attacker_luck_bonus,
-                            (await _res_effects_of(_tpid)) if is_enemy_side else 0,
-                        )
+                        if is_enemy_side:
+                            _passed = await _roll_enemy_effects(
+                                [row], _tpid,
+                                failed_out=(
+                                    None if _is_cleanse_row(row)
+                                    else _item_failed_rows.setdefault(_tpid, [])
+                                ),
+                            )
+                        else:
+                            _passed = _filter_effects_by_chance(
+                                [row], attacker_luck_bonus, 0,
+                            )
                         if not _passed:
                             continue
                         if _is_cleanse_row(row):
@@ -3078,25 +3594,41 @@ async def _make_action_core(
                                     "removed": removed,
                                 })
                             continue
-                        apply_new_effects(
-                            battle_state, _tpid, [dict(row)],
-                            is_enemy=is_enemy_side,
-                            owner_pid=request.participant_id,
-                            # Эффекты ПРЕДМЕТА обновляются, а не копятся: тот же
-                            # предмет продлевает свою запись, чужой предмет и
-                            # навыки не трогаются (FEAT-168).
-                            source=("item", item_id),
-                        )
-                        _normalized = _normalize_effect(row)
+                        _row_contribs: List[Dict] = []
+                        if is_enemy_side:
+                            # FEAT-189: same landing wrapper as skills (duration
+                            # +1, Monk immunity).
+                            _applied, _row_contribs = _land_enemy_effects(
+                                _tpid, [dict(row)], is_enemy=True,
+                                source=("item", item_id),
+                            )
+                            if not _applied:
+                                continue
+                            _logged_row = _applied[0] if _row_contribs else row
+                        else:
+                            _apply_effects(
+                                _tpid, [dict(row)],
+                                is_enemy=is_enemy_side,
+                                owner_pid=request.participant_id,
+                                # Эффекты ПРЕДМЕТА обновляются, а не копятся: тот же
+                                # предмет продлевает свою запись, чужой предмет и
+                                # навыки не трогаются (FEAT-168).
+                                source=("item", item_id),
+                            )
+                            _logged_row = row
+                        _normalized = _normalize_effect(_logged_row)
                         applied_effect_log.append(_normalized)
-                        turn_events.append({
+                        _item_eff_event = {
                             "event": "apply_effects",
                             "who": _tpid,
                             "kind": "item",
                             "item_id": item_id,
                             "item_name": item_name,
                             "effects": [_normalized],
-                        })
+                        }
+                        if _row_contribs:
+                            _item_eff_event["passives"] = _row_contribs
+                        turn_events.append(_item_eff_event)
 
                 # ── 6) Урон от предмета (свитки) — та же формула, что у навыков:
                 # криты, сопротивления, уклонение, AoE.
@@ -3106,34 +3638,62 @@ async def _make_action_core(
                     _item_mods = aggregate_modifiers(
                         battle_state.get("active_effects", {}).get(me, [])
                     )
-                    _item_attacker_attrs = apply_flat_modifiers(
+                    _item_plain_attrs = apply_flat_modifiers(
                         base_attacker_attributes, _item_mods
                     )
+                    _item_attacker_attrs = _actor_attrs(_item_plain_attrs)
                     _item_pct_damage = build_percent_damage_buffs(_item_mods)
+                    # FEAT-190 E19: effects-only buffs for «Обман» redirects
+                    # (no rage, no attack-level passive %).
+                    _item_pct_plain = _copy_buffs(_item_pct_damage)
+                    # FEAT-188: пассивка подкласса (Ярость Берсерка) — в общий
+                    # процент урона; считается один раз по текущему HP.
+                    _item_passive_pct, _item_passive_key = passive_damage_bonus(part)
+                    if _item_passive_pct > 0:
+                        _item_pct_damage["all"] = _item_pct_damage.get("all", 0) + _item_passive_pct
+                    # FEAT-189 H2: a damaging item (scroll) is an attack like a
+                    # skill — passives open it with the enemy-side entry types.
+                    _item_enemy_rows = [
+                        d for d in item_damage_rows
+                        if isinstance(d, dict)
+                        and (d.get("target_side") or ITEM_TARGET_ENEMY).strip().lower()
+                        == ITEM_TARGET_ENEMY
+                    ]
+                    _item_actx = passives.begin_attack(
+                        battle_state, request.participant_id, defender_pid,
+                        [passives.resolve_entry_type(d, attacker_weapons, "no_weapon")
+                         for d in _item_enemy_rows],
+                        "item",
+                    ) if _item_enemy_rows else None
+                    if _item_actx is not None and _item_actx["pct"] > 0:
+                        _item_pct_damage["all"] = _item_pct_damage.get("all", 0) + _item_actx["pct"]
                     _item_ctx: Dict[int, Dict] = {}
                     _item_dodge_logged: set = set()
+                    _item_event_extra = {
+                        "source_kind": "item", "item_id": item_id, "item_name": item_name,
+                    }
 
                     async def _item_ctx_for(pid: int) -> Dict:
                         if pid not in _item_ctx:
-                            _pd = participants_map[str(pid)]
-                            _mods = aggregate_modifiers(
-                                battle_state.get("active_effects", {}).get(str(pid), [])
-                            )
-                            _tattrs = apply_flat_modifiers(
-                                await attrs(_pd["character_id"]), _mods
-                            )
-                            _item_ctx[pid] = {
-                                "attrs": _tattrs,
-                                "resists": build_percent_resist_buffs(_mods, _tattrs),
-                                "dodged": roll_dodge(_tattrs.get("dodge", 0)),
-                            }
+                            _item_ctx[pid] = await _build_target_ctx(pid)
                         return _item_ctx[pid]
+
+                    def _item_weapon_of(dmg: Dict):
+                        return (
+                            None
+                            if dmg.get("weapon_slot", "no_weapon") == "no_weapon"
+                            else attacker_weapons.get(dmg.get("weapon_slot"))
+                        )
 
                     # Поле `chance` у строк урона НЕ бросается — намеренно, ровно
                     # как в шаге атаки для урона навыков: попадание решают
                     # уклонение и сопротивления. Админка поле шанса у строк урона
                     # не показывает, чтобы не обещать несуществующий бросок.
+                    _item_plain_ctx: Dict[int, Dict] = {}
                     for dmg in item_damage_rows:
+                        # FEAT-190 E10: an actor killed by a reflect stops.
+                        if not _actor_alive():
+                            break
                         if not isinstance(dmg, dict):
                             continue
                         _side = (dmg.get("target_side") or ITEM_TARGET_ENEMY).strip().lower()
@@ -3145,53 +3705,54 @@ async def _make_action_core(
                         else:
                             _targets = [(p, 1.0) for p in _item_targets(_side)]
                         for _tpid, _tmult in _targets:
+                            if not _actor_alive():
+                                break
                             _tpart = participants_map.get(str(_tpid))
                             if not _tpart or _tpart.get("hp", 0) <= 0:
                                 continue
                             _ctx = await _item_ctx_for(_tpid)
-                            if _ctx["dodged"]:
+                            if _ctx["dodged"] or _ctx["deceived"]:
                                 if _tpid not in _item_dodge_logged:
                                     _item_dodge_logged.add(_tpid)
-                                    turn_events.append({
-                                        "event": "damage", "source": request.participant_id,
-                                        "target": _tpid, "dodged": True, "final": 0,
-                                        "source_kind": "item", "item_id": item_id,
-                                        "item_name": item_name,
-                                    })
-                                continue
-                            dealt, log = await compute_damage_with_rolls(
-                                damage_entry=dmg,
-                                attacker_attr=_item_attacker_attrs,
-                                weapon=(
-                                    None
-                                    if dmg.get("weapon_slot", "no_weapon") == "no_weapon"
-                                    else attacker_weapons.get(dmg.get("weapon_slot"))
-                                ),
-                                percent_buffs=_item_pct_damage,
-                                defender_attr=_ctx["attrs"],
-                                percent_resists=_ctx["resists"],
-                                class_id=attacker_class_id,
-                                apply_dodge=False,
-                            )
-                            if _tmult != 1.0:
-                                dealt *= _tmult
-                                log = {**log, "final": round(dealt, 2), "aoe_falloff": _tmult}
-                            participants_map[str(_tpid)]["hp"] -= dealt
-                            dealt_int = int(round(dealt))
-                            item_damage_total += dealt_int
-                            part["total_damage_dealt"] = part.get("total_damage_dealt", 0) + dealt_int
-                            participants_map[str(_tpid)]["total_damage_received"] = (
-                                participants_map[str(_tpid)].get("total_damage_received", 0) + dealt_int
-                            )
-                            turn_events.append({
-                                "event": "damage", "source": request.participant_id,
-                                "target": _tpid, **log,
-                                "source_kind": "item", "item_id": item_id,
-                                "item_name": item_name,
-                            })
+                                    _log_miss(_tpid, _ctx, _item_event_extra)
+                                _rpid = _redirect_target(_ctx) if _ctx["deceived"] else None
+                                if _rpid is None:
+                                    continue
+                                # FEAT-190 E19: «Обман» sends this entry into
+                                # the attacker's ally at 50%, no passives.
+                                if _rpid not in _item_plain_ctx:
+                                    _item_plain_ctx[_rpid] = await _plain_ctx(_rpid)
+                                _dealt_int, _item_dmg_event, _post = await _strike(
+                                    _rpid, dmg, _tmult * passives.REDIRECT_MULT,
+                                    _item_plain_ctx[_rpid], None,
+                                    _item_pct_plain, _item_plain_attrs,
+                                    _item_weapon_of(dmg), _item_event_extra,
+                                    0, None, "no_weapon", redirect_from=_tpid,
+                                )
+                            else:
+                                _dealt_int, _item_dmg_event, _post = await _strike(
+                                    _tpid, dmg, _tmult, _ctx,
+                                    _item_actx if _side == ITEM_TARGET_ENEMY else None,
+                                    _item_pct_damage, _item_attacker_attrs,
+                                    _item_weapon_of(dmg), _item_event_extra,
+                                    _item_passive_pct, _item_passive_key, "no_weapon",
+                                )
+                            item_damage_total += _dealt_int
+                            turn_events.append(_item_dmg_event)
+                            turn_events.extend(_post)
+
+                    if _item_actx is not None:
+                        item_damage_total += await _finish_passive_attack(
+                            _item_actx, _item_failed_rows,
+                            _item_passive_pct, _item_passive_key,
+                            _item_pct_damage, _item_attacker_attrs, _item_weapon_of,
+                            _item_event_extra, "no_weapon",
+                            {"is_enemy": True, "source": ("item", item_id)},
+                        )
 
                 # ── 7) Нанесение яда на оружие.
-                if item_action == ITEM_ACTION_WEAPON_COATING:
+                # FEAT-190 E10: not for an actor killed by the item's own reflect.
+                if item_action == ITEM_ACTION_WEAPON_COATING and _actor_alive():
                     try:
                         _coating_turns = int(matched_slot.get("coating_turns") or 0)
                     except (TypeError, ValueError):
@@ -3254,7 +3815,10 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     attack_id = request.skills.attack_skill_id
     logger.debug(f"[SKILL] attack_skill_id={request.skills.attack_skill_id}")
-    if attack_id and attack_id > 0:
+    # FEAT-190 E10: an attacker killed by a reflect in the scroll step does
+    # nothing further — no attack effect rows (9.0–9.0e), no damage, no H2.
+    # Costs and cooldowns are still charged below (the action was taken).
+    if attack_id and attack_id > 0 and _actor_alive():
         attack_rank = await get_resolved_skill(attack_id, attacker_character_id)
         logger.debug(f"[SKILL] attack_skill resolved={attack_rank}")
 
@@ -3262,8 +3826,8 @@ async def _make_action_core(
         attack_self_effects = [e for e in attack_rank.get("effects", [])
                                if e.get("target_side") == "self"]
         if attack_self_effects:
-            apply_new_effects(
-                battle_state, request.participant_id, attack_self_effects,
+            _apply_effects(
+                request.participant_id, attack_self_effects,
                 owner_pid=request.participant_id,
             )
             turn_events.append({
@@ -3274,30 +3838,26 @@ async def _make_action_core(
 
         # ── 9.0b. Apply attack enemy-effects BEFORE damage so debuffs (e.g.
         # resist-down) affect this same hit. Luck-proc filter applies.
+        # FEAT-189: rows that fail here are kept for the Agent's post-damage
+        # re-roll (D5) — `_failed_enemy_rows[target] = [(row, chance), ...]`.
+        _failed_enemy_rows: Dict[int, list] = {}
         attack_enemy_effects = [e for e in attack_rank.get("effects", [])
                                 if e.get("target_side") == "enemy"]
-        attack_enemy_effects = _filter_effects_by_chance(
-            attack_enemy_effects,
-            attacker_luck_bonus,
-            await _res_effects_now(defender_pid),
+        attack_enemy_effects = await _roll_enemy_effects(
+            attack_enemy_effects, defender_pid,
+            failed_out=_failed_enemy_rows.setdefault(defender_pid, []),
         )
         if attack_enemy_effects:
-            apply_new_effects(
-                battle_state, defender_pid, attack_enemy_effects, is_enemy=True,
-                owner_pid=request.participant_id,
-            )
-            turn_events.append({
-                "event": "apply_effects", "who": defender_pid,
-                "kind": "attack",
-                "effects": [_normalize_effect(e) for e in attack_enemy_effects],
-            })
+            _applied, _pc = _land_enemy_effects(defender_pid, attack_enemy_effects)
+            if _applied:
+                turn_events.append(_effects_event(defender_pid, "attack", _applied, _pc))
 
         # ── 9.0c. Attack ally-effects — buff a chosen teammate (FEAT-143).
         attack_ally_effects = [e for e in attack_rank.get("effects", [])
                                if e.get("target_side") == "ally"]
         if attack_ally_effects:
-            apply_new_effects(
-                battle_state, ally_target_pid, attack_ally_effects,
+            _apply_effects(
+                ally_target_pid, attack_ally_effects,
                 owner_pid=request.participant_id,
             )
             turn_events.append({
@@ -3311,8 +3871,8 @@ async def _make_action_core(
                                      if e.get("target_side") == "all_allies"]
         if attack_all_allies_effects:
             for _ally_pid in alive_allies:
-                apply_new_effects(
-                    battle_state, _ally_pid, [dict(e) for e in attack_all_allies_effects],
+                _apply_effects(
+                    _ally_pid, [dict(e) for e in attack_all_allies_effects],
                     owner_pid=request.participant_id,
                 )
                 turn_events.append({
@@ -3326,30 +3886,56 @@ async def _make_action_core(
                                       if e.get("target_side") == "all_enemies"]
         if attack_all_enemies_effects:
             for _enemy_pid in alive_enemies:
-                _epd = participants_map[str(_enemy_pid)]
-                _eff = _filter_effects_by_chance(
-                    attack_all_enemies_effects, attacker_luck_bonus,
-                    await _res_effects_now(_enemy_pid),
+                _eff = await _roll_enemy_effects(
+                    attack_all_enemies_effects, _enemy_pid,
+                    failed_out=_failed_enemy_rows.setdefault(_enemy_pid, []),
                 )
                 if not _eff:
                     continue
-                apply_new_effects(
-                    battle_state, _enemy_pid, [dict(e) for e in _eff], is_enemy=True,
-                    owner_pid=request.participant_id,
-                )
-                turn_events.append({
-                    "event": "apply_effects", "who": _enemy_pid, "kind": "attack",
-                    "effects": [_normalize_effect(e) for e in _eff],
-                })
+                _applied, _pc = _land_enemy_effects(_enemy_pid, [dict(e) for e in _eff])
+                if _applied:
+                    turn_events.append(_effects_event(_enemy_pid, "attack", _applied, _pc))
 
         attacker_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(request.participant_id), [])
         )
         percent_damage_buffs = build_percent_damage_buffs(attacker_buff_modifiers)
+        # FEAT-190 E19: effects-only buffs for «Обман» redirects (no rage, no
+        # attack-level passive %) — snapshot before both are added in place.
+        _pct_plain = _copy_buffs(percent_damage_buffs)
+        # FEAT-188: пассивка подкласса (Ярость Берсерка) идёт в общий процент
+        # урона. Считается ОДИН раз на атаку, по HP в её начале. С FEAT-190 HP
+        # атакующего может меняться внутри атаки (отражение Хранителя,
+        # вампиризм) — это сознательно не пересчитывается. Старые бои без
+        # passive_key → 0.
+        _passive_pct, _passive_key = passive_damage_bonus(
+            battle_state["participants"].get(str(request.participant_id))
+        )
+        if _passive_pct > 0:
+            percent_damage_buffs["all"] = percent_damage_buffs.get("all", 0) + _passive_pct
 
-        attacker_attributes = apply_flat_modifiers(
+        # FEAT-189 H2: open the attack for the subclass passives (Inquisitor
+        # mark, Gladiator / Saber attack-level %, Assassin shadow, Mechanic duel
+        # roll, Salamander reset). Its `pct` excludes rage (FEAT-188 path above).
+        # An attack skill without damage rows (e.g. debuff-only) is not an
+        # attack for the passives (same rule as the item path): no H2, so the
+        # Assassin's shadow / Salamander kindling survive it.
+        _attack_entries = [
+            d for d in attack_rank.get("damage_entries", []) if isinstance(d, dict)
+        ]
+        _actx = passives.begin_attack(
+            battle_state, request.participant_id, defender_pid,
+            [passives.resolve_entry_type(d, attacker_weapons, "main_weapon")
+             for d in _attack_entries],
+            "skill",
+        ) if _attack_entries else None
+        if _actx is not None and _actx["pct"] > 0:
+            percent_damage_buffs["all"] = percent_damage_buffs.get("all", 0) + _actx["pct"]
+
+        _plain_attacker_attributes = apply_flat_modifiers(
             base_attacker_attributes, attacker_buff_modifiers
         )
+        attacker_attributes = _actor_attrs(_plain_attacker_attributes)
 
         defender_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(defender_pid), [])
@@ -3366,29 +3952,29 @@ async def _make_action_core(
         # Per-target combat context (attrs / resists / dodge) for this attack.
         # Dodge is rolled once per target (cached), so an AoE that hits a target
         # via several entries can't show "dodged" next to a landed hit. Seed the
-        # primary with its already-computed context.
+        # primary with its already-computed context. FEAT-189: the ctx also
+        # carries passive stat/resist deltas and the Trickster's deceit roll.
         _atk_ctx = {
-            defender_pid: {
-                "attrs": defender_attributes,
-                "resists": defender_percent_resists,
-                "dodged": roll_dodge(defender_attributes.get("dodge", 0)),
-            }
+            defender_pid: _finish_target_ctx(
+                defender_pid, defender_attributes, defender_percent_resists
+            )
         }
         _dodge_logged: set = set()
+        _redirect_ctx: Dict[int, Dict] = {}
 
         async def _ctx_for(pid: int):
             if pid not in _atk_ctx:
-                _pd = participants_map[str(pid)]
-                _mods = aggregate_modifiers(
-                    battle_state.get("active_effects", {}).get(str(pid), [])
-                )
-                _tattrs = apply_flat_modifiers(await attrs(_pd["character_id"]), _mods)
-                _atk_ctx[pid] = {
-                    "attrs": _tattrs,
-                    "resists": build_percent_resist_buffs(_mods, _tattrs),
-                    "dodged": roll_dodge(_tattrs.get("dodge", 0)),
-                }
+                _atk_ctx[pid] = await _build_target_ctx(pid)
             return _atk_ctx[pid]
+
+        def _skill_weapon_of(dmg: Dict):
+            # "no_weapon": damage from attributes only, ignoring any equipped
+            # weapon's modifier. Any unknown slot also resolves to None (unarmed).
+            return (
+                None
+                if dmg.get("weapon_slot") == "no_weapon"
+                else attacker_weapons.get(dmg.get("weapon_slot", "main_weapon"))
+            )
 
         # FEAT-168: нанесённый на оружие яд действует на КАЖДУЮ строку урона,
         # которая бьёт оружием (no_weapon — свитки и голые руки — не в счёт).
@@ -3415,67 +4001,63 @@ async def _make_action_core(
                 dmg.get("aoe_falloff", 50), dmg.get("aoe_max_targets", 3),
             )
             for _tpid, _tmult in aoe_targets:
+                # FEAT-190 E10: an attacker killed by a reflect (here or in
+                # the scroll step) strikes no more.
+                if not _actor_alive():
+                    break
                 _ctx = await _ctx_for(_tpid)
-                if _ctx["dodged"]:
+                if _ctx["dodged"] or _ctx["deceived"]:
                     if _tpid not in _dodge_logged:
                         _dodge_logged.add(_tpid)
-                        turn_events.append({
-                            "event": "damage", "source": request.participant_id,
-                            "target": _tpid, "dodged": True, "final": 0,
-                        })
+                        _log_miss(_tpid, _ctx, {})
+                    _rpid = _redirect_target(_ctx) if _ctx["deceived"] else None
+                    if _rpid is None:
+                        continue
+                    # FEAT-190 E19: «Обман» sends this entry into the
+                    # attacker's ally at 50% — plain ctx, no passives, no
+                    # coating effects (the Trickster wasn't hit).
+                    if _rpid not in _redirect_ctx:
+                        _redirect_ctx[_rpid] = await _plain_ctx(_rpid)
+                    _, _dmg_event, _post = await _strike(
+                        _rpid, dmg, _tmult * passives.REDIRECT_MULT,
+                        _redirect_ctx[_rpid], None, _pct_plain,
+                        _plain_attacker_attributes, _skill_weapon_of(dmg), {},
+                        0, None, "main_weapon", redirect_from=_tpid,
+                    )
+                    turn_events.append(_dmg_event)
+                    turn_events.extend(_post)
                     continue
-                dealt, log = await compute_damage_with_rolls(
-                    damage_entry=dmg,
-                    attacker_attr=attacker_attributes,
-                    # "no_weapon": damage from attributes only, ignoring any equipped
-                    # weapon's modifier. Any unknown slot also resolves to None (unarmed).
-                    weapon=(
-                        None
-                        if dmg.get("weapon_slot") == "no_weapon"
-                        else attacker_weapons.get(dmg.get("weapon_slot", "main_weapon"))
-                    ),
-                    percent_buffs=percent_damage_buffs,
-                    defender_attr=_ctx["attrs"],
-                    percent_resists=_ctx["resists"],
-                    class_id=attacker_class_id,
-                    apply_dodge=False,
-                )
-                if _tmult != 1.0:
-                    dealt *= _tmult
-                    log = {**log, "final": round(dealt, 2), "aoe_falloff": _tmult}
-                battle_state["participants"][str(_tpid)]["hp"] -= dealt
-                dealt_int = int(round(dealt))
-                attacker_p = battle_state["participants"][str(request.participant_id)]
-                attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
-                battle_state["participants"][str(_tpid)]["total_damage_received"] = (
-                    battle_state["participants"][str(_tpid)].get("total_damage_received", 0) + dealt_int
+                _, _dmg_event, _post = await _strike(
+                    _tpid, dmg, _tmult, _ctx, _actx, percent_damage_buffs,
+                    attacker_attributes, _skill_weapon_of(dmg), {},
+                    _passive_pct, _passive_key, "main_weapon",
                 )
                 if _coated_entry and _tpid not in _coating_hit_targets:
                     _coating_hit_targets.append(_tpid)
-                turn_events.append({
-                    "event": "damage", "source": request.participant_id,
-                    "target": _tpid, **log
-                })
+                turn_events.append(_dmg_event)
+                turn_events.extend(_post)
 
         # FEAT-168: эффекты яда вешаются на тех, кто реально получил урон
         # отравленным оружием — по одному разу за ход на цель, с обычным
         # броском шанса (удача атакующего против стойкости цели).
+        # FEAT-189: Agent «Слабое место» adds its pp directly here for targets
+        # it critted (the coating roll already happens after the damage).
         _coating_effects = (_coating or {}).get("effects") or []
-        if _coating_effects and _coating_hit_targets:
+        # FEAT-190 E10: an attacker killed by a reflect lands no more effects.
+        if _coating_effects and _coating_hit_targets and _actor_alive():
+            _crit_now = passives.critted_targets(_actx)
             for _tpid in _coating_hit_targets:
                 _tpd = participants_map.get(str(_tpid))
                 if not _tpd:
                     continue
-                _rows = _filter_effects_by_chance(
+                _rows = await _roll_enemy_effects(
                     [dict(r) for r in _coating_effects if isinstance(r, dict)],
-                    attacker_luck_bonus,
-                    await _res_effects_now(_tpid),
+                    _tpid, crit_targets=_crit_now,
                 )
                 if not _rows:
                     continue
-                apply_new_effects(
-                    battle_state, _tpid, _rows, is_enemy=True,
-                    owner_pid=request.participant_id,
+                _applied, _pc = _land_enemy_effects(
+                    _tpid, _rows,
                     # Источник — сам яд: повторные попадания продлевают его
                     # эффект, а не складывают несколько отравлений. У яда из
                     # старого состояния item_id может не быть — тогда источник
@@ -3485,12 +4067,20 @@ async def _make_action_core(
                         if _coating.get("item_id") else None
                     ),
                 )
-                turn_events.append({
-                    "event": "apply_effects", "who": _tpid, "kind": "item",
-                    "item_id": _coating.get("item_id"),
-                    "item_name": _coating.get("name"),
-                    "effects": [_normalize_effect(r) for r in _rows],
-                })
+                if _applied:
+                    turn_events.append(_effects_event(
+                        _tpid, "item", _applied, _pc,
+                        item_id=_coating.get("item_id"),
+                        item_name=_coating.get("name"),
+                    ))
+
+        # FEAT-189: H9 on-hit stacks → Agent re-roll → H10 extra hit.
+        if _actx is not None:
+            await _finish_passive_attack(
+                _actx, _failed_enemy_rows, _passive_pct, _passive_key,
+                percent_damage_buffs, attacker_attributes, _skill_weapon_of,
+                {}, "main_weapon", {},
+            )
 
     # ------------------------------------------------------------------------------
     # 9.1. Equipment durability loss (10% chance per hit to lose 1 durability)
@@ -3555,9 +4145,35 @@ async def _make_action_core(
                      support_rank.get("skill_id") or request.skills.support_skill_id,
                      support_rank["cooldown"])
 
-    turn_events.append(
-        {"event": "resource_spend", "who": request.participant_id, **spend}
-    )
+    _flush_absorbs()   # FEAT-190: procs deferred by the last effect landing
+    _spend_event = {"event": "resource_spend", "who": request.participant_id, **spend}
+    _spend_contribs: List[Dict] = []
+    if spend.get("mana_discount"):
+        # FEAT-189 H12: Caster «Чистая энергия» — saved mana in the log.
+        _spend_contribs.append(passives.mana_discount_contribution(
+            spend["mana_discount"], request.participant_id))
+    if spend.get("hp_paid"):
+        # FEAT-190 H23: Necromancer «Плата кровью» — HP paid for the mana.
+        _spend_contribs.append(passives.blood_price_contribution(
+            spend["hp_paid"], request.participant_id))
+    if _spend_contribs:
+        _spend_event["passives"] = _spend_contribs
+    turn_events.append(_spend_event)
+
+    # FEAT-190 H24 (E15–E17): end of the actor's action — Bard «Ритм» stacks,
+    # Etheriad «Шёпот духов». After the payment (a 400 voids them too) and
+    # before the DoT tick; rows are applied here (passives never import buffs)
+    # with a ("passive", key) source so re-application refreshes in place.
+    if _actor_alive():
+        _apps, _eoa_events = passives.end_of_action(
+            battle_state, actor_pid, bool(_full_skip), _landed_enemies,
+        )
+        for _t, _rows, _source, _is_enemy in _apps:
+            apply_new_effects(
+                battle_state, _t, _rows, is_enemy=_is_enemy,
+                owner_pid=actor_pid, source=_source,
+            )
+        turn_events.extend(_eoa_events)
     logger.debug("[EVENTS] turn_events=%s", turn_events)
 
     # ------------------------------------------------------------------------------
@@ -3566,13 +4182,22 @@ async def _make_action_core(
     # (чтобы свеженаложенные не били в этот же ход). Урон может добить цель —
     # проверка гибели ниже это учтёт.
     # ------------------------------------------------------------------------------
-    periodic_events = tick_periodic_effects(battle_state, request.participant_id)
+    # FEAT-190: shields eat DoT (absorb_fn), HoT overflow feeds the
+    # Auromancer's tide (overheal_fn); a Paladin brought low by a tick gets
+    # his vow (check_vows sweep after the periodic events).
+    _hp_before_dot = passives.snapshot_hp(battle_state)
+    periodic_events = tick_periodic_effects(
+        battle_state, request.participant_id,
+        absorb_fn=_absorb_fn, overheal_fn=_overheal_fn,
+    )
     if periodic_events:
         attacker_p = battle_state["participants"][str(request.participant_id)]
         attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + sum(
             ev["amount"] for ev in periodic_events
         )
         turn_events.extend(periodic_events)
+    _flush_absorbs()
+    turn_events.extend(passives.check_vows(battle_state, _hp_before_dot))
 
     # ------------------------------------------------------------------------------
     # 9.4. Тик длительности эффектов АТАКУЮЩЕГО (конец его хода).
@@ -3581,6 +4206,9 @@ async def _make_action_core(
     # в конце ЕГО собственного хода.
     # ------------------------------------------------------------------------------
     decrement_durations(battle_state, request.participant_id)
+    # FEAT-190 H17: the actor's timed shields (Auromancer tide) tick on the
+    # same clock as the effects he casts.
+    passives.tick_shields(battle_state, request.participant_id)
 
     # ------------------------------------------------------------------------------
     # 9.4b. FEAT-168: яд на оружии живёт по тем же часам — убывает в конце хода
@@ -3600,14 +4228,40 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     # Mark & log each newly-defeated participant exactly once (so group battles
     # don't re-log the same corpse every turn).
+    _newly_defeated: List[int] = []
     for pid_str, pdata in battle_state["participants"].items():
         if pdata["hp"] <= 0 and not pdata.get("defeated"):
             pdata["defeated"] = True
+            _newly_defeated.append(int(pid_str))
             turn_events.append({
                 "event": "participant_defeated",
                 "who": int(pid_str),
                 "hp": pdata["hp"],
             })
+    # FEAT-190 H25 (E14): the dead own no more turns — their Bard / Etheriad
+    # rows and shields would never tick, so they go now.
+    if _newly_defeated:
+        turn_events.extend(passives.on_deaths(battle_state, _newly_defeated))
+
+    # FEAT-189 H13 (D11): every HP loss inside this action is the actor's —
+    # direct hits, scrolls, extra hits and the DoT ticks of effects the actor
+    # owns — so every newly defeated ENEMY of the actor is the actor's kill.
+    _victims = [
+        v for v in _newly_defeated
+        if battle_state["participants"][str(v)].get("team") != attacker_team
+    ]
+    if _victims:
+        _kill_events, _saber_stacks = passives.on_kills(
+            battle_state, request.participant_id, _victims
+        )
+        turn_events.extend(_kill_events)
+        if _saber_stacks is not None:
+            # Soft-fail inside: a lost write only resets the run bonus.
+            await set_saber_run_stacks(
+                battle_state.get("dungeon_session_id"),
+                participant_info["character_id"],
+                _saber_stacks,
+            )
 
     # Team-based victory: a team survives while ANY member has hp > 0. The battle
     # ends only when at most one team still has a living member.
@@ -4133,30 +4787,9 @@ async def respond_to_pvp_invitation(
             await build_participant_info(p.character_id, p.id)
         )
 
-    participants_payload = []
-    for snap in participants_info:
-        participants_payload.append({
-            "participant_id": snap["participant_id"],
-            "character_id": snap["character_id"],
-            "team": next(
-                pl.team for pl in participant_objs
-                if pl.id == snap["participant_id"]
-            ),
-            "hp": snap["attributes"]["current_health"],
-            "mana": snap["attributes"]["current_mana"],
-            "energy": snap["attributes"]["current_energy"],
-            "stamina": snap["attributes"]["current_stamina"],
-            "max_hp": snap["attributes"]["max_health"],
-            "max_mana": snap["attributes"]["max_mana"],
-            "max_energy": snap["attributes"]["max_energy"],
-            "max_stamina": snap["attributes"]["max_stamina"],
-            "fast_slots": snap["fast_slots"],
-            "equipment_durability": snap.get("equipment_durability", {}),
-            # Initiative + agility drive the turn order (FEAT-143). Agility is
-            # kept for tie-breaks; initiative is the weighted stat sum.
-            "agility": snap["attributes"].get("agility", 0),
-            "initiative": compute_initiative(snap["attributes"]),
-        })
+    participants_payload = [
+        _participant_payload(snap, participant_objs) for snap in participants_info
+    ]
 
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
@@ -4432,30 +5065,9 @@ async def pvp_attack(
             await build_participant_info(p.character_id, p.id)
         )
 
-    participants_payload = []
-    for snap in participants_info:
-        participants_payload.append({
-            "participant_id": snap["participant_id"],
-            "character_id": snap["character_id"],
-            "team": next(
-                pl.team for pl in participant_objs
-                if pl.id == snap["participant_id"]
-            ),
-            "hp": snap["attributes"]["current_health"],
-            "mana": snap["attributes"]["current_mana"],
-            "energy": snap["attributes"]["current_energy"],
-            "stamina": snap["attributes"]["current_stamina"],
-            "max_hp": snap["attributes"]["max_health"],
-            "max_mana": snap["attributes"]["max_mana"],
-            "max_energy": snap["attributes"]["max_energy"],
-            "max_stamina": snap["attributes"]["max_stamina"],
-            "fast_slots": snap["fast_slots"],
-            "equipment_durability": snap.get("equipment_durability", {}),
-            # Initiative + agility drive the turn order (FEAT-143). Agility is
-            # kept for tie-breaks; initiative is the weighted stat sum.
-            "agility": snap["attributes"].get("agility", 0),
-            "initiative": compute_initiative(snap["attributes"]),
-        })
+    participants_payload = [
+        _participant_payload(snap, participant_objs) for snap in participants_info
+    ]
 
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
@@ -4728,6 +5340,8 @@ async def admin_get_battle_state(
                     "energy": state["participants"][pid]["energy"],
                     "stamina": state["participants"][pid]["stamina"],
                     "max_hp": state["participants"][pid].get("max_hp", 0),
+                    # FEAT-190 E20: total passive shield (0 for old states).
+                    "shield": passives.shield_total(state["participants"][pid]),
                     "max_mana": state["participants"][pid].get("max_mana", 0),
                     "max_energy": state["participants"][pid].get("max_energy", 0),
                     "max_stamina": state["participants"][pid].get("max_stamina", 0),
@@ -5214,6 +5828,13 @@ async def admin_approve_join_request(
             "total_damage_dealt": 0,
             "total_damage_received": 0,
             "equipment_durability": participant_info.get("equipment_durability", {}),
+            # FEAT-188: the joiner's subclass passive (snapshot carries display data).
+            "passive_key": _passive_key_of(participant_info),
+            # FEAT-189: NPC flag + passive state (Saber run seed in a dungeon).
+            "is_npc": bool(participant_info.get("is_npc")),
+            "passive_state": await _saber_seed(
+                participant_info, state.get("dungeon_session_id")
+            ),
         }
         state["turn_order"].append(participant_id)
         await save_state(battle_id, state)
@@ -5657,6 +6278,8 @@ def _build_runtime(state: dict) -> dict:
                 "team": state["participants"][pid]["team"],
                 "character_id": state["participants"][pid]["character_id"],
                 "max_hp": state["participants"][pid].get("max_hp", 0),
+                # FEAT-190 E20: total passive shield (0 for old states).
+                "shield": passives.shield_total(state["participants"][pid]),
                 "max_mana": state["participants"][pid].get("max_mana", 0),
                 "max_energy": state["participants"][pid].get("max_energy", 0),
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
@@ -5919,6 +6542,9 @@ async def handle_expired_turn(
         {"event": "participant_timed_out", "who": participant_id, "character_id": character_id},
         {"event": "participant_defeated", "who": participant_id, "hp": 0},
     ]
+    # FEAT-190 H25 (E14): the dropped participant's Bard / Etheriad rows and
+    # shields would never tick again — remove them (not damage: no vow etc.).
+    turn_events.extend(passives.on_deaths(state, [participant_id]))
     new_turn_number = int(state.get("turn_number", 0)) + 1
 
     # Identical to the post-turn check in `_make_action_core`: a team survives

@@ -10,8 +10,19 @@
 #   - GET /skills/characters/{character_id}/skills — list of character's
 #     owned skills with the new flat `CharacterSkillRead` shape.
 #
-# All internal service-to-service calls carry the INTERNAL_SERVICE_TOKEN
-# in the Authorization header. The token is read from the env at import
+#   - GET /skills/internal/characters/{character_id}/subclass (FEAT-188) —
+#     character's subclass + passive, read once per participant at battle
+#     start.
+#
+# Header styles (the file deliberately uses both):
+#   - the public skills routes above accept the INTERNAL_SERVICE_TOKEN in the
+#     `Authorization: Bearer` position (`_service_headers()`, skills-service
+#     `allow_jwt_or_service_token`);
+#   - `/skills/internal/*` routes use `verify_internal_token`, which accepts
+#     ONLY `X-Internal-Token` (`_internal_headers()`) and rejects Bearer;
+#   - `get_item` (inventory-service internal route) also uses X-Internal-Token.
+#
+# All internal service-to-service calls carry the INTERNAL_SERVICE_TOKEN. The token is read from the env at import
 # time; if missing a warning is logged so the service stays bootable for
 # local tests (DevSecOps will wire the env var in docker-compose.*).
 import logging
@@ -38,6 +49,22 @@ def _service_headers() -> dict:
     if INTERNAL_SERVICE_TOKEN:
         return {"Authorization": f"Bearer {INTERNAL_SERVICE_TOKEN}"}
     return {}
+
+
+def _internal_headers() -> dict:
+    """Header for skills-service `/skills/internal/*` routes (FEAT-188).
+
+    Those routes use `verify_internal_token`, which accepts ONLY the
+    `X-Internal-Token` header and rejects the Bearer position with 401 —
+    so `_service_headers()` must not be used for them.
+    """
+    return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
+
+
+# Timeout for the per-participant subclass lookup at battle start: a hanging
+# skills-service must not stall the battle start for long (the lookup is
+# soft-fail — the participant just fights without a passive).
+SUBCLASS_LOOKUP_TIMEOUT_S = 3.0
 
 
 # -----------------------------------------------------------
@@ -125,6 +152,27 @@ async def character_skills(character_id: int) -> list[dict]:
         entry.setdefault("id", entry.get("skill_id"))
         results.append(entry)
     return results
+
+
+# -----------------------------------------------------------
+# 3b. Character subclass + passive (FEAT-188)
+# -----------------------------------------------------------
+async def get_character_subclass(character_id: int) -> dict:
+    """Subclass and passive of a character, from skills-service.
+
+    Returns `CharacterSubclassRead`:
+      {character_id, is_npc, subclass_key, subclass_name,
+       passive: {key, name, description, implemented} | None}
+    `subclass_key`/`passive` are None when no subclass is chosen yet.
+    Raises on HTTP / network errors — the caller treats that as "no passive".
+    """
+    async with httpx.AsyncClient(timeout=SUBCLASS_LOOKUP_TIMEOUT_S) as client:
+        r = await client.get(
+            f"{BASE}/skills/internal/characters/{character_id}/subclass",
+            headers=_internal_headers(),
+        )
+        r.raise_for_status()
+        return r.json()
 
 
 # -----------------------------------------------------------

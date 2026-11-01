@@ -357,6 +357,8 @@ class BattlePreviewParticipant(BaseModel):
     max_hp: int
     mana: int
     max_mana: int
+    # FEAT-190: current passive shield pool (passives.shield_total), 0 = none
+    shield: int = 0
 
 
 class BattlePreviewOut(BaseModel):

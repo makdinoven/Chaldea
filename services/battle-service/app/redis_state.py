@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -18,9 +19,15 @@ from typing import Dict, List, Optional
 import redis.asyncio as redis
 
 from config import settings
+from passives import SABER_RUN_STACKS_TTL_S
+
+logger = logging.getLogger(__name__)
 
 KEY_BATTLE_SNAPSHOT = "battle:{id}:snapshot"      # hash
 KEY_BATTLE_TURNS    = "battle:{id}:turns"         # zset turn_number → 1
+# FEAT-189 (D12): Saber kill stacks carried across the battles of one dungeon
+# run. Int value, TTL refreshed on each write; session ids are unique per run.
+KEY_SABER_RUN_STACKS = "battle:passive:saber_run:{session_id}:{character_id}"
 
 SNAPSHOT_TTL = 24 * 3600   # сек – сутки
 STATE_TTL_HOURS = int(os.getenv("BATTLE_STATE_TTL_HOURS", 48))
@@ -165,6 +172,7 @@ async def init_battle_state(
     first_actor_participant_id: int,
     deadline_at: datetime,
     location_id: int = None,
+    dungeon_session_id: Optional[int] = None,
 ) -> None:
     """
     Создаём начальное состояние боя:
@@ -190,6 +198,9 @@ async def init_battle_state(
         # Location where the fight happens — used to resolve co-located squadmates
         # for the party XP bonus (FEAT-144 Ф2).
         "location_id": location_id,
+        # FEAT-189: dungeon run of this battle (None outside dungeons) — Saber
+        # run stacks are read/written only when it is set.
+        "dungeon_session_id": dungeon_session_id,
         # First cycle (FEAT-143): from the initiator's first turn until their
         # next turn, everyone may use only ONE skill type per turn. Unlocks once
         # the turn returns to the initiator.
@@ -213,6 +224,12 @@ async def init_battle_state(
             "total_damage_dealt": 0,
             "total_damage_received": 0,
             "equipment_durability": p.get("equipment_durability", {}),
+            # FEAT-188: subclass passive, fixed for the battle; None = no passive.
+            "passive_key": p.get("passive_key"),
+            # FEAT-189: NPC flag (Saber rules) and per-battle passive state
+            # (stacks/flags owned by passives.py). Old payloads → False / {}.
+            "is_npc": bool(p.get("is_npc")),
+            "passive_state": dict(p.get("passive_state") or {}),
             }
     for p in participants_payload
         },
@@ -234,6 +251,41 @@ async def init_battle_state(
 
 
 # ---------- вспомогательные операции --------------------------------------
+async def get_saber_run_stacks(session_id: int, character_id: int) -> int:
+    """Saber kill stacks of a character in a dungeon run (FEAT-189).
+
+    Soft-fail: a missing key, a garbage value or a Redis error → 0, so the
+    battle start is never blocked by this cosmetic counter.
+    """
+    try:
+        rds = await get_redis_client()
+        raw = await rds.get(
+            KEY_SABER_RUN_STACKS.format(session_id=session_id, character_id=character_id)
+        )
+        return max(0, int(raw)) if raw is not None else 0
+    except Exception as e:
+        logger.error(
+            f"Не удалось прочитать стаки Сейбера (run {session_id}, char {character_id}): {e}"
+        )
+        return 0
+
+
+async def set_saber_run_stacks(session_id: int, character_id: int, stacks: int) -> None:
+    """Persist Saber kill stacks for the run (FEAT-189); TTL refreshed.
+    Soft-fail: errors are logged, never raised."""
+    try:
+        rds = await get_redis_client()
+        await rds.set(
+            KEY_SABER_RUN_STACKS.format(session_id=session_id, character_id=character_id),
+            int(stacks),
+            ex=SABER_RUN_STACKS_TTL_S,
+        )
+    except Exception as e:
+        logger.error(
+            f"Не удалось сохранить стаки Сейбера (run {session_id}, char {character_id}): {e}"
+        )
+
+
 async def load_state(battle_id: int) -> Optional[Dict]:
     """
     Читает JSON-state из Redis, добавляет:

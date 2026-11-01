@@ -1,4 +1,13 @@
 # buffs.py
+"""Battle effects: application, ticks, durations, modifiers, cleanse.
+
+FEAT-190: `apply_new_effects`, `tick_periodic_effects` and `_tick_resource`
+take two optional callbacks, `absorb_fn` (shields) and `overheal_fn`
+(Auromancer «Прилив»). Defaults are None and leave the behaviour unchanged.
+This module only CALLS them — the logic lives in `passives.py`, because many
+test suites replace `buffs` with a MagicMock and logic here would silently
+become a mock.
+"""
 from random import choice
 from typing import Dict, List
 
@@ -113,6 +122,8 @@ def apply_new_effects(
     is_enemy: bool = False,
     owner_pid: int | None = None,
     source=None,
+    absorb_fn=None,
+    overheal_fn=None,
 ) -> None:
     """
     • Для hp/mana/energy/stamina — применяем сразу (clamp 0..max_*); при duration > 1 —
@@ -139,6 +150,17 @@ def apply_new_effects(
     Флаг `fresh` выставляется ТОЛЬКО у по-настоящему новой записи; при
     обновлении уже активного эффекта он не трогается, иначе эффект пропустил бы
     один тик (подновлённый яд переставал бы наносить урон на ход).
+
+    FEAT-190, необязательные колбэки (по умолчанию None → поведение
+    побайтово прежнее). Логика щитов/«Прилива» живёт в passives.py, а не
+    здесь: ~30 наборов тестов подменяют `buffs` моком, и логика внутри него
+    молча превратилась бы в MagicMock. buffs только вызывает колбэки:
+    • absorb_fn(pid, amount) -> remaining — для каждого УМЕНЬШЕНИЯ HP
+      (после инверсии is_enemy): шкала меняется на −remaining, а сохранённая
+      доза `magnitude` для следующих тиков остаётся исходной (без вычета щита).
+    • overheal_fn(pid, intended, applied, owner_id) — для каждой
+      ПОЛОЖИТЕЛЬНОЙ дозы HP после _change_resource (intended = доза,
+      applied = реальное изменение шкалы).
     """
     aid = str(pid)
     owner_id = int(owner_pid) if owner_pid is not None else int(pid)
@@ -152,7 +174,12 @@ def apply_new_effects(
             # должны наносить урон, а не лечить
             if is_enemy and magnitude > 0:
                 magnitude = -magnitude
-            _change_resource(state["participants"][aid], eff["attribute"], magnitude)
+            delta = magnitude
+            if absorb_fn is not None and eff["attribute"] == "hp" and magnitude < 0:
+                delta = -absorb_fn(int(pid), -magnitude)
+            applied = _change_resource(state["participants"][aid], eff["attribute"], delta)
+            if overheal_fn is not None and eff["attribute"] == "hp" and magnitude > 0:
+                overheal_fn(int(pid), magnitude, applied, owner_id)
             # The first dose lands now; with a longer duration the rest arrive one
             # per caster turn (tick_periodic_effects), `duration` doses in total.
             if (eff.get("duration") or 0) <= 1:
@@ -264,13 +291,26 @@ def first_cycle_limit_skills(attack_id, defense_id, support_id) -> tuple:
     return tuple(out)
 
 
-def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> List[Dict]:
+def tick_periodic_effects(
+    state: Dict,
+    participant_id: int | None = None,
+    absorb_fn=None,
+    overheal_fn=None,
+) -> List[Dict]:
     """Apply periodic HP damage (bleeding / burn / periodic poison) for effects
     OWNED by `participant_id` — same ownership model as decrement_durations, so a
     DoT ticks on its caster's turn together with its duration. Freshly-cast
     effects are skipped (no tick on the turn they were applied). Returns a list
     of `effect_tick` events for the battle log. Call BEFORE decrement_durations
     (which clears the `fresh` flag).
+
+    FEAT-190 optional callbacks (None → unchanged behaviour; the logic lives in
+    passives.py because this module is MagicMock-ed in many suites):
+      * absorb_fn(pid, amount) -> remaining — shields eat DoT before the HP
+        bar; the event `amount` stays "HP actually lost". Also passed through
+        to `_tick_resource` for negative HP doses.
+      * overheal_fn(pid, intended, applied, owner_id) — passed through to
+        `_tick_resource` for positive HP doses (HoT).
     """
     active = state.get("active_effects", {})
     owner_filter = int(participant_id) if participant_id is not None else None
@@ -284,7 +324,10 @@ def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> Lis
             if eff.get("fresh"):
                 continue
             if eff.get("attribute") in RESOURCE_ATTRS:
-                event = _tick_resource(state, pid, eff, eff_owner)
+                event = _tick_resource(
+                    state, pid, eff, eff_owner,
+                    absorb_fn=absorb_fn, overheal_fn=overheal_fn,
+                )
                 if event:
                     events.append(event)
                 continue
@@ -296,6 +339,8 @@ def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> Lis
             part = state["participants"].get(str(pid))
             if not part or part["hp"] <= 0:
                 continue
+            if absorb_fn is not None:
+                amount = absorb_fn(int(pid), amount)
             new_hp = max(0, part["hp"] - amount)
             dealt = part["hp"] - new_hp
             part["hp"] = new_hp
@@ -311,15 +356,29 @@ def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> Lis
     return events
 
 
-def _tick_resource(state: Dict, pid: str, eff: Dict, owner: int) -> Dict | None:
+def _tick_resource(
+    state: Dict, pid: str, eff: Dict, owner: int, absorb_fn=None, overheal_fn=None
+) -> Dict | None:
     """One dose of a resource-over-time effect (StatModifier hp/mana/... with a
     duration). Lost HP is logged like any periodic damage (`effect_tick`), so it
-    counts as damage received; every other change is a `resource_tick`."""
+    counts as damage received; every other change is a `resource_tick`.
+
+    FEAT-190 optional callbacks (None → unchanged): `absorb_fn(pid, amount) ->
+    remaining` for a negative HP dose (the stored dose `magnitude` is never
+    altered); `overheal_fn(pid, intended, applied, owner)` for a positive HP
+    dose, called BEFORE the "nothing changed" early return so a dose on a
+    full-HP target reports its whole overflow."""
     part = state["participants"].get(str(pid))
     if not part or part["hp"] <= 0:
         return None
     attribute = eff["attribute"]
-    change = _change_resource(part, attribute, eff.get("magnitude", 0))
+    magnitude = eff.get("magnitude", 0)
+    delta = magnitude
+    if absorb_fn is not None and attribute == "hp" and magnitude < 0:
+        delta = -absorb_fn(int(pid), -magnitude)
+    change = _change_resource(part, attribute, delta)
+    if overheal_fn is not None and attribute == "hp" and magnitude > 0:
+        overheal_fn(int(pid), magnitude, change, owner)
     if not change:
         return None
     if attribute == "hp" and change < 0:

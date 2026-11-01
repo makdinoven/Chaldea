@@ -1121,3 +1121,142 @@ class TestAutoRejectOnBattleFinish:
         # The endpoint may return various codes depending on internal state handling,
         # but _auto_reject should have been called
         mock_auto_reject.assert_called_once_with(mock_db, 1)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-188: the joiner's subclass passive reaches the Redis state + snapshot
+# ---------------------------------------------------------------------------
+
+def _feat188_join_info(passive):
+    return {
+        "participant_id": 500,
+        "character_id": 100,
+        "name": "Воин",
+        "avatar": "",
+        "attributes": {
+            "current_health": 100, "current_mana": 50,
+            "current_energy": 100, "current_stamina": 100,
+            "max_health": 100, "max_mana": 50,
+            "max_energy": 100, "max_stamina": 100,
+        },
+        "skills": [],
+        "fast_slots": [],
+        "subclass": {"key": "warrior_berserker", "name": "Берсерк"} if passive else None,
+        "passive": passive,
+    }
+
+
+class TestJoinApprovalPassiveKey:
+
+    def setup_method(self):
+        app.dependency_overrides.clear()
+
+    def teardown_method(self):
+        app.dependency_overrides.clear()
+
+    def _approve(self, info, snapshot, state_extra=None, saber_stacks=None):
+        mock_db = AsyncMock()
+        req_row = _row(1, 10, 100, 50, 0, "pending")
+
+        async def execute_side_effect(query, params=None):
+            q = str(query)
+            if "battle_join_requests" in q and "SELECT" in q.upper() and "UPDATE" not in q.upper():
+                return _result_with_row(req_row)
+            if "is_npc" in q:
+                return _result_with_row(_row(0))
+            return _result_empty()
+
+        mock_db.execute = AsyncMock(side_effect=execute_side_effect)
+        mock_db.commit = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        def mock_add(obj):
+            obj.id = 500
+        mock_db.add = mock_add
+
+        state = {
+            "turn_number": 1, "deadline_at": "2026-03-23T14:00:00",
+            "next_actor": 1, "first_actor": 1, "turn_order": [1, 2],
+            "participants": {
+                "1": {"character_id": 10, "team": 0, "hp": 100},
+                "2": {"character_id": 20, "team": 1, "hp": 80},
+            },
+        }
+        state.update(state_extra or {})
+        self.saber_getter = AsyncMock(return_value=saber_stacks or 0)
+        save_state = AsyncMock()
+        mongo_db = MagicMock()
+        mongo_db.battle_snapshots.update_one = AsyncMock()
+
+        async def override_get_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_current_user_via_http] = lambda: _make_admin()
+
+        with patch("main.get_battle", AsyncMock(return_value=_make_battle(battle_id=10))), \
+             patch("main.build_participant_info", AsyncMock(return_value=info)), \
+             patch("main.load_state", AsyncMock(return_value=state)), \
+             patch("main.save_state", save_state), \
+             patch("main.get_redis_client", AsyncMock(return_value=AsyncMock())), \
+             patch("main.get_cached_snapshot", AsyncMock(return_value=snapshot)), \
+             patch("main.cache_snapshot", AsyncMock()), \
+             patch("main.get_mongo_db", MagicMock(return_value=mongo_db)), \
+             patch("main.resume_battle_if_ready", AsyncMock(return_value=True)), \
+             patch("main.publish_notification", AsyncMock()), \
+             patch("main.get_saber_run_stacks", self.saber_getter):
+            response = TestClient(app).post("/battles/admin/join-requests/1/approve")
+
+        assert response.status_code == 200, response.text
+        saved = save_state.await_args.args[1]
+        return saved, mongo_db
+
+    def test_berserker_joiner_gets_passive_key(self):
+        passive = {"key": "berserker_rage", "name": "Ярость",
+                   "description": "…", "implemented": True}
+        snapshot = [{"participant_id": 1}, {"participant_id": 2}]
+        saved, mongo_db = self._approve(_feat188_join_info(passive), snapshot)
+        assert saved["participants"]["500"]["passive_key"] == "berserker_rage"
+        # existing participants untouched
+        assert "passive_key" not in saved["participants"]["1"]
+        # snapshot gets the joiner with the passive display data
+        new_snap = mongo_db.battle_snapshots.update_one.await_args.args[1]["$set"]["participants"]
+        assert new_snap[-1]["participant_id"] == 500
+        assert new_snap[-1]["passive"]["name"] == "Ярость"
+
+    def test_joiner_without_passive_gets_none(self):
+        saved, _ = self._approve(_feat188_join_info(None), [{"participant_id": 1}])
+        assert "passive_key" in saved["participants"]["500"]
+        assert saved["participants"]["500"]["passive_key"] is None
+
+    def test_old_style_snapshot_without_passive_field(self):
+        info = _feat188_join_info(None)
+        info.pop("passive")
+        info.pop("subclass")
+        saved, _ = self._approve(info, [{"participant_id": 1}])
+        assert saved["participants"]["500"]["passive_key"] is None
+
+    # FEAT-189: is_npc + passive_state for the joiner; Saber run seed in a dungeon.
+
+    def test_joiner_gets_is_npc_and_empty_passive_state(self):
+        saved, _ = self._approve(_feat188_join_info(None), [{"participant_id": 1}])
+        joiner = saved["participants"]["500"]
+        assert joiner["is_npc"] is False
+        assert joiner["passive_state"] == {}
+        assert not self.saber_getter.called
+
+    def test_saber_joiner_in_dungeon_is_seeded_from_the_run_key(self):
+        passive = {"key": "saber_monster_hunter", "name": "Охотник на чудовищ",
+                   "description": "…", "implemented": True}
+        saved, _ = self._approve(_feat188_join_info(passive), [{"participant_id": 1}],
+                                 state_extra={"dungeon_session_id": 77}, saber_stacks=3)
+        assert saved["participants"]["500"]["passive_state"] == {"saber_kills": 3}
+        self.saber_getter.assert_awaited_once_with(77, 100)
+
+    def test_saber_joiner_outside_dungeon_reads_nothing(self):
+        passive = {"key": "saber_monster_hunter", "name": "Охотник на чудовищ",
+                   "description": "…", "implemented": True}
+        saved, _ = self._approve(_feat188_join_info(passive), [{"participant_id": 1}],
+                                 saber_stacks=3)
+        assert saved["participants"]["500"]["passive_state"] == {}
+        assert not self.saber_getter.called

@@ -785,3 +785,94 @@ class TestPvpAttackCancelsGathering:
 
         assert response.status_code == 201
         mock_create_battle.assert_called_once()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-188: the subclass passive reaches the Redis state on the PvP attack path
+# ═══════════════════════════════════════════════════════════════════════════
+
+import importlib.util  # noqa: E402
+import json  # noqa: E402
+
+_feat188_spec = importlib.util.spec_from_file_location(
+    "_feat188_redis_state_pvp_attack",
+    os.path.join(os.path.dirname(__file__), "..", "redis_state.py"),
+)
+_feat188_redis_state = importlib.util.module_from_spec(_feat188_spec)
+_feat188_spec.loader.exec_module(_feat188_redis_state)
+
+
+def _feat188_info(character_id, participant_id):
+    """Snapshot as build_participant_info returns it after FEAT-188."""
+    berserk = character_id == 1
+    return {
+        "participant_id": participant_id,
+        "character_id": character_id,
+        "name": "Берсерк" if berserk else "Маг",
+        "avatar": "",
+        "attributes": {
+            "current_health": 100, "current_mana": 50,
+            "current_energy": 50, "current_stamina": 50,
+            "max_health": 100, "max_mana": 50,
+            "max_energy": 50, "max_stamina": 50,
+            "agility": 10, "strength": 10, "intelligence": 5,
+        },
+        "skills": [],
+        "fast_slots": [],
+        "subclass": {"key": "warrior_berserker", "name": "Берсерк"} if berserk else None,
+        "passive": {"key": "berserker_rage", "name": "Ярость",
+                    "description": "…", "implemented": True} if berserk else None,
+    }
+
+
+class TestPvpAttackPassiveKey:
+
+    def setup_method(self):
+        app.dependency_overrides.clear()
+
+    def teardown_method(self):
+        app.dependency_overrides.clear()
+
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_passive_key_lands_in_redis_state(self, mock_publish, mock_create_battle):
+        mock_battle = MagicMock()
+        mock_battle.id = 88
+        p1, p2 = MagicMock(), MagicMock()
+        p1.id, p1.character_id, p1.team = 400, 1, 0
+        p2.id, p2.character_id, p2.team = 401, 2, 1
+        mock_create_battle.return_value = (mock_battle, [p1, p2])
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+
+        fake_rds = AsyncMock()
+        init_spy = AsyncMock(side_effect=_feat188_redis_state.init_battle_state)
+        fake_cm = _AsyncCMResponse(post_response=_FakeResponse(200, {}))
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with patch("main.build_participant_info", AsyncMock(side_effect=_feat188_info)), \
+             patch("main.init_battle_state", init_spy), \
+             patch("main.compute_initiative", _feat188_redis_state.compute_initiative), \
+             patch("main.utc_now", _feat188_redis_state.utc_now), \
+             patch("main.save_snapshot", AsyncMock()) as save_snap, \
+             patch("main.cache_snapshot", AsyncMock()), \
+             patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)), \
+             patch.object(_feat188_redis_state, "get_redis_client",
+                          AsyncMock(return_value=fake_rds)):
+            response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201, response.text
+        payload = init_spy.await_args.kwargs["participants_payload"]
+        assert {p["participant_id"]: p["passive_key"] for p in payload} == {
+            400: "berserker_rage", 401: None,
+        }
+        state_writes = [c for c in fake_rds.set.call_args_list if "state" in str(c.args[0])]
+        assert state_writes, "init_battle_state did not write the state"
+        state = json.loads(state_writes[0].args[1])
+        assert state["participants"]["400"]["passive_key"] == "berserker_rage"
+        assert state["participants"]["401"]["passive_key"] is None
+        # the snapshot (display data for the frontend) carries the passive too
+        snap = save_snap.await_args.args[1]
+        assert snap[0]["passive"]["name"] == "Ярость"
