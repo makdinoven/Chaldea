@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { fetchRegionEconomyCard } from '../../api/regionEconomy';
-import type { RegionCardData, RegionCardEvent, RegionGroupLevel, RegionGroupTrend } from '../../api/regionEconomy';
+import type {
+  CaravanCardLine,
+  RegionCardCaravans,
+  RegionCardData,
+  RegionCardEvent,
+  RegionGroupLevel,
+  RegionGroupTrend,
+} from '../../api/regionEconomy';
 import { apiErrorMessage } from '../../api/errors';
 import { parseServerDate } from '../../utils/serverDate';
 import EventIcon from '../common/EventIcon';
@@ -107,6 +114,63 @@ const RegionEvents = ({ events }: { events: RegionCardEvent[] }) => {
   );
 };
 
+/** Goods group names in the accusative case («везут руду»), for the caravan lines below. */
+const GROUP_ACCUSATIVE: Record<string, string> = {
+  food: 'продовольствие',
+  ore_metal: 'руду и металл',
+  wood: 'древесину',
+  herbs: 'травы и реагенты',
+  hides_textiles: 'шкуры и ткани',
+  magic: 'магические материалы',
+  weapons: 'оружие',
+  armor: 'броню и одежду',
+  jewelry: 'украшения',
+  potions: 'зелья',
+  tools: 'ремесленный инвентарь',
+  household: 'быт и мебель',
+};
+
+/** «Везут продовольствие из X (Страна)» / «Вывезли руду в Y» — FEAT-192 3.12 wording, never numbers. */
+const caravanText = (line: CaravanCardLine, incoming: boolean): string => {
+  const verb = incoming ? (line.in_transit ? 'Везут' : 'Привезли') : line.in_transit ? 'Вывозят' : 'Вывезли';
+  const prep = incoming ? 'из' : 'в';
+  const country = line.foreign && line.country_name ? ` (${line.country_name})` : '';
+  const goods = GROUP_ACCUSATIVE[line.group_code] ?? line.group_name.toLowerCase();
+  return `${verb} ${goods} ${prep} «${line.region_name}»${country}`;
+};
+
+/** Caravans block (FEAT-192): what is brought here and taken away, «в пути» badge for those on the road. */
+const RegionCaravans = ({ caravans }: { caravans: RegionCardCaravans }) => {
+  const lines = [
+    ...caravans.incoming.map((line) => ({ line, incoming: true })),
+    ...caravans.outgoing.map((line) => ({ line, incoming: false })),
+  ];
+  if (lines.length === 0) return null;
+  return (
+    <div className="mt-3 pt-3 border-t border-gold/15">
+      <p className="gold-text text-xs uppercase tracking-wider text-center mb-2">Караваны</p>
+      <ul className="flex flex-col items-center gap-1">
+        {lines.map(({ line, incoming }) => (
+          <li
+            key={`${incoming ? 'in' : 'out'}-${line.group_code}-${line.region_id}`}
+            className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-xs text-center min-w-0"
+          >
+            <span aria-hidden="true">{incoming ? '🐫' : '📦'}</span>
+            <span className={`break-words min-w-0 ${incoming ? 'text-white/80' : 'text-white/65'}`}>
+              {caravanText(line, incoming)}
+            </span>
+            {line.in_transit && (
+              <span className="rounded-full border border-site-blue/40 bg-site-blue/10 px-2 py-px text-[10px] text-site-blue whitespace-nowrap">
+                в пути
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
 const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   const [card, setCard] = useState<RegionCardData | null>(null);
   const [hasBank, setHasBank] = useState(false);
@@ -205,6 +269,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
           </ul>
         </div>
       )}
+      {card.caravans && <RegionCaravans caravans={card.caravans} />}
       {bankLine}
       {mintLine}
     </section>

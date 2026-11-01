@@ -261,3 +261,22 @@ def test_mint_op_types():
     assert econ_core.MINT_OP_TYPES <= econ_core.SOURCE_OP_TYPES
     assert not (econ_core.MINT_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
     assert not (econ_core.MINT_OP_TYPES & econ_core.BANK_OP_TYPES)
+
+
+# --------------------------------------------------------------------------------------------- FEAT-192 caravans
+
+def test_caravan_op_types_and_escrow_kind():
+    assert frozenset(cc.CARAVAN_OP_TYPE_NAMES) == econ_core.CARAVAN_OP_TYPES
+    assert econ_core.CARAVAN_OP_TYPES <= econ_core.OP_TYPES
+    assert not (econ_core.CARAVAN_OP_TYPES & econ_core.SOURCE_OP_TYPES)
+    assert not (econ_core.CARAVAN_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
+    kind = cc.CARAVAN_ESCROW_KIND_NAME
+    assert kind == econ_core.KIND_CARAVAN_ESCROW
+    assert kind in econ_core.ACCOUNT_KINDS
+    assert kind not in econ_core.REF_KINDS
+    assert kind not in econ_core.NEGATIVE_ALLOWED_KINDS
+    assert kind not in econ_core.TAX_SOURCE_KINDS
+    assert kind not in econ_core.SOURCE_KINDS
+    assert econ_core.SINGLETON_NAMES[kind] == "Караваны в пути"
+    assert econ_core.AccountRef.caravan_escrow() == econ_core.AccountRef(kind, 0)
+    assert not econ_core.AccountRef.caravan_escrow().allow_negative

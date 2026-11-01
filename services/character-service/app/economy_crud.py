@@ -30,10 +30,11 @@ REGION_ACCOUNT_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_POPULATIO
                                   core.KIND_BANK, core.KIND_BANK_DEPOSITS})
 # Accounts an admin correction must never touch: the money sources themselves and the auction
 # accounts, whose balances must equal the auction tables (sub-invariants). FEAT-184: bank accounts too — the vault
-# must equal the deposit rows, the bank's own money moves only via the capital endpoint.
+# must equal the deposit rows, the bank's own money moves only via the capital endpoint. FEAT-192: the caravan escrow
+# must equal the caravans on the road.
 ADJUST_FORBIDDEN_KINDS = frozenset({core.KIND_EMISSION, core.KIND_ADJUSTMENT,
                                     core.KIND_AUCTION_ESCROW, core.KIND_AUCTION_STORAGE,
-                                    core.KIND_BANK, core.KIND_BANK_DEPOSITS})
+                                    core.KIND_BANK, core.KIND_BANK_DEPOSITS, core.KIND_CARAVAN_ESCROW})
 
 MAX_DRIFTING_CHARACTERS = 50
 # LIKE escape character; '!' instead of a backslash so the same SQL works in MySQL and SQLite.
@@ -171,6 +172,7 @@ def get_summary(db: Session) -> dict:
     purses = kind_sums.get(core.KIND_POPULATION_PURSE, 0)
     banks = kind_sums.get(core.KIND_BANK, 0)
     vaults = kind_sums.get(core.KIND_BANK_DEPOSITS, 0)
+    caravan_escrow = kind_sums.get(core.KIND_CARAVAN_ESCROW, 0)
     sources = sum(kind_sums.get(k, 0) for k in core.SOURCE_KINDS)
 
     held = players + npcs + sum(v for k, v in kind_sums.items() if k not in core.SOURCE_KINDS)
@@ -186,6 +188,9 @@ def get_summary(db: Session) -> dict:
     vaults_expected = _scalar(db, (
         "SELECT COALESCE(SUM(amount + interest_accrued), 0) FROM bank_deposits WHERE status = 'open'"
     ))
+    # FEAT-192 sub-invariant: the caravan escrow holds exactly what the caravans on the road were paid
+    import economy_caravan_crud  # late: economy_caravan_crud imports this module
+    caravan_escrow_expected = economy_caravan_crud.escrow_expected(db)
 
     drifting = [
         {"character_id": int(r[0]), "name": r[1], "balance": _int(r[2]), "ledger": _int(r[3])}
@@ -194,7 +199,7 @@ def get_summary(db: Session) -> dict:
 
     invariant = {
         "ok": (ledger_sum == 0 and escrow_expected == escrow and storage_expected == storage
-               and vaults_expected == vaults and not drifting),
+               and vaults_expected == vaults and caravan_escrow_expected == caravan_escrow and not drifting),
         "ledger_sum": ledger_sum,
         "escrow_expected": escrow_expected,
         "escrow_actual": escrow,
@@ -202,6 +207,8 @@ def get_summary(db: Session) -> dict:
         "storage_actual": storage,
         "bank_deposits_expected": vaults_expected,
         "bank_deposits_actual": vaults,
+        "caravan_escrow_expected": caravan_escrow_expected,
+        "caravan_escrow_actual": caravan_escrow,
         "drifting_characters": drifting,
     }
 
@@ -211,7 +218,7 @@ def get_summary(db: Session) -> dict:
             "issued": issued, "held": held, "players": players, "npcs": npcs, "escrow": escrow,
             "auction_storage": storage, "region_treasuries": regions_total,
             "country_treasuries": countries_total, "world_treasury": world,
-            "population_purses": purses, "banks": banks, "bank_deposits": vaults,
+            "population_purses": purses, "banks": banks, "bank_deposits": vaults, "caravan_escrow": caravan_escrow,
         },
         "invariant": invariant,
         "countries": _treasury_tree(db),

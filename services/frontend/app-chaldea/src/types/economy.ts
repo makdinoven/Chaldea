@@ -16,7 +16,9 @@ export type EconAccountKind =
   | 'population_purse'
   /** FEAT-184: the bank's own money and the vault of player deposits (ref = region id) */
   | 'bank'
-  | 'bank_deposits';
+  | 'bank_deposits'
+  /** FEAT-192: singleton «Караваны в пути» — money of caravans on the road (never negative) */
+  | 'caravan_escrow';
 
 export type EconLegType = 'main' | 'refund' | 'commission' | 'tax' | 'trade_tax' | 'interest';
 
@@ -35,6 +37,8 @@ export interface EconTotals {
   /** FEAT-184: own money of all banks (`bank` accounts) and the vaults of player deposits (`bank_deposits`) */
   banks?: number;
   bank_deposits?: number;
+  /** FEAT-192: balance of «Караваны в пути» (already counted in `held`) */
+  caravan_escrow?: number;
 }
 
 export interface EconDriftingCharacter {
@@ -54,6 +58,9 @@ export interface EconInvariant {
   /** FEAT-184: Σ open deposit rows (amount + interest_accrued) vs Σ vault balances — part of `ok` */
   bank_deposits_expected?: number;
   bank_deposits_actual?: number;
+  /** FEAT-192: Σ (paid_purse + paid_treasury) of in-transit caravans vs the escrow balance — part of `ok` */
+  caravan_escrow_expected?: number;
+  caravan_escrow_actual?: number;
   drifting_characters: EconDriftingCharacter[];
 }
 
@@ -489,6 +496,15 @@ export interface EconSimParams {
   mint_season_limit: number;
   mint_court_marks_per_unit: number;
   mint_court_threshold_pct: number;
+  /* FEAT-192 caravans (feature file 3.10) — older backends may not send them yet */
+  caravans_enabled: number;
+  caravan_surplus_share: number;
+  caravan_purse_share: number;
+  caravan_treasury_food_share: number;
+  caravan_travel_domestic: number;
+  caravan_travel_foreign: number;
+  caravan_min_value: number;
+  caravan_max_per_run: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -1120,4 +1136,96 @@ export interface QuotaEntry {
   amount: number;
   /** How many region treasuries got a share */
   regions: number;
+}
+
+/* ============================================================================ FEAT-192 caravans (3.11) */
+
+export type CaravanStatus = 'in_transit' | 'delivered' | 'cancelled';
+export type CaravanStatusFilter = CaravanStatus | 'all';
+
+export interface CaravanParams {
+  caravans_enabled: number;
+  caravan_surplus_share: number;
+  caravan_purse_share: number;
+  caravan_treasury_food_share: number;
+  caravan_travel_domestic: number;
+  caravan_travel_foreign: number;
+  caravan_min_value: number;
+  caravan_max_per_run: number;
+}
+
+export interface CaravanCountry {
+  country_id: number;
+  name: string;
+  participating_regions: number;
+}
+
+/** Symmetric pair, `country_a < country_b`; a missing DB row comes as `is_enabled=false, duty_pct=10`. */
+export interface TradePair {
+  country_a: number;
+  country_b: number;
+  name_a: string | null;
+  name_b: string | null;
+  is_enabled: boolean;
+  duty_pct: number;
+  updated_at: string | null;
+}
+
+export interface TradePairIn {
+  country_a: number;
+  country_b: number;
+  is_enabled: boolean;
+  duty_pct: number;
+}
+
+export interface CaravanOverview {
+  params: CaravanParams;
+  escrow: { balance: number; expected: number; ok: boolean };
+  in_transit: { count: number; value: number; duty: number };
+  last_run: { run_id: number; dispatched: number; delivered: number; cancelled: number } | null;
+  countries: CaravanCountry[];
+  pairs: TradePair[];
+}
+
+export interface CaravanRow {
+  id: number;
+  status: CaravanStatus;
+  group_code: string;
+  group_name: string | null;
+  from_region_id: number;
+  from_region_name: string | null;
+  from_country_id: number;
+  from_country_name: string | null;
+  to_region_id: number;
+  to_region_name: string | null;
+  to_country_id: number;
+  to_country_name: string | null;
+  units: number;
+  unit_price: number;
+  value: number;
+  duty: number;
+  duty_pct: number;
+  paid_purse: number;
+  paid_treasury: number;
+  travel_runs: number;
+  runs_left: number;
+  dispatch_run_id: number;
+  finished_run_id: number | null;
+  cancel_reason: string | null;
+  goods_returned: boolean | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface CaravanList {
+  total: number;
+  items: CaravanRow[];
+}
+
+export interface CaravanListQuery {
+  status?: CaravanStatusFilter;
+  region_id?: number;
+  group_code?: string;
+  limit?: number;
+  offset?: number;
 }

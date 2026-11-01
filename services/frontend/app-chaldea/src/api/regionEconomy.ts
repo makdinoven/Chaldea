@@ -27,6 +27,8 @@ interface RegionCardHidden {
   has_bank?: boolean;
   /** FEAT-191: the region is a capital with a working mint */
   has_mint?: boolean;
+  /** FEAT-192: always empty lists for a hidden region */
+  caravans?: RegionCardCaravans;
 }
 
 export interface RegionCardData {
@@ -48,6 +50,28 @@ export interface RegionCardData {
   has_mint?: boolean;
   /** FEAT-187: active region events (optional — older backends don't send it) */
   events?: RegionCardEvent[];
+  /** FEAT-192: caravans to / from the region (optional — older backends don't send it) */
+  caravans?: RegionCardCaravans;
+}
+
+/**
+ * FEAT-192 (3.12): one caravan line as players see it — goods group and the other region, never units or money.
+ * `country_name` / `foreign` are filled only when the other region is in another country.
+ */
+export interface CaravanCardLine {
+  group_code: string;
+  group_name: string;
+  region_id: number;
+  region_name: string;
+  country_name: string | null;
+  foreign: boolean;
+  /** true — still on the road; false — arrived within the last day */
+  in_transit: boolean;
+}
+
+export interface RegionCardCaravans {
+  incoming: CaravanCardLine[];
+  outgoing: CaravanCardLine[];
 }
 
 /** FEAT-187: an active region event as players see it — no effect numbers. */

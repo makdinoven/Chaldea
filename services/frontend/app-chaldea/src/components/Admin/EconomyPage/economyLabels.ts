@@ -42,6 +42,9 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   mint_court: 'Чеканка (двор)',
   mint_player: 'Чеканка',
   season_quota: 'Квота сезона',
+  caravan_dispatch: 'Караван: оплата',
+  caravan_delivery: 'Караван: доставка',
+  caravan_cancel: 'Караван: возврат',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
@@ -58,6 +61,7 @@ export const ACCOUNT_KIND_LABELS: Record<EconAccountKind, string> = {
   population_purse: 'Кошелёк жителей',
   bank: 'Банк региона',
   bank_deposits: 'Вклады игроков',
+  caravan_escrow: 'Караваны в пути',
 };
 
 export const accountKindLabel = (kind: string | null | undefined): string =>
@@ -121,6 +125,7 @@ export const ALL_ACCOUNT_KINDS: EconAccountKind[] = [
   'adjustment',
   'bank',
   'bank_deposits',
+  'caravan_escrow',
 ];
 
 /** Op type the journal hides by default: one per simulated region every 6 hours. */

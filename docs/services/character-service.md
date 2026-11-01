@@ -1177,3 +1177,118 @@ marks_per_item` → `mint_player` последним шагом (в metadata `qu
 
 Публичная карточка региона `GET /characters/economy/regions/{id}/card` получила `has_mint` в обеих формах (регион —
 действующая столица и двор работает).
+
+
+## NPC caravans (FEAT-192)
+
+Этап 5б экономики: караваны НПС возят товары из регионов с излишком (запас выше нормы) в регионы с нехваткой и тем
+выравнивают запасы и цены. Модули: чистый `app/econ_caravan.py` (маршрут, подбор, цена/пошлина, пересчёт при
+отправке), БД — `app/economy_caravan_crud.py`, проход тика — `econ_tick._caravan_pass`, роутер — `app/economy_api.py`.
+
+### Правила
+
+- **Маршруты:** внутри страны — между любыми участвующими регионами всегда, без пошлины, в пути
+  `caravan_travel_domestic` пересчётов (1); между странами — только если пара стран разрешена в `econ_trade_pairs`
+  (по умолчанию запрещено), в пути `caravan_travel_foreign` (2), пошлина `duty_pct` пары. Граф соседства не нужен,
+  только `Regions.country_id`.
+- **Подбор (3.5, детерминирован):** группы — сначала продовольствие, затем по коду; продавец отдаёт не больше
+  `caravan_surplus_share` (25 %) излишка над нормой и всегда остаётся не ниже нормы; покупатель получает не больше, чем
+  нужно до нормы, **с учётом уже едущего** (`inbound`); покупатели — самые нуждающиеся первыми
+  (`(stock + inbound) / norm`), продавцы — ближние и дешёвые первыми (`travel_runs`, цена, id). Сигнал —
+  `stock / norm_stock` (ценовые модификаторы событий отправку не вызывают). `norm_stock = 0` → группа пропускается.
+  Не больше `caravan_max_per_run` отправок за пересчёт, сделки дешевле `caravan_min_value` не отправляются.
+- **Цена:** `unit_price = base_price × price_mult продавца` (4 знака), `value = floor(units × unit_price)`,
+  `duty = floor(value × duty_pct / 100)` — платит покупатель **сверху**, продавец получает полный `value`.
+- **Кто платит:** кошелёк жителей покупателя — до `caravan_purse_share` (25 %) кошелька за пересчёт на все группы;
+  **продовольствие** доплачивает казна региона-покупателя — до `caravan_treasury_food_share` (50 %) её положительного
+  остатка. Не хватает денег → объём уменьшается до оплачиваемого.
+- **«Набег» / «Бунт»** (эффект `merchants_halt` активного события) — регион не **вывозит**; ввозить может; караваны в
+  пути едут дальше.
+- Руда, привезённая в столицу, чеканится двором в этом же прогоне (так задумано).
+
+### Деньги: счёт «Караваны в пути» (3.4)
+
+Новый одиночный счёт `caravan_escrow` («Караваны в пути»): не уходит в минус, не источник денег, не облагается.
+
+| op_type | Ноги | Ключ |
+|---|---|---|
+| `caravan_dispatch` | `population_purse(покупатель) → caravan_escrow` + (только еда) `region_treasury(покупатель) → caravan_escrow` | `caravan:c<id>:pay` |
+| `caravan_delivery` | `caravan_escrow → population_purse(продавец)` = value; `caravan_escrow → country_treasury(страна покупателя)` = duty | `caravan:c<id>:done` |
+| `caravan_cancel` | `caravan_escrow → кошелёк / казна покупателя` = ровно то, что было заплачено | `caravan:c<id>:back` |
+
+Все три — в `OP_TYPES` и `CARAVAN_OP_TYPES` (не в `SOURCE_OP_TYPES`, без комментария), проводятся с
+`apply_tax=False` (налог страны на них не начисляется — переводы с/на `caravan_escrow` под правило налога не попадают).
+Получатель удалён: кошелёк / казна удалённого региона → казна его страны (`from_country_id` / `to_country_id` строки),
+удалённая страна → Казна Скитальцев. **Подинвариант** (сводка): баланс `caravan_escrow` = Σ `paid_purse +
+paid_treasury` караванов `in_transit`; `totals.caravan_escrow`, `invariant.caravan_escrow_expected / _actual`, входит
+в `invariant.ok`. Счёт нельзя корректировать (`ADJUST_FORBIDDEN_KINDS`).
+
+### Таблицы (миграция `035_econ_caravans`, без FK, без ENUM)
+
+- `econ_trade_pairs` — разрешение торговли пары стран, симметричное: PK `(country_a, country_b)`, `country_a <
+  country_b` (нормализует приложение), `is_enabled` (0), `duty_pct` DECIMAL(5,2) (10.00), `updated_at`, `updated_by`.
+  Нет строки = торговля запрещена.
+- `econ_caravans` — караван: `dispatch_run_id`, `from/to_region_id`, `from/to_country_id`, `group_code`, `units`
+  DECIMAL(16,3), `unit_price` DECIMAL(14,4), `value`, `duty`, `duty_pct`, `paid_purse`, `paid_treasury`,
+  `travel_runs`, `runs_left`, `last_run_id`, `status` (`in_transit | delivered | cancelled`), `cancel_reason`
+  (`destination_left | destination_deleted`), `goods_returned`, `dispatch_op_id`, `finish_op_id`, `created_at`,
+  `finished_at`, `finished_run_id`. UNIQUE `(dispatch_run_id, from_region_id, to_region_id, group_code)` — маркер
+  идемпотентности отправки. Строки **хранятся** (история для будущей газеты), `purge_old` их не трогает; индекс
+  `finished_at` — на случай будущей чистки.
+- Откат: `DROP TABLE econ_caravans, econ_trade_pairs`. Перед откатом с караванами в пути поставить `caravans_enabled =
+  0` и дождаться, пока все доедут, иначе их деньги останутся на «Караваны в пути».
+
+Параметры пересчёта (JSON `econ_sim_settings.params`, без миграции, правятся `PUT /admin/economy/sim`):
+`caravans_enabled` (1, 0…1; 0 = новых не отправлять, едущие доезжают), `caravan_surplus_share` (0.25, 0…1),
+`caravan_purse_share` (0.25, 0…1), `caravan_treasury_food_share` (0.5, 0…1), `caravan_travel_domestic` (1, 1…8),
+`caravan_travel_foreign` (2, 1…8), `caravan_min_value` (10, 1…1e6), `caravan_max_per_run` (200, 1…5000).
+
+### Тик (3.2 / 3.7 / 3.8)
+
+Проход `_caravan_pass` — **после квоты, до цикла регионов**, в плановых и ручных прогонах; сначала **прибытия**, потом
+**отправки** (шаг регионов уже считает цены и потребление по запасу после караванов).
+- **Прибытия:** каждый караван `in_transit` (кроме отправленных / продвинутых этим же прогоном) — своя транзакция.
+  `runs_left > 1` → только `runs_left −= 1`, `last_run_id = run` (блокируется только строка каравана). Иначе —
+  завершение: блокировки `econ_regions` обоих концов по возрастанию → их `econ_region_goods` → строка каравана; если
+  какой-то из регионов уже прошёл этот прогон (возобновлённый прогон) → `runs_left = 0`, завершится в следующем.
+  Назначение участвует (есть `Regions`, шаблон и население, строка товара) → **доставка**: `stock += units`,
+  `caravan_delivery`. Иначе → **отмена**: товар возвращается в регион-отправитель (если у него есть `Regions` и строка
+  товара; оба региона исчезли → товар списывается, `goods_returned = 0`, WARNING в лог), деньги — `caravan_cancel`.
+  Запрет пары или «Набег»/«Бунт» едущий караван не останавливают.
+- **Отправки:** снимок (участвующие регионы со страной, ещё не прошедшие этот прогон; товары; кошельки и казны;
+  `inbound`; разрешённые пары; `merchants_halt` из `active_map` прохода событий) → `plan_caravans` → на каждый план
+  своя транзакция: `econ_regions` обоих по возрастанию (оба участвуют и ещё не прошли прогон) → строка товара продавца
+  → перепроверка маршрута (пошлина берётся текущая) → счета покупателя и `caravan_escrow` блокируются по возрастанию id
+  → `clamp_dispatch` (не больше плана, продавец не ниже нормы, кошелёк/казна не больше плана и остатка) → INSERT
+  `econ_caravans` (UNIQUE → «уже отправлен») → `stock −= units` → `caravan_dispatch`.
+- Сбой одного каравана откатывает только его; в `econ_tick_runs.error` — `караваны — ошибка: <число>`. Сбой снимка →
+  в этом прогоне отправок нет (прибытия идут). `RunSummary`: `caravans_dispatched, caravans_delivered,
+  caravans_cancelled, caravans_failed, caravan_value`.
+
+### Порядок блокировок (3.9, заменяет FEAT-191 3.12)
+
+`econ_regions (asc region_id) → econ_region_goods (asc region_id, group_code) → econ_region_events (asc id) →
+econ_caravans (asc id) → econ_mint_seasons → npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits
+(asc id) → bank_loans (asc id) → character_inventory (asc id) → characters (asc id) → econ_accounts (asc id)`.
+Отправка: `econ_regions ×2 → econ_region_goods(продавец) → [INSERT econ_caravans] → econ_accounts`; завершение:
+`econ_regions ×≤2 → econ_region_goods ×≤2 → econ_caravans → econ_accounts`; продвижение — только `econ_caravans`.
+Это первая транзакция, блокирующая **два** региона, — только по возрастанию id. `econ_trade_pairs` не блокируется.
+
+### Админ-API (3.11; префикс `/characters/admin/economy`)
+
+| Метод и путь | Права | Описание |
+|---|---|---|
+| `GET /caravans/overview` | `economy:read` | `CaravanOverviewOut`: 8 параметров, `escrow {balance, expected, ok}`, `in_transit {count, value, duty}`, `last_run {run_id, dispatched, delivered, cancelled}` (последний завершённый прогон, null — прогонов нет), `countries [{country_id, name, participating_regions}]` (по имени), `pairs` — все неупорядоченные пары стран (`a < b`), нет строки → `is_enabled=false, duty_pct=10.0` |
+| `PUT /caravans/pairs` | `economy:settings` | `TradePairIn {country_a ≥1, country_b ≥1, is_enabled, duty_pct 0…100}` → `TradePairOut`; пара нормализуется, `duty_pct` округляется до 2 знаков; 400 «Страна не может торговать сама с собой», 404 «Страна не найдена», 422 — границы. Действует на **новые** отправки (едущие хранят свою пошлину) |
+| `GET /caravans?status=in_transit\|delivered\|cancelled\|all&region_id=&group_code=&limit=50&offset=0` | `economy:read` | `CaravanListOut {total, items}` новые сначала; `region_id` — отправитель **или** получатель; неизвестная группа → 400 «Неизвестная группа товаров»; `limit 1…200`; имена регионов / стран — LEFT JOIN (удалён → null) |
+
+`GET /admin/economy/summary` — новые поля `totals.caravan_escrow`, `invariant.caravan_escrow_expected / _actual`.
+
+### Карточка региона (3.12)
+
+`GET /characters/economy/regions/{id}/card` — поле `caravans {incoming: [...], outgoing: [...]}` в обеих формах
+(скрытая — пустые списки). Строка: `group_code, group_name, region_id, region_name, country_name (только чужая
+страна), foreign, in_transit`. Источник — караваны региона в пути или доставленные за последние 24 ч
+(`CARD_RECENT_HOURS`), без отменённых; одна строка на (группа, другой регион), «в пути» важнее; сначала в пути, затем
+по порядку групп; не больше 6 (`CARD_MAX_LINES`) в списке; другой регион удалён → строка выпадает. **Без количеств,
+цен и денег.**

@@ -1796,6 +1796,7 @@ class EconTotals(BaseModel):
     population_purses: int = 0               # FEAT-182: all population purses (already part of `held`)
     banks: int = 0                           # FEAT-184: own money of all banks (`bank` accounts)
     bank_deposits: int = 0                   # FEAT-184: vaults of player deposits (`bank_deposits` accounts)
+    caravan_escrow: int = 0                  # FEAT-192: money of caravans on the road («Караваны в пути»)
 
 
 class EconDriftingCharacter(BaseModel):
@@ -1814,6 +1815,8 @@ class EconInvariant(BaseModel):
     storage_actual: int
     bank_deposits_expected: int = 0          # FEAT-184: Σ open deposit rows (amount + interest_accrued)
     bank_deposits_actual: int = 0            # FEAT-184: Σ vault balances — part of `ok`
+    caravan_escrow_expected: int = 0         # FEAT-192: Σ (paid_purse + paid_treasury) of caravans in transit
+    caravan_escrow_actual: int = 0           # FEAT-192: the `caravan_escrow` balance — part of `ok`
     drifting_characters: List[EconDriftingCharacter]
 
 
@@ -1962,6 +1965,15 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "mint_season_limit": (0, 1_000_000_000),
     "mint_court_marks_per_unit": (0.01, 10_000.0),
     "mint_court_threshold_pct": (0.0, 1000.0),
+    # FEAT-192 NPC caravans
+    "caravans_enabled": (0, 1),
+    "caravan_surplus_share": (0.0, 1.0),
+    "caravan_purse_share": (0.0, 1.0),
+    "caravan_treasury_food_share": (0.0, 1.0),
+    "caravan_travel_domestic": (1, 8),
+    "caravan_travel_foreign": (1, 8),
+    "caravan_min_value": (1, 1_000_000),
+    "caravan_max_per_run": (1, 5_000),
 }
 ECON_SIM_INT_PARAMS = frozenset({
     "treasury_release_ticks", "history_retention_days",
@@ -1969,6 +1981,8 @@ ECON_SIM_INT_PARAMS = frozenset({
     "population_scale",
     "events_enabled", "event_max_active", "event_spread_max_depth",
     "quota_season_amount", "mint_season_limit",
+    "caravans_enabled", "caravan_travel_domestic", "caravan_travel_foreign", "caravan_min_value",
+    "caravan_max_per_run",
 })
 
 
@@ -2324,6 +2338,14 @@ class EconSimParamsIn(BaseModel):
     mint_season_limit: Optional[int] = None
     mint_court_marks_per_unit: Optional[float] = None
     mint_court_threshold_pct: Optional[float] = None
+    caravans_enabled: Optional[int] = None
+    caravan_surplus_share: Optional[float] = None
+    caravan_purse_share: Optional[float] = None
+    caravan_treasury_food_share: Optional[float] = None
+    caravan_travel_domestic: Optional[int] = None
+    caravan_travel_foreign: Optional[int] = None
+    caravan_min_value: Optional[int] = None
+    caravan_max_per_run: Optional[int] = None
 
     class Config:
         extra = Extra.forbid
@@ -2943,3 +2965,129 @@ class QuotaOut(BaseModel):
     season: Optional[str]
     amount: int
     regions: int
+
+
+# ===========================================================================
+# FEAT-192 NPC caravans (contract 3.11 / 3.12; app/economy_caravan_crud.py)
+# ===========================================================================
+
+CARAVAN_STATUS_RE = r"^(in_transit|delivered|cancelled|all)$"
+CARAVAN_MAX_DUTY_PCT = 100
+CARAVAN_LIST_MAX_LIMIT = 200
+
+
+class TradePairIn(BaseModel):
+    """Symmetric trade permission of two countries; normalised to country_a < country_b by the server."""
+    country_a: conint(strict=True, ge=1)
+    country_b: conint(strict=True, ge=1)
+    is_enabled: StrictBool
+    duty_pct: confloat(ge=0, le=CARAVAN_MAX_DUTY_PCT)
+
+    class Config:
+        extra = Extra.forbid
+
+
+class TradePairOut(BaseModel):
+    country_a: int
+    country_b: int
+    name_a: Optional[str]
+    name_b: Optional[str]
+    is_enabled: bool
+    duty_pct: float
+    updated_at: Optional[datetime]
+
+
+class CaravanParamsOut(BaseModel):
+    caravans_enabled: int
+    caravan_surplus_share: float
+    caravan_purse_share: float
+    caravan_treasury_food_share: float
+    caravan_travel_domestic: int
+    caravan_travel_foreign: int
+    caravan_min_value: int
+    caravan_max_per_run: int
+
+
+class CaravanEscrowOut(BaseModel):
+    balance: int
+    expected: int
+    ok: bool
+
+
+class CaravanTransitOut(BaseModel):
+    count: int
+    value: int
+    duty: int
+
+
+class CaravanLastRunOut(BaseModel):
+    run_id: int
+    dispatched: int
+    delivered: int
+    cancelled: int
+
+
+class CaravanCountryOut(BaseModel):
+    country_id: int
+    name: Optional[str]
+    participating_regions: int
+
+
+class CaravanOverviewOut(BaseModel):
+    params: CaravanParamsOut
+    escrow: CaravanEscrowOut
+    in_transit: CaravanTransitOut
+    last_run: Optional[CaravanLastRunOut]
+    countries: List[CaravanCountryOut]
+    pairs: List[TradePairOut]
+
+
+class CaravanOut(BaseModel):
+    id: int
+    status: str                                  # in_transit | delivered | cancelled
+    group_code: str
+    group_name: Optional[str]
+    from_region_id: int
+    from_region_name: Optional[str]              # null = region deleted
+    from_country_id: int
+    from_country_name: Optional[str]
+    to_region_id: int
+    to_region_name: Optional[str]
+    to_country_id: int
+    to_country_name: Optional[str]
+    units: float
+    unit_price: float
+    value: int
+    duty: int
+    duty_pct: float
+    paid_purse: int
+    paid_treasury: int
+    travel_runs: int
+    runs_left: int
+    dispatch_run_id: int
+    finished_run_id: Optional[int]
+    cancel_reason: Optional[str]                 # destination_left | destination_deleted
+    goods_returned: Optional[bool]
+    created_at: datetime
+    finished_at: Optional[datetime]
+
+
+class CaravanListOut(BaseModel):
+    total: int
+    items: List[CaravanOut]
+
+
+class CaravanCardLine(BaseModel):
+    """Region card line — words only (no units, prices or money)."""
+    group_code: str
+    group_name: str
+    region_id: int
+    region_name: Optional[str]
+    country_name: Optional[str]                  # only for another country
+    foreign: bool
+    in_transit: bool
+
+
+class RegionCaravansOut(BaseModel):
+    incoming: List[CaravanCardLine] = []
+    outgoing: List[CaravanCardLine] = []

@@ -62,6 +62,20 @@ Global lock order (3.12, supersedes the FEAT-187 one): ``econ_regions → econ_r
 → econ_mint_seasons → npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans
 (asc id) → character_inventory (asc id) → characters (asc id) → econ_accounts (asc id)``.
 
+NPC caravans (FEAT-192, 3.2 / 3.7 / 3.8) — the **caravan pass** runs right after the quota pass, before the region
+loop (scheduled and manual runs alike): **arrivals first** (each caravan on the road advances its travel counter or, at
+0, is delivered — goods into the destination stock, ``caravan_delivery`` escrow → seller purse + duty → buyer country —
+or cancelled — goods back, ``caravan_cancel`` full refund; key ``caravan:c<id>:done|back``), **then dispatches**
+(snapshot → pure ``econ_caravan.plan_caravans`` → one transaction per caravan: both ``econ_regions`` rows ascending →
+the seller's goods row → INSERT ``econ_caravans`` (UNIQUE per run / route / group) → stock taken → ``caravan_dispatch``
+buyer purse (+ treasury for food) → escrow, key ``caravan:c<id>:pay``). Regions already ticked in this run (a resumed
+run) are skipped / their caravans postponed. Best effort: a failing caravan is rolled back alone and counted. Global
+lock order (3.9, supersedes the FEAT-191 one): ``econ_regions (asc region_id) → econ_region_goods (asc region_id,
+group_code) → econ_region_events (asc id) → econ_caravans (asc id) → econ_mint_seasons → npc_shop_items (asc id) →
+econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans (asc id) → character_inventory (asc id) → characters
+(asc id) → econ_accounts (asc id)``; the caravan transaction is the first to lock two ``econ_regions`` rows, always
+ascending.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -116,6 +130,8 @@ EVENTS_ERROR_PREFIX = "события — ошибка: "
 # FEAT-191: countries whose court mint failed / the season quota failed (regions still ticked).
 MINT_ERROR_PREFIX = "чеканка — ошибка в странах: "
 QUOTA_ERROR_PREFIX = "квота — ошибка"
+# FEAT-192: caravans whose dispatch / arrival failed (count; regions still ticked).
+CARAVAN_ERROR_PREFIX = "караваны — ошибка: "
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -182,6 +198,12 @@ class RunSummary:
     mint_court_marks: int = 0             # marks minted by the courts
     mint_failures: int = 0                # countries whose court mint was rolled back
     mint_failed_country_ids: List[int] = field(default_factory=list)
+    # FEAT-192 NPC caravans (3.2)
+    caravans_dispatched: int = 0          # caravans sent in this run
+    caravans_delivered: int = 0           # caravans that arrived in this run
+    caravans_cancelled: int = 0           # caravans cancelled in this run (destination gone)
+    caravans_failed: int = 0              # dispatches / arrivals rolled back (retried next run)
+    caravan_value: int = 0                # Σ value of the caravans sent in this run
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -1172,6 +1194,10 @@ def run_tick(
     # FEAT-191 (3.7): the season quota before the region loop, so this run's region steps already see the money.
     _quota_pass(session_factory, run_id, summary, params, start)
 
+    # FEAT-192 (3.2): caravans before the region loop (arrivals, then dispatches), so this run's region steps already
+    # price / consume the post-caravan stock.
+    _caravan_pass(session_factory, run_id, summary, params, start, groups, active_map)
+
     logger.info("economy tick run %s (%s, slot %s)%s: %d regions, %d living merchants", run_id, summary.trigger,
                 summary.slot, " resumed" if resumed else "", len(plan), sum(len(v) for v in merchant_map.values()))
     for region_id, grant in sorted(plan.items()):
@@ -1235,6 +1261,8 @@ def run_tick(
             parts.append(QUOTA_ERROR_PREFIX)
         if summary.mint_failed_country_ids:
             parts.append(MINT_ERROR_PREFIX + ", ".join(str(c) for c in summary.mint_failed_country_ids))
+        if summary.caravans_failed:
+            parts.append(CARAVAN_ERROR_PREFIX + str(summary.caravans_failed))
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -1253,13 +1281,15 @@ def run_tick(
         session.close()
 
     log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures
-                             or summary.events_failed or summary.mint_failures or summary.quota_failed) \
+                             or summary.events_failed or summary.mint_failures or summary.quota_failed
+                             or summary.caravans_failed) \
         else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
         "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
         "%d failed, %d loans collected (%d), %d overdue, %d closed; events: %d ended, %d started, %d spread, "
         "%d chained, %d riots, %d applied, %d expense operations, %d failed; quota: %d issued%s; "
-        "court mint: %d operations, %d marks, %d failed countries",
+        "court mint: %d operations, %d marks, %d failed countries; caravans: %d sent (%d marks), %d delivered, "
+        "%d cancelled, %d failed",
         run_id, summary.status, summary.regions_done, summary.regions_total, summary.regions_failed,
         summary.operations_posted, summary.merchants_processed, summary.merchant_items_sold,
         summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures,
@@ -1268,7 +1298,8 @@ def run_tick(
         summary.events_started, summary.events_spread, summary.events_chained, summary.riots_started,
         summary.events_applied, summary.event_expense_ops, summary.events_failed, summary.quota_amount,
         " (failed)" if summary.quota_failed else "", summary.mint_court_ops, summary.mint_court_marks,
-        summary.mint_failures)
+        summary.mint_failures, summary.caravans_dispatched, summary.caravan_value, summary.caravans_delivered,
+        summary.caravans_cancelled, summary.caravans_failed)
     return summary
 
 
@@ -1318,6 +1349,56 @@ def _quota_pass(session_factory: SessionFactory, run_id: int, summary: RunSummar
     finally:
         session.rollback()
         session.close()
+
+
+def _caravan_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,
+                  now: datetime, groups: Mapping[str, econ_sim.GroupDef],
+                  active_map: Optional[Mapping[int, Sequence]] = None) -> None:
+    """Caravans (3.2): arrivals first, then dispatches; one transaction per caravan, best effort."""
+    import econ_caravan
+    import economy_caravan_crud as caravan_crud  # late: economy_caravan_crud imports this module lazily too
+    session = session_factory()
+    try:
+        available = caravan_crud.caravans_available(session)
+    except Exception as exc:
+        logger.warning("economy tick run %s: caravans unavailable (%s), skipped", run_id, type(exc).__name__)
+        available = False
+    finally:
+        session.rollback()
+        session.close()
+    if not available:
+        return
+
+    counts = caravan_crud.advance_and_finish(session_factory, run_id, now)
+    summary.caravans_delivered += counts["delivered"]
+    summary.caravans_cancelled += counts["cancelled"]
+    summary.caravans_failed += counts["failed"]
+
+    if not int(params.caravans_enabled):
+        return
+    session = session_factory()
+    try:
+        snapshot = caravan_crud.load_snapshot(session, run_id, params, groups, active_map)
+    except Exception as exc:
+        summary.caravans_failed += 1
+        logger.error("economy tick run %s: caravan snapshot failed (%s), no caravans sent this run", run_id,
+                     type(exc).__name__, exc_info=True)
+        return
+    finally:
+        session.rollback()
+        session.close()
+    plans = econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params)
+    for plan in plans:
+        try:
+            result = caravan_crud.dispatch_tx(session_factory, plan, run_id=run_id, params=params, now=now)
+        except Exception as exc:
+            summary.caravans_failed += 1
+            logger.error("economy tick run %s: caravan %s -> %s (%s) failed (%s), rolled back", run_id,
+                         plan.from_region_id, plan.to_region_id, plan.group_code, type(exc).__name__, exc_info=True)
+            continue
+        if result.status == "sent":
+            summary.caravans_dispatched += 1
+            summary.caravan_value += result.value
 
 
 def _mint_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,

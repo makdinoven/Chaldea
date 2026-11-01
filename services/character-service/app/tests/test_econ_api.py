@@ -180,10 +180,12 @@ def test_summary_shape(client):
     assert s["currency"] == CURRENCY
     assert s["totals"] == {"issued": 150, "held": 150, "players": 100, "npcs": 50, "escrow": 0,
                            "auction_storage": 0, "region_treasuries": 0, "country_treasuries": 0,
-                           "world_treasury": 0, "population_purses": 0, "banks": 0, "bank_deposits": 0}
+                           "world_treasury": 0, "population_purses": 0, "banks": 0, "bank_deposits": 0,
+                           "caravan_escrow": 0}
     assert s["invariant"] == {"ok": True, "ledger_sum": 0, "escrow_expected": 0, "escrow_actual": 0,
                               "storage_expected": 0, "storage_actual": 0, "bank_deposits_expected": 0,
-                              "bank_deposits_actual": 0, "drifting_characters": []}
+                              "bank_deposits_actual": 0, "caravan_escrow_expected": 0,
+                              "caravan_escrow_actual": 0, "drifting_characters": []}
     assert s["settings"] == {"country_tax_rate": 0.1}
     # Treasuries of every existing country / region are created for the page.
     assert [(c["country_id"], c["name"], [r["region_id"] for r in c["regions"]]) for c in s["countries"]] == [

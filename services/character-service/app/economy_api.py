@@ -8,6 +8,7 @@ Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,
          FEAT-184: /characters/admin/economy/banks[/debtors|/{region_id}[/capital]|/loans/{loan_id}/write-off]
          FEAT-187: /characters/admin/economy/events/{templates[/{id}],active,start,history,{event_id}/cancel}
          FEAT-191: /characters/admin/economy/mint[/countries/{id}|/items[/{item_id}]|/quotas]
+         FEAT-192: /characters/admin/economy/caravans[/overview|/pairs]
 Player:  FEAT-184 banks: /characters/economy/bank/{npc/{npc_id}[/deposit|/withdraw|/transfer|/send|/loan|/repay],
                           summary,regions} (JWT + ownership; POST also the FEAT-145 gate via locations-service)
          FEAT-191 mint: /characters/economy/mint/npc/{npc_id}[/mint] (same gate as the banks)
@@ -35,6 +36,7 @@ import econ_ledger
 import econ_scheduler
 import econ_tick
 import economy_bank_crud
+import economy_caravan_crud
 import economy_crud
 import economy_events_crud
 import economy_mint_crud
@@ -964,3 +966,43 @@ def list_mint_quotas(
     current_user: UserRead = Depends(require_permission("economy:read")),
 ):
     return _read(db, lambda: economy_mint_crud.list_quotas(db, limit))
+
+
+# ---------------------------------------------------------------------------
+# FEAT-192 NPC caravans — admin API (contract 3.11): reads economy:read, the pair PUT economy:settings
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/economy/caravans/overview", response_model=schemas.CaravanOverviewOut)
+def get_caravan_overview(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_caravan_crud.overview(db))
+
+
+@router.put("/admin/economy/caravans/pairs", response_model=schemas.TradePairOut)
+def put_trade_pair(
+    body: schemas.TradePairIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:settings")),
+):
+    result = _run_write(db, lambda: economy_caravan_crud.upsert_pair(
+        db, country_a=body.country_a, country_b=body.country_b, is_enabled=body.is_enabled,
+        duty_pct=body.duty_pct, user_id=current_user.id))
+    logger.info("trade pair: user=%s pair=%s-%s enabled=%s duty=%s", current_user.id, result["country_a"],
+                result["country_b"], result["is_enabled"], result["duty_pct"])
+    return result
+
+
+@router.get("/admin/economy/caravans", response_model=schemas.CaravanListOut)
+def list_caravans(
+    status: str = Query("all", pattern=schemas.CARAVAN_STATUS_RE),
+    region_id: Optional[int] = Query(None, ge=1),
+    group_code: Optional[str] = Query(None, max_length=32),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=schemas.CARAVAN_LIST_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read_or_error(db, lambda: economy_caravan_crud.list_caravans(
+        db, status=status, region_id=region_id, group_code=group_code or None, limit=limit, offset=offset))

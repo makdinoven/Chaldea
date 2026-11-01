@@ -20,6 +20,9 @@ This module never touches a database driver. It holds:
   * FEAT-187 region events: the `region_event` op type (one-shot treasury expense of an
     event, region treasury -> population purse, untaxed); the event maths lives in
     character-service (`econ_events.py`);
+  * FEAT-192 NPC caravans: the singleton `caravan_escrow` account («Караваны в пути») and the
+    caravan op types (dispatch / delivery / cancel, all untaxed, never touching the sources);
+    the caravan maths lives in character-service (`econ_caravan.py`);
   * a small TTL cache for the economy settings row.
 
 World invariant: the sum of all balances (characters.currency_balance plus
@@ -52,11 +55,13 @@ KIND_POPULATION_PURSE = "population_purse"
 # deposits (always equals the sum of the open deposit rows of that bank; never lent).
 KIND_BANK = "bank"
 KIND_BANK_DEPOSITS = "bank_deposits"
+# FEAT-192: money of caravans on the road (paid by the buyer at dispatch, released at arrival). Never negative.
+KIND_CARAVAN_ESCROW = "caravan_escrow"
 
 ACCOUNT_KINDS = frozenset({
     KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_WORLD_TREASURY,
     KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_EMISSION, KIND_ADJUSTMENT,
-    KIND_POPULATION_PURSE, KIND_BANK, KIND_BANK_DEPOSITS,
+    KIND_POPULATION_PURSE, KIND_BANK, KIND_BANK_DEPOSITS, KIND_CARAVAN_ESCROW,
 })
 
 # Kinds identified by a foreign id (ref_id > 0); every other kind is a singleton (ref_id = 0).
@@ -72,6 +77,7 @@ SINGLETON_NAMES = {
     KIND_AUCTION_STORAGE: "Хранилище аукциона",
     KIND_EMISSION: "Эмиссия",
     KIND_ADJUSTMENT: "Корректировки",
+    KIND_CARAVAN_ESCROW: "Караваны в пути",
 }
 
 # Accounts whose balance may go below zero (stage 1: treasuries and money sources).
@@ -137,6 +143,11 @@ OP_BANK_CAPITAL = "bank_capital"          # region treasury <-> bank
 OP_LOAN_ISSUE = "loan_issue"              # bank -> character
 OP_LOAN_REPAY = "loan_repay"              # character -> bank
 OP_LOAN_COLLECT = "loan_collect"          # vault / character -> bank (overdue debt collection)
+# FEAT-192 NPC caravans (untaxed; never touch the sources)
+OP_CARAVAN_DISPATCH = "caravan_dispatch"  # buyer purse (+ buyer region treasury for food) -> escrow
+OP_CARAVAN_DELIVERY = "caravan_delivery"  # escrow -> seller purse (value) + escrow -> buyer country (duty)
+OP_CARAVAN_CANCEL = "caravan_cancel"      # escrow -> the buyer accounts that paid (full refund)
+CARAVAN_OP_TYPES = frozenset({OP_CARAVAN_DISPATCH, OP_CARAVAN_DELIVERY, OP_CARAVAN_CANCEL})
 
 BANK_OP_TYPES = frozenset({
     OP_BANK_DEPOSIT, OP_BANK_WITHDRAW, OP_BANK_TRANSFER, OP_BANK_TICK, OP_BANK_CAPITAL,
@@ -151,7 +162,7 @@ OP_TYPES = frozenset({
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
     OP_REGION_EVENT,
-}) | BANK_OP_TYPES | MINT_OP_TYPES
+}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
 SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST}) | MINT_OP_TYPES
@@ -262,6 +273,10 @@ class AccountRef:
     @classmethod
     def storage(cls) -> "AccountRef":
         return cls(KIND_AUCTION_STORAGE, 0)
+
+    @classmethod
+    def caravan_escrow(cls) -> "AccountRef":
+        return cls(KIND_CARAVAN_ESCROW, 0)
 
     @classmethod
     def emission(cls) -> "AccountRef":

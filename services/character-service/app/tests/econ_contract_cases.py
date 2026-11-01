@@ -33,6 +33,11 @@ FEAT-187 (region events) appends `region_event` ledger CASES (one-shot treasury 
 T(R) -> P(R), untaxed, idempotent per event) and REGION_EVENT_OP_TYPE_NAME, which a runner
 checks is in econ_core.OP_TYPES and not in SOURCE_OP_TYPES / BANK_OP_TYPES.
 
+FEAT-192 (NPC caravans) appends caravan ledger CASES (`caravan_escrow` = the singleton account of
+money on the road; dispatch purse/treasury -> escrow, delivery escrow -> purse + escrow -> country
+duty, cancel escrow -> payers; untaxed, never negative, no sources) and CARAVAN_OP_TYPE_NAMES /
+CARAVAN_ESCROW_KIND_NAME, which a runner checks against econ_core's constants directly.
+
 Only econ_core is imported here, so this module is identical in every service.
 """
 
@@ -806,6 +811,69 @@ CASES += [
         name="non_source_op_with_emission_leg_still_rejected",
         steps=[Step("trade", [Leg(EMISSION, C1, 5)], error="EconomyError")],
         expected_operations=0, expected_postings=0,
+    ),
+]
+
+# ---------------------------------------------------------------------------
+# FEAT-192 NPC caravans: money on the road sits in the singleton `caravan_escrow`, appended to CASES
+# ---------------------------------------------------------------------------
+
+# a runner checks == CARAVAN_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES and
+# COMMENT_REQUIRED_OP_TYPES
+CARAVAN_OP_TYPE_NAMES: Tuple[str, ...] = ("caravan_dispatch", "caravan_delivery", "caravan_cancel")
+# a runner checks: in ACCOUNT_KINDS, singleton, not in NEGATIVE_ALLOWED_KINDS / TAX_SOURCE_KINDS / SOURCE_KINDS
+CARAVAN_ESCROW_KIND_NAME = "caravan_escrow"
+
+CARAVAN_ESCROW = AccountRef("caravan_escrow", 0)
+
+CASES += [
+    # buyer purse (+ region treasury for food) -> escrow, then escrow -> seller purse + duty -> buyer country;
+    # no comment needed, no tax leg on any step, idempotent per caravan key
+    ContractCase(
+        name="caravan_dispatch_and_delivery_untaxed_with_duty",
+        steps=[_fund((P20, 500), (R20, 200)),
+               Step("caravan_dispatch", [Leg(P20, CARAVAN_ESCROW, 150), Leg(R20, CARAVAN_ESCROW, 70)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c1:pay",
+                     "metadata": {"caravan_id": 1, "run_id": 1}}),
+               Step("caravan_dispatch", [Leg(P20, CARAVAN_ESCROW, 150)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c1:pay"},
+                    error="DuplicateOperation"),
+               Step("caravan_delivery", [Leg(CARAVAN_ESCROW, P10, 200), Leg(CARAVAN_ESCROW, K2, 20)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c1:done"})],
+        expected_accounts={("population_purse", 20): 350, ("region_treasury", 20): 130,
+                           ("caravan_escrow", 0): 0, ("population_purse", 10): 200,
+                           ("country_treasury", 2): 20},
+        expected_operations=3, expected_postings=6, expected_tax_legs=0,
+    ),
+    # a cancel refunds every payer in full; escrow -> region treasury is not taxed even with apply_tax on
+    ContractCase(
+        name="caravan_cancel_refunds_payers_untaxed",
+        steps=[_fund((P10, 100), (R10, 100)),
+               Step("caravan_dispatch", [Leg(P10, CARAVAN_ESCROW, 60), Leg(R10, CARAVAN_ESCROW, 40)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "caravan:c2:pay"}),
+               Step("caravan_cancel", [Leg(CARAVAN_ESCROW, P10, 60), Leg(CARAVAN_ESCROW, R10, 40)],
+                    {"region_id": 10, "idempotency_key": "caravan:c2:back"})],
+        expected_accounts={("population_purse", 10): 100, ("region_treasury", 10): 100,
+                           ("caravan_escrow", 0): 0},
+        expected_operations=3, expected_postings=6, expected_tax_legs=0,
+    ),
+    # the escrow never goes negative; caravan ops may not touch the money sources; the escrow is a singleton
+    ContractCase(
+        name="caravan_escrow_never_negative_and_no_sources",
+        steps=[_fund((P10, 50)),
+               Step("caravan_dispatch", [Leg(P10, CARAVAN_ESCROW, 50)], {"apply_tax": False}),
+               Step("caravan_delivery", [Leg(CARAVAN_ESCROW, P20, 51)], {"apply_tax": False},
+                    error="InsufficientFunds"),
+               Step("caravan_dispatch", [Leg(P10, CARAVAN_ESCROW, 51)], {"apply_tax": False},
+                    error="InsufficientFunds"),
+               Step("caravan_delivery", [Leg(EMISSION, P20, 5)], {"apply_tax": False}, error="EconomyError"),
+               Step("caravan_cancel", [Leg(CARAVAN_ESCROW, ADJUSTMENT, 5)], {"apply_tax": False},
+                    error="EconomyError"),
+               Step("caravan_dispatch", [Leg(P10, AccountRef("caravan_escrow", 7), 1)], {"apply_tax": False},
+                    error="EconomyError"),
+               Step("caravan_delivery", [Leg(CARAVAN_ESCROW, P20, 50)], {"apply_tax": False})],
+        expected_accounts={("population_purse", 10): 0, ("population_purse", 20): 50, ("caravan_escrow", 0): 0},
+        expected_operations=3, expected_postings=3, expected_tax_legs=0,
     ),
 ]
 

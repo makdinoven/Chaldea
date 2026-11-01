@@ -46,6 +46,11 @@ import type {
   EconEventsHistoryParams,
   EconRegionEvent,
   EconRegionEventsPage,
+  CaravanList,
+  CaravanListQuery,
+  CaravanOverview,
+  TradePair,
+  TradePairIn,
 } from '../types/economy';
 
 /** Admin «Экономика» API (FEAT-181, character-service). Auth header comes from axiosSetup. */
@@ -302,5 +307,27 @@ export const postEconomyEventCancel = async (eventId: number, comment: string): 
 
 export const fetchEconomyEventsHistory = async (params: EconEventsHistoryParams): Promise<EconRegionEventsPage> => {
   const { data } = await axios.get<EconRegionEventsPage>(`${EVENTS}/history`, { params: clean(params) });
+  return data;
+};
+
+/* ---------------------------------------------------------------- FEAT-192 caravans (feature file 3.11) */
+
+const CARAVANS = `${BASE}/caravans`;
+
+/** Params, escrow check, counters, countries and every country pair (`economy:read`). */
+export const fetchCaravanOverview = async (): Promise<CaravanOverview> => {
+  const { data } = await axios.get<CaravanOverview>(`${CARAVANS}/overview`);
+  return data;
+};
+
+/** Opens / closes trade between two countries and sets the duty (`economy:settings`); 400 same country, 404 unknown. */
+export const putTradePair = async (body: TradePairIn): Promise<TradePair> => {
+  const { data } = await axios.put<TradePair>(`${CARAVANS}/pairs`, body);
+  return data;
+};
+
+/** Caravans newest first; `region_id` matches from or to (`economy:read`). */
+export const fetchCaravans = async (query: CaravanListQuery = {}): Promise<CaravanList> => {
+  const { data } = await axios.get<CaravanList>(CARAVANS, { params: clean(query) });
   return data;
 };

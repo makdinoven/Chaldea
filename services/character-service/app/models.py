@@ -959,6 +959,63 @@ class EconMintSeason(Base):
     updated_at = Column(DateTime, nullable=True)
 
 
+# --------------------------------------------------------------------------- FEAT-192 caravans (migration 035)
+
+class EconTradePair(Base):
+    """Trade permission of two countries, symmetric (country_a < country_b, app-enforced; Countries.id, no FK).
+    No row = trade forbidden."""
+
+    __tablename__ = "econ_trade_pairs"
+
+    country_a = Column(Integer, primary_key=True, autoincrement=False)
+    country_b = Column(Integer, primary_key=True, autoincrement=False)
+    is_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
+    duty_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
+    updated_at = Column(DateTime, nullable=True)
+    updated_by = Column(Integer, nullable=True)
+
+
+class EconCaravan(Base):
+    """One NPC caravan (dispatch idempotency marker + kept history). Regions / countries: no FK."""
+
+    __tablename__ = "econ_caravans"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    dispatch_run_id = Column(Integer, nullable=False)
+    from_region_id = Column(Integer, nullable=False)
+    to_region_id = Column(Integer, nullable=False)
+    from_country_id = Column(Integer, nullable=False)
+    to_country_id = Column(Integer, nullable=False)
+    group_code = Column(String(32), nullable=False)
+    units = Column(Numeric(16, 3), nullable=False)
+    unit_price = Column(Numeric(14, 4), nullable=False)
+    value = Column(BigInteger, nullable=False)
+    duty = Column(BigInteger, nullable=False, default=0, server_default="0")
+    duty_pct = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    paid_purse = Column(BigInteger, nullable=False, default=0, server_default="0")
+    paid_treasury = Column(BigInteger, nullable=False, default=0, server_default="0")
+    travel_runs = Column(SmallInteger, nullable=False)
+    runs_left = Column(SmallInteger, nullable=False)
+    last_run_id = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False)                # in_transit | delivered | cancelled
+    cancel_reason = Column(String(32), nullable=True)          # destination_left | destination_deleted
+    goods_returned = Column(Boolean, nullable=True)
+    dispatch_op_id = Column(BigInteger, nullable=True)
+    finish_op_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    finished_run_id = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("dispatch_run_id", "from_region_id", "to_region_id", "group_code",
+                         name="uq_econ_caravans_dispatch"),
+        Index("ix_econ_caravans_status", "status", "id"),
+        Index("ix_econ_caravans_to", "to_region_id", "status"),
+        Index("ix_econ_caravans_from", "from_region_id", "status"),
+        Index("ix_econ_caravans_finished", "finished_at"),
+    )
+
+
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
 # ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
 # change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance

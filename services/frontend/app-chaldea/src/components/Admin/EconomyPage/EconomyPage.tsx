@@ -21,6 +21,7 @@ import EconomyMerchants from './EconomyMerchants';
 import EconomyBanks from './EconomyBanks';
 import EconomyEvents from './EconomyEvents';
 import EconomyMint from './EconomyMint';
+import EconomyCaravans from './EconomyCaravans';
 import EconomyGuide from './EconomyGuide';
 import { GuideIntro } from './GuideLink';
 import { EconomyGuideContext, type EconomyTabId, type GuideSectionId, type OpenGuide } from './guideSections';
@@ -40,6 +41,7 @@ const TAB_LABEL: Record<EconomyTab, string> = {
   banks: 'Банки',
   events: 'События',
   mint: 'Монетный двор',
+  caravans: 'Караваны',
   tick: 'Пересчёт',
   settings: 'Настройки',
 };
@@ -93,6 +95,10 @@ const TAB_INTRO: Partial<Record<EconomyTab, { section: GuideSectionId; text: Rea
     section: 'mint',
     text: 'Монетный двор каждой страны в её столице: двор сам чеканит излишек руды столицы, игроки сдают руду монетчику. Лимит — общий на страну за игровой сезон (49 дней). Здесь же — история квот сезона.',
   },
+  caravans: {
+    section: 'caravans',
+    text: 'Караваны НПС в каждом пересчёте везут товары из регионов, где их больше нормы, туда, где их меньше нормы. Внутри страны — всегда, между странами — только для пар с открытой торговлей. Здесь — параметры, пары стран с пошлиной и список караванов.',
+  },
 };
 
 /** Admin «Экономика» (FEAT-181): where the world's money is, the ledger journal, admin postings, currency settings. */
@@ -145,6 +151,7 @@ const EconomyPage = () => {
     'banks',
     'events',
     'mint',
+    'caravans',
     'tick',
     'settings',
   ];
@@ -223,6 +230,7 @@ const EconomyPage = () => {
         {tab === 'banks' && <EconomyBanks canSettings={canSettings} onMoneyChanged={loadSummary} />}
         {tab === 'events' && <EconomyEvents canSettings={canSettings} />}
         {tab === 'mint' && <EconomyMint canSettings={canSettings} canEmit={canEmit} />}
+        {tab === 'caravans' && <EconomyCaravans canSettings={canSettings} />}
         {tab === 'tick' && <EconomyTick canSettings={canSettings} onMoneyChanged={loadSummary} />}
         {tab === 'settings' && <EconomySettings canEdit={canSettings} onSaved={loadSummary} />}
       </div>

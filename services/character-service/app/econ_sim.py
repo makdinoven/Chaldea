@@ -142,6 +142,15 @@ class SimParams:
     mint_season_limit: int = 0                # default per-country season limit (court + players); 0 = mint closed
     mint_court_marks_per_unit: float = 8.0    # marks per region unit of ore_metal taken by the court
     mint_court_threshold_pct: float = 100.0   # the court takes ore only above this % of the capital's norm_stock
+    # FEAT-192 NPC caravans (3.10). Not in a seed either.
+    caravans_enabled: int = 1                 # 0 = no new caravans (those on the road still arrive)
+    caravan_surplus_share: float = 0.25       # share of a seller's surplus above norm that may leave per recount
+    caravan_purse_share: float = 0.25         # share of a buyer's purse caravans may spend per recount (all goods)
+    caravan_treasury_food_share: float = 0.5  # share of a buyer's positive treasury that may top up food per recount
+    caravan_travel_domestic: int = 1          # recounts on the road inside a country
+    caravan_travel_foreign: int = 2           # recounts on the road between countries
+    caravan_min_value: int = 10               # smaller deals are not sent
+    caravan_max_per_run: int = 200            # hard cap of dispatches per recount
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":

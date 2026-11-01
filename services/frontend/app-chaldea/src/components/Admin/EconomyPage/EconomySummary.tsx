@@ -106,9 +106,14 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
   // FEAT-184: shown once the backend reports banks (older responses have no such fields).
   if (totals.banks !== undefined) cards.push({ label: 'Банки (свои средства)', value: totals.banks });
   if (totals.bank_deposits !== undefined) cards.push({ label: 'Вклады игроков', value: totals.bank_deposits });
+  // FEAT-192: money of caravans on the road (paid by buyers, released at arrival).
+  if (totals.caravan_escrow !== undefined) cards.push({ label: 'Караваны в пути', value: totals.caravan_escrow });
 
   const hasBankCheck = invariant.bank_deposits_expected !== undefined && invariant.bank_deposits_actual !== undefined;
   const bankVaultOk = !hasBankCheck || invariant.bank_deposits_expected === invariant.bank_deposits_actual;
+  const hasCaravanCheck =
+    invariant.caravan_escrow_expected !== undefined && invariant.caravan_escrow_actual !== undefined;
+  const caravanOk = !hasCaravanCheck || invariant.caravan_escrow_expected === invariant.caravan_escrow_actual;
 
   return (
     <div className="flex flex-col gap-6">
@@ -133,6 +138,14 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
             title="Сумма открытых вкладов игроков должна совпадать с деньгами в хранилищах банков"
           >
             Вклады = хранилище: {bankVaultOk ? 'сходится' : 'расхождение'}
+          </span>
+        )}
+        {hasCaravanCheck && (
+          <span
+            className={`text-sm ${caravanOk ? 'text-white/50' : 'text-site-red'}`}
+            title="Деньги на счёте «Караваны в пути» должны совпадать с оплатой караванов, которые ещё в пути"
+          >
+            Караваны в пути: {caravanOk ? 'сходится' : 'расхождение'}
           </span>
         )}
         <button
@@ -162,6 +175,12 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
             <p className={bankVaultOk ? 'text-white' : 'text-site-red'}>
               Вклады игроков: хранилища банков {format(invariant.bank_deposits_actual ?? 0)}, по вкладам{' '}
               {format(invariant.bank_deposits_expected ?? 0)}
+            </p>
+          )}
+          {hasCaravanCheck && (
+            <p className={caravanOk ? 'text-white' : 'text-site-red'}>
+              Караваны в пути: счёт {format(invariant.caravan_escrow_actual ?? 0)}, по караванам{' '}
+              {format(invariant.caravan_escrow_expected ?? 0)}
             </p>
           )}
           {invariant.drifting_characters.length > 0 && (
