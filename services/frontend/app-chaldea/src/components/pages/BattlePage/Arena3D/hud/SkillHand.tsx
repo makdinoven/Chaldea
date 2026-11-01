@@ -27,6 +27,7 @@ import {
   isCoatingBlocked,
 } from "../../../../../utils/itemEffects";
 import { effectIconOf } from "../arenaTypes";
+import { skillPayment, type PayerBars } from "../../../../../utils/passiveCosts";
 import { RuneIcon } from "../EffectRunes";
 
 const TITLES: Record<SkillPickerProps["type"], string> = {
@@ -88,13 +89,22 @@ const CostGem = ({
   kind,
   cost,
   short,
+  hpCost = 0,
 }: {
   kind: "energy" | "mana";
   cost: number;
   short: boolean;
+  /** FEAT-190 — the Necromancer's HP top-up for a mana shortfall. */
+  hpCost?: number;
 }) => (
   <span
-    title={kind === "energy" ? `Энергия: ${cost}` : `Мана: ${cost}`}
+    title={
+      kind === "energy"
+        ? `Энергия: ${cost}`
+        : hpCost > 0
+          ? `Мана: ${cost} (не хватает — доплата ${hpCost} HP, Плата кровью)`
+          : `Мана: ${cost}`
+    }
     className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-extrabold tabular-nums text-white ring-2 shadow-[0_2px_4px_rgba(0,0,0,0.85),inset_0_-2px_3px_rgba(0,0,0,0.45)] [text-shadow:0_1px_2px_#000] sm:h-7 sm:w-7 sm:text-[11px] ${
       kind === "energy"
         ? "bg-[radial-gradient(circle_at_35%_30%,#fff2a8_0%,#c49a2c_55%,#4a3507_100%)]"
@@ -180,36 +190,46 @@ const SkillFace = ({
   playing,
   onPlay,
   onInfo,
+  passiveKey,
 }: {
   skill: BattleSkill;
   resolved: ResolvedSkill | undefined;
   cooldown: number;
-  resources: { mana: number; energy: number };
+  resources: PayerBars;
+  /** FEAT-189 — the viewer's passive key: the Caster pays (and sees) less mana. */
+  passiveKey: string | null;
   selected: boolean;
   playing: boolean;
   onPlay: () => void;
   onInfo: () => void;
 }) => {
   const costEnergy = resolved?.cost_energy ?? 0;
-  const costMana = resolved?.cost_mana ?? 0;
-  const shortEnergy = costEnergy > resources.energy;
-  const shortMana = costMana > resources.mana;
-  const short = shortEnergy || shortMana;
+  // FEAT-189 Caster discount + FEAT-190 Necromancer blood price (HP top-up).
+  const {
+    mana: costMana,
+    hpCost,
+    shortMana,
+    shortEnergy,
+    short,
+    shortText,
+  } = skillPayment(resolved?.cost_mana ?? 0, costEnergy, resources, passiveKey);
   const onCooldown = cooldown > 0;
-  const shortText =
-    shortMana && shortEnergy
-      ? "Не хватает маны и энергии"
-      : shortMana
-        ? "Не хватает маны"
-        : "Не хватает энергии";
 
   const corners = (
     <>
       <span className="absolute left-1 top-1">
         <CostGem kind="energy" cost={costEnergy} short={shortEnergy} />
       </span>
-      <span className="absolute right-1 top-1">
-        <CostGem kind="mana" cost={costMana} short={shortMana} />
+      <span className="absolute right-1 top-1 flex flex-col items-end gap-0.5">
+        <CostGem kind="mana" cost={costMana} short={shortMana} hpCost={hpCost} />
+        {hpCost > 0 && (
+          <span
+            title={`Плата кровью: нехватка маны доплачивается здоровьем (${hpCost} HP)`}
+            className="rounded-sm bg-black/80 px-1 text-[9px] font-bold tabular-nums text-stat-hp ring-1 ring-stat-hp/50 sm:text-[10px]"
+          >
+            +{hpCost} HP
+          </span>
+        )}
       </span>
       {resolved && resolved.level > 0 && (
         <span className="absolute bottom-1 left-1 rounded-sm bg-black/75 px-1 text-[9px] font-semibold text-gold-light ring-1 ring-gold/40">
@@ -381,7 +401,7 @@ const ItemFace = ({
 };
 
 interface SkillHandProps extends SkillPickerProps {
-  resources: { mana: number; energy: number };
+  resources: PayerBars;
 }
 
 /**
@@ -402,6 +422,7 @@ const SkillHand = ({
   onClear,
   onClose,
   resources,
+  passiveKey = null,
 }: SkillHandProps) => {
   const isItems = type === "item";
   const { resolvedById, loading } = useResolvedSkills(
@@ -461,6 +482,7 @@ const SkillHand = ({
               resolved={resolved}
               cooldown={cooldowns?.[String(id)] ?? 0}
               resources={resources}
+              passiveKey={passiveKey}
               selected={selectedId === id}
               playing={playing === id}
               onInfo={() => openCard(s)}
@@ -473,6 +495,9 @@ const SkillHand = ({
                     targets_ally: !!resolved?.effects?.some(
                       (e) => e.target_side === "ally",
                     ),
+                    // FEAT-189: the resolved (level-adjusted) mana cost, so the
+                    // slot tooltip shows the same price as this card.
+                    cost_mana: resolved?.cost_mana,
                   }),
                 )
               }
@@ -563,6 +588,8 @@ const SkillHand = ({
           resolved={resolvedById[skillId(cardSkill)] ?? null}
           perks={cardPerks}
           loading={cardLoading}
+          passiveKey={passiveKey}
+          resources={resources}
           onClose={closeCard}
         />
       )}

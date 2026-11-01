@@ -5,6 +5,7 @@ import Tooltip from "../../../../CommonComponents/Tooltip/Tooltip";
 import { translateSkillSign } from "../../../../../helpers/helpers";
 import InventoryItem from "../../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
 import { SKILLS_KEYS } from "../../../../../helpers/commonConstants";
+import type { PayerBars } from "../../../../../utils/passiveCosts";
 
 interface SkillSlot {
   id?: number;
@@ -19,6 +20,10 @@ interface ItemSkillCircleProps {
   choosedItem: SkillSlot | null;
   onClear?: () => void;
   onOpen?: () => void;
+  /* FEAT-189: the viewer's passive key, for the Caster's mana discount in the tooltip. */
+  passiveKey?: string | null;
+  /* FEAT-190: the viewer's live bars, for the Necromancer's HP top-up in the tooltip. */
+  resources?: PayerBars | null;
 }
 
 const ItemSkillCircle = ({
@@ -27,6 +32,8 @@ const ItemSkillCircle = ({
   onDropItem,
   choosedItem,
   onOpen,
+  passiveKey = null,
+  resources = null,
 }: ItemSkillCircleProps) => {
   const typeIcon =
     type === SKILLS_KEYS.item ? <ItemIcon /> : <SkillIcon />;
@@ -75,7 +82,7 @@ const ItemSkillCircle = ({
       {isClosed ? (
         <ClosedItemSkillIcon />
       ) : choosedItem ? (
-        <InventoryItem isDraggable={false} item={choosedItem} />
+        <InventoryItem isDraggable={false} item={choosedItem} passiveKey={passiveKey} resources={resources} />
       ) : (
         <>
           {typeIcon}

@@ -7,6 +7,7 @@ import { toSameOriginMedia } from '../pages/BattlePage/Arena3D/sameOriginMedia';
 import SkillUpgradeModal from './SkillUpgradeModal';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import type { NodePageAction, NodePageModel, NodePageTone } from './Books3D/nodePageModel';
+import type { SubclassPassive } from '../../api/subclasses';
 import type {
   CharacterTreeProgressResponse,
   FullClassTreeResponse,
@@ -44,6 +45,8 @@ interface UseNodePageArgs {
   onNavigateToSubclass?: (nodeId: number) => void;
   /** Opens a learned skill's own page for upgrading; without it, the upgrade window opens instead. */
   onUpgradeSkill?: (skillId: number) => void;
+  /** Subclass passives by subclass key (FEAT-188), shown on subclass_choice nodes. */
+  passives?: Record<string, SubclassPassive>;
 }
 
 const useNodePage = ({
@@ -56,6 +59,7 @@ const useNodePage = ({
   onRefresh,
   onNavigateToSubclass,
   onUpgradeSkill,
+  passives,
 }: UseNodePageArgs) => {
   const dispatch = useAppDispatch();
   const [choosing, setChoosing] = useState(false);
@@ -122,11 +126,18 @@ const useNodePage = ({
       chosenNodeIds.size > 0 &&
       !tree.nodes.some((n) => n.node_type === 'subclass_choice' && chosenNodeIds.has(n.id));
 
+    // Every subclass node shows its passive, chosen or not — a preview before choosing.
+    const passive =
+      node.node_type === 'subclass_choice' && node.subclass_key ? passives?.[node.subclass_key] ?? null : null;
+
     return {
       nodeId: node.id,
       title: node.name,
       meta: `${NODE_TYPE_LABELS[node.node_type] ?? node.node_type} · Уровень ${node.level_ring}`,
       description: node.description,
+      passive: passive
+        ? { name: passive.name, description: passive.description, implemented: passive.implemented }
+        : null,
       status: { text: readOnly ? `${tree.name} — только просмотр` : stateText[state], tone },
       action,
       skills,
@@ -134,7 +145,7 @@ const useNodePage = ({
       hint,
       canReset,
     };
-  }, [node, tree, progress, readOnly, chosenNodeIds, choosing, learningSkillId, onNavigateToSubclass]);
+  }, [node, tree, progress, readOnly, chosenNodeIds, choosing, learningSkillId, onNavigateToSubclass, passives]);
 
   const onAction = useCallback(
     async (action: NodePageAction) => {

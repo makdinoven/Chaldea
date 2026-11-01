@@ -1,4 +1,5 @@
 import type { DotKind as EffectDotKind } from "../battleEffects";
+import type { SubclassPassive } from "../../../../api/subclasses";
 
 /** Damage-over-time families on the arena: the effect ones plus a plain "HP −"
  * stat modifier with a duration, which drains rather than bleeds. */
@@ -145,6 +146,10 @@ export interface ArenaFighter {
   isSelf: boolean;
   selection: FighterSelection;
   selectable: boolean;
+  /** FEAT-188 — the subclass passive (badge on the card); null for mobs / old battles. */
+  passive?: SubclassPassive | null;
+  /** FEAT-190 — total passive shield (absorbs damage before HP); 0 when none. */
+  shield: number;
 }
 
 export interface ArenaAim {

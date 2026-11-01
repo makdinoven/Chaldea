@@ -32,10 +32,22 @@ import {
 import ProfileCard from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import SectionHeader from '../shared/SectionHeader';
+import {
+  effectiveManaCost,
+  CASTER_MANA_DISCOUNT_NOTE,
+  NECROMANCER_PASSIVE_KEY,
+  BLOOD_PRICE_NOTE,
+  skillPayment,
+  type PayerBars,
+} from '../../../utils/passiveCosts';
 
 interface ResolvedSkillCardProps {
   resolved: ResolvedSkill;
   skill: SkillWithPerks | null;
+  /** FEAT-189: the viewer's subclass passive key — a Caster sees the discounted mana. */
+  passiveKey?: string | null;
+  /** FEAT-190: the viewer's live bars in battle — a Necromancer sees the exact HP top-up. */
+  resources?: PayerBars;
 }
 
 const SKILL_TYPE_BADGE: Record<string, string> = {
@@ -166,7 +178,14 @@ const EffectRow = ({
   );
 };
 
-const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
+const ResolvedSkillCard = ({ resolved, skill, passiveKey = null, resources }: ResolvedSkillCardProps) => {
+  const manaCost = effectiveManaCost(resolved.cost_mana, passiveKey);
+  const manaDiscounted = manaCost < resolved.cost_mana;
+  // FEAT-190: the Necromancer's «Плата кровью» — exact top-up in battle, the rule elsewhere.
+  const isNecro = passiveKey === NECROMANCER_PASSIVE_KEY;
+  const payment = resources
+    ? skillPayment(resolved.cost_mana, resolved.cost_energy, resources, passiveKey)
+    : null;
   const skillType = resolved.skill_type || skill?.skill_type || '';
   const typeLabel = ruSkillType(skillType);
   const typeBadge = SKILL_TYPE_BADGE[skillType] ?? 'bg-white/10 text-white/70 border-white/20';
@@ -227,9 +246,24 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
           {resolved.cost_energy} энергии
         </span>
         <span className="text-white/20">·</span>
-        <span className="flex items-center gap-1">
+        <span className="flex flex-wrap items-center gap-1">
           <Droplet size={14} className="text-site-blue" />
-          {resolved.cost_mana} маны
+          {manaDiscounted && <s className="text-white/35">{resolved.cost_mana}</s>}
+          {manaCost} маны
+          {manaDiscounted && (
+            <span className="text-gold/80 text-[11px]">({CASTER_MANA_DISCOUNT_NOTE})</span>
+          )}
+          {isNecro && manaCost > 0 && (
+            payment && payment.hpCost > 0 ? (
+              <span className="text-stat-hp text-[11px]">
+                (не хватает — доплата {payment.hpCost} HP, Плата кровью)
+              </span>
+            ) : payment?.shortMana ? (
+              <span className="text-site-red text-[11px]">(не хватает маны и здоровья)</span>
+            ) : !payment ? (
+              <span className="text-gold/80 text-[11px]">({BLOOD_PRICE_NOTE})</span>
+            ) : null
+          )}
         </span>
         <span className="text-white/20">·</span>
         <span className="flex items-center gap-1">

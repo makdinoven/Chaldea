@@ -24,6 +24,8 @@ export interface NodePageModel {
   /** "Корневой узел · Уровень 1" */
   meta: string;
   description: string | null;
+  /** A subclass node's passive (FEAT-188), written under its description. */
+  passive: { name: string; description: string; implemented: boolean } | null;
   status: { text: string; tone: NodePageTone };
   /** The one large action the page offers, if any. */
   action: { kind: 'choose' | 'subclass'; label: string; busy: boolean } | null;

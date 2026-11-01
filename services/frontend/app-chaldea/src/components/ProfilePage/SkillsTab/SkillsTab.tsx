@@ -33,6 +33,10 @@ import PanelScrollArea from '../shared/PanelScrollArea';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import { MotionProfileCard } from '../shared/ProfileCard';
 import ResolvedSkillCard from './ResolvedSkillCard';
+import { useAppSelector } from '../../../redux/store';
+import { selectEquipmentRules } from '../../../redux/slices/profileSlice';
+import useSubclassRegistry from '../../../hooks/useSubclassRegistry';
+import { effectiveManaCost } from '../../../utils/passiveCosts';
 
 interface SkillsTabProps {
   characterId: number;
@@ -89,6 +93,18 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
   const [resolved, setResolved] = useState<ResolvedSkill | null>(null);
   const [skillWithPerks, setSkillWithPerks] = useState<SkillWithPerks | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // FEAT-189: the character's subclass passive (equipment rules the profile
+  // already loads + the public subclass registry) — a Caster sees mana costs
+  // with the «Чистая энергия» discount. Unknown passive — raw costs.
+  const equipmentRules = useAppSelector(selectEquipmentRules);
+  const subclassKey = equipmentRules?.subclass_key ?? null;
+  const { passives, error: subclassError } = useSubclassRegistry(!!subclassKey, equipmentRules?.class_id ?? null);
+  const passiveKey = subclassKey ? passives[subclassKey]?.key ?? null : null;
+
+  useEffect(() => {
+    if (subclassError) toast.error(subclassError);
+  }, [subclassError]);
 
   useEffect(() => {
     const fetchSkills = async () => {
@@ -241,7 +257,7 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
                 const FallbackIcon = SKILL_TYPE_FALLBACK_ICON[skillType] ?? Swords;
                 const hasPerk = cs.selected_perk_ids.length > 0;
                 const costEnergy = cs.skill?.cost_energy ?? 0;
-                const costMana = cs.skill?.cost_mana ?? 0;
+                const costMana = effectiveManaCost(cs.skill?.cost_mana ?? 0, passiveKey);
                 const cooldown = cs.skill?.cooldown ?? 0;
                 return (
                   <MotionProfileCard
@@ -339,7 +355,7 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
 
         {!detailLoading && !resolved && error && <ErrorState message={error} className="py-6" />}
 
-        {resolved && <ResolvedSkillCard resolved={resolved} skill={skillWithPerks} />}
+        {resolved && <ResolvedSkillCard resolved={resolved} skill={skillWithPerks} passiveKey={passiveKey} />}
 
         {selectedSkill && (
           <div className="text-white/40 text-xs mt-3 text-center">

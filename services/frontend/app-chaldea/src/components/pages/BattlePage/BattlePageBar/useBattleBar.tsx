@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { createElement, useEffect, useMemo, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import {
   BATTLE_EVENTS_TRANSLATE,
   SKILLS_KEYS,
@@ -15,6 +15,8 @@ import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
 import { describeEffect, pluralizeTurn, type EffectLike } from "../battleEffects";
 import { EQUIPMENT_SLOT_LABELS } from "../../../ProfilePage/constants";
 import type { WeaponCoating } from "../../../../utils/itemEffects";
+import type { ParticipantPassiveFields } from "../battleTypes";
+import type { PayerBars } from "../../../../utils/passiveCosts";
 import SkillPicker, {
   type BattleSkill,
   type BattleItem,
@@ -26,7 +28,7 @@ import SkillPicker, {
 
 // --- Types ---
 
-interface ParticipantSnapshot {
+interface ParticipantSnapshot extends ParticipantPassiveFields {
   participant_id: number;
   character_id: number;
   name: string;
@@ -44,6 +46,8 @@ interface RuntimeParticipant {
   team: number;
   /** FEAT-168 — absent for battles started before the feature shipped */
   weapon_coating?: WeaponCoating | null;
+  /** FEAT-190 — total passive shield; absent in older states. */
+  shield?: number;
 }
 
 interface RuntimeState {
@@ -110,6 +114,69 @@ const RESOURCE_TICK_LABELS: Record<string, string> = {
   stamina: "выносливости",
 };
 
+// Log name of a passive by key — only for a snapshot that lacks the passive
+// (the snapshot's own name, from the skills-service registry, wins).
+const PASSIVE_LOG_NAMES: Record<string, string> = {
+  berserker_rage: "Ярость",
+  // FEAT-189 — wave 1 (names mirror skills-service `app/subclasses.py`).
+  inquisitor_heresy_seal: "Печать ереси",
+  saber_monster_hunter: "Охотник на чудовищ",
+  gladiator_arena: "Арена",
+  agent_weak_spot: "Слабое место",
+  lancer_pin: "Пригвоздить",
+  mechanic_shrapnel: "Шрапнель",
+  archer_first_blood: "Первая кровь",
+  assassin_from_shadow: "Из тени",
+  trickster_deceit: "Обман",
+  monk_harmony: "Гармония",
+  salamander_kindling: "Разгорание",
+  caster_pure_energy: "Чистая энергия",
+  sparkmage_chain_lightning: "Цепная молния",
+  // FEAT-190 — wave 2.
+  paladin_sacred_vow: "Священный обет",
+  guardian_retribution: "Возмездие",
+  bard_rhythm: "Ритм",
+  necromancer_blood_price: "Плата кровью",
+  etheriad_spirit_whisper: "Шёпот духов",
+  auromancer_tide: "Прилив",
+  priest_faith: "Вера",
+};
+const PASSIVE_LOG_FALLBACK = "пассивка";
+
+// FEAT-189 — an extra hit from a passive, so it does not read as an AoE splash.
+const EXTRA_HIT_LABELS: Record<string, string> = {
+  splash: "осколок",
+  chain: "перескок",
+  echo: "повтор",
+};
+
+// FEAT-189 — stats the Lancer steals (`passive_proc` kind `pin`, field `stolen`).
+const STOLEN_STAT_LABELS: Record<string, { label: string; unit: string }> = {
+  dodge: { label: "уклонения", unit: "%" },
+  critical_hit_chance: { label: "шанса крита", unit: " п.п." },
+};
+
+// FEAT-190 — what the Etheriad's spirits did (`passive_proc` kind `spirit_whisper`, field `mode`).
+const SPIRIT_WHISPER_LABELS: Record<string, { label: string; unit: string }> = {
+  ward: { label: "стойкость", unit: "% сопр." },
+  curse: { label: "уязвимость", unit: "% сопр." },
+  might: { label: "сила", unit: "% урона" },
+};
+
+/** One passive's share of an event (FEAT-189 log contract, battle-service §3.5). */
+export interface PassiveContribution {
+  key: string;
+  /** damage_pct | resist_pct | forced_crit | resist_ignore | extra_hit | deceit | duration_plus | mana_discount
+   *  | lifesteal | reflect | redirect | blood_price (FEAT-190) */
+  kind: string;
+  value?: number;
+  /** participant_id of the passive's owner, when it is one participant's passive. */
+  owner?: number;
+}
+
+const fmtNum = (n: number): string => String(Math.round(n * 10) / 10);
+const signed = (n: number): string => (n < 0 ? `−${fmtNum(-n)}` : `+${fmtNum(n)}`);
+
 // TODO: type battle events properly when backend contract is formalized
 export interface BattleEvent {
   event: string;
@@ -151,6 +218,45 @@ export interface BattleEvent {
   quantity_left?: number;
   item_id?: number;
   removed?: Array<EffectLike | string>;
+  // FEAT-188 — set on a landed blow when the attacker's subclass passive added
+  // damage (passive_pct > 0); its share is already inside buff_pct.
+  passive_key?: string;
+  passive_pct?: number;
+  // FEAT-189 — every passive that touched this event (attacker and defender
+  // side). When present it replaces the single FEAT-188 passive_pct segment.
+  passives?: PassiveContribution[];
+  forced_crit?: boolean;
+  resist_ignored_pct?: number;
+  /** splash (Шрапнель) | chain / echo (Цепная молния) */
+  extra_hit?: string;
+  extra_mult?: number;
+  /** A Trickster's «Обман» — also flagged `dodged`, so 3D animates a dodge. */
+  deceived?: boolean;
+  // `passive_proc` fields (its `kind` reuses the field above).
+  key?: string;
+  value?: number;
+  stacks?: number;
+  stolen?: Record<string, number> | number;
+  mana_discount?: number;
+  // FEAT-190 — shields, reflect, redirect, blood price (battle-service §3.5).
+  /** Damage a shield took off this blow (already inside `final`). */
+  absorbed?: number;
+  /** The target's shield left after the blow. */
+  shield_left?: number;
+  /** A Guardian's «Возмездие»: `source` = Guardian, `target` = the attacker. */
+  reflected?: boolean;
+  /** A Trickster's «Обман» sent this blow into the attacker's ally. */
+  redirected?: boolean;
+  /** participant_id of the Trickster who deceived the attacker. */
+  deceived_by?: number;
+  /** `resource_spend`: HP the Necromancer paid for missing mana. */
+  hp_paid?: number;
+  /** `passive_proc`: a shield total after the proc. */
+  shield?: number;
+  /** `passive_proc`: inspiration group/solo, spirit whisper ward/curse/might. */
+  mode?: string;
+  /** `passive_proc`: participants the proc touched. */
+  targets?: number[];
   [key: string]: unknown;
 }
 
@@ -438,6 +544,89 @@ export const useBattleBar = ({
       return name ? <span className="gold-text text-xs">{name}</span> : null;
     };
 
+    // FEAT-189 — a passive's display name: the owner's snapshot name (registry),
+    // then the local map, then a neutral word.
+    const passiveNameOf = (key: unknown, owner?: number): string => {
+      if (typeof key !== "string" || !key) return PASSIVE_LOG_FALLBACK;
+      const own =
+        owner != null
+          ? snapshotData.find((p) => p.participant_id === owner)?.passive
+          : undefined;
+      return (own?.key === key ? own.name : undefined) || PASSIVE_LOG_NAMES[key] || PASSIVE_LOG_FALLBACK;
+    };
+
+    // Text after the name for one contribution; null = render nothing (unknown
+    // kind or nothing to say) — new kinds must never break the log.
+    const contributionDetail = (c: PassiveContribution): string | null => {
+      const v = Number(c.value ?? 0);
+      if (!Number.isFinite(v)) return null;
+      switch (c.kind) {
+        case "damage_pct":
+          return v ? ` ${signed(v)}%` : null;
+        case "resist_pct":
+          return v ? `: сопр. ${signed(v)}%` : null;
+        case "forced_crit":
+          return v ? `: крит +${fmtNum(v)}%` : ": крит";
+        case "resist_ignore":
+          return v ? `: пробивает ${fmtNum(v)}% сопр.` : null;
+        case "extra_hit":
+          return v ? `: ${fmtNum(v)}% урона` : "";
+        case "duration_plus":
+          return v > 0 ? `: +${pluralizeTurn(Math.round(v))}` : "";
+        case "mana_discount":
+          return v ? `: −${fmtNum(Math.abs(v))} маны` : null;
+        // FEAT-190.
+        case "lifesteal":
+          // «Ярость» also adds damage on the same blow — say which part this is.
+          return v > 0
+            ? `${c.key === "berserker_rage" ? ": вампиризм" : ""} +${fmtNum(v)} HP`
+            : null;
+        case "reflect":
+          return v > 0 ? `: −${fmtNum(v)}` : null;
+        case "redirect":
+          return v ? `: ${fmtNum(v)}% урона` : "";
+        case "blood_price":
+          return v > 0 ? ` −${fmtNum(v)} HP` : null;
+        default:
+          return null;
+      }
+    };
+
+    const renderContributions = (list: unknown): ReactNode => {
+      if (!Array.isArray(list)) return null;
+      return list.map((raw, i) => {
+        if (!raw || typeof raw !== "object") return null;
+        const c = raw as PassiveContribution;
+        if (typeof c.key !== "string" || typeof c.kind !== "string") return null;
+        const detail = contributionDetail(c);
+        if (detail === null) return null;
+        return (
+          <span key={`passive-${i}`} className="text-white/60 text-[11px]">
+            · <span className="gold-text">{passiveNameOf(c.key, c.owner)}</span>
+            {detail}
+          </span>
+        );
+      });
+    };
+
+    // Effect names of a `passive_proc` (raw DB rows or normalized effects).
+    const effectNames = (list: unknown): string[] =>
+      Array.isArray(list)
+        ? list
+            .map((e) => {
+              if (typeof e === "string") return describeEffect({ name: e }).label;
+              if (!e || typeof e !== "object") return "";
+              const row = e as Record<string, unknown>;
+              const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+              return describeEffect({
+                ...(row as EffectLike),
+                name: str(row.name) ?? str(row.effect_name),
+                attribute: str(row.attribute) ?? str(row.attribute_key),
+              }).label;
+            })
+            .filter(Boolean)
+        : [];
+
     // Which skill(s) the actor used this turn — resolved to a human name.
     if (event.event === "skill_use") {
       const skillName =
@@ -478,8 +667,178 @@ export const useBattleBar = ({
               </span>
             );
           })}
+          {/* FEAT-189: «· Обман: +1 ход» / «· Разгорание: +1 ход» */}
+          {renderContributions(event.passives)}
         </span>
       );
+    }
+
+    // FEAT-189 — a passive fired outside a damage number: stacks, immunity, a
+    // readied shadow, the Agent's bonus effects. Unknown kinds render nothing.
+    if (event.event === "passive_proc") {
+      const name = <span className="gold-text">{passiveNameOf(event.key, event.who)}</span>;
+      const value = Number(event.value ?? 0);
+      const stacks = Number(event.stacks ?? 0);
+      const stacksNote =
+        Number.isFinite(stacks) && stacks > 0 ? (
+          <span className="text-white/45 text-[11px]">(стаков: {stacks})</span>
+        ) : null;
+      // Varargs children (not an array) — no React key warnings.
+      const line = (...children: ReactNode[]) =>
+        createElement("span", { className: "flex flex-wrap items-center gap-1" }, ...children);
+      const muted = (text: string) => <span className="text-white/60">{text}</span>;
+      switch (event.kind) {
+        case "heresy_stack":
+          return line(
+            getName(event.who),
+            name,
+            muted("—"),
+            getName(event.target),
+            value ? muted(`сопр. к магии и стихиям −${fmtNum(Math.abs(value))}%`) : null,
+            stacksNote,
+          );
+        case "pin": {
+          const stolen = event.stolen;
+          const parts =
+            stolen && typeof stolen === "object"
+              ? Object.entries(stolen)
+                  .filter(([, amt]) => Number(amt) > 0)
+                  .map(([stat, amt]) => {
+                    const meta = STOLEN_STAT_LABELS[stat];
+                    return meta
+                      ? `${fmtNum(Number(amt))}${meta.unit} ${meta.label}`
+                      : `${fmtNum(Number(amt))} (${stat})`;
+                  })
+              : typeof stolen === "number" && stolen > 0
+                ? [fmtNum(stolen)]
+                : [];
+          return line(
+            getName(event.who),
+            name,
+            muted(parts.length > 0 ? "крадёт у" : "пригвождает"),
+            getName(event.target),
+            parts.length > 0 ? <span className="text-white/85">{parts.join(", ")}</span> : null,
+            stacksNote,
+          );
+        }
+        case "saber_kill":
+          return line(
+            getName(event.who),
+            name,
+            muted(value ? `— урон +${fmtNum(value)}% до конца забега` : "— убийство засчитано"),
+            stacksNote,
+          );
+        case "saber_resolve":
+          return line(
+            getName(event.who),
+            <span className="gold-text">Несгибаемость</span>,
+            muted(value ? `— сопротивления +${fmtNum(value)}%` : "— сопротивления растут"),
+            stacksNote,
+          );
+        case "shadow_ready":
+          return line(getName(event.who), name, muted("— следующая атака будет критом"));
+        case "control_immune": {
+          const names = effectNames(event.effects);
+          return line(
+            getName(event.who),
+            name,
+            <span className="text-emerald-400/90">
+              — контроль не сработал{names.length > 0 ? `: ${names.join(", ")}` : ""}
+            </span>,
+          );
+        }
+        case "weak_spot": {
+          const names = effectNames(event.effects);
+          if (names.length === 0) return null;
+          return line(
+            getName(event.who),
+            name,
+            muted("—"),
+            getName(event.target),
+            muted("получает:"),
+            <span className="text-white/85">{names.join(", ")}</span>,
+          );
+        }
+        // FEAT-190 — wave 2.
+        case "vow": {
+          // «Священный обет: щит N, снято: X»
+          const names = effectNames(event.effects);
+          return line(
+            getName(event.who),
+            name,
+            <span className="text-site-blue">
+              — щит {value > 0 ? fmtNum(value) : "поднят"}
+            </span>,
+            names.length > 0 ? muted(`· снято: ${names.join(", ")}`) : null,
+          );
+        }
+        case "tide":
+          // «Прилив: щит <цель> +N»
+          if (!(value > 0)) return null;
+          return line(
+            getName(event.who),
+            name,
+            muted("— щит"),
+            getName(event.target ?? event.who),
+            <span className="text-site-blue">+{fmtNum(value)}</span>,
+          );
+        case "shield_absorb": {
+          // DoT / effect damage soaked by a shield (strikes carry `absorbed`).
+          if (!(value > 0)) return null;
+          const left = Math.round(Number(event.shield ?? 0));
+          return line(
+            muted("Щит"),
+            getName(event.who),
+            muted("поглотил"),
+            <span className="text-site-blue">{fmtNum(value)}</span>,
+            Number.isFinite(left) && left > 0 ? muted(`(осталось ${left})`) : null,
+          );
+        }
+        case "kill_heal":
+          // «Плата кровью +N HP» for a kill.
+          if (!(value > 0)) return null;
+          return line(
+            getName(event.who),
+            name,
+            <span className="text-emerald-400">+{fmtNum(value)} HP</span>,
+            event.target != null ? muted("за убийство") : null,
+            getName(event.target),
+          );
+        case "inspiration": {
+          // «Вдохновение ×N (+X% урона)»
+          if (!(stacks > 0)) return null;
+          const solo = event.mode === "solo";
+          return line(
+            getName(event.who),
+            name,
+            muted("—"),
+            <span className="gold-text">Вдохновение ×{stacks}</span>,
+            value > 0 ? (
+              <span className="text-emerald-400/90">
+                (+{fmtNum(value)}% урона{solo ? ", себе" : ""})
+              </span>
+            ) : null,
+          );
+        }
+        case "inspiration_end":
+          return line(getName(event.who), name, muted("— Вдохновение угасло"));
+        case "spirit_whisper": {
+          const meta = SPIRIT_WHISPER_LABELS[String(event.mode ?? "")];
+          if (!meta) return null;
+          return line(
+            getName(event.who),
+            name,
+            muted("—"),
+            getName(event.target),
+            <span className={value < 0 ? "text-site-red" : "text-emerald-400/90"}>
+              {meta.label}
+              {value ? ` ${signed(value)}${meta.unit}` : ""}
+            </span>,
+          );
+        }
+        default:
+          return null;
+      }
     }
 
     if (event.event === "item_use") {
@@ -671,10 +1030,36 @@ export const useBattleBar = ({
     }
 
     if (event.event === "damage") {
+      // FEAT-189: an extra hit from a passive (Шрапнель / Цепная молния) is
+      // tagged so it does not read as an ordinary AoE splash.
+      const extraTag = event.extra_hit ? (
+        <span className="text-site-blue text-[11px]">
+          ↳ {EXTRA_HIT_LABELS[event.extra_hit] ?? "доп. удар"}
+        </span>
+      ) : null;
+      // FEAT-189: the Trickster's «Обман» — the attack did not pass. Also
+      // flagged `dodged` (3D animates a dodge), so it must come first.
+      if (event.deceived) {
+        return (
+          <span className="flex flex-wrap items-center gap-1">
+            {extraTag}
+            {getName(event.target)}
+            <span className="text-site-red">обманул</span>
+            {getName(event.source)}
+            {event.source_kind === "item" && (
+              <span className="text-site-blue">«{itemName(event)}»</span>
+            )}
+            <span className="text-white/60 text-[11px]">
+              · <span className="gold-text">{passiveNameOf("trickster_deceit", event.target)}</span>
+            </span>
+          </span>
+        );
+      }
       // Misses: two distinct cases. Show ONLY on a miss — no "попал" on a hit.
       if (event.dodged) {
         return (
           <span className="flex flex-wrap items-center gap-1">
+            {extraTag}
             {getName(event.target)}
             <span className="text-site-red">
               {event.source_kind === "item" ? "уклонился от" : "уклонился от удара"}
@@ -690,6 +1075,7 @@ export const useBattleBar = ({
       if (event.hit_chance_failed) {
         return (
           <span className="flex flex-wrap items-center gap-1">
+            {extraTag}
             {getName(event.source)}
             <span className="text-site-red">промахнулся по</span>
             {getName(event.target)}
@@ -698,8 +1084,65 @@ export const useBattleBar = ({
       }
       // Hit: compact source → target, damage icon, final amount, crit marker.
       const finalDmg = Math.round(Number(event.final ?? 0));
+      // FEAT-190: what a shield took off this blow (already inside `final`).
+      const absorbed = Math.round(Number(event.absorbed ?? 0));
+      const absorbedNote =
+        Number.isFinite(absorbed) && absorbed > 0 ? (
+          <span className="text-site-blue text-[11px]">(щит поглотил {absorbed})</span>
+        ) : null;
+      // FEAT-190: a Guardian's «Возмездие» — «<Хранитель> — Возмездие: <атакующий> −N».
+      if (event.reflected) {
+        return (
+          <span className="flex flex-wrap items-center gap-1">
+            {getName(event.source)}
+            <span className="text-white/60">—</span>
+            <span className="gold-text">{passiveNameOf("guardian_retribution", event.source)}:</span>
+            {getName(event.target)}
+            {damageIcon(event.damage_type)}
+            <span className="font-medium text-site-red">−{finalDmg}</span>
+            {absorbedNote}
+          </span>
+        );
+      }
+      // FEAT-190: «Обман» sent the blow into the attacker's own ally at reduced damage.
+      if (event.redirected) {
+        const redirect = Array.isArray(event.passives)
+          ? event.passives.find((c) => c && c.kind === "redirect")
+          : undefined;
+        const trickster = event.deceived_by ?? redirect?.owner;
+        return (
+          <span className="flex flex-wrap items-center gap-1">
+            {getName(event.source)}
+            {event.source_kind === "item" && (
+              <span className="text-site-blue">«{itemName(event)}»</span>
+            )}
+            <span className="text-white/60">— удар ушёл в</span>
+            {getName(event.target)}
+            <span className="text-white/60 text-[11px]">
+              (<span className="gold-text">{passiveNameOf("trickster_deceit", trickster)}</span>
+              {trickster != null ? " " : ""}
+              {getName(trickster)})
+            </span>
+            {damageIcon(event.damage_type)}
+            <span className="font-medium text-site-red">−{finalDmg}</span>
+            {absorbedNote}
+          </span>
+        );
+      }
+      // FEAT-189: every passive on this blow (attacker and defender side). A log
+      // without the list (FEAT-188, before wave 1) keeps the single rage segment.
+      const hasPassiveList = Array.isArray(event.passives) && event.passives.length > 0;
+      // FEAT-188: the attacker's passive raised the blow — «· Ярость +12%».
+      const passivePct = Math.round(Number(event.passive_pct ?? 0));
+      const passiveName =
+        !hasPassiveList && passivePct > 0
+          ? snapshotData.find((p) => p.participant_id === event.source)?.passive?.name ||
+            (event.passive_key ? PASSIVE_LOG_NAMES[event.passive_key] : undefined) ||
+            PASSIVE_LOG_FALLBACK
+          : null;
       return (
         <span className="flex flex-wrap items-center gap-1">
+          {extraTag}
           {getName(event.source)}
           {/* FEAT-168: a damage scroll / thrown flask, not a weapon swing */}
           {event.source_kind === "item" && (
@@ -714,6 +1157,13 @@ export const useBattleBar = ({
               крит
             </span>
           )}
+          {absorbedNote}
+          {passiveName && (
+            <span className="text-white/60 text-[11px]">
+              · <span className="gold-text">{passiveName}</span> +{passivePct}%
+            </span>
+          )}
+          {hasPassiveList && renderContributions(event.passives)}
         </span>
       );
     }
@@ -740,10 +1190,39 @@ export const useBattleBar = ({
       const parts: string[] = [];
       if (event.energy) parts.push(`${event.energy} энергии`);
       if (event.mana) parts.push(`${event.mana} маны`);
-      if (parts.length === 0) return null;
+      // FEAT-190: the Necromancer's «Плата кровью» — missing mana paid with HP.
+      const blood = Array.isArray(event.passives)
+        ? event.passives.find((c) => c && c.kind === "blood_price")
+        : undefined;
+      const hpPaid = Math.round(Number(event.hp_paid ?? blood?.value ?? 0));
+      const hasBlood = Number.isFinite(hpPaid) && hpPaid > 0;
+      if (parts.length === 0 && !hasBlood) return null;
+      // FEAT-189: the Caster's «Чистая энергия» discount, if any.
+      const discount = Array.isArray(event.passives)
+        ? event.passives.find((c) => c && c.kind === "mana_discount")
+        : undefined;
+      const discountValue = Number(discount?.value ?? event.mana_discount ?? 0);
       return (
         <span className="text-white/35 text-[11px]">
           Расход: {parts.join(", ")}
+          {Number.isFinite(discountValue) && discountValue > 0 && (
+            <>
+              {" · "}
+              <span className="gold-text">
+                {passiveNameOf(discount?.key ?? "caster_pure_energy", event.who)}
+              </span>{" "}
+              −{fmtNum(discountValue)} маны
+            </>
+          )}
+          {hasBlood && (
+            <>
+              {parts.length > 0 ? " · " : ""}
+              <span className="gold-text">
+                {passiveNameOf(blood?.key ?? "necromancer_blood_price", event.who)}
+              </span>{" "}
+              <span className="text-stat-hp/80">−{hpPaid} HP</span>
+            </>
+          )}
         </span>
       );
     }
@@ -764,6 +1243,21 @@ export const useBattleBar = ({
       </span>
     );
   };
+  // FEAT-189 — the viewer's own subclass passive (the Caster's skills cost less
+  // mana); the key comes from the viewer's snapshot entry (fixed at battle start).
+  const myPassiveKey: string | null =
+    myData.participant_id != null
+      ? snapshotData?.find((p) => p.participant_id === myData.participant_id)?.passive?.key ?? null
+      : null;
+
+  // The viewer's bars right now — the skill cards grey out what they cannot afford
+  // (FEAT-190: HP too — the Necromancer tops a mana shortfall up with health).
+  const myResources: PayerBars = (() => {
+    const live =
+      myData.participant_id != null ? runtimeData.participants[myData.participant_id] : undefined;
+    return { mana: live?.mana ?? 0, energy: live?.energy ?? 0, hp: live?.hp ?? 0 };
+  })();
+
   /** Everything the skill / item chooser needs — the 2D modal and the 3D hand alike. */
   const pickerProps = (): SkillPickerProps | null => {
     if (!pickerType || isOpponentTurn) return null;
@@ -801,6 +1295,8 @@ export const useBattleBar = ({
             characterId: myData.character_id ?? 0,
             weaponCoating:
               pid != null ? runtimeData.participants[pid]?.weapon_coating ?? null : null,
+            passiveKey: myPassiveKey,
+            resources: myResources,
             selectedId,
             onSelectSkill: (skill) =>
               setTurnData((prev) => ({
@@ -821,13 +1317,6 @@ export const useBattleBar = ({
     const props = pickerProps();
     return props ? <SkillPicker {...props} /> : null;
   };
-
-  // The viewer's bars right now — the 3D hand greys out what they cannot afford.
-  const myResources = (() => {
-    const live =
-      myData.participant_id != null ? runtimeData.participants[myData.participant_id] : undefined;
-    return { mana: live?.mana ?? 0, energy: live?.energy ?? 0 };
-  })();
 
   const slotKeyOf = (type: SlotType) =>
     type === "item" ? SKILLS_KEYS.item : SKILLS_KEYS[type as keyof typeof SKILLS_KEYS];
@@ -923,6 +1412,7 @@ export const useBattleBar = ({
     renderPicker,
     pickerProps,
     myResources,
+    myPassiveKey,
     setSlot,
     clearSlot,
     clearAllSlots,

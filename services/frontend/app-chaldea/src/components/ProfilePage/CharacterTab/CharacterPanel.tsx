@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAppSelector } from '../../../redux/store';
 import {
   selectAttributes,
+  selectEquipmentRules,
   selectProfile,
   selectRaceInfo,
   selectRaceNamesMap,
@@ -13,6 +14,8 @@ import FastSlots from '../EquipmentPanel/FastSlots';
 import BankSummary from './BankSummary';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 import { useCurrency } from '../../../hooks/useCurrency';
+import useSubclassRegistry from '../../../hooks/useSubclassRegistry';
+import PassiveBadge from '../../CommonComponents/PassiveBadge/PassiveBadge';
 
 /** Experience in Russian digit groups: 29 726. */
 const fmtXp = (n: number | null | undefined) => Math.round(n ?? 0).toLocaleString('ru-RU');
@@ -41,6 +44,15 @@ const CharacterPanel = () => {
   const raceInfo = useAppSelector(selectRaceInfo);
   const raceNamesMap = useAppSelector(selectRaceNamesMap);
   const attributes = useAppSelector(selectAttributes);
+  const equipmentRules = useAppSelector(selectEquipmentRules);
+
+  // FEAT-188: the chosen subclass (from the equipment rules the page already
+  // loads) and its passive, looked up in the public subclass registry.
+  const subclassKey = equipmentRules?.subclass_key ?? null;
+  const subclassClassId = equipmentRules?.class_id ?? raceInfo?.id_class ?? null;
+  const { subclasses, passives, error: subclassError } = useSubclassRegistry(!!subclassKey, subclassClassId);
+  const subclass = subclassKey ? subclasses[subclassKey] ?? null : null;
+  const passive = subclassKey ? passives[subclassKey] ?? null : null;
 
   const raceName = raceInfo ? (raceNamesMap[raceInfo.id_race] ?? 'Неизвестная раса') : '—';
   const className = raceInfo ? (CLASS_NAMES[raceInfo.id_class] ?? 'Неизвестный класс') : '—';
@@ -75,7 +87,17 @@ const CharacterPanel = () => {
               <span className="truncate">{raceName}</span>
               <span className="text-white/30">|</span>
               <span className="truncate">{className}</span>
+              {subclass && (
+                <>
+                  <span className="text-white/30">|</span>
+                  <span className="truncate">{subclass.name}</span>
+                </>
+              )}
             </div>
+            {passive && <PassiveBadge passive={passive} size="sm" showName className="self-start max-w-full" />}
+            {subclassKey && subclassError && (
+              <span className="text-site-red text-[11px] leading-snug">{subclassError}</span>
+            )}
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Shield } from "lucide-react";
 import type { ArenaFighter, DotKind } from "./arenaTypes";
 import DotEffects, { DOT_GLOW, DOT_LABELS, DOT_LABEL_STYLE, DOT_NUMBER_STYLE, type DotFx } from "./DotEffects";
 import EffectRunes from "./EffectRunes";
@@ -8,6 +9,7 @@ import type { StrikeStyle } from "./strikeStyles";
 import Auras, { auraKindsOf, frameFinishOf, portraitFilterOf } from "./Auras";
 import CastEffects, { HealSparkles, type CastFx } from "./CastEffects";
 import Vial from "./Vial";
+import PassiveBadge from "../../../CommonComponents/PassiveBadge/PassiveBadge";
 
 export interface FloatingNumber {
   id: number;
@@ -201,6 +203,14 @@ const FighterCard = ({ fighter, hit, hitStyle, dotFx, castFx, healFx, orbRow, nu
           <span className={`${CORNER_STUD} -bottom-1 -left-1`} />
           <span className={`${CORNER_STUD} -bottom-1 -right-1`} />
 
+          {/* FEAT-188: the subclass passive, on the top-right corner (the orbs sit
+              on the left; "Вы" / "Цель" on the top centre). Its tap is its own —
+              PassiveBadge stops the click, so it never selects the card. The
+              popover is portaled to <body> above the drei layers (z ≤ 30). */}
+          {fighter.passive && (
+            <PassiveBadge passive={fighter.passive} className="absolute -right-2.5 -top-2.5 z-20" />
+          )}
+
           <div className="rounded-[11px] bg-[#120e0a] p-[2px]">
             <div className="relative aspect-[3/4] overflow-hidden rounded-[9px] bg-site-dark">
               {showAvatar ? (
@@ -247,13 +257,31 @@ const FighterCard = ({ fighter, hit, hitStyle, dotFx, castFx, healFx, orbRow, nu
             narrow board, a row facing the middle of the board (under an enemy,
             over an ally) so neighbours keep their room */}
         <div className={`absolute z-10 flex items-center gap-0.5 ${ORB_PLACEMENT[orbRow ?? "side"]}`}>
-          <Vial
-            kind="hp"
-            value={fighter.hp}
-            max={fighter.maxHp}
-            title={`Здоровье: ${Math.round(fighter.hp)} / ${fighter.maxHp}`}
-            className={VIAL_SIZE}
-          />
+          {/* FEAT-190: a passive shield sits on the HP orb as a pale-blue seal */}
+          <div className="relative">
+            <Vial
+              kind="hp"
+              value={fighter.hp}
+              max={fighter.maxHp}
+              title={`Здоровье: ${Math.round(fighter.hp)} / ${fighter.maxHp}${
+                fighter.shield > 0 ? ` · щит ${fighter.shield}` : ""
+              }`}
+              className={`${VIAL_SIZE} ${
+                fighter.shield > 0 && !fighter.isDead
+                  ? "drop-shadow-[0_0_6px_rgba(118,166,189,0.9)]"
+                  : ""
+              }`}
+            />
+            {fighter.shield > 0 && !fighter.isDead && (
+              <span
+                title={`Щит: ${fighter.shield} — поглощает урон до здоровья`}
+                className="absolute -right-2 -top-1.5 z-[1] flex items-center gap-px rounded-full bg-black/80 px-1 text-[8px] font-medium leading-[14px] tabular-nums text-white ring-1 ring-site-blue/80 shadow-[0_0_6px_rgba(118,166,189,0.7)] sm:text-[9px]"
+              >
+                <Shield size={8} className="shrink-0 text-site-blue" />
+                {fighter.shield}
+              </span>
+            )}
+          </div>
           <Vial
             kind="mana"
             value={fighter.mana}

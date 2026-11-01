@@ -6,6 +6,8 @@ import { chooseNode, resetTree } from '../../redux/actions/playerTreeActions';
 import { computeTreeStates } from './utils/computeNodeState';
 import SkillPurchaseCard from './SkillPurchaseCard';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
+import { PassiveInfo } from '../CommonComponents/PassiveBadge/PassiveBadge';
+import type { SubclassPassive } from '../../api/subclasses';
 import type {
   TreeNodeInTreeResponse,
   FullClassTreeResponse,
@@ -23,6 +25,8 @@ interface NodeDetailPanelProps {
   onNavigateToSubclass?: (nodeId: number) => void;
   /** Node from another class's tree: show what it holds, offer no actions. */
   readOnly?: boolean;
+  /** The subclass's passive, for a subclass_choice node (FEAT-188). */
+  passive?: SubclassPassive | null;
 }
 
 const nodeTypeLabels: Record<string, string> = {
@@ -40,6 +44,7 @@ const NodeDetailPanel = ({
   onRefresh,
   onNavigateToSubclass,
   readOnly = false,
+  passive = null,
 }: NodeDetailPanelProps) => {
   const dispatch = useAppDispatch();
   const [choosing, setChoosing] = useState(false);
@@ -143,6 +148,11 @@ const NodeDetailPanel = ({
         <p className="text-white/70 text-sm leading-relaxed">
           {node.description}
         </p>
+      )}
+
+      {/* Subclass passive — shown before and after choosing (FEAT-188) */}
+      {passive && node.node_type === 'subclass_choice' && (
+        <PassiveInfo passive={passive} className="rounded-card border border-gold/25 bg-gold/[0.05] p-3" />
       )}
 
       {/* Status message */}

@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { Zap, Droplet, Clock, TrendingUp, Info, Ban } from "lucide-react";
+import { Zap, Droplet, Clock, TrendingUp, Info, Ban, Heart } from "lucide-react";
 import ResolvedSkillCard from "../../../ProfilePage/SkillsTab/ResolvedSkillCard";
 import ModalShell from "../../../CommonComponents/ModalShell/ModalShell";
 import type {
@@ -21,6 +21,7 @@ import {
   type ItemBattleConfig,
   type WeaponCoating,
 } from "../../../../utils/itemEffects";
+import { skillPayment, type PayerBars } from "../../../../utils/passiveCosts";
 
 // --- Battle data shapes (flat snapshot rows) ---
 export interface BattleSkill {
@@ -65,6 +66,9 @@ export const skillName = (s: BattleSkill): string =>
 export const skillImage = (s: BattleSkill): string | null =>
   s.skill_image ?? s.skill?.skill_image ?? null;
 
+/** FEAT-190 — the viewer's live bars: what a skill card can be paid with. */
+export type PayerResources = PayerBars;
+
 export interface SkillPickerProps {
   type: "attack" | "defense" | "support" | "item";
   skills: BattleSkill[];
@@ -73,6 +77,10 @@ export interface SkillPickerProps {
   characterId: number;
   /** Poison currently on the viewer's weapon — blocks a second coating (FEAT-168) */
   weaponCoating?: WeaponCoating | null;
+  /** FEAT-189 — the viewer's subclass passive key (the Caster's skills cost less mana). */
+  passiveKey?: string | null;
+  /** FEAT-190 — the viewer's live bars (the Necromancer may top up mana with HP). */
+  resources?: PayerResources;
   selectedId: number | null;
   onSelectSkill: (skill: BattleSkill) => void;
   onSelectItem: (item: BattleItem) => void;
@@ -87,6 +95,8 @@ const SkillPicker = ({
   cooldowns,
   characterId,
   weaponCoating = null,
+  passiveKey = null,
+  resources,
   selectedId,
   onSelectSkill,
   onSelectItem,
@@ -225,22 +235,34 @@ const SkillPicker = ({
                 const cd = cooldowns?.[String(id)] ?? 0;
                 const onCd = cd > 0;
                 const selected = selectedId === id;
+                // FEAT-189 Caster discount + FEAT-190 Necromancer HP top-up; an
+                // unpayable skill is blocked like on the 3D hand.
+                const pay = resolved
+                  ? skillPayment(resolved.cost_mana, resolved.cost_energy, resources, passiveKey)
+                  : null;
+                const blocked = onCd || !!pay?.short;
                 return (
                   <li key={id} className="flex items-stretch gap-1.5">
                     <button
                       type="button"
-                      disabled={onCd}
+                      disabled={blocked}
                       onClick={() => {
                         // Flag whether this skill buffs/heals a chosen ally, so
                         // the battle screen knows to offer an ally target (FEAT-143).
                         const targetsAlly = !!resolved?.effects?.some(
                           (e) => e.target_side === "ally",
                         );
-                        onSelectSkill({ ...s, targets_ally: targetsAlly });
+                        // FEAT-189: carry the resolved (level-adjusted) mana cost so
+                        // the slot tooltip shows the same price as this card.
+                        onSelectSkill({
+                          ...s,
+                          targets_ally: targetsAlly,
+                          cost_mana: resolved?.cost_mana,
+                        });
                         onClose();
                       }}
                       className={`flex-1 flex items-center gap-3 p-2.5 rounded-card border text-left transition-all duration-200 ease-site ${
-                        onCd
+                        blocked
                           ? "border-white/10 bg-white/[0.02] opacity-50 cursor-not-allowed"
                           : selected
                             ? "border-gold/60 bg-gold/10"
@@ -265,8 +287,19 @@ const SkillPicker = ({
                           )}
                           {resolved && (
                             <span className="flex items-center gap-0.5 text-sky-300/80">
-                              <Droplet size={11} /> {resolved.cost_mana}
+                              <Droplet size={11} /> {pay?.mana ?? resolved.cost_mana}
                             </span>
+                          )}
+                          {pay && pay.hpCost > 0 && (
+                            <span
+                              className="flex items-center gap-0.5 text-stat-hp"
+                              title="Плата кровью: нехватка маны доплачивается здоровьем"
+                            >
+                              <Heart size={11} /> +{pay.hpCost} HP
+                            </span>
+                          )}
+                          {pay?.short && (
+                            <span className="text-site-red">{pay.shortText}</span>
                           )}
                           {onCd && (
                             <span className="flex items-center gap-0.5 text-site-red">
@@ -298,6 +331,8 @@ const SkillPicker = ({
           resolved={resolvedById[skillId(cardSkill)] ?? null}
           perks={cardPerks}
           loading={cardLoading}
+          passiveKey={passiveKey}
+          resources={resources}
           onClose={closeCard}
         />
       )}
@@ -352,11 +387,17 @@ export const SkillCardModal = ({
   resolved,
   perks,
   loading,
+  passiveKey = null,
+  resources,
   onClose,
 }: {
   resolved: ResolvedSkill | null;
   perks: SkillWithPerks | null;
   loading: boolean;
+  /** FEAT-189: the viewer's passive — a Caster's card shows the discounted mana. */
+  passiveKey?: string | null;
+  /** FEAT-190: the viewer's live bars — a Necromancer's card shows the HP top-up. */
+  resources?: PayerResources;
   onClose: () => void;
 }) => (
   <ModalShell open onClose={onClose} title="Карточка навыка" size="sm">
@@ -365,7 +406,7 @@ export const SkillCardModal = ({
           <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
         </div>
       ) : resolved ? (
-        <ResolvedSkillCard resolved={resolved} skill={perks} />
+        <ResolvedSkillCard resolved={resolved} skill={perks} passiveKey={passiveKey} resources={resources} />
       ) : (
         <p className="text-white/50 text-center py-4">Характеристики навыка недоступны</p>
       )}

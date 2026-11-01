@@ -12,6 +12,14 @@ import { SKILLS_KEYS } from "../../../../../../helpers/commonConstants";
 import { translateSkillSign } from "../../../../../../helpers/helpers";
 import { DAMAGE_TYPES } from "../../../../../AdminSkillsPage/skillConstants";
 import { describeEffect } from "../../../battleEffects";
+import {
+  effectiveManaCost,
+  bloodPriceHp,
+  canPayMana,
+  CASTER_MANA_DISCOUNT_NOTE,
+  NECROMANCER_PASSIVE_KEY,
+  type PayerBars,
+} from "../../../../../../utils/passiveCosts";
 
 interface DamageEntry {
   damage_type?: string;
@@ -66,6 +74,10 @@ interface InventoryItemProps {
   cooldownValue?: number;
   isDraggable: boolean;
   setTurnData?: Dispatch<SetStateAction<Record<string, unknown>>> | null;
+  /* FEAT-189: the viewer's passive key — a Caster sees the discounted mana. */
+  passiveKey?: string | null;
+  /* FEAT-190: the viewer's live bars — a Necromancer sees the HP top-up. */
+  resources?: PayerBars | null;
 }
 
 export const getDamageLabel = (value: string | undefined) =>
@@ -77,6 +89,8 @@ const InventoryItem = ({
   cooldownValue,
   isDraggable,
   setTurnData,
+  passiveKey = null,
+  resources = null,
 }: InventoryItemProps) => {
   const itemRef = useRef<HTMLDivElement>(null);
   const [isHovered, setIsHovered] = useState(false);
@@ -99,6 +113,18 @@ const InventoryItem = ({
 
   const itemIcon = item.skill_image || item.image || null;
   const itemName = item.skill_name || item.skill?.name || item.name || null;
+  const rawMana = item.cost_mana ?? 0;
+  const manaCost = effectiveManaCost(rawMana, passiveKey);
+  const manaDiscounted = manaCost < rawMana;
+  // FEAT-190: «Плата кровью» — the Necromancer tops a mana shortfall up with HP.
+  const bloodHp =
+    resources && passiveKey === NECROMANCER_PASSIVE_KEY
+      ? bloodPriceHp(manaCost, resources.mana, passiveKey)
+      : 0;
+  const bloodPayable =
+    bloodHp > 0 && resources
+      ? canPayMana(manaCost, resources.mana, resources.hp, passiveKey)
+      : true;
 
   const renderEntries = (entries: (DamageEntry | EffectEntry)[], isEffect = false) => (
     <ul className="flex flex-col gap-[5px]">
@@ -223,7 +249,26 @@ const InventoryItem = ({
               {!!item.cost_energy && (
                 <li>Затрата энергии: {item.cost_energy}</li>
               )}
-              {!!item.cost_mana && <li>Затрата маны: {item.cost_mana}</li>}
+              {!!item.cost_mana && (
+                <li className="flex-wrap items-baseline">
+                  Затрата маны:{" "}
+                  {manaDiscounted && <s className="text-white/40">{rawMana}</s>}
+                  {manaCost}
+                  {manaDiscounted && (
+                    <span className="!text-gold/80 text-[11px]">({CASTER_MANA_DISCOUNT_NOTE})</span>
+                  )}
+                </li>
+              )}
+              {bloodHp > 0 && (
+                <li className="flex-wrap items-baseline">
+                  Плата кровью:{" "}
+                  {bloodPayable ? (
+                    <span className="!text-stat-hp">+{bloodHp} HP</span>
+                  ) : (
+                    <span className="!text-site-red">не хватает маны и здоровья</span>
+                  )}
+                </li>
+              )}
 
               {item.health_recovery && (
                 <li>Восстановление здоровья: {item.health_recovery}</li>

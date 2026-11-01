@@ -110,6 +110,8 @@ const BattlePageBar = (props: BattlePageBarProps) => {
               key={btn.type}
               isClosed={bar.isSlotLocked(btn.type)}
               type={btn.type}
+              passiveKey={bar.myPassiveKey}
+              resources={bar.myResources}
             />
           ))}
           {/* Vertical gradient line separator */}

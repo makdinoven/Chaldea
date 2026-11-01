@@ -4,6 +4,7 @@ import ItemIcon from "../../../../../assets/IconComponents/ItemIcon";
 import ClosedItemSkillIcon from "../../../../../assets/IconComponents/ClosedItemSkillIcon";
 import InventoryItem from "../../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
 import type { SkillSlot, SlotType } from "../../BattlePageBar/useBattleBar";
+import type { PayerBars } from "../../../../../utils/passiveCosts";
 
 export const SLOT_META: Record<SlotType, { label: string; glow: string }> = {
   attack: { label: "Атака", glow: "#f37753" },
@@ -48,9 +49,13 @@ interface SlotMedallionProps {
   chained: boolean;
   onOpen: () => void;
   onClear: () => void;
+  /** FEAT-189: the viewer's passive key, for the Caster's mana discount in the tooltip. */
+  passiveKey?: string | null;
+  /** FEAT-190: the viewer's live bars, for the Necromancer's HP top-up in the tooltip. */
+  resources?: PayerBars | null;
 }
 
-const SlotMedallion = ({ type, value, locked, chained, onOpen, onClear }: SlotMedallionProps) => {
+const SlotMedallion = ({ type, value, locked, chained, onOpen, onClear, passiveKey = null, resources = null }: SlotMedallionProps) => {
   const meta = SLOT_META[type];
   const filled = Boolean(value) && !locked;
   const glowStyle = { "--slot-glow": meta.glow } as CSSProperties;
@@ -84,7 +89,7 @@ const SlotMedallion = ({ type, value, locked, chained, onOpen, onClear }: SlotMe
             </span>
           ) : value ? (
             <span className="pointer-events-none scale-[0.82] sm:scale-100 [&>div]:pointer-events-auto">
-              <InventoryItem isDraggable={false} item={value} />
+              <InventoryItem isDraggable={false} item={value} passiveKey={passiveKey} resources={resources} />
             </span>
           ) : (
             <span className="opacity-60 [&_svg]:h-7 [&_svg]:w-6 sm:[&_svg]:h-9 sm:[&_svg]:w-7">

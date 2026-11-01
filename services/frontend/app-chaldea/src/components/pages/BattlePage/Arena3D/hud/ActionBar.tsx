@@ -85,6 +85,8 @@ const ActionBar = ({ bar, turnData, onPassTurn, layout, ...auto }: ActionBarProp
       chained={bar.isSlotChained(type)}
       onOpen={() => bar.setPickerType(type)}
       onClear={() => bar.clearSlot(type)}
+      passiveKey={bar.myPassiveKey}
+      resources={bar.myResources}
     />
   );
 

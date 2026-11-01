@@ -1,5 +1,22 @@
 import type { BattleRewards } from "../../../api/mobs";
 import type { EffectLike } from "./battleEffects";
+import type { SubclassPassive } from "../../../api/subclasses";
+
+/** A participant's subclass in the battle snapshot (FEAT-188); name is null for a key unknown to the registry. */
+export interface ParticipantSubclass {
+  key: string;
+  name: string | null;
+}
+
+/**
+ * Subclass-passive fields of a battle snapshot entry (FEAT-188). Optional:
+ * mobs, characters without a subclass and battles started before the feature
+ * have them null / absent.
+ */
+export interface ParticipantPassiveFields {
+  subclass?: ParticipantSubclass | null;
+  passive?: SubclassPassive | null;
+}
 
 export interface ResourceEntry {
   current: number;
@@ -13,7 +30,7 @@ export interface ResourceBlock {
   energy?: ResourceEntry;
 }
 
-export interface ParticipantSnapshot {
+export interface ParticipantSnapshot extends ParticipantPassiveFields {
   participant_id: number;
   character_id: number;
   name: string;
@@ -32,6 +49,8 @@ export interface RuntimeState {
       energy: number;
       fast_slots: unknown;
       team: number;
+      /** FEAT-190 — total passive shield; absent in older states. */
+      shield?: number;
     }
   >;
   current_actor: number;
@@ -58,6 +77,10 @@ export interface CharacterData {
   items?: unknown;
   resources?: ResourceBlock[];
   title?: string;
+  /** FEAT-188 — the subclass passive shown as a badge on the card. */
+  passive?: SubclassPassive | null;
+  /** FEAT-190 — total passive shield from the runtime (0 when none / old states). */
+  shield?: number;
 }
 
 export interface TurnInfo {

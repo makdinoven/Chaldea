@@ -19,6 +19,7 @@ import NodeDetailPanel from './NodeDetailPanel';
 import useNodePage from './useNodePage';
 import useSkillPage from './useSkillPage';
 import useCharacterDossier from './useCharacterDossier';
+import useSubclassRegistry from '../../hooks/useSubclassRegistry';
 import type { ShelfBook } from './Books3D/BookTableScene';
 import type {
   FullClassTreeResponse,
@@ -125,6 +126,14 @@ const SkillTreePage = () => {
       // Not remembered across visits; the switch itself still works.
     }
   }, []);
+
+  // FEAT-188: subclass passives for the subclass_choice nodes. Every class's
+  // trees can be on screen (the other classes for reference), so the whole
+  // registry is loaded once rather than per class.
+  const { passives: subclassPassives, error: subclassRegistryError } = useSubclassRegistry(!!classTree);
+  useEffect(() => {
+    if (subclassRegistryError) toast.error(`Пассивки подклассов: ${subclassRegistryError}`);
+  }, [subclassRegistryError]);
 
   // Load class tree on mount
   useEffect(() => {
@@ -419,6 +428,7 @@ const SkillTreePage = () => {
     onNavigateToSubclass:
       bookNode?.book.own && bookNode.node.node_type === 'subclass_choice' ? handleNavigateToSubclass : undefined,
     onUpgradeSkill: setSkillPageId,
+    passives: subclassPassives,
   });
 
   // The 3D books take the whole screen under the site header — once they are on the table.
@@ -684,6 +694,11 @@ const SkillTreePage = () => {
                     progress={selected.view.progress}
                     characterId={characterId}
                     readOnly={selected.view.readOnly}
+                    passive={
+                      selected.node.node_type === 'subclass_choice' && selected.node.subclass_key
+                        ? subclassPassives[selected.node.subclass_key] ?? null
+                        : null
+                    }
                     onClose={handleClosePanel}
                     onRefresh={handleRefreshProgress}
                     onNavigateToSubclass={

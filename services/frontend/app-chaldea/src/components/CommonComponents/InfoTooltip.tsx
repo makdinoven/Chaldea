@@ -32,14 +32,31 @@ interface Position {
 
 const isEmpty = (content: ReactNode) => content == null || content === false || content === '';
 
-/** Open state, positioning and the portaled bubble of one tooltip. */
-const useTooltip = (content: ReactNode) => {
+export interface TooltipOptions {
+  /**
+   * Stacking order of the portaled bubble (default: the `z-[1100]` class).
+   * Raise it when the trigger sits in a layer stacked above that, e.g. drei
+   * `<Html>` labels over a 3D canvas.
+   */
+  zIndex?: number;
+}
+
+/**
+ * Open state, positioning and the portaled bubble of one tooltip. Exported
+ * for triggers with their own look (e.g. PassiveBadge); spread
+ * `pointerHandlers`, `onFocus`, `toggleByClick` onto the trigger and render
+ * `bubble` inside it.
+ */
+export const useTooltip = (content: ReactNode, options: TooltipOptions = {}) => {
+  const { zIndex } = options;
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<Position | null>(null);
   const anchorRef = useRef<HTMLElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
   const lastPointer = useRef<string>('mouse');
   const id = useId();
+  // A boolean, not the content itself: a fresh element every render must not re-run effects.
+  const hasContent = !isEmpty(content);
 
   const place = useCallback(() => {
     const anchor = anchorRef.current;
@@ -55,16 +72,23 @@ const useTooltip = (content: ReactNode) => {
     // A tall bubble below a low anchor is pulled back up so it stays inside the viewport.
     const top = Math.max(EDGE, Math.min(below, vh - h - EDGE));
     const left = Math.min(Math.max(r.left + r.width / 2 - w / 2, EDGE), Math.max(EDGE, vw - w - EDGE));
-    setPos({ top, left });
+    // Keep the same state object when nothing moved, so a re-place never re-renders
+    // (callers may pass a fresh content element every render — no update loop).
+    setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
   }, []);
 
+  // Placement depends on the open state only; content changes that resize the
+  // bubble are picked up by the ResizeObserver below, not by content identity.
   useLayoutEffect(() => {
     if (open) place();
     else setPos(null);
-  }, [open, place, content]);
+  }, [open, hasContent, place]);
 
   useEffect(() => {
     if (!open) return undefined;
+    const tip = tipRef.current;
+    const observer = tip && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => place()) : null;
+    if (tip) observer?.observe(tip);
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
@@ -77,18 +101,19 @@ const useTooltip = (content: ReactNode) => {
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
     return () => {
+      observer?.disconnect();
       window.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', onDown);
       window.removeEventListener('scroll', place, true);
       window.removeEventListener('resize', place);
     };
-  }, [open, place]);
+  }, [open, hasContent, place]);
 
-  const bubble = open && !isEmpty(content)
+  const bubble = open && hasContent
     ? createPortal(
       <div ref={tipRef} id={id} role="tooltip"
         className="site-tooltip gold-outline !fixed z-[1100] w-max max-w-[min(300px,calc(100vw-16px))] !normal-case !font-normal text-white/85 text-xs leading-relaxed text-left whitespace-normal shadow-dropdown pointer-events-none animate-fade-in"
-        style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, visibility: pos ? 'visible' : 'hidden' }}>
+        style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, visibility: pos ? 'visible' : 'hidden', ...(zIndex !== undefined ? { zIndex } : {}) }}>
         {content}
       </div>,
       document.body,

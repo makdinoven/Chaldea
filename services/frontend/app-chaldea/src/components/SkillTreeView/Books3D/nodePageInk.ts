@@ -1,6 +1,7 @@
 import type { PaperStock } from './bookTextures';
 import { pathInkFor } from './spreadTextures';
 import { actionKey, type NodePageAction, type NodePageModel, type NodePageTone } from './nodePageModel';
+import { PASSIVE_NOT_ACTIVE_NOTE } from '../../CommonComponents/PassiveBadge/PassiveBadge';
 
 /*
   A node's page, written in ink on a transparent sheet the size of a book page;
@@ -203,6 +204,29 @@ export const drawNodePageInk = (
     for (const line of wrap(ctx, model.description, COLUMN)) {
       ctx.fillText(line, LEFT, y);
       y += 52;
+    }
+    y += 16;
+  }
+
+  // A subclass node's passive (FEAT-188): what the subclass carries into every battle.
+  if (model.passive) {
+    y += 10;
+    ctx.font = 'bold 40px serif';
+    ctx.fillStyle = stock.ink;
+    for (const line of wrap(ctx, `ПАССИВКА: ${model.passive.name.toUpperCase()}`, COLUMN)) {
+      ctx.fillText(line, LEFT, y);
+      y += 50;
+    }
+    ctx.font = '36px serif';
+    for (const line of wrap(ctx, model.passive.description, COLUMN)) {
+      ctx.fillText(line, LEFT, y);
+      y += 48;
+    }
+    if (!model.passive.implemented) {
+      ctx.font = 'italic 32px serif';
+      ctx.fillStyle = stock.faintInk;
+      ctx.fillText(`(${PASSIVE_NOT_ACTIVE_NOTE})`, LEFT, y);
+      y += 44;
     }
     y += 16;
   }

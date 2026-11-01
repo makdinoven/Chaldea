@@ -31,6 +31,8 @@ import { auraKindOf, effectIconOf } from "./Arena3D/arenaTypes";
 import ArenaHud from "./Arena3D/hud/ArenaHud";
 import { toSameOriginMedia } from "./Arena3D/sameOriginMedia";
 import { fetchLocationDetails } from "../../../api/mapEditor";
+import type { SubclassPassive } from "../../../api/subclasses";
+import type { ParticipantPassiveFields } from "./battleTypes";
 
 // three.js is heavy; only the 3D view pulls it in.
 const ArenaScene = lazy(() => import("./Arena3D/ArenaScene"));
@@ -50,7 +52,7 @@ interface ResourceBlock {
 }
 
 // TODO: type these properly when sub-components are migrated to TS
-interface ParticipantSnapshot {
+interface ParticipantSnapshot extends ParticipantPassiveFields {
   participant_id: number;
   character_id: number;
   name: string;
@@ -69,6 +71,8 @@ interface RuntimeState {
       energy: number;
       fast_slots: unknown;
       team: number;
+      /** FEAT-190 — total passive shield; absent in older states. */
+      shield?: number;
     }
   >;
   current_actor: number;
@@ -94,6 +98,10 @@ interface CharacterData {
   attributes?: Record<string, number>;
   items?: unknown;
   resources?: ResourceBlock[];
+  /** FEAT-188 — subclass passive badge; null for mobs / old snapshots. */
+  passive?: SubclassPassive | null;
+  /** FEAT-190 — total passive shield from the runtime (0 when none / old states). */
+  shield?: number;
 }
 
 interface TurnInfo {
@@ -140,6 +148,12 @@ interface ActionResponseData {
  * of that same effect it is. A list index would shift when an earlier effect runs
  * out, and every rune after it would look newly applied.
  */
+/** FEAT-190 — a runtime `shield` as a whole non-negative number (absent / garbage → 0). */
+const shieldOf = (raw: unknown): number => {
+  const n = Math.round(Number(raw ?? 0));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
 const withStableKeys = (effects: EffectLike[]) => {
   const seen = new Map<string, number>();
   return effects.map((e) => {
@@ -311,6 +325,8 @@ const BattlePage = () => {
         attributes: p.attributes,
         items: runtime.participants[p.participant_id]?.fast_slots,
         resources: getResources(p, runtime, p.participant_id),
+        passive: p.passive ?? null,
+        shield: shieldOf(runtime.participants[p.participant_id]?.shield),
       });
 
       // Viewer's own participant (participant mode). In spectate there is no
@@ -781,6 +797,8 @@ const BattlePage = () => {
           !isDead &&
           !isSpectateMode &&
           (side === "enemy" || needsAllyTarget),
+        passive: c.passive ?? null,
+        shield: shieldOf(live.shield),
       };
     };
     return [
