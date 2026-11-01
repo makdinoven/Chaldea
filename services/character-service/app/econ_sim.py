@@ -124,6 +124,7 @@ class SimParams:
     bank_resident_deposit_share: float = 0.2  # residents keep this share of their savings in the bank
     bank_resident_loan_share: float = 0.1     # residents' loan target as a share of the purse
     bank_resident_adjust: float = 0.25        # per 6 h residents move this share of the gap to their targets
+    bank_profit_to_treasury_share: float = 1.0  # share of the bank's realized net interest income sent to the treasury
     # FEAT-186: the sim runs on lore population / scale (4 000 000 inhabitants -> 40 000 at 100). Not in a seed.
     population_scale: int = 100
     # FEAT-187 region events (3.5): frequency, stacking caps, spreading, riot clock. Not in a seed either.
@@ -151,6 +152,16 @@ class SimParams:
     caravan_travel_foreign: int = 2           # recounts on the road between countries
     caravan_min_value: int = 10               # smaller deals are not sent
     caravan_max_per_run: int = 200            # hard cap of dispatches per recount
+    # FEAT-193 guild orders (3.4). Not in a seed either.
+    guild_enabled: int = 1                    # 0 = no orders (open ones close on the next recount)
+    guild_markup_pct: float = 20.0            # markup over the local price
+    guild_open_threshold_pct: float = 80.0    # an order exists only while stock (+ caravans on the road) < this % of norm
+    guild_min_order_value: int = 50           # smaller shortages (marks at the local price) open no order
+    guild_purse_share: float = 0.25           # share of the residents' purse the guild may spend per recount
+    guild_treasury_food_share: float = 0.25   # share of the positive treasury that may top up food orders per recount
+    guild_xp_per_mark: float = 0.1            # XP per mark paid for an item no merchant of the region sells
+    guild_xp_per_mark_merchant_items: float = 0.05  # XP per mark paid for an item a merchant of the region sells
+    guild_xp_daily_cap: int = 200             # max base guild XP per character per UTC day; 0 = guild XP off
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":

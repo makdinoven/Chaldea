@@ -566,7 +566,8 @@ def test_step_inputs_not_mutated():
 def _random_world(rng, now):
     params = SimParams(bank_reserve_ratio=rng.choice([0, 0.2, 0.5, 1]),
                        bank_resident_adjust=rng.choice([0, 0.25, 1]),
-                       bank_rate_factor_min=rng.choice([0, 0.2, 0.5]))
+                       bank_rate_factor_min=rng.choice([0, 0.2, 0.5]),
+                       bank_profit_to_treasury_share=rng.choice([0, 0.5, 1]))
     deps, next_id = [], 1
     for char in range(1, rng.randint(2, 6)):
         if rng.random() < 0.7:
@@ -596,7 +597,8 @@ def _random_world(rng, now):
         region_id=rng.randint(1, 50), now=now, enabled=rng.random() < 0.8, simulated=rng.random() < 0.7,
         factor=Decimal(rng.randint(0, 12000)) / 10000, bank_balance=rng.randint(0, 200000),
         purse_balance=rng.randint(0, 500000), residents=res, deposits=tuple(deps), loans=tuple(loans),
-        params=params,
+        params=params, loan_income_received=rng.choice([0, 0, rng.randint(0, 20000)]),
+        interest_paid_outside=rng.choice([0, 0, rng.randint(0, 500)]),
     )
 
 
@@ -611,8 +613,15 @@ def test_step_random_worlds_guarantees():
         region = inp.region_id
         bank, vault, purse = (core.AccountRef.bank(region), core.AccountRef.bank_deposits(region),
                               core.AccountRef.purse(region))
+        treasury = core.AccountRef.region(region)
         deltas = core.net_deltas(out.legs)
-        assert set(deltas) <= {bank, vault, purse} and sum(deltas.values()) == 0
+        assert set(deltas) <= {bank, vault, purse, treasury} and sum(deltas.values()) == 0
+        # profit sweep: only the realized net income, never more than the share of it
+        profit = out.stats["profit_to_treasury"]
+        assert deltas.get(treasury, 0) == profit >= 0
+        net = (inp.loan_income_received + out.stats["resident_loan_interest"] - out.stats["interest_paid"]
+               - out.stats["resident_interest_paid"] - inp.interest_paid_outside)
+        assert profit <= max(0, net) * inp.params.bank_profit_to_treasury_share
         assert _legs_key_counts(out.legs) and all(l.amount > 0 for l in out.legs)
         assert inp.bank_balance + deltas.get(bank, 0) == out.bank_balance >= 0
         assert inp.purse_balance + deltas.get(purse, 0) == out.purse_balance >= 0
@@ -719,3 +728,61 @@ def test_step_full_period_still_converges_to_target():
         out = _step(enabled=False, simulated=True, residents=out.residents, purse_balance=out.purse_balance,
                     bank_balance=out.bank_balance, now=T0 + H6 * (i + 1))
     assert out.residents.deposits == 0
+
+
+# --------------------------------------------------------------------------------------------- profit to the treasury (bank fix)
+
+def test_profit_to_treasury_formula():
+    assert eb.profit_to_treasury(received=300, paid=10, free=10 ** 6) == 290
+    assert eb.profit_to_treasury(received=10, paid=300, free=10 ** 6) == 0           # a loss sends nothing
+    assert eb.profit_to_treasury(received=300, paid=300, free=10 ** 6) == 0
+    assert eb.profit_to_treasury(received=1000, paid=0, free=150) == 150              # capped by the free money
+    assert eb.profit_to_treasury(received=1000, paid=0, free=0) == 0
+    half = SimParams(bank_profit_to_treasury_share=0.5)
+    assert eb.profit_to_treasury(received=301, paid=0, free=10 ** 6, params=half) == 150   # floor
+    none = SimParams(bank_profit_to_treasury_share=0)
+    assert eb.profit_to_treasury(received=10 ** 6, paid=0, free=10 ** 6, params=none) == 0
+
+
+def test_step_player_loan_income_minus_deposit_interest_goes_to_treasury():
+    out = _step(deposits=(_dep(1, 1, amount=10000),), bank_balance=1000, loan_income_received=300,
+                now=T0 + timedelta(days=1))
+    assert out.stats["interest_paid"] == 10 and out.stats["player_loan_income"] == 300
+    assert out.stats["profit_to_treasury"] == 290 and out.bank_balance == 1000 - 10 - 290
+    deltas = _sum_legs(out.legs)
+    assert deltas[core.AccountRef.region(7)] == 290 and deltas[core.AccountRef.bank(7)] == -300
+    profit_legs = [l for l in out.legs if l.dst == core.AccountRef.region(7)]
+    assert len(profit_legs) == 1 and profit_legs[0].src == core.AccountRef.bank(7)
+    # interest paid outside the pass (matured term withdrawn) also counts as paid
+    out = _step(deposits=(_dep(1, 1, amount=10000),), bank_balance=1000, loan_income_received=300,
+                interest_paid_outside=40, now=T0 + timedelta(days=1))
+    assert out.stats["profit_to_treasury"] == 250
+
+
+def test_step_resident_loan_interest_swept_even_when_bank_closed():
+    # disabled bank, residents winding down: 1 day of interest on 10 000 at 0.005 = 50 is profit
+    res = eb.ResidentState(loans=10000, accrued_at=T0)
+    out = _step(enabled=False, residents=res, purse_balance=10 ** 6, bank_balance=0, now=T0 + timedelta(days=1))
+    assert out.stats["resident_loan_interest"] == 50 and out.stats["profit_to_treasury"] == 50
+    assert out.bank_balance == out.stats["resident_repaid"]                       # only the repaid principal stays
+
+
+def test_step_profit_never_touches_the_reserve_nor_exceeds_free_money():
+    out = _step(bank_balance=150, loan_income_received=1000)
+    assert out.stats["profit_to_treasury"] == 150 and out.bank_balance == 0
+    # residents' deposits 1000 with reserve 0.2 -> 200 stay; the bank is at its reserve: nothing is free
+    res = eb.ResidentState(deposits=1000, accrued_at=T0 + H6)                      # no time: residents do not move
+    out = _step(simulated=True, residents=res, bank_balance=200, purse_balance=4000, loan_income_received=1000)
+    assert out.stats["profit_to_treasury"] == 0 and out.bank_balance == 200
+
+
+def test_step_profit_share_zero_keeps_the_old_behaviour():
+    zero = SimParams(bank_profit_to_treasury_share=0)
+    out = _step(bank_balance=1000, loan_income_received=300, params=zero)
+    assert out.stats["profit_to_treasury"] == 0 and out.bank_balance == 1000 and out.legs == ()
+
+
+def test_step_same_instant_still_sweeps_money_received_since_the_last_pass():
+    # a manual run right after the scheduled one: nothing accrues, but a repayment between them is realized income
+    out = _step(now=T0, residents=eb.ResidentState(accrued_at=T0), bank_balance=5000, loan_income_received=120)
+    assert out.stats["profit_to_treasury"] == 120

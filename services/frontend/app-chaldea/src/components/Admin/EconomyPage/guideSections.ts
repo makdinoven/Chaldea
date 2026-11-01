@@ -20,6 +20,7 @@ export const GUIDE_SECTION_IDS = [
   'events',
   'mint',
   'caravans',
+  'guild',
   'recipes',
   'recipe-hunger',
   'recipe-empty-treasury',
@@ -31,6 +32,7 @@ export const GUIDE_SECTION_IDS = [
   'recipe-events',
   'recipe-mint',
   'recipe-caravans',
+  'recipe-guild',
 ] as const;
 
 export type GuideSectionId = (typeof GUIDE_SECTION_IDS)[number];
@@ -59,6 +61,8 @@ export const GUIDE_SECTION_TITLE: Record<GuideSectionId, string> = {
   'recipe-mint': 'Монетный двор не чеканит или съедает весь лимит',
   caravans: 'Караваны НПС',
   'recipe-caravans': 'Как открыть торговлю между двумя странами',
+  guild: 'Гильдия торговцев',
+  'recipe-guild': 'Как открыть гильдию в регионе',
 };
 
 /** Tabs of the admin «Экономика» page (EconomyPage.tsx). */
@@ -76,6 +80,7 @@ export type EconomyTabId =
   | 'events'
   | 'mint'
   | 'caravans'
+  | 'guild'
   | 'tick'
   | 'settings';
 

@@ -744,3 +744,90 @@ def test_orphan_row_with_nothing_in_it_is_left_alone(engine):
     assert summary.banks_processed == 3                                 # 40 has nothing to tick
     assert _ops(engine, core.OP_TREASURY_CLOSED) == 0
     _assert_invariant(engine)
+
+
+# --------------------------------------------------------------------------------------------- profit to the treasury (bank fix)
+
+def _repay(engine, loan_id, cid, region_id, amount):
+    """A player repayment like ``economy_bank_crud.repay``: ``C -> B(L)``, paid_total grows, closed when settled."""
+    db = engine.factory()
+    try:
+        loan = db.query(models.BankLoan).filter(models.BankLoan.id == loan_id).one()
+        loan.paid_total = int(loan.paid_total or 0) + amount
+        loan.debt = max(0, int(loan.debt) - amount)
+        if loan.debt == 0:
+            bank_crud.close_loan(loan, T0)
+        db.flush()
+        econ_ledger.post_operation(db, op_type=core.OP_LOAN_REPAY, source_service=SOURCE,
+                                   legs=[core.Leg(core.AccountRef.character(cid), core.AccountRef.bank(region_id),
+                                                  amount)])
+        db.commit()
+    finally:
+        db.close()
+
+
+def _last_stats(engine, region_id=10):
+    db = engine.factory()
+    try:
+        return bank_crud._stats(db.query(models.EconBank).filter(models.EconBank.region_id == region_id)
+                                .one().last_stats)
+    finally:
+        db.close()
+
+
+def test_repaid_loan_interest_goes_to_the_treasury_once(engine):
+    loan = _loan(engine, ALPHA, 10, 1_000, due_at=T0 + timedelta(days=7), accrued_at=T0)
+    first = _run(engine, T0)                                         # baseline marks, nothing realized yet
+    assert _last_stats(engine)["profit_to_treasury"] == 0
+    assert _last_stats(engine)["marks"] == {"loan_income": 0, "deposit_interest": 0}
+    _repay(engine, loan, ALPHA, 10, 600)                              # still below the principal: no income
+    _run(engine, T0)
+    assert _last_stats(engine)["profit_to_treasury"] == 0 and _acc(engine, "region_treasury", 10) == 0
+    _repay(engine, loan, ALPHA, 10, 535)                              # 1 135 back for 1 000 lent: 135 earned
+    bank_before = _acc(engine, "bank", 10)
+    summary = _run(engine, T0)
+    stats = _last_stats(engine)
+    assert stats["player_loan_income"] == 135 and stats["profit_to_treasury"] == 135
+    assert stats["marks"]["loan_income"] == 135
+    assert _acc(engine, "region_treasury", 10) == 135 and _acc(engine, "bank", 10) == bank_before - 135
+    op_id = _q(engine, "SELECT id FROM econ_operations WHERE idempotency_key = :k",
+               k=f"bank_tick:{summary.run_id}:b:10")
+    assert ("bank", 10, "region_treasury", 10, 135, "main") in _legs(engine, op_id)
+    assert first.run_id != summary.run_id
+    # the next run finds nothing new
+    _run(engine, T0 + timedelta(minutes=1))
+    assert _last_stats(engine)["profit_to_treasury"] == 0 and _acc(engine, "region_treasury", 10) == 135
+    _assert_invariant(engine)
+
+
+def test_income_realized_before_the_first_pass_is_not_back_dated(engine):
+    loan = _loan(engine, ALPHA, 10, 1_000, due_at=T0 + timedelta(days=7), accrued_at=T0)
+    _repay(engine, loan, ALPHA, 10, 1_200)                            # repaid before any pass with marks
+    _run(engine, T0)
+    assert _last_stats(engine)["profit_to_treasury"] == 0 and _acc(engine, "region_treasury", 10) == 0
+    assert _last_stats(engine)["marks"]["loan_income"] == 200
+    _assert_invariant(engine)
+
+
+def test_deposit_interest_paid_outside_the_pass_is_subtracted(engine):
+    loan = _loan(engine, ALPHA, 10, 1_000, due_at=T0 + timedelta(days=7), accrued_at=T0)
+    dep = _deposit(engine, BETA, 10, 500, accrued_at=T0)
+    _run(engine, T0)
+    _repay(engine, loan, ALPHA, 10, 1_100)                            # 100 earned
+    _sql(engine, "UPDATE bank_deposits SET interest_total = interest_total + 30 WHERE id = :i", i=dep)  # 30 paid out
+    _run(engine, T0)
+    assert _last_stats(engine)["profit_to_treasury"] == 70 and _acc(engine, "region_treasury", 10) == 70
+    _assert_invariant(engine)
+
+
+def test_collected_overdue_debt_counts_and_share_zero_keeps_it_in_the_bank(engine):
+    loan = _loan(engine, ALPHA, 10, 1_000, due_at=T0 - timedelta(days=1), accrued_at=T0 - timedelta(days=8))
+    summary = _run(engine, T0)                                        # bank pass first (marks 0), then collection
+    assert summary.loans_collected == 1 and _loan_col(engine, loan, "status") == "closed"
+    collected = int(_loan_col(engine, loan, "collected_total"))
+    assert collected > 1_000
+    zero = dataclasses.replace(PARAMS, bank_profit_to_treasury_share=0.0)
+    _tick_bank(engine, summary.run_id + 1, T0, zero)
+    assert _last_stats(engine)["profit_to_treasury"] == 0 and _acc(engine, "region_treasury", 10) == 0
+    assert _last_stats(engine)["marks"]["loan_income"] == collected - 1_000   # consumed: never swept later
+    _assert_invariant(engine)

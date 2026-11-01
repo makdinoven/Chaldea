@@ -4331,20 +4331,9 @@ def price_shop_row(market: MerchantMarket, item: Optional[econ_core.ItemMarket],
     1 otherwise; the bid is capped by the cheapest possible ask (applies to legacy merchants too).
 
     -> {group, off_market, market, mult, ask, bid, price_level}; bid 0 = «does not buy».
+    FEAT-193: the maths lives in econ_core.shop_row_prices (shared with the guild price cap).
     """
-    group = item.group if item is not None else None
-    off_market = item.off_market if item is not None else True
-    mult = econ_core.market_mult(market.living, group, off_market, market.mults)
-    ask = econ_core.market_ask(buy_price, mult)
-    return {
-        "group": group,
-        "off_market": off_market,
-        "market": bool(market.living and group is not None and not off_market),
-        "mult": mult,
-        "ask": ask,
-        "bid": econ_core.market_bid(sell_price, mult, ask),
-        "price_level": econ_core.price_level(mult),
-    }
+    return econ_core.shop_row_prices(market.living, item, buy_price, sell_price, market.mults)
 
 
 async def merchant_buy_groups(session: AsyncSession, market: MerchantMarket) -> List[str]:
@@ -4537,10 +4526,8 @@ async def delete_npc_shop_item(session: AsyncSession, shop_item_id: int) -> bool
 
 def effective_stock(market: MerchantMarket, stock: Optional[int]) -> Optional[int]:
     """Stock a player sees / can buy: NULL = unlimited for a legacy merchant only; a living merchant
-    treats NULL as 0 (nothing to sell until the tick restocks the row)."""
-    if stock is None:
-        return 0 if market.living else None
-    return max(0, int(stock))
+    treats NULL as 0 (nothing to sell until the tick restocks the row). FEAT-193: econ_core helper."""
+    return econ_core.effective_shop_stock(market.living, stock)
 
 
 async def get_npc_shop_items_player(session: AsyncSession, npc_id: int) -> List[dict]:
@@ -4610,15 +4597,9 @@ class BidQuote(NamedTuple):
 
 
 def _buys_groups(rows, items: Dict[int, econ_core.ItemMarket]) -> List[str]:
-    """Effective groups of the active, on-market, admin-origin rows (SHOP_ROW_COLUMNS tuples)."""
-    groups = set()
-    for r in rows:
-        if not r[8] or r[7] != econ_core.SHOP_ORIGIN_ADMIN:
-            continue
-        m = items.get(r[2])
-        if m is not None and m.group is not None and not m.off_market:
-            groups.add(m.group)
-    return sorted(groups)
+    """Effective groups of the active, on-market, admin-origin rows (SHOP_ROW_COLUMNS tuples).
+    FEAT-193: econ_core.merchant_buys_groups."""
+    return econ_core.merchant_buys_groups(rows, items)
 
 
 def quote_bid(market: MerchantMarket, item: Optional[econ_core.ItemMarket], row,
@@ -4631,23 +4612,17 @@ def quote_bid(market: MerchantMarket, item: Optional[econ_core.ItemMarket], row,
     * no row, living merchant: on-market item of one of his goods groups -> default bid
       floor(item_base x bid_share) moved by the region and capped like any bid;
     * no row, legacy merchant: refused (he buys only his own rows).
+
+    FEAT-193: the unit price comes from econ_core.shop_row_bid (shared with the guild price floor).
     """
+    bid = econ_core.shop_row_bid(market.living, item, row, buys_groups, market.mults,
+                                 market.group_base, market.bid_share)
+    if bid < 1:
+        return None
     if row is not None:
-        if not row[8] or int(row[4] or 0) <= 0:
-            return None
-        bid = price_shop_row(market, item, row[3], row[4])["bid"]
-        return BidQuote(bid, int(row[0]), 0, 0) if bid >= 1 else None
-    if not market.living or item is None or item.group is None or item.off_market:
-        return None
-    if item.group not in buys_groups:
-        return None
+        return BidQuote(bid, int(row[0]), 0, 0)
     base = econ_core.item_base_price(item.price, market.group_base.get(item.group))
-    if base <= 0:
-        return None
-    mult = econ_core.market_mult(True, item.group, False, market.mults)
-    base_bid = econ_core.default_bid(base, market.bid_share)
-    bid = econ_core.market_bid(base_bid, mult, econ_core.market_ask(base, mult))
-    return BidQuote(bid, None, base, base_bid) if bid >= 1 else None
+    return BidQuote(bid, None, base, econ_core.default_bid(base, market.bid_share))
 
 
 async def quote_bids(session: AsyncSession, market: MerchantMarket, item_ids) -> Dict[int, BidQuote]:

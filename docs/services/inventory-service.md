@@ -172,7 +172,8 @@ FEAT-171 §3.4 D9).
 ### character_inventory
 - id, character_id, item_id (FK -> items), quantity
 - **Другие писатели таблицы:** locations-service (`houses._take_materials`, стройка/ремонт домов) и character-service
-  (FEAT-191, чеканка руды у Монетчика — `economy_mint_crud._take_ore`): списывают только обычные стопки
+  (FEAT-191, чеканка руды у Монетчика, и FEAT-193, сдача товаров в «Гильдию торговцев» — общий
+  `economy_mint_crud.take_plain_stacks`): списывают только обычные стопки
   (`enhancement_points_spent = 0`, `socketed_gems IS NULL`, `current_durability IS NULL`) напрямую SQL в одной
   транзакции со своей проводкой книги счетов.
 

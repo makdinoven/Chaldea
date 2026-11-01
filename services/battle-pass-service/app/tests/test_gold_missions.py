@@ -488,3 +488,39 @@ class TestMintCountsAsEarned:
         await db_session.commit()
 
         assert await _earned_and_spent(db_session, active_season) == (25, 0)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-193: guild orders — a hand-in pays purse (+ region treasury for food)
+# -> character; it counts as earned gold (user decision 4)
+# ---------------------------------------------------------------------------
+
+PURSE_ACC = 5
+
+
+class TestGuildOrderCountsAsEarned:
+    async def _setup(self, db):
+        await _setup_accounts(db, [100])
+        db.add(EconAccount(id=PURSE_ACC, kind="population_purse", ref_id=5))
+        await db.flush()
+
+    async def test_guild_order_is_not_excluded(self):
+        assert "guild_order" not in crud.LEDGER_EXCLUDED_OP_TYPES
+
+    async def test_guild_order_purse_and_treasury_legs_count_as_earned(self, db_session, active_season):
+        await self._setup(db_session)
+        await _post(db_session, "guild_order", PURSE_ACC, 200, 120)     # purse leg
+        await _post(db_session, "guild_order", REGION_ACC, 200, 30)     # food top-up from the treasury
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (150, 0)
+
+    async def test_guild_order_of_another_players_character_is_not_ours(self, db_session, active_season):
+        await self._setup(db_session)
+        db_session.add(EconAccount(id=998, kind="character", ref_id=556))
+        await db_session.flush()
+        await _post(db_session, "guild_order", PURSE_ACC, 998, 700)
+        await _post(db_session, "guild_order", PURSE_ACC, 200, 9)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (9, 0)

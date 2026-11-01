@@ -29,6 +29,8 @@ interface RegionCardHidden {
   has_mint?: boolean;
   /** FEAT-192: always empty lists for a hidden region */
   caravans?: RegionCardCaravans;
+  /** FEAT-193: always empty for a hidden region */
+  guild_wants?: RegionCardGuildWant[];
 }
 
 export interface RegionCardData {
@@ -52,6 +54,14 @@ export interface RegionCardData {
   events?: RegionCardEvent[];
   /** FEAT-192: caravans to / from the region (optional — older backends don't send it) */
   caravans?: RegionCardCaravans;
+  /** FEAT-193: goods groups the regional guild has open, payable orders for (optional — older backends don't send it) */
+  guild_wants?: RegionCardGuildWant[];
+}
+
+/** FEAT-193 (3.9): a goods group the guild of the region is looking for — words only, no units or money. */
+export interface RegionCardGuildWant {
+  group_code: string;
+  group_name: string;
 }
 
 /**

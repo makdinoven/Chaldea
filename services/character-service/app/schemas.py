@@ -1947,6 +1947,7 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "bank_resident_deposit_share": (0.0, 0.9),
     "bank_resident_loan_share": (0.0, 0.9),
     "bank_resident_adjust": (0.0, 1.0),
+    "bank_profit_to_treasury_share": (0.0, 1.0),
     # FEAT-186 population scale: the sim uses lore population / scale
     "population_scale": (1, 10_000),
     # FEAT-187 region events
@@ -1974,6 +1975,16 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "caravan_travel_foreign": (1, 8),
     "caravan_min_value": (1, 1_000_000),
     "caravan_max_per_run": (1, 5_000),
+    # FEAT-193 guild orders
+    "guild_enabled": (0, 1),
+    "guild_markup_pct": (0.0, 200.0),
+    "guild_open_threshold_pct": (1.0, 100.0),
+    "guild_min_order_value": (1, 1_000_000),
+    "guild_purse_share": (0.0, 1.0),
+    "guild_treasury_food_share": (0.0, 1.0),
+    "guild_xp_per_mark": (0.0, 10.0),
+    "guild_xp_per_mark_merchant_items": (0.0, 10.0),
+    "guild_xp_daily_cap": (0, 1_000_000),
 }
 ECON_SIM_INT_PARAMS = frozenset({
     "treasury_release_ticks", "history_retention_days",
@@ -1983,6 +1994,7 @@ ECON_SIM_INT_PARAMS = frozenset({
     "quota_season_amount", "mint_season_limit",
     "caravans_enabled", "caravan_travel_domestic", "caravan_travel_foreign", "caravan_min_value",
     "caravan_max_per_run",
+    "guild_enabled", "guild_min_order_value", "guild_xp_daily_cap",
 })
 
 
@@ -2323,6 +2335,7 @@ class EconSimParamsIn(BaseModel):
     bank_resident_deposit_share: Optional[float] = None
     bank_resident_loan_share: Optional[float] = None
     bank_resident_adjust: Optional[float] = None
+    bank_profit_to_treasury_share: Optional[float] = None
     population_scale: Optional[int] = None
     events_enabled: Optional[int] = None
     event_rate_per_season: Optional[float] = None
@@ -2346,6 +2359,15 @@ class EconSimParamsIn(BaseModel):
     caravan_travel_foreign: Optional[int] = None
     caravan_min_value: Optional[int] = None
     caravan_max_per_run: Optional[int] = None
+    guild_enabled: Optional[int] = None
+    guild_markup_pct: Optional[float] = None
+    guild_open_threshold_pct: Optional[float] = None
+    guild_min_order_value: Optional[int] = None
+    guild_purse_share: Optional[float] = None
+    guild_treasury_food_share: Optional[float] = None
+    guild_xp_per_mark: Optional[float] = None
+    guild_xp_per_mark_merchant_items: Optional[float] = None
+    guild_xp_daily_cap: Optional[int] = None
 
     class Config:
         extra = Extra.forbid
@@ -3091,3 +3113,162 @@ class CaravanCardLine(BaseModel):
 class RegionCaravansOut(BaseModel):
     incoming: List[CaravanCardLine] = []
     outgoing: List[CaravanCardLine] = []
+
+
+# ===========================================================================
+# FEAT-193 guild orders (contract 3.10; app/economy_guild_crud.py)
+# ===========================================================================
+
+GUILD_MAX_QUANTITY = 10_000
+GUILD_STATUS_RE = r"^(open|filled|closed|all)$"   # «closed» lists closed and filled orders
+GUILD_LIST_MAX_LIMIT = 200
+
+
+class GuildHandInIn(BaseModel):
+    character_id: conint(strict=True, ge=1)
+    item_id: conint(strict=True, ge=1)
+    quantity: conint(strict=True, ge=1, le=GUILD_MAX_QUANTITY)
+    request_id: _BANK_REQ_ID                     # required: the ledger key guild:{character}:{request_id}
+
+
+class GuildOrderOut(BaseModel):
+    order_id: int
+    group_code: str
+    group_name: str
+    is_food: bool
+    units_total: float
+    units_left: float
+    filled_pct: int
+    payable: bool                                # false = «жителям нечем платить до пересчёта»
+
+
+class GuildOfferOut(BaseModel):
+    item_id: int
+    name: Optional[str]
+    image: Optional[str]
+    group_code: str
+    order_id: int
+    have: int                                    # plain stacks in the bag
+    unit_price: int
+    units_per_item: float
+    max_accept: int                              # min(have, by volume, by money, 10000)
+    capped_by_merchants: bool
+    xp_rate: float                               # XP per mark for this item (3.6a)
+
+
+class GuildRefusedOut(BaseModel):
+    item_id: int
+    name: Optional[str]
+    image: Optional[str]
+    group_code: Optional[str]
+    have: int
+    reason: str                                  # Russian
+
+
+class GuildXpInfo(BaseModel):
+    per_mark: float
+    per_mark_merchant_items: float
+    daily_cap: int
+    left_today: int                              # base XP left today (UTC day)
+    multiplier: float                            # quest XP book
+
+
+class GuildView(BaseModel):
+    npc_id: int
+    npc_name: str
+    region_id: Optional[int]                     # null when the NPC's location resolves to no region
+    region_name: Optional[str]
+    working: bool
+    closed_reason: Optional[str]                 # Russian, when working is false
+    markup_pct: float
+    orders: List[GuildOrderOut]
+    offers: List[GuildOfferOut]
+    refused: List[GuildRefusedOut]
+    xp: GuildXpInfo
+    wallet: int
+
+
+class GuildActionOut(BaseModel):
+    message: str                                 # Russian, includes the XP granted
+    operation_id: int
+    quantity: int                                # pieces actually accepted
+    requested: int
+    partial: bool
+    unit_price: int
+    total: int
+    xp: int                                      # XP granted (after the book)
+    xp_capped: bool                              # the daily cap cut the base XP
+    wallet: int
+    view: GuildView
+
+
+class GuildParamsOut(BaseModel):
+    guild_enabled: int
+    guild_markup_pct: float
+    guild_open_threshold_pct: float
+    guild_min_order_value: int
+    guild_purse_share: float
+    guild_treasury_food_share: float
+    guild_xp_per_mark: float
+    guild_xp_per_mark_merchant_items: float
+    guild_xp_daily_cap: int
+
+
+class GuildTotalsOut(BaseModel):
+    open: int
+    units_left_value: int
+    paid_last_7d: int
+    hand_ins_last_7d: int
+    xp_last_7d: int
+
+
+class GuildMasterOut(BaseModel):
+    npc_id: int
+    name: Optional[str]
+    npc_status: str
+    location_name: Optional[str]
+
+
+class GuildRegionOut(BaseModel):
+    region_id: int
+    region_name: Optional[str]
+    guild_budget: int
+    guild_food_budget: int
+    open_orders: int
+    masters: List[GuildMasterOut]
+
+
+class GuildOrderRowOut(BaseModel):
+    id: int
+    region_id: int
+    region_name: Optional[str]                   # null = region deleted
+    group_code: str
+    group_name: Optional[str]
+    status: str                                  # open | filled | closed
+    close_reason: Optional[str]                  # filled | no_shortage | no_money | disabled | region_left
+    units_total: float
+    units_left: float
+    units_filled: float
+    price_mult: float
+    markup_pct: float
+    pieces: int
+    paid_total: int
+    paid_treasury: int
+    hand_ins: int
+    opened_at: datetime
+    updated_at: Optional[datetime]
+    closed_at: Optional[datetime]
+
+
+class GuildAdminOut(BaseModel):
+    params: GuildParamsOut
+    totals: GuildTotalsOut
+    regions: List[GuildRegionOut]
+    total: int
+    items: List[GuildOrderRowOut]
+
+
+class GuildWantOut(BaseModel):
+    """Region card line «Гильдия ищет: …» — words only."""
+    group_code: str
+    group_name: str

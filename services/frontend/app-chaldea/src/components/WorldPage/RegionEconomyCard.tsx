@@ -6,6 +6,7 @@ import type {
   RegionCardCaravans,
   RegionCardData,
   RegionCardEvent,
+  RegionCardGuildWant,
   RegionGroupLevel,
   RegionGroupTrend,
 } from '../../api/regionEconomy';
@@ -114,7 +115,7 @@ const RegionEvents = ({ events }: { events: RegionCardEvent[] }) => {
   );
 };
 
-/** Goods group names in the accusative case («везут руду»), for the caravan lines below. */
+/** Goods group names in the accusative case («везут руду»), for the caravan and guild lines below. */
 const GROUP_ACCUSATIVE: Record<string, string> = {
   food: 'продовольствие',
   ore_metal: 'руду и металл',
@@ -130,12 +131,18 @@ const GROUP_ACCUSATIVE: Record<string, string> = {
   household: 'быт и мебель',
 };
 
+const groupAccusative = (code: string, name: string): string => GROUP_ACCUSATIVE[code] ?? name.toLowerCase();
+
+/** «Гильдия ищет: древесину, зелья» — FEAT-193 3.9, never units or money. */
+const guildWantsText = (wants: RegionCardGuildWant[]): string =>
+  `Гильдия ищет: ${wants.map((w) => groupAccusative(w.group_code, w.group_name)).join(', ')}`;
+
 /** «Везут продовольствие из X (Страна)» / «Вывезли руду в Y» — FEAT-192 3.12 wording, never numbers. */
 const caravanText = (line: CaravanCardLine, incoming: boolean): string => {
   const verb = incoming ? (line.in_transit ? 'Везут' : 'Привезли') : line.in_transit ? 'Вывозят' : 'Вывезли';
   const prep = incoming ? 'из' : 'в';
   const country = line.foreign && line.country_name ? ` (${line.country_name})` : '';
-  const goods = GROUP_ACCUSATIVE[line.group_code] ?? line.group_name.toLowerCase();
+  const goods = groupAccusative(line.group_code, line.group_name);
   return `${verb} ${goods} ${prep} «${line.region_name}»${country}`;
 };
 
@@ -217,6 +224,14 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
     </p>
   );
 
+  // Only the participating branch carries orders (3.9); a hidden card always sends an empty list.
+  const guildLine = card && card.guild_wants && card.guild_wants.length > 0 && (
+    <p className="text-xs text-center text-white/60 mt-2 break-words">
+      <span aria-hidden="true">📜 </span>
+      {guildWantsText(card.guild_wants)}
+    </p>
+  );
+
   if (!card) {
     return bankLine || mintLine ? (
       <section aria-label="Учреждения региона" className="mx-auto mb-4 w-full max-w-3xl px-1 sm:px-0">
@@ -272,6 +287,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
       {card.caravans && <RegionCaravans caravans={card.caravans} />}
       {bankLine}
       {mintLine}
+      {guildLine}
     </section>
   );
 };

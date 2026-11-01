@@ -22,6 +22,7 @@ import EconomyBanks from './EconomyBanks';
 import EconomyEvents from './EconomyEvents';
 import EconomyMint from './EconomyMint';
 import EconomyCaravans from './EconomyCaravans';
+import EconomyGuild from './EconomyGuild';
 import EconomyGuide from './EconomyGuide';
 import { GuideIntro } from './GuideLink';
 import { EconomyGuideContext, type EconomyTabId, type GuideSectionId, type OpenGuide } from './guideSections';
@@ -42,6 +43,7 @@ const TAB_LABEL: Record<EconomyTab, string> = {
   events: 'События',
   mint: 'Монетный двор',
   caravans: 'Караваны',
+  guild: 'Гильдия',
   tick: 'Пересчёт',
   settings: 'Настройки',
 };
@@ -99,6 +101,10 @@ const TAB_INTRO: Partial<Record<EconomyTab, { section: GuideSectionId; text: Rea
     section: 'caravans',
     text: 'Караваны НПС в каждом пересчёте везут товары из регионов, где их больше нормы, туда, где их меньше нормы. Внутри страны — всегда, между странами — только для пар с открытой торговлей. Здесь — параметры, пары стран с пошлиной и список караванов.',
   },
+  guild: {
+    section: 'guild',
+    text: 'Заказы гильдии торговцев: регион, которому не хватает товара, в каждом пересчёте выставляет заказ, а игроки сдают подходящие предметы представителю гильдии и получают марки из кошелька жителей (за еду доплачивает казна) и немного опыта. Здесь — параметры, бюджеты регионов, представители и список заказов.',
+  },
 };
 
 /** Admin «Экономика» (FEAT-181): where the world's money is, the ledger journal, admin postings, currency settings. */
@@ -152,6 +158,7 @@ const EconomyPage = () => {
     'events',
     'mint',
     'caravans',
+    'guild',
     'tick',
     'settings',
   ];
@@ -231,6 +238,7 @@ const EconomyPage = () => {
         {tab === 'events' && <EconomyEvents canSettings={canSettings} />}
         {tab === 'mint' && <EconomyMint canSettings={canSettings} canEmit={canEmit} />}
         {tab === 'caravans' && <EconomyCaravans canSettings={canSettings} />}
+        {tab === 'guild' && <EconomyGuild canSettings={canSettings} />}
         {tab === 'tick' && <EconomyTick canSettings={canSettings} onMoneyChanged={loadSummary} />}
         {tab === 'settings' && <EconomySettings canEdit={canSettings} onSaved={loadSummary} />}
       </div>

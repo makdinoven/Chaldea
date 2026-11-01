@@ -280,3 +280,15 @@ def test_caravan_op_types_and_escrow_kind():
     assert econ_core.SINGLETON_NAMES[kind] == "Караваны в пути"
     assert econ_core.AccountRef.caravan_escrow() == econ_core.AccountRef(kind, 0)
     assert not econ_core.AccountRef.caravan_escrow().allow_negative
+
+
+# --------------------------------------------------------------------------------------------- FEAT-193 guild orders
+
+def test_guild_op_types():
+    assert frozenset(cc.GUILD_OP_TYPE_NAMES) == econ_core.GUILD_OP_TYPES
+    assert econ_core.OP_GUILD_ORDER == "guild_order"
+    assert econ_core.GUILD_OP_TYPES <= econ_core.OP_TYPES
+    assert not (econ_core.GUILD_OP_TYPES & econ_core.SOURCE_OP_TYPES)
+    assert not (econ_core.GUILD_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
+    assert not (econ_core.GUILD_OP_TYPES & econ_core.BANK_OP_TYPES)
+    assert not (econ_core.GUILD_OP_TYPES & econ_core.CARAVAN_OP_TYPES)

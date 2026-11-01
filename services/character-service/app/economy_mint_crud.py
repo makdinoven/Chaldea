@@ -521,10 +521,11 @@ def build_view(db: Session, ctx: MinterContext, status: Optional[MintStatus] = N
     }
 
 
-def _take_ore(db: Session, character_id: int, item_id: int, quantity: int, name: str,
-              need: Optional[int] = None) -> None:
+def take_plain_stacks(db: Session, character_id: int, item_id: int, quantity: int, name: str,
+                      need: Optional[int] = None, not_enough: str = MSG_NOT_ENOUGH) -> None:
     """Take ``quantity`` pieces from plain stacks only, rows locked in ascending id. The «not enough» check runs
-    against ``need`` (the requested quantity, defaults to ``quantity``) — 400 naming what is short. No commit."""
+    against ``need`` (the requested quantity, defaults to ``quantity``) — 400 naming what is short (``not_enough``
+    template with name / need / have). No commit. Shared by the mint and the guild (FEAT-193)."""
     need = quantity if need is None else need
     rows = db.execute(text(
         "SELECT id, quantity FROM character_inventory WHERE character_id = :c AND item_id = :i "
@@ -533,7 +534,7 @@ def _take_ore(db: Session, character_id: int, item_id: int, quantity: int, name:
         {"c": int(character_id), "i": int(item_id)}).fetchall()
     have = sum(_i(r[1]) for r in rows)
     if have < need:
-        raise EconomyApiError(400, MSG_NOT_ENOUGH.format(name=name, need=need, have=have))
+        raise EconomyApiError(400, not_enough.format(name=name, need=need, have=have))
     left = quantity
     for row_id, qty in rows:
         if left <= 0:
@@ -586,7 +587,7 @@ def mint(db: Session, ctx: MinterContext, status: MintStatus, body, *, now: Opti
     marks = marks_per_item * accepted
 
     name = market.name or f"предмет #{item_id}"
-    _take_ore(db, ctx.character_id, item_id, accepted, name, need=quantity)
+    take_plain_stacks(db, ctx.character_id, item_id, accepted, name, need=quantity)
 
     group_base = _ore_group_base(db)
     per_item = Decimal(str(core.units_per_item(core.item_base_price(market.price, group_base), group_base)))

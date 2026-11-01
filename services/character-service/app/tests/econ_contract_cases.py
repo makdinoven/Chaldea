@@ -38,6 +38,11 @@ money on the road; dispatch purse/treasury -> escrow, delivery escrow -> purse +
 duty, cancel escrow -> payers; untaxed, never negative, no sources) and CARAVAN_OP_TYPE_NAMES /
 CARAVAN_ESCROW_KIND_NAME, which a runner checks against econ_core's constants directly.
 
+FEAT-193 (guild orders) appends `guild_order` ledger CASES (purse + region treasury -> character, no
+comment, untaxed, no sources) and GUILD_OP_TYPE_NAMES, plus PRICING_CASES for the shop-row helpers
+lifted from locations-service into econ_core (ask_discount_floor, effective_shop_stock,
+shop_row_prices, merchant_buys_groups, shop_row_bid) at the end of this module.
+
 Only econ_core is imported here, so this module is identical in every service.
 """
 
@@ -877,6 +882,47 @@ CASES += [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# FEAT-193 guild orders: a player fills a region's order, paid by the purse (+ treasury for food)
+# ---------------------------------------------------------------------------
+
+# a runner checks == GUILD_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES and
+# COMMENT_REQUIRED_OP_TYPES
+GUILD_OP_TYPE_NAMES: Tuple[str, ...] = ("guild_order",)
+
+CASES += [
+    # purse -> character + treasury -> character, no comment, no tax leg, idempotent per request key
+    ContractCase(
+        name="guild_order_purse_and_treasury_to_character_untaxed",
+        steps=[_fund((P10, 500), (R10, 100)),
+               Step("guild_order", [Leg(P10, C1, 120), Leg(R10, C1, 30)],
+                    {"region_id": 10, "location_id": 1000, "apply_tax": False,
+                     "idempotency_key": "guild:1:req-1",
+                     "metadata": {"order_id": 7, "item_id": 1, "quantity": 5, "unit_price": 30}}),
+               Step("guild_order", [Leg(P10, C1, 120), Leg(R10, C1, 30)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "guild:1:req-1"},
+                    error="DuplicateOperation")],
+        expected_characters={1: 150},
+        expected_accounts={("population_purse", 10): 380, ("region_treasury", 10): 70},
+        expected_operations=2, expected_postings=4, expected_tax_legs=0,
+    ),
+    # the purse never goes negative; the guild op may never touch the money sources
+    ContractCase(
+        name="guild_order_purse_never_negative_and_no_sources",
+        steps=[_fund((P10, 40)),
+               Step("guild_order", [Leg(P10, C1, 41)], {"region_id": 10, "apply_tax": False},
+                    error="InsufficientFunds"),
+               Step("guild_order", [Leg(EMISSION, C1, 5)], {"region_id": 10, "apply_tax": False},
+                    error="EconomyError"),
+               Step("guild_order", [Leg(P10, ADJUSTMENT, 5)], {"region_id": 10, "apply_tax": False},
+                    error="EconomyError"),
+               Step("guild_order", [Leg(P10, C1, 40)], {"region_id": 10})],
+        expected_characters={1: 40},
+        expected_accounts={("population_purse", 10): 0},
+        expected_operations=2, expected_postings=2, expected_tax_legs=0,
+    ),
+]
+
 # location_id -> (region_id, country_id)
 RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] = [
     (1000, (10, 1)),      # via district
@@ -1330,3 +1376,70 @@ MERCHANT_STOCK_STEPS: List[Tuple[str, Dict[str, object], int]] = [
 ]
 MERCHANT_STOCK_SQL = "SELECT id, stock FROM npc_shop_items ORDER BY id"
 MERCHANT_STOCK_EXPECTED: Dict[int, Optional[int]] = {1: 1, 2: 4, 3: 7, 4: 3}
+
+
+# ---------------------------------------------------------------------------
+# FEAT-193 shop-row helpers lifted from locations-service into econ_core (same runner as above:
+# getattr(econ_core, name)(*args) == expected). SHOP_ROW_COLUMNS tuples:
+# (id, npc_id, item_id, buy_price, sell_price, stock, restock_target, origin, is_active)
+# ---------------------------------------------------------------------------
+
+_BREAD = ItemMarket(1, "Хлеб", None, 3, "food", False)
+_ORE = ItemMarket(2, "Руда", None, 2500, "ore_metal", False)
+_ORE_FREE = ItemMarket(5, "Камень", None, 0, "ore_metal", False)     # price 0 -> group base
+_HAMMER = ItemMarket(3, "Молот", None, 40, "tools", False)
+_RELIC = ItemMarket(8, "Реликвия", None, 900, "weapons", True)       # off-market
+_SHOP_ROWS = [
+    (1, 31, 1, 4, 2, 5, 10, "admin", 1),
+    (2, 31, 2, 3000, 1250, None, 10, "admin", 1),
+    (3, 31, 3, 150, 60, 0, 0, "player", 1),       # player-origin: no group bought
+    (4, 31, 8, 60, 0, 3, 0, "admin", 1),          # off-market item
+    (6, 31, 3, 60, 10, 3, 0, "admin", 0),         # inactive
+]
+_SHOP_ITEMS = {1: _BREAD, 2: _ORE, 3: _HAMMER, 8: _RELIC}
+_MULTS = {"food": "1.4", "ore_metal": "0.8"}
+_BASES = {"food": 2, "ore_metal": 10, "tools": 40, "weapons": 120}
+
+PRICING_CASES += [
+    # floor(ask * 0.5): the bid cap and the guild cap for an item a regional merchant sells
+    ("ask_discount_floor", (20,), 10),
+    ("ask_discount_floor", (21,), 10),
+    ("ask_discount_floor", (1,), 0),
+    ("ask_discount_floor", (Decimal("19"),), 9),
+    ("ask_discount_floor", (2000,), 1000),
+    # NULL stock = unlimited only for a legacy merchant
+    ("effective_shop_stock", (True, None), 0),
+    ("effective_shop_stock", (False, None), None),
+    ("effective_shop_stock", (True, -3), 0),
+    ("effective_shop_stock", (False, 5), 5),
+    # one row's prices (same dict the player shop shows)
+    ("shop_row_prices", (True, _BREAD, 4, 2, _MULTS),
+     {"group": "food", "off_market": False, "market": True, "mult": Decimal("1.4"), "ask": 6, "bid": 2,
+      "price_level": "high"}),
+    ("shop_row_prices", (False, _BREAD, 4, 2, _MULTS),
+     {"group": "food", "off_market": False, "market": False, "mult": Decimal(1), "ask": 4, "bid": 2,
+      "price_level": "normal"}),
+    ("shop_row_prices", (True, None, 4, 3, _MULTS),
+     {"group": None, "off_market": True, "market": False, "mult": Decimal(1), "ask": 4, "bid": 2,
+      "price_level": "normal"}),
+    ("shop_row_prices", (True, _RELIC, 60, 0, _MULTS),
+     {"group": "weapons", "off_market": True, "market": False, "mult": Decimal(1), "ask": 60, "bid": 0,
+      "price_level": "normal"}),
+    # groups bought outside the assortment: active admin rows of on-market items only
+    ("merchant_buys_groups", (_SHOP_ROWS, _SHOP_ITEMS), ["food", "ore_metal"]),
+    ("merchant_buys_groups", ([], _SHOP_ITEMS), []),
+    # bid: row present (capped), inactive / sell 0 -> 0, no row (living, group bought), legacy, off-market
+    ("shop_row_bid", (True, _BREAD, _SHOP_ROWS[0], ["food"], _MULTS, _BASES, "0.5"), 2),
+    ("shop_row_bid", (True, _HAMMER, _SHOP_ROWS[4], ["food"], _MULTS, _BASES, "0.5"), 0),
+    ("shop_row_bid", (True, _RELIC, _SHOP_ROWS[3], ["food"], _MULTS, _BASES, "0.5"), 0),
+    ("shop_row_bid", (True, _ORE, _SHOP_ROWS[1], ["ore_metal"], _MULTS, _BASES, "0.5"), 1000),
+    ("shop_row_bid", (False, _ORE, _SHOP_ROWS[1], [], _MULTS, _BASES, "0.5"), 1250),
+    ("shop_row_bid", (True, _ORE, None, ["ore_metal"], _MULTS, _BASES, "0.5"), 1000),
+    ("shop_row_bid", (True, _ORE_FREE, None, ["ore_metal"], _MULTS, _BASES, "0.5"), 4),
+    ("shop_row_bid", (True, _ORE, None, ["food"], _MULTS, _BASES, "0.5"), 0),
+    ("shop_row_bid", (False, _ORE, None, ["ore_metal"], _MULTS, _BASES, "0.5"), 0),
+    ("shop_row_bid", (True, _RELIC, None, ["weapons"], _MULTS, _BASES, "0.5"), 0),
+    ("shop_row_bid", (True, None, None, ["food"], _MULTS, _BASES, "0.5"), 0),
+    ("shop_row_bid", (True, _ORE, None, ["ore_metal"], _MULTS, {}, "0.5"), 1000),   # items.price > 0 wins
+    ("shop_row_bid", (True, _ORE_FREE, None, ["ore_metal"], _MULTS, {}, "0.5"), 0),  # no base at all
+]

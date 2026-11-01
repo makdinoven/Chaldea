@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, SmallInteger, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime, Numeric, CheckConstraint
+from sqlalchemy import Column, Integer, SmallInteger, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime, Numeric, CheckConstraint, Date
 from sqlalchemy.orm import relationship
 from database import Base
 from sqlalchemy.dialects import mysql as mysql_types
@@ -611,6 +611,9 @@ class EconRegion(Base):
     last_run_id = Column(BigInteger, nullable=True)
     last_tick_at = Column(DateTime, nullable=True)
     low_stability_since = Column(DateTime, nullable=True)  # FEAT-187 riot clock (set / cleared by the tick)
+    # FEAT-193 guild: the per-recount allowance (shares of the purse / positive treasury for food), set by the tick
+    guild_budget = Column(BigInteger, nullable=False, default=0, server_default="0")
+    guild_food_budget = Column(BigInteger, nullable=False, default=0, server_default="0")
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -1014,6 +1017,55 @@ class EconCaravan(Base):
         Index("ix_econ_caravans_from", "from_region_id", "status"),
         Index("ix_econ_caravans_finished", "finished_at"),
     )
+
+
+# --------------------------------------------------------------------------- FEAT-193 guild orders (migration 036)
+
+class EconGuildOrder(Base):
+    """One opening of a region's guild order for a goods group (history kept). Regions: no FK.
+
+    open_key = 'r<region>:<group>' while status = 'open', NULL afterwards (UNIQUE: one open order per pair)."""
+
+    __tablename__ = "econ_guild_orders"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    region_id = Column(Integer, nullable=False)
+    group_code = Column(String(32), nullable=False)
+    open_key = Column(String(48), nullable=True)
+    status = Column(String(16), nullable=False)                # open | filled | closed
+    close_reason = Column(String(32), nullable=True)           # filled | no_shortage | no_money | disabled | region_left
+    units_total = Column(Numeric(16, 3), nullable=False)
+    units_left = Column(Numeric(16, 3), nullable=False)
+    units_filled = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    price_mult = Column(Numeric(10, 3), nullable=False)
+    markup_pct = Column(Numeric(6, 2), nullable=False)
+    pieces = Column(Integer, nullable=False, default=0, server_default="0")
+    paid_total = Column(BigInteger, nullable=False, default=0, server_default="0")
+    paid_treasury = Column(BigInteger, nullable=False, default=0, server_default="0")
+    hand_ins = Column(Integer, nullable=False, default=0, server_default="0")
+    opened_run_id = Column(Integer, nullable=False)
+    last_run_id = Column(Integer, nullable=False)
+    closed_run_id = Column(Integer, nullable=True)
+    opened_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("open_key", name="uq_econ_guild_orders_open"),
+        Index("ix_econ_guild_orders_region", "region_id", "status"),
+        Index("ix_econ_guild_orders_status", "status", "id"),
+        Index("ix_econ_guild_orders_closed", "closed_at"),
+    )
+
+
+class EconGuildXpDay(Base):
+    """Base guild XP granted to a character on one UTC day (the daily cap counter)."""
+
+    __tablename__ = "econ_guild_xp_days"
+
+    character_id = Column(Integer, primary_key=True, autoincrement=False)
+    day = Column(Date, primary_key=True)
+    xp = Column(Integer, nullable=False, default=0, server_default="0")
 
 
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the

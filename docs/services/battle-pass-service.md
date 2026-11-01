@@ -44,6 +44,8 @@ character-service answers `duplicate=true` and adds **neither XP nor gold**. Del
 - both: `econ_postings.created_at >= season.start_date` and `econ_operations.op_type <> 'genesis'`.
 - FEAT-191: `mint_player` (a player mints ore at a «Монетчик», `emission → character`) is deliberately **not**
   excluded — minting counts as earned gold. `mint_court` / `season_quota` never touch a character account.
+- FEAT-193: `guild_order` (a player fills a region's guild order, `population_purse` / `region_treasury → character`)
+  is deliberately **not** excluded either — guild hand-ins count as earned gold (user decision).
 
 Type-agnostic like before (trades, auction refunds count as earned; bids, purchases as spent). Old
 `gold_transactions` rows are not merged — progress of these two mission types in the season running at the FEAT-181

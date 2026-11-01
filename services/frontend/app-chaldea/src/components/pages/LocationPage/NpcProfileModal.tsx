@@ -11,6 +11,7 @@ import NpcQuestsModal from './NpcQuestsModal';
 import NpcAuctionModal from './NpcAuctionModal';
 import BankModal from './BankModal/BankModal';
 import MintModal from './MintModal/MintModal';
+import GuildModal from './GuildModal/GuildModal';
 import TeleportMenu from './TeleportMenu';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
@@ -46,6 +47,7 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   const [auctionOpen, setAuctionOpen] = useState(false);
   const [bankOpen, setBankOpen] = useState(false);
   const [mintOpen, setMintOpen] = useState(false);
+  const [guildOpen, setGuildOpen] = useState(false);
   /** The teleport dialog sits on top of this one and owns Escape while open. */
   const [teleportOpen, setTeleportOpen] = useState(false);
   const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
@@ -138,6 +140,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
         npcName={npc.name}
         npcAvatar={npc.avatar}
         onClose={() => setMintOpen(false)}
+      />
+    );
+  }
+
+  if (guildOpen && npc) {
+    return (
+      <GuildModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setGuildOpen(false)}
       />
     );
   }
@@ -362,6 +375,26 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v8m-2.5-6.5h3.75a1.75 1.75 0 010 3.5h-2.5a1.75 1.75 0 000 3.5H14.5" />
               </svg>
               Монетный двор
+            </button>
+          )}
+
+          {/* Guild button — «Гильдия торговцев» NPCs, character in the same location (FEAT-193) */}
+          {npc.npc_role === 'guild' && isCharacterHere && characterId && (
+            <button
+              onClick={() => setGuildOpen(true)}
+              className="
+                mt-2 w-full px-6 py-3 rounded-card
+                border border-gold/50 bg-gold/10
+                text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                hover:bg-gold/20 hover:border-gold/80
+                transition-all duration-200
+                flex items-center justify-center gap-2
+              "
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              Гильдия торговцев
             </button>
           )}
 

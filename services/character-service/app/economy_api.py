@@ -9,9 +9,11 @@ Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,
          FEAT-187: /characters/admin/economy/events/{templates[/{id}],active,start,history,{event_id}/cancel}
          FEAT-191: /characters/admin/economy/mint[/countries/{id}|/items[/{item_id}]|/quotas]
          FEAT-192: /characters/admin/economy/caravans[/overview|/pairs]
+         FEAT-193: /characters/admin/economy/guild
 Player:  FEAT-184 banks: /characters/economy/bank/{npc/{npc_id}[/deposit|/withdraw|/transfer|/send|/loan|/repay],
                           summary,regions} (JWT + ownership; POST also the FEAT-145 gate via locations-service)
          FEAT-191 mint: /characters/economy/mint/npc/{npc_id}[/mint] (same gate as the banks)
+         FEAT-193 guild: /characters/economy/guild/npc/{npc_id}[/hand-in] (same gate as the banks)
 RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings
 (regions/fill and merchants/fund need economy:settings AND economy:emit).
 
@@ -30,6 +32,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session, sessionmaker
 
+import crud
 import database
 import econ_core as core
 import econ_ledger
@@ -39,6 +42,7 @@ import economy_bank_crud
 import economy_caravan_crud
 import economy_crud
 import economy_events_crud
+import economy_guild_crud
 import economy_mint_crud
 import locations_client
 import economy_merchants_crud
@@ -1005,4 +1009,117 @@ def list_caravans(
     current_user: UserRead = Depends(require_permission("economy:read")),
 ):
     return _read_or_error(db, lambda: economy_caravan_crud.list_caravans(
+        db, status=status, region_id=region_id, group_code=group_code or None, limit=limit, offset=offset))
+
+
+# ---------------------------------------------------------------------------
+# FEAT-193 guild orders — player API (contract 3.6 / 3.10)
+# ---------------------------------------------------------------------------
+# Gate order = the banker / minter order: 1 JWT + ownership + player -> 2 guild NPC exists / role / alive -> 3 activity
+# lock (POST) -> 4 same location -> 5 FEAT-145 gate (POST, fail-closed, no open DB transaction) -> 6 the NPC's region
+# participates and guild orders are enabled (POST 409; the view answers working=false with the reason).
+# The quest XP book multiplier is resolved over HTTP BEFORE any DB transaction (fail-open to 1.0).
+
+@router.get("/economy/guild/npc/{npc_id}", response_model=schemas.GuildView)
+def get_guild_view(
+    npc_id: int,
+    character_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """The guild window at this NPC (read-only, no gate)."""
+    multiplier = crud.get_character_xp_multiplier(character_id, crud.XP_SOURCE_QUEST)
+
+    def action():
+        ctx = economy_guild_crud.guild_context(db, npc_id, character_id, current_user.id, write=False)
+        return economy_guild_crud.build_view(db, ctx, xp_multiplier=multiplier)
+    return _read_or_error(db, action)
+
+
+def _guild_precheck(db: Session, npc_id: int, character_id: int, user_id: int):
+    """Steps 1-4; the read transaction is always closed before the gate's HTTP call."""
+    try:
+        return economy_guild_crud.resolve_guild(db, npc_id, character_id, user_id, write=True)
+    except economy_crud.EconomyApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except SQLAlchemyError:
+        logger.exception("guild precheck failed")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить данные гильдии")
+    finally:
+        db.rollback()
+
+
+def _guild_level_up(db: Session, character_id: int) -> None:
+    """Level-up check after a committed XP grant; failures are only logged (the next XP grant re-runs it)."""
+    try:
+        total = economy_guild_crud.passive_experience(db, character_id)
+        if total is not None:
+            crud.check_and_update_level(db, character_id, total)
+    except Exception:
+        db.rollback()
+        logger.exception("guild level-up check failed: character=%s", character_id)
+
+
+def _guild_commit(db: Session, npc_id: int, body: schemas.GuildHandInIn, user_id: int, multiplier: float) -> dict:
+    """Ensure the XP day row (own short commit), then steps 1-4 + 6 and the flow in ONE transaction, COMMIT."""
+    character_id = body.character_id
+    try:
+        economy_guild_crud.guild_context(db, npc_id, character_id, user_id, write=True)
+        economy_guild_crud.ensure_xp_day_row(db, character_id)
+        ctx = economy_guild_crud.guild_context(db, npc_id, character_id, user_id, write=True)
+        result = economy_guild_crud.hand_in(db, ctx, body, xp_multiplier=multiplier)
+        db.commit()
+    except economy_crud.EconomyApiError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except IntegrityError:
+        db.rollback()
+        logger.warning("guild conflict: npc=%s character=%s", npc_id, character_id)
+        raise HTTPException(status_code=409, detail=economy_guild_crud.MSG_RETRY)
+    except core.EconomyError:
+        db.rollback()
+        logger.exception("guild hand-in rejected: npc=%s character=%s", npc_id, character_id)
+        raise HTTPException(status_code=400, detail=BANK_REJECTED)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("guild hand-in failed: npc=%s character=%s", npc_id, character_id)
+        raise HTTPException(status_code=500, detail=GENERIC_ERROR)
+    logger.info("guild hand-in: user=%s character=%s npc=%s item=%s qty=%s total=%s xp=%s op=%s", user_id,
+                character_id, npc_id, body.item_id, result["quantity"], result["total"], result["xp"],
+                result["operation_id"])
+    if result["xp"] > 0:
+        _guild_level_up(db, character_id)
+    view = _read(db, lambda: economy_guild_crud.build_view(db, ctx, xp_multiplier=multiplier))
+    return {**result, "wallet": view["wallet"], "view": view}
+
+
+@router.post("/economy/guild/npc/{npc_id}/hand-in", response_model=schemas.GuildActionOut)
+async def post_guild_hand_in(npc_id: int, body: schemas.GuildHandInIn, db: Session = Depends(get_db),
+                             current_user: UserRead = Depends(get_current_user_via_http)):
+    ctx = await run_in_threadpool(_guild_precheck, db, npc_id, body.character_id, current_user.id)
+    try:
+        gate_open = await locations_client.check_npc_gate(body.character_id, ctx.location_id, npc_id)
+    except locations_client.GateUnavailable:
+        raise HTTPException(status_code=503, detail=economy_guild_crud.MSG_GATE_UNAVAILABLE)
+    if not gate_open:
+        raise HTTPException(status_code=403, detail=economy_guild_crud.MSG_GATE_CLOSED)
+    multiplier = await crud.get_character_xp_multiplier_async(body.character_id, crud.XP_SOURCE_QUEST)
+    return await run_in_threadpool(_guild_commit, db, npc_id, body, current_user.id, multiplier)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-193 guild orders — admin API (contract 3.10): economy:read; params via PUT /admin/economy/sim
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/economy/guild", response_model=schemas.GuildAdminOut)
+def get_guild_admin(
+    status: str = Query("open", pattern=schemas.GUILD_STATUS_RE),
+    region_id: Optional[int] = Query(None, ge=1),
+    group_code: Optional[str] = Query(None, max_length=32),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=schemas.GUILD_LIST_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read_or_error(db, lambda: economy_guild_crud.admin_view(
         db, status=status, region_id=region_id, group_code=group_code or None, limit=limit, offset=offset))

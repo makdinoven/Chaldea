@@ -56,6 +56,7 @@ LOAN_OPEN_STATUSES = (LOAN_ACTIVE, LOAN_OVERDUE)
 STAT_KEYS = (
     "interest_paid", "interest_skipped", "resident_interest_paid", "loan_interest", "penalties",
     "resident_loan_interest", "resident_in", "resident_out", "resident_issued", "resident_repaid", "matured", "merged",
+    "player_loan_income", "profit_to_treasury",
 )
 
 _ZERO = Decimal(0)
@@ -475,6 +476,9 @@ class BankInput:
     deposits: Sequence[DepositState] = ()   # open deposits of this bank, ascending id
     loans: Sequence[LoanState] = ()         # active/overdue loans of this bank, ascending id
     params: SimParams = DEFAULT_PARAMS
+    # Profit to the treasury (bank fix): money that moved outside the pass since the previous one.
+    loan_income_received: int = 0           # interest / penalties of player loans actually repaid or collected
+    interest_paid_outside: int = 0          # deposit interest paid outside the pass (matured term withdrawn early)
 
 
 @dataclass(frozen=True)
@@ -491,13 +495,15 @@ class BankOutput:
 
 
 def bank_legs(region_id: int, *, player_interest: int, resident_interest: int, resident_loan_interest: int,
-              main_in: int, main_out: int) -> List[core.Leg]:
+              main_in: int, main_out: int, profit_to_treasury: int = 0) -> List[core.Leg]:
     """Legs of one ``bank_tick`` operation (at most one per (src, dst, leg_type), zero legs omitted):
-    ``bank -> vault`` interest, ``bank -> purse`` interest, ``purse -> bank`` interest, and the residents' ``main``
-    flows netted into one ``purse -> bank`` or ``bank -> purse`` leg."""
+    ``bank -> vault`` interest, ``bank -> purse`` interest, ``purse -> bank`` interest, the residents' ``main``
+    flows netted into one ``purse -> bank`` or ``bank -> purse`` leg, and the profit ``bank -> region treasury``
+    (``main``; the tick posts with ``apply_tax=False``, so no country tax on it)."""
     bank = core.AccountRef.bank(region_id)
     vault = core.AccountRef.bank_deposits(region_id)
     purse = core.AccountRef.purse(region_id)
+    treasury = core.AccountRef.region(region_id)
     legs: List[core.Leg] = []
     net = int(main_in) - int(main_out)
     for src, dst, amount, leg_type in (
@@ -506,14 +512,29 @@ def bank_legs(region_id: int, *, player_interest: int, resident_interest: int, r
         (purse, bank, resident_loan_interest, core.LEG_INTEREST),
         (purse, bank, net, core.LEG_MAIN),
         (bank, purse, -net, core.LEG_MAIN),
+        (bank, treasury, profit_to_treasury, core.LEG_MAIN),
     ):
         if amount > 0:
             legs.append(core.Leg(src, dst, int(amount), leg_type))
     return legs
 
 
+def profit_to_treasury(*, received: int, paid: int, free: int, params: SimParams = DEFAULT_PARAMS) -> int:
+    """The bank's realized net interest income of one pass sent to the region treasury.
+
+    ``received`` = interest / penalties actually received (residents' loan interest of the pass + player loan interest
+    repaid or collected since the previous pass), ``paid`` = deposit interest actually paid out (players and residents).
+    ``floor(max(0, received - paid) x bank_profit_to_treasury_share)``, at most ``free`` (the lendable money — the
+    residents' reserve is never touched). A loss is not carried over, nor is a profit the free money could not cover."""
+    net = int(received) - int(paid)
+    if net <= 0:
+        return 0
+    share = _clamp(_p(params, "bank_profit_to_treasury_share"), _ZERO, _ONE)
+    return max(0, min(_floor(Decimal(net) * share), int(free)))
+
+
 def bank_step(inp: BankInput) -> BankOutput:
-    """The whole bank pass of one bank (3.6 steps 1–8)."""
+    """The whole bank pass of one bank (3.6 steps 1–8, plus the profit sweep to the treasury)."""
     params = inp.params
     now = inp.now
     stats = {k: 0 for k in STAT_KEYS}
@@ -664,11 +685,21 @@ def bank_step(inp: BankInput) -> BankOutput:
     if inp.enabled and seconds_bank > 0:
         factor = rate_factor_next(factor, income, cost_base, params, seconds_bank)
 
-    # 8. Legs.
+    # 8. Profit to the treasury (always, also for a disabled bank): see :func:`profit_to_treasury`.
+    player_income = max(0, int(inp.loan_income_received))
+    stats["player_loan_income"] = player_income
+    profit = profit_to_treasury(
+        received=player_income + res_loan_paid,
+        paid=player_paid + res_paid + max(0, int(inp.interest_paid_outside)),
+        free=lendable(bank, res_deposits, params), params=params)
+    bank -= profit
+    stats["profit_to_treasury"] = profit
+
+    # 9. Legs.
     legs = bank_legs(
         inp.region_id, player_interest=player_paid, resident_interest=res_paid, resident_loan_interest=res_loan_paid,
         main_in=stats["resident_in"] + stats["resident_repaid"],
-        main_out=stats["resident_out"] + stats["resident_issued"],
+        main_out=stats["resident_out"] + stats["resident_issued"], profit_to_treasury=profit,
     )
     residents = ResidentState(deposits=res_deposits, loans=res_loans, dep_carry=q6(res_dep_carry),
                               loan_carry=q6(res_loan_carry), accrued_at=now)

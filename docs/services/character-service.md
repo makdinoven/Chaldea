@@ -836,7 +836,7 @@ sold_value, tax, restock_items, restock_value, upkeep}` или `null`. Удал�
 него выдаются займы и платятся проценты) и `bank_deposits` (хранилище вкладов игроков = Σ `amount + interest_accrued`
 открытых строк; никогда не идёт в займы → вклад игрока всегда снимаем). Чистая математика — `app/econ_bank.py`,
 слой БД — `app/economy_bank_crud.py` (разделы: общие помощники → API игрока (B4) → тик (B5) → админка (B6)).
-Параметры — 20 ключей `bank_*` в `econ_sim_settings.params` (`econ_tick.load_params`).
+Параметры — 21 ключ `bank_*` в `econ_sim_settings.params` (`econ_tick.load_params`).
 
 ### Порядок блокировок (3.8, общий для всех потоков экономики)
 
@@ -867,9 +867,24 @@ bank_loans (asc id) → characters (asc id) → econ_accounts (asc id)`. Люб�
    региона; одна транзакция на банк: `econ_banks(X)` FOR UPDATE (пропуск, если `last_run_id` = этот запуск) → время
    берётся **после** блокировки → вклады → займы → `econ_bank.bank_step` (проценты, сроки, займы, жители, фактор
    ставки) → все строки записываются → одна операция `bank_tick` (ключ `bank_tick:<run>:b:<X>`, `apply_tax=False`,
-   в metadata — счётчики) → `last_run_id`, `last_tick_at`, `accrued_at`, `last_stats` (+ `factor`). Банк включён для
-   начислений, только если флаг стоит **и** регион существует; «жители» — только в симулируемом регионе
+   в metadata — счётчики) → `last_run_id`, `last_tick_at`, `accrued_at`, `last_stats` (+ `factor`, + `marks`). Банк
+   включён для начислений, только если флаг стоит **и** регион существует; «жители» — только в симулируемом регионе
    (`econ_regions.template_code` и `population > 0`).
+   **Прибыль в казну** (фикс 2026-11-01, `econ_bank.profit_to_treasury`): в каждом проходе (и у закрытого банка тоже)
+   реализованный чистый процентный доход банка — `получено − выплачено`, где получено = проценты по займам жителей
+   этого прохода + проценты/пени по займам игроков, реально погашенные или взысканные с прошлого прохода, а выплачено =
+   проценты по вкладам игроков и жителей этого прохода + проценты по вкладам, выплаченные вне прохода (досчёт срочного
+   вклада при снятии) — положительная часть × `bank_profit_to_treasury_share` (по умолчанию 1, диапазон 0…1), но не
+   больше свободных денег (`lendable` — резерв жителей не трогается), уходит ногой `B(X) → T(X)` (`main`) в той же
+   операции `bank_tick` (без налога стране). Счётчики `player_loan_income` и `profit_to_treasury` — в `last_stats`
+   (админка «Банки» показывает их в «последнем пересчёте»). Убыток и не покрытый свободными деньгами остаток не
+   переносятся. Доход по займам игроков считается по метке: Σ по всем займам банка `max(0, paid_total +
+   collected_total − principal)` (сначала возвращается тело займа, потом засчитываются проценты); выплаты вне прохода —
+   по метке Σ `interest_total` всех вкладов банка. Метки лежат в `last_stats.marks` (`loan_income`,
+   `deposit_interest`); при первом проходе после выкладки метки нет → берётся текущее значение (накопленная раньше
+   прибыль не выгребается — её можно вернуть кнопкой «Вернуть капитал в казну»). Известные упрощения: списанный займ
+   прибыль не уменьшает (тело не вернулось → дохода просто нет); сгоревшие при досрочном закрытии срочного вклада
+   проценты (`V → B`) в «получено» не засчитываются (консервативно).
 3. **Взыскание** — займы `active|overdue` с `due_at <= now`, по возрастанию id; одна транзакция на займ: долг
    доначисляется до «сейчас», затем `econ_bank.plan_collection` (вклады до востребования → срочные (сначала
    начисленные проценты) → кошелёк, не больше, чем есть) → операция `loan_collect` (ключ `loan_collect:<run>:l:<id>`:
@@ -957,7 +972,7 @@ bank_loans (asc id) → characters (asc id) → econ_accounts (asc id)`. Люб�
 | `GET /banks` | — | `{items: [BankAdminItem], totals: {banks, enabled, own_funds, player_deposits, resident_deposits, player_loans_debt, resident_loans, debtors}}` — только регионы со строкой `econ_banks` |
 | `GET /banks/debtors` (объявлен до `/banks/{region_id}`) | — | список `{loan_id, character_id, character_name, region_id, region_name, debt, principal, due_at, overdue_days, penalty_total}` — открытые займы после `due_at` с долгом, долг по убыванию |
 | `GET /banks/{region_id}` | — | `{item, deposits (открытые, 500 новейших), loans (открытые)}` — поля игрока + `character_id`, `character_name` (+ `status` у вкладов); 404 «Банк не найден» (редактор региона читает флаг отсюда) |
-| `PUT /banks/{region_id}` | `BankFlagIn {is_enabled, seed_capital = true}` | `BankAdminItem`; 404 «Регион не найден»; создаёт строку (`accrued_at = now`); первое включение с `seed_capital` и `capital_seeded_at IS NULL` → `bank_capital` `T(X) → B(X)` на `min(bank_start_capital, max(0, казна))`, ключ `bank_capital:r:<X>:seed`, `capital_seeded_at = now` даже при 0 (повторное включение капитал не берёт) |
+| `PUT /banks/{region_id}` | `BankFlagIn {is_enabled, seed_capital = true}` | `BankAdminItem`; 404 «Регион не найден»; создаёт строку (`accrued_at = now`); первое включение с `seed_capital` и `capital_seeded_at IS NULL` → `bank_capital` `T(X) → B(X)` на `min(bank_start_capital, max(0, казна − econ_regions.treasury_target))` (только излишек казны над её резервом; фикс 2026-11-01 — раньше брал всю казну, и жалованье падало до 0), ключ `bank_capital:r:<X>:seed`, `capital_seeded_at = now` даже при 0 (повторное включение капитал не берёт) |
 | `POST /banks/{region_id}/capital` | `BankCapitalIn {direction: in\|out, amount 1…1e9, comment 3…500}` | `{operation_id, bank_balance, treasury_balance}`; `in` больше положительной казны → 400 «В казне региона только N»; `out` больше `lendable` (резерв жителей остаётся) → 400 «Банк может вернуть не больше N»; нет строки банка → 404; без налога; ключ `bank_capital:r:<X>:p<последняя проводка B(X)>:<dir>:<amount>` |
 | `POST /banks/loans/{loan_id}/write-off` | `BankWriteOffIn {comment}` | `BankLoanOut`; долг доначисляется до «сейчас», затем `written_off += debt`, `debt = 0`, `status = written_off`, `active_character_id = NULL`, `closed_by_user_id`, `note`; денег не двигает (убыток банка), снимает «Должник»; закрытый → 409 «Займ уже закрыт», нет → 404 |
 
@@ -1292,3 +1307,109 @@ econ_caravans (asc id) → econ_mint_seasons → npc_shop_items (asc id) → eco
 (`CARD_RECENT_HOURS`), без отменённых; одна строка на (группа, другой регион), «в пути» важнее; сначала в пути, затем
 по порядку групп; не больше 6 (`CARD_MAX_LINES`) в списке; другой регион удалён → строка выпадает. **Без количеств,
 цен и денег.**
+
+## Guild orders (FEAT-193)
+
+Этап 5в экономики: регион с нехваткой группы товаров выставляет заказ в «Гильдии торговцев»; игрок приносит любые
+предметы этой группы к НПС с ролью `guild` в этом регионе и сразу получает марки из кошелька жителей (за еду —
+доплата из казны) и немного опыта. Новых денег заказы не создают. Модули: чистый `app/econ_guild.py` (план заказов,
+цена, приём, опыт), БД — `app/economy_guild_crud.py`, шаг тика — `econ_tick._process_region` (SAVEPOINT в конце) +
+`econ_tick._guild_sweep`, роутер — `app/economy_api.py`.
+
+### Пересчёт заказов (3.2 / 3.3)
+- Внутри транзакции региона: открытые строки `econ_guild_orders` региона блокируются сразу после строк событий;
+  **в самом конце шага** (после торговцев, перед строкой истории) SAVEPOINT считает бюджет и заказы по **итоговому**
+  запасу, норме, `price_mult` и караванам в пути к региону (`econ_caravans in_transit`, вычитаются — решение 6).
+- Бюджет на пересчёт (на строке `econ_regions`, не копится): `guild_budget = floor(max(0, кошелёк) ×
+  guild_purse_share)`, `guild_food_budget = floor(max(0, казна) × guild_treasury_food_share)`.
+- Заказ открыт ⇔ `guild_enabled = 1`, норма > 0, `запас + в пути < норма × guild_open_threshold_pct %`, объём
+  `floor3(норма − запас − в пути)` (до **полной** нормы) × базовая цена × `price_mult` ≥ `guild_min_order_value` и
+  есть бюджет (для еды — бюджет + еда-бюджет). Каждый пересчёт: открытая строка обновляется (`units_total =
+  units_left` = новый объём, снимок `price_mult` / `markup_pct`, счётчики сданного копятся), новая — INSERT, лишняя —
+  `closed` (`no_shortage | no_money | disabled`). Выполненная (`filled`) не переоткрывается — при сохранении нехватки
+  открывается **новая** строка (история хранится).
+- Сбой шага гильдии откатывает только SAVEPOINT (заказы и бюджет — прежние), регион всё равно проходит;
+  `econ_tick_runs.error` — `гильдия — ошибка в регионах: <id>`. Повтор торговцев другим исполнителем
+  (`DuplicateOperation`) пропускает и шаг гильдии. `RunSummary`: `guild_opened, guild_refreshed, guild_closed,
+  guild_failures, guild_failed_region_ids, guild_sweep_failed`.
+- **Уборка** `_guild_sweep` (после цикла регионов, до чеканки; одна короткая транзакция): регионы, вышедшие из
+  экономики, — бюджеты в 0, их открытые заказы — `closed / region_left`; строки `econ_guild_xp_days` старше 7 дней
+  удаляются. Ошибка — `гильдия — ошибка закрытия заказов`.
+- Нет миграции 036 → шаг и уборка пропускаются.
+
+### Цена за штуку (3.5, правка PM)
+`offer = floor(item_base × price_mult(снимок заказа) × (1 + markup_pct(снимок)/100))`; если предмет продаёт какой-то
+торговец региона — `offer = min(offer, floor(самая дешёвая цена продажи × 0,5))` (`econ_core.ask_discount_floor`);
+`unit_price = max(лучшая цена скупки торговцами региона, offer)`; `≤ 0` → отказ. `item_base` — `items.price`, при 0 —
+базовая цена группы. «Торговцы региона» — НПС с активными строками `npc_shop_items`, не мёртвые, чьё место
+резолвится в регион (живые **и** legacy, например в подземелье региона, с множителем 1). Строка продажи — как в окне
+магазина (`origin='player'` — только пока есть на складе, admin — и при 0). Формулы — общие `econ_core.shop_row_prices
+/ shop_row_bid / merchant_buys_groups / effective_shop_stock` (те же, что у магазина locations-service). Чтение без
+блокировок.
+
+### Игрок у «Гильдии торговцев» (3.6 / 3.6a)
+Роль НПС `guild`. Проверки — как у банкира / монетчика: JWT + свой персонаж игрока (403) → НПС есть / роль / жив
+(404 / 409) → блокировка активности (POST, 409) → та же локация (400) → гейт FEAT-145 (POST, fail-closed 403/503) →
+регион участвует и `guild_enabled = 1` (POST 409 «Гильдия не принимает заказы: …»; окно отвечает `working=false`).
+Не принимаются: без группы / вне рынка (свиток, рецепт, легендарное+, админ-override) 400; квестовые
+(`quest_objectives collect|deliver`) 400; нет открытого заказа группы 409; цена ≤ 0 400. Только обычные стопки.
+
+Сдача — одна транзакция (роутер коммитит): `econ_regions` FOR UPDATE → повтор `guild:{character}:{request_id}` (409
+«Операция уже выполнена») → правила → `econ_region_goods(группа)` → открытая строка заказа по `open_key` → цена →
+деньги (`min(бюджет, баланс)`, без блокировки счетов) → `accept`: целые штуки, пока заказу что-то нужно (последняя
+может перекрыть), не больше денег; 0 → 409 «У жителей сейчас нет денег…» → строка дня опыта FOR UPDATE → списание
+из `character_inventory` (проверка «не хватает» — по запрошенному числу) → `stock += штуки × units_per_item`, заказ
+уменьшается (0 → `filled`), бюджеты уменьшаются → проводка `guild_order` (последний денежный шаг; `InsufficientFunds`
+→ 409 «Деньги жителей изменились…») → `character_attributes.passive_experience += опыт` → COMMIT → проверка уровня.
+Частичный приём — 200 с `partial=true` и причиной. Опыт: `floor(марки × 0,1)` (0,05 — если предмет продаёт торговец
+региона), дневной лимит `guild_xp_daily_cap` базового опыта на персонажа за UTC-сутки (`econ_guild_xp_days`), книга
+опыта квестов (`XP_SOURCE_QUEST`) умножает после лимита; множитель берётся по HTTP **до** транзакции (fail-open 1.0).
+Нет строки `character_attributes` → опыт 0, сдача проходит. Всё — в одной транзакции с проводкой (повтор / сбой
+откатывает и опыт).
+
+Кросс-владение: character-service пишет `character_inventory` (inventory-service) и
+`character_attributes.passive_experience` (character-attributes-service) напрямую SQL — прецеденты чеканки и
+`add_rewards_to_character`.
+
+### Книга счетов
+| Тип | Ноги | Ключ |
+|---|---|---|
+| `guild_order` | `population_purse(R) → character` + (только еда) `region_treasury(R) → character`, `LEG_MAIN`, `apply_tax=False` | `guild:{character_id}:{request_id}` |
+
+`econ_core.GUILD_OP_TYPES` ⊂ `OP_TYPES`, не источник, без комментария. Метаданные: `order_id, npc_id, item_id,
+item_name, group, quantity, requested, unit_price, units, price_mult, markup_pct, best_bid, cheapest_ask, paid_purse,
+paid_treasury, xp_base, xp, xp_rate, xp_multiplier`. battle-pass считает её «заработанным золотом».
+
+### Таблицы (миграция `036_econ_guild_orders`, без FK, без ENUM, перезапускаемая)
+- `econ_guild_orders` — одно «открытие» заказа: `region_id, group_code, open_key` (`r<регион>:<группа>` пока
+  открыт, иначе NULL; UNIQUE → не больше одного открытого заказа на пару), `status open|filled|closed`,
+  `close_reason filled|no_shortage|no_money|disabled|region_left`, `units_total / units_left / units_filled`,
+  `price_mult, markup_pct` (снимок), `pieces, paid_total, paid_treasury, hand_ins`, `opened/last/closed_run_id`,
+  `opened_at, updated_at, closed_at`.
+- `econ_guild_xp_days (character_id, day)` PK, `xp` — базовый опыт гильдии за UTC-день.
+- `econ_regions.guild_budget`, `guild_food_budget` BIGINT NOT NULL DEFAULT 0.
+- Откат: удалить две колонки и обе таблицы (проводки и выданный опыт остаются).
+
+### Параметры (`econ_sim_settings.params`, `PUT /admin/economy/sim`, право `economy:settings`)
+`guild_enabled` (1, 0…1), `guild_markup_pct` (20, 0…200), `guild_open_threshold_pct` (80, 1…100),
+`guild_min_order_value` (50, 1…1e6), `guild_purse_share` (0.25, 0…1), `guild_treasury_food_share` (0.25, 0…1),
+`guild_xp_per_mark` (0.1, 0…10), `guild_xp_per_mark_merchant_items` (0.05, 0…10), `guild_xp_daily_cap` (200, 0…1e6;
+0 = без опыта). Наценка и множитель цены берутся из снимка заказа — изменение наценки действует со следующего пересчёта.
+
+### Порядок блокировок (3.7, заменяет FEAT-192 3.9)
+`econ_regions (asc region_id) → econ_region_goods (asc region_id, group_code) → econ_region_events (asc id) →
+econ_caravans (asc id) → econ_guild_orders (asc id) → econ_guild_xp_days → econ_mint_seasons → npc_shop_items (asc id)
+→ econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans (asc id) → character_inventory (asc id) → characters
+(asc id) → econ_accounts (asc id) → character_attributes`. Шаг региона: `… → события → заказы → npc_shop_items →
+characters → econ_accounts` (бюджет — на уже заблокированной строке региона). Сдача: `econ_regions →
+econ_region_goods(группа) → econ_guild_orders → econ_guild_xp_days → character_inventory → characters → econ_accounts →
+character_attributes`; `npc_shop_items` / `characters` торговцев читаются без блокировок. INSERT заказов — только под
+блокировкой `econ_regions` региона; строка дня опыта создаётся в отдельной короткой транзакции.
+
+### API (префикс `/characters`)
+| Метод и путь | Доступ | Описание |
+|---|---|---|
+| `GET /economy/guild/npc/{npc_id}?character_id=` | JWT, свой персонаж | `GuildView {npc_id, npc_name, region_id (null — нет региона), region_name, working, closed_reason, markup_pct, orders[{order_id, group_code, group_name, is_food, units_total, units_left, filled_pct, payable}], offers[{item_id, name, image, group_code, order_id, have, unit_price, units_per_item, max_accept, capped_by_merchants, xp_rate}], refused[{item_id, name, image, group_code, have, reason}], xp{per_mark, per_mark_merchant_items, daily_cap, left_today, multiplier}, wallet}`; без чисел бюджета |
+| `POST /economy/guild/npc/{npc_id}/hand-in` | JWT + гейт | `GuildHandInIn {character_id ≥1, item_id ≥1, quantity 1…10000, request_id [A-Za-z0-9-]{8,64}}` → `GuildActionOut {message, operation_id, quantity, requested, partial, unit_price, total, xp, xp_capped, wallet, view}`; `message` уже содержит «и N опыта» |
+| `GET /admin/economy/guild?status=open/filled/closed/all&region_id=&group_code=&limit=50&offset=0` | `economy:read` | `GuildAdminOut {params (9), totals {open, units_left_value, paid_last_7d, hand_ins_last_7d, xp_last_7d}, regions [{region_id, region_name, guild_budget, guild_food_budget, open_orders, masters [{npc_id, name, npc_status, location_name}]}], total, items [...]}`; `status=closed` — закрытые **и** выполненные; неизвестная группа → 400; `limit 1…200` |
+| `GET /economy/regions/{id}/card` | публично | новое поле `guild_wants [{group_code, group_name}]` (обе формы; только при живом НПС гильдии в регионе, открытый заказ с остатком и бюджетом; до 12; без чисел) |

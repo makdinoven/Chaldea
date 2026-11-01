@@ -898,6 +898,14 @@ SQL_REGION_SIMULATED = (
     "WHERE e.region_id = :r AND e.template_code IS NOT NULL AND e.population > 0"
 )
 SQL_ACCOUNT_BALANCE = "SELECT balance FROM econ_accounts WHERE kind = :kind AND ref_id = :ref_id"
+# Profit sweep marks (cumulative, all loan / deposit rows of the bank — rows are never deleted). A loan's realized
+# income = what came back above its principal (principal first: interest counts only once the principal is back).
+SQL_LOAN_INCOME_MARK = (
+    "SELECT COALESCE(SUM(CASE WHEN paid_total + collected_total > principal "
+    "THEN paid_total + collected_total - principal ELSE 0 END), 0) FROM bank_loans WHERE region_id = :r"
+)
+SQL_DEPOSIT_INTEREST_MARK = "SELECT COALESCE(SUM(interest_total), 0) FROM bank_deposits WHERE region_id = :r"
+PROFIT_MARKS_KEY = "marks"           # last_stats[marks] = {"loan_income": int, "deposit_interest": int}
 
 
 @dataclass
@@ -1055,6 +1063,13 @@ def tick_bank(db: Session, region_id: int, *, run_id: int, params, clock) -> Ban
     now = clock().replace(microsecond=0)
     deposits = _lock_open_deposits_of_bank(db, region_id)
     loans = _lock_open_loans(db, region_id=region_id)
+    # Realized money since the previous pass (repay / collect / withdraw all hold econ_banks(X), so the sums are
+    # consistent with the marks). No marks yet (first pass after the fix) -> baseline now, nothing back-dated.
+    loan_mark = int(db.execute(text(SQL_LOAN_INCOME_MARK), {"r": region_id}).scalar() or 0)
+    dep_mark = int(db.execute(text(SQL_DEPOSIT_INTEREST_MARK), {"r": region_id}).scalar() or 0)
+    prev = _stats(_stats(bank.last_stats).get(PROFIT_MARKS_KEY))
+    loan_income = max(0, loan_mark - int(prev.get("loan_income", loan_mark)))
+    paid_outside = max(0, dep_mark - int(prev.get("deposit_interest", dep_mark)))
     names = region_names(db, [region_id])
     simulated = db.execute(text(SQL_REGION_SIMULATED), {"r": region_id}).first() is not None
     out = econ_bank.bank_step(econ_bank.BankInput(
@@ -1066,6 +1081,7 @@ def tick_bank(db: Session, region_id: int, *, run_id: int, params, clock) -> Ban
             dep_carry=Decimal(str(bank.resident_dep_carry or 0)), loan_carry=Decimal(str(bank.resident_loan_carry or 0)),
             accrued_at=bank.accrued_at),
         deposits=tuple(deposit_state(d) for d in deposits), loans=tuple(loan_state(l) for l in loans), params=params,
+        loan_income_received=loan_income, interest_paid_outside=paid_outside,
     ))
     by_id = {int(d.id): d for d in deposits}
     for state in out.deposits:
@@ -1092,7 +1108,9 @@ def tick_bank(db: Session, region_id: int, *, run_id: int, params, clock) -> Ban
         posted = result.operation_id is not None
     bank.last_run_id = int(run_id)
     bank.last_tick_at = now
-    bank.last_stats = {**out.stats, "factor": str(out.factor)}
+    bank.last_stats = {**out.stats, "factor": str(out.factor),
+                       PROFIT_MARKS_KEY: {"loan_income": loan_mark,
+                                          "deposit_interest": dep_mark + int(out.stats.get("interest_paid", 0))}}
     return BankTickResult(TICK_STATUS_DONE, posted=posted, stats=dict(out.stats))
 
 
@@ -1445,15 +1463,31 @@ def ensure_bank_row(db: Session, region_id: int, now: datetime) -> "models.EconB
     return bank
 
 
+def _treasury_target(db: Session, region_id: int) -> int:
+    """``econ_regions.treasury_target`` of the region (0 when the region is not in the economy)."""
+    value = db.execute(text("SELECT treasury_target FROM econ_regions WHERE region_id = :r"),
+                       {"r": int(region_id)}).scalar()
+    return max(0, int(value or 0))
+
+
+def seed_capital_available(treasury: int, treasury_target: int) -> int:
+    """What the start capital may take: the treasury's excess above its reserve target (never negative)."""
+    return max(0, int(treasury) - max(0, int(treasury_target)))
+
+
 def seed_capital(db: Session, bank: "models.EconBank", *, params, actor_user_id: Optional[int],
                  now: datetime) -> int:
-    """One-time start capital ``T(X) -> B(X)`` = ``min(bank_start_capital, max(0, treasury))``; marks the bank as
-    seeded even when the amount is 0, so re-toggling never seeds twice. Caller holds ``econ_banks(X)``."""
+    """One-time start capital ``T(X) -> B(X)`` = ``min(bank_start_capital, max(0, treasury - treasury_target))``:
+    only the treasury's excess above its reserve target (``econ_regions.treasury_target``, 0 without a row), so the
+    seed never pushes the treasury under its target and never cuts the residents' wages (prod fix: the old
+    ``min(capital, treasury)`` emptied every treasury). 0 is fine — the bank then works on the residents' deposits.
+    Marks the bank as seeded even when the amount is 0, so re-toggling never seeds twice. Caller holds
+    ``econ_banks(X)``. The admin's explicit «Капитал из казны» (:func:`move_capital`) is not limited by the target."""
     if bank.capital_seeded_at is not None:
         return 0
     region_id = int(bank.region_id)
     treasury = _account(db, core.AccountRef.region(region_id))
-    amount = min(int(params.bank_start_capital), max(0, treasury))
+    amount = min(int(params.bank_start_capital), seed_capital_available(treasury, _treasury_target(db, region_id)))
     if amount > 0:
         try:
             econ_ledger.post_operation(

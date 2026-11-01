@@ -76,6 +76,19 @@ econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans (asc id) �
 (asc id) → econ_accounts (asc id)``; the caravan transaction is the first to lock two ``econ_regions`` rows, always
 ascending.
 
+Guild orders (FEAT-193, 3.2 / 3.7) — inside the region transaction the region's open ``econ_guild_orders`` rows are
+locked right after its event rows; at the very end of the step (after the merchant step, before the history row) a
+SAVEPOINT runs the **guild step** (``economy_guild_crud.guild_step``): the guild's per-recount budget
+(``econ_regions.guild_budget`` / ``guild_food_budget`` = shares of the purse / positive treasury) and the refresh /
+insert / close of the order rows from the final stock, the norm, the price and the caravans on the road. A failing
+guild step is rolled back alone, logged and counted (``GUILD_ERROR_PREFIX``); the region still commits. After the
+region loop, before the mint pass, the **guild sweep** closes orders of regions that left the economy and drops old
+guild XP day rows. Global lock order (3.7, supersedes the FEAT-192 one): ``econ_regions (asc region_id) →
+econ_region_goods (asc region_id, group_code) → econ_region_events (asc id) → econ_caravans (asc id) →
+econ_guild_orders (asc id) → econ_guild_xp_days → econ_mint_seasons → npc_shop_items (asc id) → econ_banks (asc
+region_id) → bank_deposits (asc id) → bank_loans (asc id) → character_inventory (asc id) → characters (asc id) →
+econ_accounts (asc id) → character_attributes``.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -132,6 +145,9 @@ MINT_ERROR_PREFIX = "чеканка — ошибка в странах: "
 QUOTA_ERROR_PREFIX = "квота — ошибка"
 # FEAT-192: caravans whose dispatch / arrival failed (count; regions still ticked).
 CARAVAN_ERROR_PREFIX = "караваны — ошибка: "
+# FEAT-193: regions whose guild step failed / a failed guild sweep (regions still ticked).
+GUILD_ERROR_PREFIX = "гильдия — ошибка в регионах: "
+GUILD_SWEEP_ERROR = "гильдия — ошибка закрытия заказов"
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -204,6 +220,13 @@ class RunSummary:
     caravans_cancelled: int = 0           # caravans cancelled in this run (destination gone)
     caravans_failed: int = 0              # dispatches / arrivals rolled back (retried next run)
     caravan_value: int = 0                # Σ value of the caravans sent in this run
+    # FEAT-193 guild orders (3.2)
+    guild_opened: int = 0                 # orders opened in this run
+    guild_refreshed: int = 0              # open orders re-measured in this run
+    guild_closed: int = 0                 # orders closed by the region step or the sweep
+    guild_failures: int = 0               # regions whose guild step was rolled back (the region still ticked)
+    guild_failed_region_ids: List[int] = field(default_factory=list)
+    guild_sweep_failed: bool = False
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -231,6 +254,7 @@ class _RegionOutcome:
     merchants: Optional[_MerchantOutcome] = None
     events_applied: int = 0     # FEAT-187: instances whose one-shots were applied
     expense_ops: int = 0        # FEAT-187: region_event operations posted
+    guild: Optional[object] = None   # FEAT-193: economy_guild_crud.StepOutcome (None = no guild step)
 
 
 # --------------------------------------------------------------------------------------------- time
@@ -689,9 +713,11 @@ def _process_region(
     now: datetime,
     merchant_npcs: Sequence[int] = (),
     with_events: bool = True,
+    with_guild: bool = False,
 ) -> _RegionOutcome:
     session = session_factory()
     merchants: Optional[_MerchantOutcome] = None
+    guild = None
     events_applied = 0
     expense_ops = 0
     try:
@@ -751,6 +777,12 @@ def _process_region(
             row.applied_run_id = run_id
             events_applied += 1
         ev = econ_events.aggregate(parsed, group_codes, params) if event_rows else None
+
+        # FEAT-193 (3.2 / 3.7): the region's open guild orders are locked after its event rows.
+        guild_orders: list = []
+        if with_guild:
+            import economy_guild_crud as guild_crud  # late: the crud module imports this one lazily
+            guild_orders = guild_crud.lock_open_orders(session, region_id, for_update)
 
         # FEAT-183: shop rows → NPC rows are locked now (lock order 3.5), before region_tick locks any account.
         merchant_ctx: Optional[MerchantContext] = None
@@ -849,6 +881,7 @@ def _process_region(
             row.outcome = outcome_data
 
         merchant_stock: Dict[str, float] = {}
+        skip_guild = False
         if merchant_ctx is not None and merchant_ctx.merchants:
             step_outcome = _MerchantOutcome()
             session.flush()  # region updates hit the DB before the SAVEPOINT (also starts pysqlite's transaction)
@@ -863,11 +896,25 @@ def _process_region(
                 logger.info("economy tick run %s: region %s merchants already posted by another runner",
                             run_id, region_id)
                 merchant_stock = {}
+                skip_guild = True
             except Exception as exc:  # a broken merchant must not roll the region back
                 merchant_stock = {}
                 merchants = _MerchantOutcome(failed=True)
                 logger.error("economy tick run %s: region %s merchant step failed (%s), rolled back; the region "
                              "ticked without merchants", run_id, region_id, type(exc).__name__, exc_info=True)
+
+        # FEAT-193 (3.2): the guild step last — final stock (after merchants), balances after every posting.
+        if with_guild and not skip_guild:
+            session.flush()
+            try:
+                with session.begin_nested():
+                    guild = guild_crud.guild_step(
+                        session, run_id=run_id, region_id=region_id, region=region, goods_rows=goods_rows,
+                        groups=groups, params=params, orders=guild_orders, now=now)
+            except Exception as exc:  # a broken guild step must not roll the region back
+                guild = guild_crud.StepOutcome(failed=True)
+                logger.error("economy tick run %s: region %s guild step failed (%s), rolled back; orders and budget "
+                             "keep their previous values", run_id, region_id, type(exc).__name__, exc_info=True)
 
         session.add(models.EconRegionHistory(
             run_id=run_id, region_id=region_id, created_at=now, population=int(region.population),
@@ -882,7 +929,7 @@ def _process_region(
         ))
         session.commit()
         return _RegionOutcome("done", posted=posting.operation_id is not None, merchants=merchants,
-                              events_applied=events_applied, expense_ops=expense_ops)
+                              events_applied=events_applied, expense_ops=expense_ops, guild=guild)
     except core.DuplicateOperation:
         # Posted by an overlapping runner of the same run: the region is done, nothing moved twice.
         session.rollback()
@@ -1198,12 +1245,16 @@ def run_tick(
     # price / consume the post-caravan stock.
     _caravan_pass(session_factory, run_id, summary, params, start, groups, active_map)
 
+    # FEAT-193 (3.2): the guild step runs inside each region transaction when migration 036 is applied.
+    guild_on = _guild_available(session_factory, run_id)
+
     logger.info("economy tick run %s (%s, slot %s)%s: %d regions, %d living merchants", run_id, summary.trigger,
                 summary.slot, " resumed" if resumed else "", len(plan), sum(len(v) for v in merchant_map.values()))
     for region_id, grant in sorted(plan.items()):
         outcome = _process_region(session_factory, run_id=run_id, region_id=region_id, grant=grant, groups=groups,
                                   params=params, country_tax_rate=country_tax_rate, now=start,
-                                  merchant_npcs=merchant_map.get(region_id, ()), with_events=events_on)
+                                  merchant_npcs=merchant_map.get(region_id, ()), with_events=events_on,
+                                  with_guild=guild_on)
         summary.events_applied += outcome.events_applied
         summary.event_expense_ops += outcome.expense_ops
         if outcome.status == "failed":
@@ -1224,7 +1275,19 @@ def run_tick(
             summary.shop_rows_purged += m.rows_purged
             if m.posted:
                 summary.merchant_ops_posted += 1
+        g = outcome.guild
+        if g is not None and outcome.status == "done":
+            if g.failed:
+                summary.guild_failures += 1
+                summary.guild_failed_region_ids.append(region_id)
+            summary.guild_opened += g.opened
+            summary.guild_refreshed += g.refreshed
+            summary.guild_closed += g.closed
         _heartbeat(session_factory, run_id, tick_clock(), summary.regions_done, summary.regions_failed)
+
+    # FEAT-193 (3.2): close orders of regions that left the economy (cosmetic for the admin view).
+    if guild_on:
+        _guild_sweep(session_factory, run_id, summary, start)
 
     # FEAT-191 (3.6): the court mint after the regions (stocks / norms are fresh), before the banks.
     _mint_pass(session_factory, run_id, summary, params, start)
@@ -1263,6 +1326,10 @@ def run_tick(
             parts.append(MINT_ERROR_PREFIX + ", ".join(str(c) for c in summary.mint_failed_country_ids))
         if summary.caravans_failed:
             parts.append(CARAVAN_ERROR_PREFIX + str(summary.caravans_failed))
+        if summary.guild_failed_region_ids:
+            parts.append(GUILD_ERROR_PREFIX + ", ".join(str(r) for r in summary.guild_failed_region_ids))
+        if summary.guild_sweep_failed:
+            parts.append(GUILD_SWEEP_ERROR)
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -1282,14 +1349,15 @@ def run_tick(
 
     log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures
                              or summary.events_failed or summary.mint_failures or summary.quota_failed
-                             or summary.caravans_failed) \
+                             or summary.caravans_failed or summary.guild_failures
+                             or summary.guild_sweep_failed) \
         else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
         "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
         "%d failed, %d loans collected (%d), %d overdue, %d closed; events: %d ended, %d started, %d spread, "
         "%d chained, %d riots, %d applied, %d expense operations, %d failed; quota: %d issued%s; "
         "court mint: %d operations, %d marks, %d failed countries; caravans: %d sent (%d marks), %d delivered, "
-        "%d cancelled, %d failed",
+        "%d cancelled, %d failed; guild: %d opened, %d refreshed, %d closed, %d failed regions",
         run_id, summary.status, summary.regions_done, summary.regions_total, summary.regions_failed,
         summary.operations_posted, summary.merchants_processed, summary.merchant_items_sold,
         summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures,
@@ -1299,7 +1367,8 @@ def run_tick(
         summary.events_applied, summary.event_expense_ops, summary.events_failed, summary.quota_amount,
         " (failed)" if summary.quota_failed else "", summary.mint_court_ops, summary.mint_court_marks,
         summary.mint_failures, summary.caravans_dispatched, summary.caravan_value, summary.caravans_delivered,
-        summary.caravans_cancelled, summary.caravans_failed)
+        summary.caravans_cancelled, summary.caravans_failed, summary.guild_opened, summary.guild_refreshed,
+        summary.guild_closed, summary.guild_failures)
     return summary
 
 
@@ -1399,6 +1468,36 @@ def _caravan_pass(session_factory: SessionFactory, run_id: int, summary: RunSumm
         if result.status == "sent":
             summary.caravans_dispatched += 1
             summary.caravan_value += result.value
+
+
+def _guild_available(session_factory: SessionFactory, run_id: int) -> bool:
+    import economy_guild_crud as guild_crud  # late: the crud module imports this one lazily
+    session = session_factory()
+    try:
+        return guild_crud.guild_available(session)
+    except Exception as exc:
+        logger.warning("economy tick run %s: guild orders unavailable (%s), skipped", run_id, type(exc).__name__)
+        return False
+    finally:
+        session.rollback()
+        session.close()
+
+
+def _guild_sweep(session_factory: SessionFactory, run_id: int, summary: RunSummary, now: datetime) -> None:
+    """Guild sweep (3.2): one short transaction, best effort."""
+    import economy_guild_crud as guild_crud
+    session = session_factory()
+    try:
+        closed = guild_crud.sweep(session, run_id, now)
+        session.commit()
+        summary.guild_closed += closed
+    except Exception as exc:
+        session.rollback()
+        summary.guild_sweep_failed = True
+        logger.error("economy tick run %s: guild sweep failed (%s), will be retried next tick", run_id,
+                     type(exc).__name__, exc_info=True)
+    finally:
+        session.close()
 
 
 def _mint_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,

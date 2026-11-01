@@ -23,6 +23,9 @@ This module never touches a database driver. It holds:
   * FEAT-192 NPC caravans: the singleton `caravan_escrow` account («Караваны в пути») and the
     caravan op types (dispatch / delivery / cancel, all untaxed, never touching the sources);
     the caravan maths lives in character-service (`econ_caravan.py`);
+  * FEAT-193 guild orders: the `guild_order` op type (a player fills a region's order: purse, plus
+    the region treasury for food -> character, untaxed) and the pure shop-row helpers shared by
+    the player shop (locations-service) and the guild price cap (character-service, `econ_guild.py`);
   * a small TTL cache for the economy settings row.
 
 World invariant: the sum of all balances (characters.currency_balance plus
@@ -148,6 +151,9 @@ OP_CARAVAN_DISPATCH = "caravan_dispatch"  # buyer purse (+ buyer region treasury
 OP_CARAVAN_DELIVERY = "caravan_delivery"  # escrow -> seller purse (value) + escrow -> buyer country (duty)
 OP_CARAVAN_CANCEL = "caravan_cancel"      # escrow -> the buyer accounts that paid (full refund)
 CARAVAN_OP_TYPES = frozenset({OP_CARAVAN_DISPATCH, OP_CARAVAN_DELIVERY, OP_CARAVAN_CANCEL})
+# FEAT-193: a player fills a region's guild order: purse (+ region treasury for food) -> character (untaxed)
+OP_GUILD_ORDER = "guild_order"
+GUILD_OP_TYPES = frozenset({OP_GUILD_ORDER})
 
 BANK_OP_TYPES = frozenset({
     OP_BANK_DEPOSIT, OP_BANK_WITHDRAW, OP_BANK_TRANSFER, OP_BANK_TICK, OP_BANK_CAPITAL,
@@ -162,7 +168,7 @@ OP_TYPES = frozenset({
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
     OP_REGION_EVENT,
-}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES
+}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES | GUILD_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
 SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST}) | MINT_OP_TYPES
@@ -841,8 +847,14 @@ def market_bid(base_bid, mult, ask) -> int:
     base_bid = _dec(base_bid)
     if base_bid <= 0:
         return 0
-    bid = min(_floor(base_bid * _dec(mult)), _floor(_dec(ask) * (_ONE - MAX_CHARISMA_DISCOUNT)))
+    bid = min(_floor(base_bid * _dec(mult)), ask_discount_floor(ask))
     return bid if bid >= 1 else 0
+
+
+def ask_discount_floor(ask) -> int:
+    """floor(ask * (1 - MAX_CHARISMA_DISCOUNT)): the most anyone pays back for an item a merchant sells at
+    `ask`; never above the max-charisma purchase price ceil(ask * 0.5) (FEAT-183 bid cap, FEAT-193 guild cap)."""
+    return _floor(_dec(ask) * (_ONE - MAX_CHARISMA_DISCOUNT))
 
 
 def wholesale_price(base_ask, mult, share) -> int:
@@ -975,6 +987,76 @@ def region_goods_from_rows(rows) -> Tuple[Dict[str, Decimal], Dict[str, int]]:
         bases[code] = int(base_price or 0)
         mults[code] = _ONE if mult is None else _dec(mult)
     return mults, bases
+
+
+def effective_shop_stock(living: bool, stock) -> Optional[int]:
+    """Stock a player sees / can buy: NULL = unlimited for a legacy merchant only; a living merchant
+    treats NULL as 0 (nothing to sell until the tick restocks the row)."""
+    if stock is None:
+        return 0 if living else None
+    return max(0, int(stock))
+
+
+def shop_row_prices(living: bool, item: Optional[ItemMarket], buy_price, sell_price,
+                    mults: Mapping[str, Any]) -> Dict[str, Any]:
+    """Current prices of one shop row (FEAT-183 3.1 #4): region mult for a living merchant and an
+    on-market item, 1 otherwise; the bid is capped by the cheapest possible ask (legacy merchants too).
+
+    -> {group, off_market, market, mult, ask, bid, price_level}; bid 0 = «does not buy».
+    """
+    group = item.group if item is not None else None
+    off_market = item.off_market if item is not None else True
+    mult = market_mult(living, group, off_market, mults)
+    ask = market_ask(buy_price, mult)
+    return {
+        "group": group,
+        "off_market": off_market,
+        "market": bool(living and group is not None and not off_market),
+        "mult": mult,
+        "ask": ask,
+        "bid": market_bid(sell_price, mult, ask),
+        "price_level": price_level(mult),
+    }
+
+
+def merchant_buys_groups(rows, items: Mapping[int, ItemMarket]) -> List[str]:
+    """Goods groups a living merchant buys outside his assortment: effective groups of his active,
+    on-market, admin-origin rows (SHOP_ROW_COLUMNS tuples), sorted."""
+    groups = set()
+    for r in rows:
+        if not r[8] or r[7] != SHOP_ORIGIN_ADMIN:
+            continue
+        m = items.get(r[2])
+        if m is not None and m.group is not None and not m.off_market:
+            groups.add(m.group)
+    return sorted(groups)
+
+
+def shop_row_bid(living: bool, item: Optional[ItemMarket], row, buys_groups, mults: Mapping[str, Any],
+                 group_base: Mapping[str, Any], bid_share) -> int:
+    """What a merchant pays per item right now (FEAT-183 3.1 #4 / #7); 0 = «does not buy».
+
+    `row` = the NPC's shop row for the item (SHOP_ROW_COLUMNS tuple) or None.
+      * row present: active with sell_price > 0 -> the row's current (capped) bid, else 0;
+      * no row, living merchant: on-market item of one of his goods groups -> default bid
+        floor(item_base x bid_share) moved by the region and capped like any bid;
+      * no row, legacy merchant: 0 (he buys only his own rows).
+    """
+    if row is not None:
+        if not row[8] or int(row[4] or 0) <= 0:
+            return 0
+        bid = shop_row_prices(living, item, row[3], row[4], mults)["bid"]
+        return bid if bid >= 1 else 0
+    if not living or item is None or item.group is None or item.off_market:
+        return 0
+    if item.group not in buys_groups:
+        return 0
+    base = item_base_price(item.price, group_base.get(item.group))
+    if base <= 0:
+        return 0
+    mult = market_mult(True, item.group, False, mults)
+    bid = market_bid(default_bid(base, bid_share), mult, market_ask(base, mult))
+    return bid if bid >= 1 else 0
 
 
 # NPC + the marker of his location (merchant_status input).

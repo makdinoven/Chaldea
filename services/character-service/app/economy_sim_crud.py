@@ -21,6 +21,7 @@ import econ_tick
 import economy_bank_crud
 import economy_caravan_crud
 import economy_events_crud
+import economy_guild_crud
 import economy_mint_crud
 import models
 from economy_crud import EconomyApiError, _like_pattern
@@ -832,13 +833,14 @@ def update_sim(db: Session, *, tick_enabled: bool, params_in: dict, user_id: Opt
 def region_card(db: Session, region_id: int) -> dict:
     if region_id <= 0:
         return {"region_id": region_id, "participating": False, "has_bank": False, "has_mint": False, "events": [],
-                "caravans": economy_caravan_crud.empty_card()}
+                "caravans": economy_caravan_crud.empty_card(), "guild_wants": []}
     has_bank = bool(economy_bank_crud.enabled_bank_ids(db, [region_id]))   # FEAT-184, in both shapes
     has_mint = economy_mint_crud.has_mint_for_region(db, region_id)       # FEAT-191, in both shapes
     # FEAT-187: in both shapes too; events only ever run in participating regions -> [] in the hidden one
     # FEAT-192: in both shapes too; caravans only ever run between participating regions -> empty in the hidden one
+    # FEAT-193: in both shapes too; guild orders exist only in participating regions -> [] in the hidden one
     hidden = {"region_id": region_id, "participating": False, "has_bank": has_bank, "has_mint": has_mint,
-              "events": [], "caravans": economy_caravan_crud.empty_card()}
+              "events": [], "caravans": economy_caravan_crud.empty_card(), "guild_wants": []}
     region = db.get(models.EconRegion, region_id)
     if region is None or region.template_code is None or _i(region.population) <= 0:
         return hidden
@@ -856,4 +858,5 @@ def region_card(db: Session, region_id: int) -> dict:
     )
     return {"region_id": region_id, "participating": True, "updated_at": region.last_tick_at, **card,
             "has_bank": has_bank, "has_mint": has_mint, "events": economy_events_crud.card_events(db, region_id),
-            "caravans": economy_caravan_crud.card_caravans(db, region_id)}
+            "caravans": economy_caravan_crud.card_caravans(db, region_id),
+            "guild_wants": economy_guild_crud.card_guild_wants(db, region_id)}

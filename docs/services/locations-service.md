@@ -609,6 +609,11 @@ not_simulated`), `location_id`, `region_id` (и у legacy, если место �
   дешёвой ценой продажи (`floor(ask × 0,5)`), в том числе у legacy;
 - `merchant_buy_groups(session, market)` — группы, которые живой торговец скупает у игроков вне своего списка
   (эффективные группы его активных строк `origin='admin'` на рынке); у legacy — `[]`.
+- **FEAT-193:** сами формулы строки лавки живут в общем `econ_core` (байт-в-байт копия) — `effective_shop_stock`,
+  `shop_row_prices`, `merchant_buys_groups`, `shop_row_bid`, `ask_discount_floor`; здешние `effective_stock`,
+  `price_shop_row`, `_buys_groups`, `quote_bid` — тонкие обёртки с прежними сигнатурами и результатами. Те же
+  функции использует «Гильдия торговцев» character-service (потолок / пол цены заказа), поэтому правка цены лавки —
+  только в `econ_core` (и копирование во все 4 сервиса).
 
 **Админка лавки** (`get_admin_user` = admin + moderator, как раньше):
 

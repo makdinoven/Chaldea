@@ -444,7 +444,7 @@ def test_region_card_has_bank_in_both_shapes(api, engine):
     client = TestClient(app)
     hidden = client.get("/characters/economy/regions/40/card").json()
     assert hidden == {"region_id": 40, "participating": False, "has_bank": True, "has_mint": False,
-                      "events": [], "caravans": {"incoming": [], "outgoing": []}}
+                      "events": [], "caravans": {"incoming": [], "outgoing": []}, "guild_wants": []}
     assert client.get("/characters/economy/regions/30/card").json()["has_bank"] is False
     assert client.get("/characters/economy/regions/0/card").json()["has_bank"] is False
 
@@ -652,3 +652,41 @@ def test_banks_live_in_regions_with_lore_populations(api, engine):
     assert _bal(engine, "bank", 10) >= 0 and _bal(engine, "bank", 20) >= 0
     summary = _ok_summary(api)
     assert summary["invariant"]["bank_deposits_expected"] == summary["invariant"]["bank_deposits_actual"]
+
+
+# --------------------------------------------------------------------------------------------- seed above the reserve target
+
+def _set_target(engine, region_id, target):
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE econ_regions SET treasury_target = :t WHERE region_id = :r"),
+                     {"t": target, "r": region_id})
+
+
+def test_seed_takes_only_the_treasury_excess_above_its_target(api, engine):
+    _set_target(engine, 10, 45_000)                                  # treasury 50 000: only 5 000 is spare
+    item = _open_bank(api, 10)
+    assert item["own_funds"] == 5_000 and _bal(engine, "region_treasury", 10) == 45_000
+    _set_target(engine, 20, 10_000)                                  # 40 000 spare > start capital
+    assert _open_bank(api, 20)["own_funds"] == START_CAPITAL
+    assert _bal(engine, "region_treasury", 20) == 50_000 - START_CAPITAL
+    _ok_summary(api)
+
+
+def test_seed_from_a_treasury_at_or_below_its_target_takes_nothing_but_counts_as_seeded(api, engine):
+    _set_target(engine, 10, 60_000)                                  # treasury 50 000 under its target
+    item = _open_bank(api, 10)
+    assert item["own_funds"] == 0 and item["capital_seeded_at"] is not None
+    assert _bal(engine, "region_treasury", 10) == 50_000
+    assert _q(engine, "SELECT COUNT(*) FROM econ_operations WHERE op_type = 'bank_capital'") == 0
+    # the explicit «Капитал из казны» is not limited by the target
+    resp = api.post(f"{BASE}/banks/10/capital", json={"direction": "in", "amount": 8_000, "comment": COMMENT})
+    assert resp.status_code == 200 and resp.json()["bank_balance"] == 8_000
+    _ok_summary(api)
+
+
+def test_seed_capital_available_helper():
+    assert bank_crud.seed_capital_available(50_000, 45_000) == 5_000
+    assert bank_crud.seed_capital_available(50_000, 0) == 50_000
+    assert bank_crud.seed_capital_available(10_000, 60_000) == 0
+    assert bank_crud.seed_capital_available(-5, 0) == 0
+    assert bank_crud.seed_capital_available(100, -7) == 100                # a bad negative target counts as 0

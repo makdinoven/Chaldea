@@ -478,6 +478,8 @@ export interface EconSimParams {
   bank_resident_deposit_share: number;
   bank_resident_loan_share: number;
   bank_resident_adjust: number;
+  /* bank fix: share of the bank's realized net interest income sent to the region treasury each pass */
+  bank_profit_to_treasury_share: number;
   /* FEAT-186 lore population scale: the tick computes with population / population_scale */
   population_scale: number;
   /* FEAT-187 region events (feature file 3.5) */
@@ -505,6 +507,16 @@ export interface EconSimParams {
   caravan_travel_foreign: number;
   caravan_min_value: number;
   caravan_max_per_run: number;
+  /* FEAT-193 guild orders (feature file 3.4) — older backends may not send them yet */
+  guild_enabled: number;
+  guild_markup_pct: number;
+  guild_open_threshold_pct: number;
+  guild_min_order_value: number;
+  guild_purse_share: number;
+  guild_treasury_food_share: number;
+  guild_xp_per_mark: number;
+  guild_xp_per_mark_merchant_items: number;
+  guild_xp_daily_cap: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -677,7 +689,7 @@ export interface EconBankBanker {
 }
 
 /** Counters of the last bank pass (`econ_bank.bank_step` stats); unknown keys are shown as is. */
-export type EconBankStats = Record<string, number | string | boolean | null>;
+export type EconBankStats = Record<string, number | string | boolean | null | Record<string, number>>;
 
 export interface EconBankAdminItem {
   region_id: number;
@@ -1224,6 +1236,177 @@ export interface CaravanList {
 
 export interface CaravanListQuery {
   status?: CaravanStatusFilter;
+  region_id?: number;
+  group_code?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/* ============================================================================ FEAT-193 guild orders (3.10) */
+
+/** An open order of the region as the player sees it — no money numbers. */
+export interface GuildOrder {
+  order_id: number;
+  group_code: string;
+  group_name: string;
+  is_food: boolean;
+  units_total: number;
+  units_left: number;
+  /** 0…100 */
+  filled_pct: number;
+  /** false — the residents have no money for it until the next recount */
+  payable: boolean;
+}
+
+/** A plain bag stack the guild accepts now. */
+export interface GuildOffer {
+  item_id: number;
+  name: string;
+  image: string | null;
+  group_code: string;
+  order_id: number;
+  have: number;
+  /** Marks per piece */
+  unit_price: number;
+  units_per_item: number;
+  /** min(have, by volume, by money, 10000) — pieces the guild takes now */
+  max_accept: number;
+  /** The price was lowered to what the region's merchants sell the item for */
+  capped_by_merchants: boolean;
+  /** XP per mark for this item: lower when a merchant of the region sells it (3.6a) */
+  xp_rate: number;
+}
+
+/** A bag item of a wanted group that the guild refuses (reason in Russian). */
+export interface GuildRefused {
+  item_id: number;
+  name: string;
+  image: string | null;
+  group_code: string;
+  have: number;
+  reason: string;
+}
+
+export interface GuildXpInfo {
+  per_mark: number;
+  per_mark_merchant_items: number;
+  daily_cap: number;
+  /** Base XP (before the XP book) still available today (UTC day) */
+  left_today: number;
+  /** Quest XP book multiplier */
+  multiplier: number;
+}
+
+export interface GuildView {
+  npc_id: number;
+  npc_name: string;
+  region_id: number | null;
+  region_name: string | null;
+  working: boolean;
+  closed_reason: string | null;
+  markup_pct: number;
+  orders: GuildOrder[];
+  offers: GuildOffer[];
+  refused: GuildRefused[];
+  xp: GuildXpInfo;
+  wallet: number;
+}
+
+export interface GuildHandInRequest {
+  character_id: number;
+  item_id: number;
+  quantity: number;
+  request_id: string;
+}
+
+export interface GuildActionOut {
+  message: string;
+  operation_id: number;
+  /** Accepted pieces */
+  quantity: number;
+  requested: number;
+  partial: boolean;
+  unit_price: number;
+  total: number;
+  /** XP granted (after the XP book) */
+  xp: number;
+  /** Base XP was cut by the daily cap */
+  xp_capped: boolean;
+  wallet: number;
+  view: GuildView;
+}
+
+export type GuildOrderStatus = 'open' | 'filled' | 'closed';
+export type GuildStatusFilter = 'open' | 'closed' | 'all';
+
+export interface GuildAdminParams {
+  guild_enabled: number;
+  guild_markup_pct: number;
+  guild_open_threshold_pct: number;
+  guild_min_order_value: number;
+  guild_purse_share: number;
+  guild_treasury_food_share: number;
+  guild_xp_per_mark: number;
+  guild_xp_per_mark_merchant_items: number;
+  guild_xp_daily_cap: number;
+}
+
+export interface GuildAdminTotals {
+  open: number;
+  units_left_value: number;
+  paid_last_7d: number;
+  hand_ins_last_7d: number;
+  xp_last_7d: number;
+}
+
+export interface GuildMaster {
+  npc_id: number;
+  name: string;
+  npc_status: string | null;
+  location_name: string | null;
+}
+
+export interface GuildRegionRow {
+  region_id: number;
+  region_name: string | null;
+  guild_budget: number;
+  guild_food_budget: number;
+  open_orders: number;
+  masters: GuildMaster[];
+}
+
+export interface GuildOrderRow {
+  id: number;
+  region_id: number;
+  region_name: string | null;
+  group_code: string;
+  group_name: string | null;
+  status: GuildOrderStatus | string;
+  close_reason: string | null;
+  units_total: number;
+  units_left: number;
+  units_filled: number;
+  price_mult: number;
+  markup_pct: number;
+  pieces: number;
+  paid_total: number;
+  paid_treasury: number;
+  hand_ins: number;
+  opened_at: string;
+  updated_at: string | null;
+  closed_at: string | null;
+}
+
+export interface GuildAdminOut {
+  params: GuildAdminParams;
+  totals: GuildAdminTotals;
+  regions: GuildRegionRow[];
+  total: number;
+  items: GuildOrderRow[];
+}
+
+export interface GuildAdminQuery {
+  status?: GuildStatusFilter;
   region_id?: number;
   group_code?: string;
   limit?: number;

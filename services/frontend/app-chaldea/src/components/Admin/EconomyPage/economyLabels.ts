@@ -45,6 +45,7 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   caravan_dispatch: 'Караван: оплата',
   caravan_delivery: 'Караван: доставка',
   caravan_cancel: 'Караван: возврат',
+  guild_order: 'Заказ гильдии',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
@@ -180,3 +181,15 @@ const MERCHANT_FUND_SKIP_LABELS: Record<string, string> = {
 
 export const merchantFundSkipText = (reason: string): string =>
   MERCHANT_FUND_SKIP_LABELS[reason] ?? merchantReasonText(reason);
+
+/** Why a guild order is no longer open (FEAT-193, `econ_guild_orders.close_reason`). */
+export const GUILD_CLOSE_REASON_LABELS: Record<string, string> = {
+  filled: 'выполнен',
+  no_shortage: 'нехватки нет',
+  no_money: 'нет денег',
+  disabled: 'выключено',
+  region_left: 'регион вышел из экономики',
+};
+
+export const guildCloseReasonText = (reason: string | null | undefined): string =>
+  (reason && GUILD_CLOSE_REASON_LABELS[reason]) || reason || 'причина неизвестна';
