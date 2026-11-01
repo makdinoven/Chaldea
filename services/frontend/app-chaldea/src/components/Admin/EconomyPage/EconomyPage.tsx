@@ -20,6 +20,7 @@ import EconomyTick from './EconomyTick';
 import EconomyMerchants from './EconomyMerchants';
 import EconomyBanks from './EconomyBanks';
 import EconomyEvents from './EconomyEvents';
+import EconomyMint from './EconomyMint';
 import EconomyGuide from './EconomyGuide';
 import { GuideIntro } from './GuideLink';
 import { EconomyGuideContext, type EconomyTabId, type GuideSectionId, type OpenGuide } from './guideSections';
@@ -38,6 +39,7 @@ const TAB_LABEL: Record<EconomyTab, string> = {
   merchants: 'Торговцы',
   banks: 'Банки',
   events: 'События',
+  mint: 'Монетный двор',
   tick: 'Пересчёт',
   settings: 'Настройки',
 };
@@ -86,6 +88,10 @@ const TAB_INTRO: Partial<Record<EconomyTab, { section: GuideSectionId; text: Rea
   events: {
     section: 'events',
     text: 'Засухи, чума, праздники и другие события регионов: идущие сейчас, ручной запуск, шаблоны и история. Сами события начинаются в плановых пересчётах — в среднем одно на регион за игровой сезон.',
+  },
+  mint: {
+    section: 'mint',
+    text: 'Монетный двор каждой страны в её столице: двор сам чеканит излишек руды столицы, игроки сдают руду монетчику. Лимит — общий на страну за игровой сезон (49 дней). Здесь же — история квот сезона.',
   },
 };
 
@@ -138,6 +144,7 @@ const EconomyPage = () => {
     'merchants',
     'banks',
     'events',
+    'mint',
     'tick',
     'settings',
   ];
@@ -215,6 +222,7 @@ const EconomyPage = () => {
         )}
         {tab === 'banks' && <EconomyBanks canSettings={canSettings} onMoneyChanged={loadSummary} />}
         {tab === 'events' && <EconomyEvents canSettings={canSettings} />}
+        {tab === 'mint' && <EconomyMint canSettings={canSettings} canEmit={canEmit} />}
         {tab === 'tick' && <EconomyTick canSettings={canSettings} onMoneyChanged={loadSummary} />}
         {tab === 'settings' && <EconomySettings canEdit={canSettings} onSaved={loadSummary} />}
       </div>

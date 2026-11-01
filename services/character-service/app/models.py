@@ -917,6 +917,48 @@ class EconRegionEvent(Base):
     )
 
 
+# --------------------------------------------------------------------------- FEAT-191 mint (migration 034)
+
+class EconMint(Base):
+    """Per-country mint settings (Countries.id, no FK). No row = all defaults (auto capital, enabled)."""
+
+    __tablename__ = "econ_mints"
+
+    country_id = Column(Integer, primary_key=True, autoincrement=False)
+    capital_region_id = Column(Integer, nullable=True)   # NULL = auto (the single 'capital'-template region)
+    season_limit = Column(BigInteger, nullable=True)     # NULL = sim param mint_season_limit
+    is_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    updated_at = Column(DateTime, nullable=True)
+    updated_by = Column(Integer, nullable=True)
+
+
+class EconMintItem(Base):
+    """Ore accepted from players at a minter NPC, with its rate (items.id, no FK)."""
+
+    __tablename__ = "econ_mint_items"
+
+    item_id = Column(Integer, primary_key=True, autoincrement=False)
+    marks_per_item = Column(Integer, nullable=False)
+    is_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    updated_at = Column(DateTime, nullable=True)
+    updated_by = Column(Integer, nullable=True)
+
+
+class EconMintSeason(Base):
+    """The lockable shared season limit counter of one country (court + players)."""
+
+    __tablename__ = "econ_mint_seasons"
+
+    country_id = Column(Integer, primary_key=True, autoincrement=False)
+    period_index = Column(Integer, primary_key=True, autoincrement=False)
+    minted_court = Column(BigInteger, nullable=False, default=0, server_default="0")
+    minted_players = Column(BigInteger, nullable=False, default=0, server_default="0")
+    ore_units_court = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    ore_units_players = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=True)
+
+
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
 # ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
 # change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance

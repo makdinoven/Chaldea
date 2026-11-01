@@ -50,6 +50,18 @@ merchant step / bank pass as replaced params. Lock order (3.6.1, supersedes the 
 econ_region_goods → econ_region_events (asc id) → npc_shop_items (asc id) → econ_banks (asc region_id) →
 bank_deposits (asc id) → bank_loans (asc id) → characters (asc id) → econ_accounts (asc id)``.
 
+Mint and season quota (FEAT-191, 3.6 / 3.7) — the **quota pass** runs right before the region loop in its own
+transaction: once per game season (49 real days, ``econ_mint.period_of`` on the shared ``game_time_config``) one
+``season_quota`` operation ``emission -> region treasuries`` of the participating regions split by population (key
+``season_quota:p<period>`` — the ledger UNIQUE key is the idempotency guarantee). The **mint pass** runs after the
+region loop, before the banks: per country with a working mint one transaction ``econ_regions(capital) →
+econ_region_goods(capital, ore_metal) → econ_mint_seasons(country, period)`` → ore surplus above the threshold taken
+from the stock → one ``mint_court`` operation ``emission -> country treasury`` (key ``mint_court:<run>:c<country>``);
+the marks reach regions through the next run's grant plan. Both are best effort (failures logged, counted, retried).
+Global lock order (3.12, supersedes the FEAT-187 one): ``econ_regions → econ_region_goods → econ_region_events (asc id)
+→ econ_mint_seasons → npc_shop_items (asc id) → econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans
+(asc id) → character_inventory (asc id) → characters (asc id) → econ_accounts (asc id)``.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -71,6 +83,7 @@ import econ_core as core
 import econ_events
 import econ_ledger
 import econ_merchant
+import econ_mint
 import econ_sim
 import locations_client
 import models
@@ -100,6 +113,9 @@ MERCHANT_ERROR_PREFIX = "торговцы — ошибка в регионах: 
 BANK_ERROR_PREFIX = "банки — ошибка в регионах: "
 # FEAT-187: the events pass (or some of its starts) failed; regions still ticked.
 EVENTS_ERROR_PREFIX = "события — ошибка: "
+# FEAT-191: countries whose court mint failed / the season quota failed (regions still ticked).
+MINT_ERROR_PREFIX = "чеканка — ошибка в странах: "
+QUOTA_ERROR_PREFIX = "квота — ошибка"
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -159,6 +175,13 @@ class RunSummary:
     events_applied: int = 0               # instances whose one-shot effects were applied in this run
     event_expense_ops: int = 0            # region_event treasury expense operations posted
     events_failed: int = 0                # failed starts / a failed events pass (regions still ticked)
+    # FEAT-191 mint and season quota (3.6 / 3.7)
+    quota_amount: int = 0                 # marks issued by the season quota in this run (0 = not this run)
+    quota_failed: bool = False
+    mint_court_ops: int = 0               # mint_court operations posted
+    mint_court_marks: int = 0             # marks minted by the courts
+    mint_failures: int = 0                # countries whose court mint was rolled back
+    mint_failed_country_ids: List[int] = field(default_factory=list)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -1146,6 +1169,9 @@ def run_tick(
     events_on, active_map, events_errors = _events_pass(session_factory, run_id, summary.slot, summary, params,
                                                         start, groups)
 
+    # FEAT-191 (3.7): the season quota before the region loop, so this run's region steps already see the money.
+    _quota_pass(session_factory, run_id, summary, params, start)
+
     logger.info("economy tick run %s (%s, slot %s)%s: %d regions, %d living merchants", run_id, summary.trigger,
                 summary.slot, " resumed" if resumed else "", len(plan), sum(len(v) for v in merchant_map.values()))
     for region_id, grant in sorted(plan.items()):
@@ -1173,6 +1199,9 @@ def run_tick(
             if m.posted:
                 summary.merchant_ops_posted += 1
         _heartbeat(session_factory, run_id, tick_clock(), summary.regions_done, summary.regions_failed)
+
+    # FEAT-191 (3.6): the court mint after the regions (stocks / norms are fresh), before the banks.
+    _mint_pass(session_factory, run_id, summary, params, start)
 
     # FEAT-184 (3.7): banks after the regions, own transactions (never inside a region transaction).
     _prepare_banks(session_factory, run_id, summary, tick_clock)
@@ -1202,6 +1231,10 @@ def run_tick(
             parts.append(BANK_ERROR_PREFIX + ", ".join(str(r) for r in summary.bank_failed_region_ids))
         if events_errors:
             parts.append(EVENTS_ERROR_PREFIX + ", ".join(events_errors))
+        if summary.quota_failed:
+            parts.append(QUOTA_ERROR_PREFIX)
+        if summary.mint_failed_country_ids:
+            parts.append(MINT_ERROR_PREFIX + ", ".join(str(c) for c in summary.mint_failed_country_ids))
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -1220,20 +1253,108 @@ def run_tick(
         session.close()
 
     log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures
-                             or summary.events_failed) \
+                             or summary.events_failed or summary.mint_failures or summary.quota_failed) \
         else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
         "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
         "%d failed, %d loans collected (%d), %d overdue, %d closed; events: %d ended, %d started, %d spread, "
-        "%d chained, %d riots, %d applied, %d expense operations, %d failed",
+        "%d chained, %d riots, %d applied, %d expense operations, %d failed; quota: %d issued%s; "
+        "court mint: %d operations, %d marks, %d failed countries",
         run_id, summary.status, summary.regions_done, summary.regions_total, summary.regions_failed,
         summary.operations_posted, summary.merchants_processed, summary.merchant_items_sold,
         summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures,
         summary.banks_processed, summary.bank_ops_posted, summary.bank_failures, summary.loans_collected,
         summary.collected_amount, summary.loans_overdue, summary.banks_closed, summary.events_ended,
         summary.events_started, summary.events_spread, summary.events_chained, summary.riots_started,
-        summary.events_applied, summary.event_expense_ops, summary.events_failed)
+        summary.events_applied, summary.event_expense_ops, summary.events_failed, summary.quota_amount,
+        " (failed)" if summary.quota_failed else "", summary.mint_court_ops, summary.mint_court_marks,
+        summary.mint_failures)
     return summary
+
+
+# --------------------------------------------------------------------------------------------- mint (FEAT-191)
+
+def _quota_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,
+                now: datetime) -> None:
+    """Season quota (3.7): once per game season, emission -> participating region treasuries by population."""
+    amount = int(params.quota_season_amount)
+    if amount <= 0:
+        return
+    import economy_mint_crud as mint_crud  # late: economy_mint_crud imports this module lazily too
+    session = session_factory()
+    try:
+        period = mint_crud.current_period(session, now)
+        if period is None:
+            logger.warning("economy tick run %s: the game calendar is unavailable, season quota skipped", run_id)
+            return
+        key = f"{mint_crud.KEY_QUOTA}:p{period.index}"
+        if session.execute(text(core.SQL_SELECT_OPERATION_BY_KEY), {"key": key}).first() is not None:
+            return
+        populations = {rid: pop for rid, pop, _country in participating_regions(session)}
+        shares = econ_mint.split_quota(amount, populations)
+        if not shares:
+            logger.warning("economy tick run %s: no participating regions, season quota skipped", run_id)
+            return
+        legs = [core.Leg(core.AccountRef.emission(), core.AccountRef.region(rid), amt)
+                for rid, amt in sorted(shares.items())]
+        econ_ledger.post_operation(
+            session, op_type=core.OP_SEASON_QUOTA, legs=legs, source_service=SOURCE_SERVICE, apply_tax=False,
+            idempotency_key=key,
+            metadata={"period_index": period.index, "year": period.year, "season": period.season,
+                      "amount": sum(shares.values()), "regions": {str(r): a for r, a in sorted(shares.items())},
+                      "run_id": run_id},
+        )
+        session.commit()
+        summary.quota_amount = sum(shares.values())
+        logger.info("economy tick run %s: season quota %s of period %s issued to %d regions", run_id,
+                    summary.quota_amount, period.index, len(shares))
+    except core.DuplicateOperation:
+        session.rollback()          # issued by another runner meanwhile
+    except Exception as exc:
+        session.rollback()
+        summary.quota_failed = True
+        logger.error("economy tick run %s: season quota failed (%s), will be retried next tick", run_id,
+                     type(exc).__name__, exc_info=True)
+    finally:
+        session.rollback()
+        session.close()
+
+
+def _mint_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,
+               now: datetime) -> None:
+    """Court mint (3.6): one transaction per country with a working mint, ascending country id, best effort."""
+    import economy_mint_crud as mint_crud
+    session = session_factory()
+    try:
+        period = mint_crud.current_period(session, now)
+        statuses = mint_crud.working_countries(session, params, period)
+    except Exception as exc:
+        logger.warning("economy tick run %s: court mint unavailable (%s), skipped", run_id, type(exc).__name__)
+        return
+    finally:
+        session.rollback()
+        session.close()
+    for status in statuses:
+        session = session_factory()
+        try:
+            mint_crud.ensure_season_row(session, status.country_id, status.period.index, now)
+            result = mint_crud.court_mint(session, status, run_id=run_id, params=params, now=now)
+            session.commit()
+        except core.DuplicateOperation:
+            session.rollback()      # another runner minted this country in this run
+            continue
+        except Exception as exc:
+            session.rollback()
+            summary.mint_failures += 1
+            summary.mint_failed_country_ids.append(status.country_id)
+            logger.error("economy tick run %s: court mint of country %s failed (%s), will be retried next tick",
+                         run_id, status.country_id, type(exc).__name__, exc_info=True)
+            continue
+        finally:
+            session.close()
+        if result.marks > 0:
+            summary.mint_court_ops += 1
+            summary.mint_court_marks += result.marks
 
 
 # --------------------------------------------------------------------------------------------- banks (FEAT-184)

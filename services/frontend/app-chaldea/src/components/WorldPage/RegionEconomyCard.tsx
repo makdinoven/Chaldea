@@ -5,6 +5,7 @@ import type { RegionCardData, RegionCardEvent, RegionGroupLevel, RegionGroupTren
 import { apiErrorMessage } from '../../api/errors';
 import { parseServerDate } from '../../utils/serverDate';
 import EventIcon from '../common/EventIcon';
+import { useCurrency } from '../../hooks/useCurrency';
 
 /**
  * Player-facing "how is the region doing" card (FEAT-182, F4).
@@ -109,18 +110,22 @@ const RegionEvents = ({ events }: { events: RegionCardEvent[] }) => {
 const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   const [card, setCard] = useState<RegionCardData | null>(null);
   const [hasBank, setHasBank] = useState(false);
+  const [hasMint, setHasMint] = useState(false);
+  const { forms } = useCurrency();
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setCard(null);
     setHasBank(false);
+    setHasMint(false);
     setFailed(false);
     fetchRegionEconomyCard(regionId)
       .then((data) => {
         if (cancelled) return;
         setCard(data.participating ? data : null);
         setHasBank(data.has_bank === true);
+        setHasMint(data.has_mint === true);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -141,9 +146,20 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
       В регионе есть банк — вклады и займы у банкира
     </p>
   );
+  const mintLine = hasMint && (
+    <p className="text-xs text-center text-white/60 mt-2">
+      <span aria-hidden="true">⚒️ </span>
+      Монетный двор — монетчик чеканит из руды {forms.name.toLowerCase()}
+    </p>
+  );
 
   if (!card) {
-    return bankLine ? <section aria-label="Банк региона" className="mx-auto mb-4 w-full max-w-3xl px-1 sm:px-0">{bankLine}</section> : null;
+    return bankLine || mintLine ? (
+      <section aria-label="Учреждения региона" className="mx-auto mb-4 w-full max-w-3xl px-1 sm:px-0">
+        {bankLine}
+        {mintLine}
+      </section>
+    ) : null;
   }
 
   return (
@@ -190,6 +206,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
         </div>
       )}
       {bankLine}
+      {mintLine}
     </section>
   );
 };

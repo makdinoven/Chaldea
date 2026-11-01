@@ -1063,3 +1063,117 @@ event_mult_min, event_mult_max, event_delta_max, event_spread_max_depth, event_r
 Поля для текста: `region_name, name, icon, kind, player_text, origin, started_at, ends_at, ended_at, status,
 cancel_comment` (только для админов), итоги — `population_before/after`, `outcome`. Объём ≈ 1 строка на регион за
 49 дней. Публичного читателя истории пока нет — его добавит фича газеты.
+
+## Mint and season quota (FEAT-191)
+
+Этап 5а экономики: два штатных источника новых марок — **монетный двор** (один на страну, в столице) и **квота
+сезона**. Деньги — только проводки книги счетов со счёта `emission`. Модули: чистый `app/econ_mint.py` (календарь,
+расчёт двора, деление квоты), БД — `app/economy_mint_crud.py`, проходы тика — `econ_tick._quota_pass` / `_mint_pass`,
+роутер — `app/economy_api.py`.
+
+### Операции книги (econ_core, копии ×4)
+
+| op_type | Ноги | Ключ идемпотентности |
+|---|---|---|
+| `mint_court` | `emission → country_treasury(страна)`, `region_id` = столица | `mint_court:<run_id>:c<country_id>` |
+| `mint_player` | `emission → character` | `mint:<character_id>:<request_id>` |
+| `season_quota` | `emission → region_treasury(R)` по всем участвующим регионам (одна операция) | `season_quota:p<period_index>` |
+
+Все три — в `OP_TYPES`, `SOURCE_OP_TYPES` и `MINT_OP_TYPES`, **не** требуют комментария, `apply_tax=False`.
+`mint_player` засчитывается заданиям БП «заработай марки» (battle-pass не исключает его).
+
+### «Сезон» (3.3)
+
+Сезон + праздник после него = 49 реальных дней, 4 периода в год. character-service **читает `game_time_config`
+напрямую** (таблица locations-service, только чтение, одна строка); формула `compute_game_time`:
+`elapsed = max(0, floor((now − epoch)/86400) + offset_days)`, `index = elapsed // 49` (абсолютный, монотонный),
+`year = index // 4 + 1`, `season = spring|summer|autumn|winter`, `starts_at = epoch + (index·49 − offset_days) дней`,
+`ends_at = starts_at + 49 дней`. Раскладка календаря продублирована в `econ_mint.YEAR_SEGMENTS` — держать в синхроне с
+`locations-service/app/crud.py` и `frontend/src/utils/gameTime.ts`. Нет строки/таблицы календаря → квота пропускается,
+двор и монетчики закрыты («календарь мира недоступен»). Правка календаря назад повторно использует счётчик и ключ квоты
+(второй квоты нет); вперёд — пропущенные сезоны не наверстываются.
+
+### Таблицы (миграция `034_econ_mint`, без FK)
+
+- `econ_mints` — по стране: `country_id` PK, `capital_region_id` (NULL = авто), `season_limit` (NULL = параметр
+  `mint_season_limit`), `is_enabled` (по умолчанию 1), `updated_at`, `updated_by`. Нет строки = всё по умолчанию.
+- `econ_mint_items` — руда, которую принимает монетчик: `item_id` PK, `marks_per_item`, `is_enabled`, `updated_*`.
+- `econ_mint_seasons` — общий лимит страны за сезон (двор + игроки), блокируемый счётчик: PK `(country_id,
+  period_index)`, `minted_court`, `minted_players`, `ore_units_court`, `ore_units_players`, `created_at`, `updated_at`.
+  Строка создаётся `ensure_season_row` в **своей короткой транзакции** (никогда под другими блокировками); не чистится.
+
+Новые параметры пересчёта (JSON `econ_sim_settings.params`, без миграции): `quota_season_amount` (0, 0…1e9),
+`mint_season_limit` (0, 0…1e9), `mint_court_marks_per_unit` (8.0, 0.01…10 000), `mint_court_threshold_pct`
+(100.0, 0…1000). Значения 0 = всё выключено до настройки админом.
+
+### Столица и «двор работает» (3.4)
+
+Столица: `econ_mints.capital_region_id`, если регион существует и принадлежит стране (`manual`); иначе единственный
+регион страны с шаблоном `capital` (`auto`); 0 или ≥ 2 таких → столицы нет (`none`). Устаревшая ручная столица
+игнорируется (`override_stale` в админке). Двор работает, когда есть столица, `is_enabled`, столица участвует
+(`template_code` и `population > 0`), у неё есть строка `econ_region_goods('ore_metal')`, лимит > 0 и календарь
+доступен. Причины закрытия: «у страны не выбрана столица», «двор выключен», «столица не участвует в экономике»,
+«в столице не ведётся запас руды и металла», «лимит не задан», «календарь мира недоступен».
+
+### Тик (3.6 / 3.7)
+
+- **Квота** — перед циклом регионов, своя транзакция: `quota_season_amount > 0` и календарь есть → если операции с
+  ключом `season_quota:p<index>` ещё нет — одна операция `emission → казны` участвующих регионов (`SQL_PARTICIPATING`),
+  деление по населению методом наибольших остатков (сумма ровно равна квоте, ничьи → меньший id). Сбой → `квота —
+  ошибка` в `econ_tick_runs.error`, повтор в следующем прогоне. Работает и в ручных прогонах (ключ сезона).
+- **Двор** — после цикла регионов, до банков, транзакция на страну: `econ_regions(столица) → econ_region_goods(столица,
+  ore_metal) → econ_mint_seasons(страна, сезон)` FOR UPDATE → `excess = max(0, stock − norm·threshold/100)`,
+  `marks = min(floor(excess·rate), остаток лимита)`, `units = min(excess, ceil_3(marks/rate))` → `stock −= units`,
+  счётчик += → `mint_court`. Сбой страны → `чеканка — ошибка в странах: …`, остальные идут. Марки попадают в регионы
+  через гранты страны **следующего** прогона (план грантов фиксируется при захвате прогона).
+- `RunSummary`: `quota_amount, quota_failed, mint_court_ops, mint_court_marks, mint_failures, mint_failed_country_ids`.
+
+### Порядок блокировок (3.12, заменяет FEAT-187 3.6.1)
+
+`econ_regions → econ_region_goods → econ_region_events (asc id) → econ_mint_seasons → npc_shop_items (asc id) →
+econ_banks (asc region_id) → bank_deposits (asc id) → bank_loans (asc id) → character_inventory (asc id) →
+characters (asc id) → econ_accounts (asc id)`. Транзакция региона не трогает `econ_mint_seasons` /
+`character_inventory`. Двор: `econ_regions → econ_region_goods → econ_mint_seasons → econ_accounts`. Игрок:
+`econ_regions → econ_region_goods → econ_mint_seasons → character_inventory → characters → econ_accounts`. Квота:
+только `econ_accounts`.
+
+### Монетчик — API игрока (3.8; роль НПС `minter`)
+
+Порядок проверок как у банкира: 1 JWT + владелец + персонаж игрока (403) → 2 НПС существует, `is_npc`, роль `minter`
+(404 «Монетчик не найден»), не мёртв (409) → 3 блокировка активности (POST) → 4 та же локация (400) → 5 FEAT-145
+(POST, fail-closed, 403 / 503) → 6 локация → регион → страна; у страны есть столица, и это не регион монетчика → 409
+«Монетный двор есть только в столице страны — этот монетчик ему не служит»; двор не работает → 409 «Монетный двор
+закрыт: {причина}» (GET отдаёт вид с `working=false`).
+
+| Метод и путь | Тело / запрос | Ответ и отказы |
+|---|---|---|
+| `GET /characters/economy/mint/npc/{npc_id}?character_id=` | — | `MintView` (сезон, лимит, отчеканено двором/игроками, остаток, принимаемая руда с `have` и `max_by_limit`, кошелёк) |
+| `POST /characters/economy/mint/npc/{npc_id}/mint` | `MintIn {character_id, item_id, quantity 1…10000, request_id [A-Za-z0-9-]{8,64}}` | `MintActionOut {message, operation_id, marks, quantity, requested, partial, wallet, view}` — `quantity`/`marks` = реально принятые штуки и выплата; при нехватке лимита принимается `floor(остаток / marks_per_item)` шт., `partial=true`, сообщение «Принято N из M шт. — лимит сезона исчерпан, остальная руда осталась у вас. Отчеканено …»; иначе «Отчеканено …: руда × N»; 400 «Монетный двор не принимает этот предмет» / «Не хватает: …» (проверка по **запрошенному** количеству); 409 «Монетный двор исчерпал лимит до dd.mm.yyyy» (не влезает ни одной штуки) / «Операция уже выполнена» |
+
+Поток (одна транзакция, роутер коммитит): `ensure_season_row` (своя транзакция) → блокировки → проверка ключа →
+предмет включён и его действующая группа `ore_metal` → лимит: `accepted = min(quantity, floor(остаток /
+marks_per_item))`, 0 → 409 (частичный приём, решение пользователя 2026-11-01; раньше запрос отклонялся целиком) →
+**руда списывается прямо из `character_inventory`** (в сумке должно быть всё **запрошенное** количество, списывается
+только `accepted`; только обычные стопки: `enhancement_points_spent = 0`, без камней, без прочности; строки
+`FOR UPDATE` по id; DELETE или `quantity − q`) → `stock += accepted × units_per_item` → счётчик `+= accepted ×
+marks_per_item` → `mint_player` последним шагом (в metadata `quantity` = принято, `requested` = запрошено). Любой
+отказ откатывает всё — руда не теряется; повтор с тем же `request_id` → 409 «Операция уже выполнена».
+
+**Межсервисная запись:** character-service пишет в таблицу inventory-service `character_inventory` напрямую (тот же
+принятый приём, что `locations-service houses._take_materials`). Если inventory-service заведёт производные кэши
+сумки — поток чеканки должен их обновлять.
+
+### Админ-API (3.10; префикс `/characters/admin/economy`)
+
+| Метод и путь | Права | Описание |
+|---|---|---|
+| `GET /mint` | `economy:read` | `MintAdminOut`: текущий сезон, параметры, по каждой стране — столица (auto/manual/none, кандидаты, устаревшая ручная), работает ли и почему нет, лимит (свой/по умолчанию), отчеканено двором/игроками, остаток (0, если двор закрыт — как у игрока), запас руды столицы и норма, монетчики (`in_capital`) |
+| `PUT /mint/countries/{country_id}` | `economy:settings` + `economy:emit` | `MintCountryIn {capital_region_id\|null, season_limit 0…1e9\|null, is_enabled}` (все ключи обязательны); 404 «Страна не найдена»; 400 «Регион не принадлежит этой стране» |
+| `GET /mint/items` | `economy:read` | `List[MintItemOut]` с `effective_group` и `valid` |
+| `PUT /mint/items/{item_id}` | `economy:settings` + `economy:emit` | `MintItemIn {marks_per_item 1…1e6, is_enabled}`; 404 «Предмет не найден»; 400 «Чеканить можно только руду и металл (группа «Руда и металл»)» |
+| `DELETE /mint/items/{item_id}` | `economy:settings` + `economy:emit` | 204; 404 |
+| `GET /mint/quotas?limit=20` | `economy:read` | `List[QuotaOut]` — история операций `season_quota`, новые сначала |
+| `PUT /sim` (существующий) | `economy:settings` | изменение `quota_season_amount`, `mint_season_limit` или `mint_court_marks_per_unit` без `economy:emit` → 403 «Нужно право на эмиссию» |
+
+Публичная карточка региона `GET /characters/economy/regions/{id}/card` получила `has_mint` в обеих формах (регион —
+действующая столица и двор работает).

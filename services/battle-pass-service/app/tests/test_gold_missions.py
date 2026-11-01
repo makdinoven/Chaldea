@@ -425,3 +425,66 @@ class TestClaimSendsLedgerFields:
         assert first_key == second_key == crud.reward_idempotency_key(
             TEST_USER.id, level_id, "free",
         )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-191: the mint — a player's minting counts as earned gold; the court
+# mint and the season quota never touch a character account
+# ---------------------------------------------------------------------------
+
+EMISSION_ACC = 3
+COUNTRY_ACC = 4
+
+
+class TestMintCountsAsEarned:
+    async def _setup(self, db):
+        await _setup_accounts(db, [100])
+        db.add_all([
+            EconAccount(id=EMISSION_ACC, kind="emission", ref_id=0),
+            EconAccount(id=COUNTRY_ACC, kind="country_treasury", ref_id=1),
+        ])
+        await db.flush()
+
+    async def test_mint_player_is_not_excluded(self):
+        assert "mint_player" not in crud.LEDGER_EXCLUDED_OP_TYPES
+        assert "mint_court" not in crud.LEDGER_EXCLUDED_OP_TYPES
+        assert "season_quota" not in crud.LEDGER_EXCLUDED_OP_TYPES
+
+    async def test_mint_player_posting_counts_as_earned(self, db_session, active_season):
+        await self._setup(db_session)
+        await _post(db_session, "mint_player", EMISSION_ACC, 200, 120)
+        await _post(db_session, "mint_player", EMISSION_ACC, 200, 30)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (150, 0)
+
+    async def test_court_mint_and_season_quota_do_not_count(self, db_session, active_season):
+        await self._setup(db_session)
+        await _post(db_session, "mint_court", EMISSION_ACC, COUNTRY_ACC, 5000)
+        await _post(db_session, "season_quota", EMISSION_ACC, REGION_ACC, 7000)
+        await _post(db_session, "mint_player", EMISSION_ACC, 200, 40)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (40, 0)
+
+    async def test_mint_player_to_another_players_character_is_not_ours(
+        self, db_session, active_season,
+    ):
+        await self._setup(db_session)
+        db_session.add(EconAccount(id=999, kind="character", ref_id=555))
+        await db_session.flush()
+        await _post(db_session, "mint_player", EMISSION_ACC, 999, 800)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (0, 0)
+
+    async def test_mint_player_before_season_start_is_ignored(self, db_session, active_season):
+        await self._setup(db_session)
+        await _post(
+            db_session, "mint_player", EMISSION_ACC, 200, 500,
+            created_at=active_season.start_date - timedelta(days=2),
+        )
+        await _post(db_session, "mint_player", EMISSION_ACC, 200, 25)
+        await db_session.commit()
+
+        assert await _earned_and_spent(db_session, active_season) == (25, 0)

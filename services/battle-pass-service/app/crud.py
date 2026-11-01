@@ -404,6 +404,9 @@ async def _progress_visit_locations(
 # string literals here); bank_tick/bank_capital never touch a character
 # account but are listed for completeness. A bank commission is a leg of the
 # same deposit/withdraw/transfer op, so it is excluded as well (small).
+# FEAT-191: mint_player is deliberately NOT excluded — minting ore at a
+# Монетчик counts as earned gold (user decision). mint_court / season_quota
+# never touch a character account, so they are never counted.
 LEDGER_CHARACTER_KIND = "character"
 LEDGER_EXCLUDED_OP_TYPES = (
     "genesis",

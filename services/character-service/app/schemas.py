@@ -1957,12 +1957,18 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "event_spread_max_depth": (0, 5),
     "event_riot_stability": (0.0, 100.0),
     "event_riot_after_days": (0.25, 60.0),
+    # FEAT-191 mint and season quota
+    "quota_season_amount": (0, 1_000_000_000),
+    "mint_season_limit": (0, 1_000_000_000),
+    "mint_court_marks_per_unit": (0.01, 10_000.0),
+    "mint_court_threshold_pct": (0.0, 1000.0),
 }
 ECON_SIM_INT_PARAMS = frozenset({
     "treasury_release_ticks", "history_retention_days",
     "bank_loan_cap_base", "bank_loan_cap_per_level", "bank_min_amount", "bank_transfer_fee_min", "bank_start_capital",
     "population_scale",
     "events_enabled", "event_max_active", "event_spread_max_depth",
+    "quota_season_amount", "mint_season_limit",
 })
 
 
@@ -2314,6 +2320,10 @@ class EconSimParamsIn(BaseModel):
     event_spread_max_depth: Optional[int] = None
     event_riot_stability: Optional[float] = None
     event_riot_after_days: Optional[float] = None
+    quota_season_amount: Optional[int] = None
+    mint_season_limit: Optional[int] = None
+    mint_court_marks_per_unit: Optional[float] = None
+    mint_court_threshold_pct: Optional[float] = None
 
     class Config:
         extra = Extra.forbid
@@ -2782,3 +2792,154 @@ class EventBadge(BaseModel):
     name: str
     icon: str
     kind: str
+
+
+# ===========================================================================
+# FEAT-191 mint and season quota (contract 3.10; app/economy_mint_crud.py)
+# ===========================================================================
+
+MINT_MAX_QUANTITY = 10_000
+MINT_MAX_RATE = 1_000_000
+MINT_MAX_LIMIT = 1_000_000_000
+
+
+class SeasonPeriodOut(BaseModel):
+    index: int
+    year: int
+    season: str                                  # spring | summer | autumn | winter (UI: utils/gameTime.ts labels)
+    starts_at: datetime                          # naive UTC
+    ends_at: datetime                            # naive UTC, exclusive
+
+
+class MintIn(BaseModel):
+    character_id: conint(strict=True, ge=1)
+    item_id: conint(strict=True, ge=1)
+    quantity: conint(strict=True, ge=1, le=MINT_MAX_QUANTITY)
+    request_id: _BANK_REQ_ID                     # required: the ledger key mint:{character}:{request_id}
+
+
+class MintItemView(BaseModel):
+    item_id: int
+    name: Optional[str]
+    image: Optional[str]
+    marks_per_item: int
+    have: int                                    # plain stacks in the bag
+    max_by_limit: int                            # floor(remaining / marks_per_item)
+
+
+class MintView(BaseModel):
+    npc_id: int
+    npc_name: str
+    country_id: int
+    country_name: Optional[str]
+    region_id: int
+    region_name: Optional[str]
+    working: bool
+    closed_reason: Optional[str]                 # Russian, when working is false
+    period: Optional[SeasonPeriodOut]            # null when the calendar is unavailable
+    limit: int
+    minted_court: int
+    minted_players: int
+    remaining: int                               # 0 when closed
+    items: List[MintItemView]
+    wallet: int
+
+
+class MintActionOut(BaseModel):
+    message: str                                 # Russian, shown as a toast
+    operation_id: int
+    marks: int                                   # marks actually paid (for the accepted pieces)
+    quantity: int                                # pieces actually accepted (≤ requested when the limit runs out)
+    requested: int                               # pieces the player asked to mint
+    partial: bool                                # True when only part was accepted (rest of the ore stays)
+    wallet: int
+    view: MintView
+
+
+class MintCandidateOut(BaseModel):
+    region_id: int
+    name: Optional[str]
+    template_code: Optional[str]
+
+
+class MintMinterOut(BaseModel):
+    npc_id: int
+    name: Optional[str]
+    npc_status: Optional[str]
+    location_name: Optional[str]
+    in_capital: bool
+
+
+class MintCountryOut(BaseModel):
+    country_id: int
+    country_name: Optional[str]
+    is_enabled: bool
+    capital_region_id: Optional[int]
+    capital_region_name: Optional[str]
+    capital_source: str                          # auto | manual | none
+    capital_override_id: Optional[int]
+    override_stale: bool
+    candidates: List[MintCandidateOut]
+    working: bool
+    closed_reason: Optional[str]
+    season_limit_override: Optional[int]
+    season_limit: int
+    minted_court: int
+    minted_players: int
+    remaining: int
+    ore_stock: Optional[float]
+    ore_norm: Optional[float]
+    minters: List[MintMinterOut]
+
+
+class MintParamsOut(BaseModel):
+    mint_season_limit: int
+    mint_court_marks_per_unit: float
+    mint_court_threshold_pct: float
+    quota_season_amount: int
+
+
+class MintAdminOut(BaseModel):
+    period: Optional[SeasonPeriodOut]
+    params: MintParamsOut
+    countries: List[MintCountryOut]
+
+
+class MintCountryIn(BaseModel):
+    """Full replace; every key is required, null = auto capital / default limit."""
+    capital_region_id: Optional[conint(strict=True, ge=1)] = Field(...)
+    season_limit: Optional[conint(strict=True, ge=0, le=MINT_MAX_LIMIT)] = Field(...)
+    is_enabled: StrictBool
+
+    class Config:
+        extra = Extra.forbid
+
+
+class MintItemIn(BaseModel):
+    marks_per_item: conint(strict=True, ge=1, le=MINT_MAX_RATE)
+    is_enabled: StrictBool
+
+    class Config:
+        extra = Extra.forbid
+
+
+class MintItemOut(BaseModel):
+    item_id: int
+    name: Optional[str]
+    image: Optional[str]
+    item_type: Optional[str]
+    resource_subcategory: Optional[str]
+    effective_group: Optional[str]
+    marks_per_item: int
+    is_enabled: bool
+    valid: bool                                  # effective_group == 'ore_metal'
+
+
+class QuotaOut(BaseModel):
+    operation_id: int
+    created_at: datetime
+    period_index: Optional[int]
+    year: Optional[int]
+    season: Optional[str]
+    amount: int
+    regions: int

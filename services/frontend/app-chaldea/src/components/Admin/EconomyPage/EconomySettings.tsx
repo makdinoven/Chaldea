@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { fetchEconomySettings, putEconomySettings } from '../../../api/economyAdmin';
+import { fetchEconomySettings, fetchEconomySim, patchEconomySimParams, putEconomySettings } from '../../../api/economyAdmin';
+import { fetchMintQuotas } from '../../../api/mint';
 import { apiErrorMessage } from '../../../api/errors';
-import { useAppDispatch } from '../../../redux/store';
+import { useCurrency } from '../../../hooks/useCurrency';
+import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { fetchCurrencyForms } from '../../../redux/slices/economySlice';
+import { selectPermissions } from '../../../redux/slices/userSlice';
+import type { QuotaEntry } from '../../../types/economy';
 import { capitalize, formatCurrency, type CurrencyForms } from '../../../utils/currency';
+import { hasPermission } from '../../../utils/permissions';
+import { seasonName } from '../../../utils/seasonPeriod';
 import { GuideIntro } from './GuideLink';
-import { FieldHint } from './ParamHint';
+import { FieldHint, SimParamHint } from './ParamHint';
+import { formatDateTime } from './economyLabels';
 import type { FieldHintKey } from './paramHints';
 
 const FORM_MAX = 50;
@@ -31,6 +38,133 @@ const fieldError = (key: keyof CurrencyForms, value: string): string | null => {
   if (v.length > limit) return `Не длиннее ${limit} символов`;
   if (FORBIDDEN_CHARS.test(v)) return 'Символы < и > запрещены';
   return null;
+};
+
+/** `quota_season_amount` bounds (`ECON_SIM_PARAM_BOUNDS`, feature file 3.5). */
+const QUOTA_MAX = 1_000_000_000;
+const QUOTA_NUMBERS = { def: 0, min: 0, max: QUOTA_MAX };
+
+/** FEAT-191 «Квота сезона»: a sim param, saved alone so the rest of the params stay as stored. */
+const SeasonQuotaCard = ({ canSettings }: { canSettings: boolean }) => {
+  const canEmit = hasPermission(useAppSelector(selectPermissions), 'economy:emit');
+  const canEdit = canSettings && canEmit;
+  const { format } = useCurrency();
+  const [stored, setStored] = useState<number | null>(null);
+  const [value, setValue] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [lastQuota, setLastQuota] = useState<QuotaEntry | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchEconomySim()
+      .then((sim) => {
+        if (cancelled) return;
+        const amount = sim.params.quota_season_amount ?? 0;
+        setStored(amount);
+        setValue(String(amount));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const msg = apiErrorMessage(e, 'Не удалось загрузить квоту сезона');
+        setLoadError(msg);
+        toast.error(msg);
+      });
+    fetchMintQuotas(1)
+      .then((list) => {
+        if (!cancelled) setLastQuota(list[0] ?? null);
+      })
+      .catch((e) => {
+        if (!cancelled) setQuotaError(apiErrorMessage(e, 'Не удалось загрузить историю квот'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const n = Number(value.trim());
+  const valid = value.trim() !== '' && Number.isInteger(n) && n >= 0 && n <= QUOTA_MAX;
+  const dirty = stored !== null && valid && n !== stored;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const sim = await patchEconomySimParams({ quota_season_amount: n });
+      const amount = sim.params.quota_season_amount ?? n;
+      setStored(amount);
+      setValue(String(amount));
+      toast.success('Квота сезона сохранена');
+    } catch (e) {
+      toast.error(apiErrorMessage(e, 'Не удалось сохранить квоту сезона'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-4 min-w-0">
+      <div className="flex flex-col gap-1">
+        <h2 className="gold-text text-lg font-medium uppercase tracking-[0.06em]">Квота сезона</h2>
+        <p className="text-white/50 text-sm">
+          Один раз в начале каждого игрового сезона (сезон + праздник, 49 дней) эта сумма выпускается эмиссией в
+          казны регионов, участвующих в пересчёте, пропорционально населению. 0 — квоты нет.
+        </p>
+      </div>
+      {loadError ? (
+        <p className="text-site-red text-sm">{loadError}</p>
+      ) : stored === null ? (
+        <div className="w-6 h-6 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
+      ) : (
+        <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+          <div className="flex flex-col gap-1 sm:max-w-[320px] w-full">
+            <span className="flex items-center gap-1 min-w-0">
+              <label htmlFor="econ-quota" className="text-white/60 text-xs uppercase tracking-[0.06em]">
+                Сумма за сезон
+              </label>
+              <SimParamHint param="quota_season_amount" label="Квота сезона" numbers={QUOTA_NUMBERS} />
+            </span>
+            <input
+              id="econ-quota"
+              type="text"
+              inputMode="numeric"
+              className="input-underline w-full"
+              value={value}
+              disabled={!canEdit || saving}
+              onChange={(e) => setValue(e.target.value.replace(/[^\d]/g, '').slice(0, 10))}
+            />
+            {!valid ? (
+              <p className="text-site-red text-xs">Целое число от 0 до {QUOTA_MAX.toLocaleString('ru-RU')}</p>
+            ) : (
+              <p className="text-white/40 text-xs">{n > 0 ? `${format(n)} за сезон` : 'Квота выключена'}</p>
+            )}
+          </div>
+          {canEdit && (
+            <button
+              type="button"
+              className="btn-blue w-full sm:w-auto !px-6"
+              disabled={!dirty || saving}
+              onClick={() => void save()}
+            >
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          )}
+        </div>
+      )}
+      {!canEdit && (
+        <p className="field-hint">Менять квоту может администратор с правами «economy:settings» и «economy:emit».</p>
+      )}
+      {quotaError ? (
+        <p className="text-site-red text-xs">{quotaError}</p>
+      ) : (
+        <p className="text-white/50 text-xs">
+          {lastQuota
+            ? `Последняя выдача: ${seasonName(lastQuota.season, lastQuota.year)} — ${format(lastQuota.amount)} в ${lastQuota.regions} рег., ${formatDateTime(lastQuota.created_at)}`
+            : 'Квота ещё не выдавалась.'}
+        </p>
+      )}
+    </section>
+  );
 };
 
 interface EconomySettingsProps {
@@ -189,6 +323,7 @@ const EconomySettings = ({ canEdit, onSaved }: EconomySettingsProps) => {
           )}
         </section>
       </div>
+      <SeasonQuotaCard canSettings={canEdit} />
     </div>
   );
 };

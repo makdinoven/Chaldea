@@ -293,3 +293,14 @@ def test_region_event_op_type():
     assert econ_core.OP_REGION_EVENT not in econ_core.SOURCE_OP_TYPES
     assert econ_core.OP_REGION_EVENT not in econ_core.BANK_OP_TYPES
     assert econ_core.OP_REGION_EVENT not in econ_core.COMMENT_REQUIRED_OP_TYPES
+
+
+# --------------------------------------------------------------------------------------------- FEAT-191 mint / quota
+
+def test_mint_op_types():
+    assert frozenset(cc.MINT_OP_TYPE_NAMES) == econ_core.MINT_OP_TYPES
+    assert "mint_court" in econ_core.OP_TYPES
+    assert econ_core.MINT_OP_TYPES <= econ_core.OP_TYPES
+    assert econ_core.MINT_OP_TYPES <= econ_core.SOURCE_OP_TYPES
+    assert not (econ_core.MINT_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
+    assert not (econ_core.MINT_OP_TYPES & econ_core.BANK_OP_TYPES)

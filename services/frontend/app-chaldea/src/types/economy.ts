@@ -484,6 +484,11 @@ export interface EconSimParams {
   event_spread_max_depth: number;
   event_riot_stability: number;
   event_riot_after_days: number;
+  /* FEAT-191 mint and season quota (feature file 3.5) — older backends may not send them yet */
+  quota_season_amount: number;
+  mint_season_limit: number;
+  mint_court_marks_per_unit: number;
+  mint_court_threshold_pct: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -549,7 +554,8 @@ export interface EconSimState {
 
 export interface EconSimUpdate {
   tick_enabled: boolean;
-  params: EconSimParams;
+  /** The backend merges the body into the stored params: keys left out keep their stored values. */
+  params: Partial<EconSimParams>;
 }
 
 /* ---------------------------------------------- FEAT-183 — NPC merchants (feature file 3.7) */
@@ -954,4 +960,164 @@ export interface EconEventBadge {
   name: string;
   icon: string;
   kind: EconEventKind;
+}
+
+/* ---------------------------------------------- FEAT-191 — mint and season quota (feature file 3.10) */
+
+/** Game «сезон» = a season with the festival after it (49 real days, 4 per year). */
+export interface MintSeasonPeriod {
+  /** Absolute period number (monotonic across years) */
+  index: number;
+  year: number;
+  /** spring | summer | autumn | winter */
+  season: string;
+  starts_at: string;
+  ends_at: string;
+}
+
+/** Ore the Монетчик accepts, with what the character has in plain stacks. */
+export interface MintViewItem {
+  item_id: number;
+  name: string;
+  image: string | null;
+  marks_per_item: number;
+  /** Sum of plain stacks in the bag */
+  have: number;
+  /** floor(remaining / marks_per_item) */
+  max_by_limit: number;
+}
+
+/** `GET /characters/economy/mint/npc/{npc_id}` */
+export interface MintView {
+  npc_id: number;
+  npc_name: string;
+  country_id: number | null;
+  country_name: string | null;
+  region_id: number | null;
+  region_name: string | null;
+  working: boolean;
+  closed_reason: string | null;
+  /** null when the world calendar is unavailable */
+  period: MintSeasonPeriod | null;
+  limit: number;
+  minted_court: number;
+  minted_players: number;
+  remaining: number;
+  items: MintViewItem[];
+  wallet: number;
+}
+
+export interface MintRequest {
+  character_id: number;
+  item_id: number;
+  quantity: number;
+  request_id: string;
+}
+
+export interface MintActionOut {
+  message: string;
+  operation_id: number;
+  /** Marks actually paid (for the accepted pieces). */
+  marks: number;
+  /** Pieces actually accepted — fewer than requested when the season limit runs out. */
+  quantity: number;
+  /** Pieces the player asked to mint. */
+  requested: number;
+  /** True when only part was accepted; the rest of the ore stayed in the bag. */
+  partial: boolean;
+  wallet: number;
+  view: MintView;
+}
+
+export type MintCapitalSource = 'auto' | 'manual' | 'none';
+
+export interface MintCandidate {
+  region_id: number;
+  name: string;
+  template_code: string | null;
+}
+
+export interface MintMinter {
+  npc_id: number;
+  name: string | null;
+  npc_status: string | null;
+  location_name: string | null;
+  in_capital: boolean;
+}
+
+/** One country of `GET /characters/admin/economy/mint`. */
+export interface MintCountry {
+  country_id: number;
+  country_name: string | null;
+  is_enabled: boolean;
+  capital_region_id: number | null;
+  capital_region_name: string | null;
+  capital_source: MintCapitalSource;
+  /** The admin's manual choice (`econ_mints.capital_region_id`), null = auto */
+  capital_override_id: number | null;
+  /** The manual choice points at a deleted region or one of another country */
+  override_stale: boolean;
+  candidates: MintCandidate[];
+  working: boolean;
+  closed_reason: string | null;
+  /** Per-country limit, null = the default param */
+  season_limit_override: number | null;
+  /** Effective limit of this season */
+  season_limit: number;
+  minted_court: number;
+  minted_players: number;
+  remaining: number;
+  ore_stock: number | null;
+  ore_norm: number | null;
+  minters: MintMinter[];
+}
+
+export interface MintAdminParams {
+  mint_season_limit: number;
+  mint_court_marks_per_unit: number;
+  mint_court_threshold_pct: number;
+  quota_season_amount: number;
+}
+
+export interface MintAdminOut {
+  period: MintSeasonPeriod | null;
+  params: MintAdminParams;
+  countries: MintCountry[];
+}
+
+/** Full replace; `capital_region_id: null` = auto, `season_limit: null` = the default param. */
+export interface MintCountryIn {
+  capital_region_id: number | null;
+  season_limit: number | null;
+  is_enabled: boolean;
+}
+
+export interface MintItem {
+  item_id: number;
+  name: string;
+  image: string | null;
+  item_type: string | null;
+  resource_subcategory: string | null;
+  effective_group: string | null;
+  marks_per_item: number;
+  is_enabled: boolean;
+  /** effective_group == 'ore_metal'; invalid rows are ignored by the Монетчик */
+  valid: boolean;
+}
+
+export interface MintItemIn {
+  marks_per_item: number;
+  is_enabled: boolean;
+}
+
+/** One issued season quota (`econ_operations`, op_type `season_quota`). */
+export interface QuotaEntry {
+  operation_id: number;
+  created_at: string;
+  period_index: number;
+  year: number | null;
+  season: string | null;
+  amount: number;
+  /** How many region treasuries got a share */
+  regions: number;
 }

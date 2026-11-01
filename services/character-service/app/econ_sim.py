@@ -137,6 +137,11 @@ class SimParams:
     event_spread_max_depth: int = 2           # hops a spreading event may make (0 = no spreading)
     event_riot_stability: float = 25.0        # the riot clock runs while stability is below this
     event_riot_after_days: float = 3.0        # days of continuous low stability before a riot starts
+    # FEAT-191 mint and season quota (3.5). Not in a seed; 0 = dormant until the admin sets the amounts.
+    quota_season_amount: int = 0              # marks issued once per game season into participating region treasuries
+    mint_season_limit: int = 0                # default per-country season limit (court + players); 0 = mint closed
+    mint_court_marks_per_unit: float = 8.0    # marks per region unit of ore_metal taken by the court
+    mint_court_threshold_pct: float = 100.0   # the court takes ore only above this % of the capital's norm_stock
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":

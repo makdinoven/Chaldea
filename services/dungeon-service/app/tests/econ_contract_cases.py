@@ -755,6 +755,60 @@ CASES += [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# FEAT-191 mint and season quota: new money from the emission source, no comment, appended to CASES
+# ---------------------------------------------------------------------------
+
+# a runner checks == MINT_OP_TYPES, subset of OP_TYPES and SOURCE_OP_TYPES, none comment-required
+MINT_OP_TYPE_NAMES: Tuple[str, ...] = ("mint_court", "mint_player", "season_quota")
+
+CASES += [
+    # court mint: emission -> country treasury, untaxed, no comment, idempotent per run and country
+    ContractCase(
+        name="mint_court_emission_to_country_without_comment",
+        steps=[Step("mint_court", [Leg(EMISSION, K1, 400)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "mint_court:1:c1",
+                     "metadata": {"run_id": 1, "period_index": 0, "units": "50.000"}}),
+               Step("mint_court", [Leg(EMISSION, K1, 400)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "mint_court:1:c1"},
+                    error="DuplicateOperation")],
+        expected_accounts={("country_treasury", 1): 400, ("emission", 0): -400},
+        expected_operations=1, expected_postings=1, expected_tax_legs=0,
+    ),
+    # player mint: emission -> character; a plain character -> region leg is fine too (generic rule)
+    ContractCase(
+        name="mint_player_emission_to_character_and_plain_leg",
+        steps=[Step("mint_player", [Leg(EMISSION, C1, 120)],
+                    {"location_id": 1000, "apply_tax": False, "idempotency_key": "mint:1:req-1"}),
+               Step("mint_player", [Leg(EMISSION, C1, 120)],
+                    {"location_id": 1000, "apply_tax": False, "idempotency_key": "mint:1:req-1"},
+                    error="DuplicateOperation"),
+               Step("mint_player", [Leg(C1, R10, 20)], {"location_id": 1000, "apply_tax": False})],
+        expected_characters={1: 100},
+        expected_accounts={("region_treasury", 10): 20, ("emission", 0): -120},
+        expected_operations=2, expected_postings=2, expected_tax_legs=0,
+    ),
+    # season quota: one multi-leg operation emission -> region treasuries, once per period key
+    ContractCase(
+        name="season_quota_emission_to_regions_once_per_period",
+        steps=[Step("season_quota", [Leg(EMISSION, R10, 700), Leg(EMISSION, R20, 300)],
+                    {"apply_tax": False, "idempotency_key": "season_quota:p0",
+                     "metadata": {"period_index": 0, "amount": 1000}}),
+               Step("season_quota", [Leg(EMISSION, R10, 700), Leg(EMISSION, R20, 300)],
+                    {"apply_tax": False, "idempotency_key": "season_quota:p0"},
+                    error="DuplicateOperation")],
+        expected_accounts={("region_treasury", 10): 700, ("region_treasury", 20): 300,
+                           ("emission", 0): -1000},
+        expected_operations=1, expected_postings=2, expected_tax_legs=0,
+    ),
+    # a non-source op still may not touch the emission account
+    ContractCase(
+        name="non_source_op_with_emission_leg_still_rejected",
+        steps=[Step("trade", [Leg(EMISSION, C1, 5)], error="EconomyError")],
+        expected_operations=0, expected_postings=0,
+    ),
+]
+
 # location_id -> (region_id, country_id)
 RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] = [
     (1000, (10, 1)),      # via district

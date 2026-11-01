@@ -25,6 +25,8 @@ interface RegionCardHidden {
   participating: false;
   /** FEAT-184: the region has an enabled bank */
   has_bank?: boolean;
+  /** FEAT-191: the region is a capital with a working mint */
+  has_mint?: boolean;
 }
 
 export interface RegionCardData {
@@ -42,6 +44,8 @@ export interface RegionCardData {
   groups: RegionCardGroup[];
   /** FEAT-184: the region has an enabled bank */
   has_bank?: boolean;
+  /** FEAT-191: the region is a capital with a working mint */
+  has_mint?: boolean;
   /** FEAT-187: active region events (optional — older backends don't send it) */
   events?: RegionCardEvent[];
 }

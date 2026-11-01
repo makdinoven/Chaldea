@@ -18,6 +18,7 @@ export const GUIDE_SECTION_IDS = [
   'merchants',
   'banks',
   'events',
+  'mint',
   'recipes',
   'recipe-hunger',
   'recipe-empty-treasury',
@@ -27,6 +28,7 @@ export const GUIDE_SECTION_IDS = [
   'recipe-prices',
   'recipe-population-scale',
   'recipe-events',
+  'recipe-mint',
 ] as const;
 
 export type GuideSectionId = (typeof GUIDE_SECTION_IDS)[number];
@@ -50,7 +52,9 @@ export const GUIDE_SECTION_TITLE: Record<GuideSectionId, string> = {
   'recipe-prices': 'Цены растут или падают',
   'recipe-population-scale': 'Перешли на масштаб населения (регионы раздуты)',
   events: 'События регионов',
+  mint: 'Монетный двор и квота',
   'recipe-events': 'Событий слишком много, мало или нет',
+  'recipe-mint': 'Монетный двор не чеканит или съедает весь лимит',
 };
 
 /** Tabs of the admin «Экономика» page (EconomyPage.tsx). */
@@ -66,6 +70,7 @@ export type EconomyTabId =
   | 'merchants'
   | 'banks'
   | 'events'
+  | 'mint'
   | 'tick'
   | 'settings';
 

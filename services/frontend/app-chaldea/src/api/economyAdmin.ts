@@ -21,6 +21,7 @@ import type {
   EconRegionItem,
   EconRegionTemplate,
   EconRegionUpdate,
+  EconSimParams,
   EconSimState,
   EconSimUpdate,
   EconTemplateUpdate,
@@ -183,6 +184,15 @@ export const fetchEconomySim = async (): Promise<EconSimState> => {
 export const putEconomySim = async (body: EconSimUpdate): Promise<EconSimState> => {
   const { data } = await axios.put<EconSimState>(`${BASE}/sim`, body);
   return data;
+};
+
+/**
+ * FEAT-191: saves only the given sim params (the backend merges them into the stored ones) and keeps the
+ * autorecount switch as it is. Changing a money param (quota, limit, court rate) also needs economy:emit (403).
+ */
+export const patchEconomySimParams = async (params: Partial<EconSimParams>): Promise<EconSimState> => {
+  const current = await fetchEconomySim();
+  return putEconomySim({ tick_enabled: current.tick_enabled, params });
 };
 
 /** «Пересчитать сейчас» — a real extra step; 409 «Пересчёт уже идёт» while a run is active. */

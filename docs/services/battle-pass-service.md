@@ -42,6 +42,8 @@ character-service answers `duplicate=true` and adds **neither XP nor gold**. Del
   `kind='character'` and `ref_id` ∈ the user's characters;
 - `spend_gold` = same with `from_account_id`;
 - both: `econ_postings.created_at >= season.start_date` and `econ_operations.op_type <> 'genesis'`.
+- FEAT-191: `mint_player` (a player mints ore at a «Монетчик», `emission → character`) is deliberately **not**
+  excluded — minting counts as earned gold. `mint_court` / `season_quota` never touch a character account.
 
 Type-agnostic like before (trades, auction refunds count as earned; bids, purchases as spent). Old
 `gold_transactions` rows are not merged — progress of these two mission types in the season running at the FEAT-181

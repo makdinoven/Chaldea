@@ -123,6 +123,11 @@ OP_REGION_TICK = "region_tick"            # FEAT-182: purse <-> region <-> count
 OP_MERCHANT_TRADE = "merchant_trade"
 # FEAT-187: one-shot money effect of a region event («восстановление»: region treasury -> population purse)
 OP_REGION_EVENT = "region_event"
+# FEAT-191: the mint and the season quota (new money from the emission source).
+OP_MINT_COURT = "mint_court"              # court mint in the 6 h tick: emission -> country treasury
+OP_MINT_PLAYER = "mint_player"            # a player hands ore to a minter NPC: emission -> character
+OP_SEASON_QUOTA = "season_quota"          # once per game season: emission -> participating region treasuries
+MINT_OP_TYPES = frozenset({OP_MINT_COURT, OP_MINT_PLAYER, OP_SEASON_QUOTA})
 # FEAT-184 banks
 OP_BANK_DEPOSIT = "bank_deposit"          # character -> vault
 OP_BANK_WITHDRAW = "bank_withdraw"        # vault -> character (+ forfeited interest vault -> bank)
@@ -146,10 +151,10 @@ OP_TYPES = frozenset({
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
     OP_REGION_EVENT,
-}) | BANK_OP_TYPES
+}) | BANK_OP_TYPES | MINT_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
-SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST})
+SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST}) | MINT_OP_TYPES
 
 # Operations that must carry a non-empty comment (audit trail).
 COMMENT_REQUIRED_OP_TYPES = frozenset({OP_ADMIN_EMISSION, OP_ADMIN_ADJUST})

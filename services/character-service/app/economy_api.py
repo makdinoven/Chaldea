@@ -7,8 +7,10 @@ Admin:   /characters/admin/economy/{summary,accounts,operations,emission,adjust,
          FEAT-183: /characters/admin/economy/merchants[/fund]
          FEAT-184: /characters/admin/economy/banks[/debtors|/{region_id}[/capital]|/loans/{loan_id}/write-off]
          FEAT-187: /characters/admin/economy/events/{templates[/{id}],active,start,history,{event_id}/cancel}
+         FEAT-191: /characters/admin/economy/mint[/countries/{id}|/items[/{item_id}]|/quotas]
 Player:  FEAT-184 banks: /characters/economy/bank/{npc/{npc_id}[/deposit|/withdraw|/transfer|/send|/loan|/repay],
                           summary,regions} (JWT + ownership; POST also the FEAT-145 gate via locations-service)
+         FEAT-191 mint: /characters/economy/mint/npc/{npc_id}[/mint] (same gate as the banks)
 RBAC via user-service permissions economy:read / economy:emit / economy:adjust / economy:settings
 (regions/fill and merchants/fund need economy:settings AND economy:emit).
 
@@ -35,6 +37,7 @@ import econ_tick
 import economy_bank_crud
 import economy_crud
 import economy_events_crud
+import economy_mint_crud
 import locations_client
 import economy_merchants_crud
 import economy_sim_crud
@@ -456,12 +459,32 @@ def get_sim(
     return _read(db, lambda: economy_sim_crud.sim_state(db, env_enabled=econ_scheduler.env_enabled()))
 
 
+# FEAT-191 (3.5): sim params that authorise new money — changing them also needs economy:emit.
+MONEY_SIM_PARAMS = ("quota_season_amount", "mint_season_limit", "mint_court_marks_per_unit")
+MSG_NEED_EMIT = "Нужно право на эмиссию"
+
+
+def _check_money_params(db: Session, body: schemas.EconSimUpdateRequest, user: UserRead) -> None:
+    if "economy:emit" in (user.permissions or []):
+        return
+    incoming = body.params.dict()
+    if all(incoming.get(k) is None for k in MONEY_SIM_PARAMS):
+        return
+    current = _read(db, lambda: econ_tick.load_params(db).to_dict())
+    db.rollback()
+    for key in MONEY_SIM_PARAMS:
+        value = incoming.get(key)
+        if value is not None and float(value) != float(current[key]):
+            raise HTTPException(status_code=403, detail=MSG_NEED_EMIT)
+
+
 @router.put("/admin/economy/sim")
 def put_sim(
     body: schemas.EconSimUpdateRequest,
     db: Session = Depends(get_db),
     current_user: UserRead = Depends(require_permission("economy:settings")),
 ):
+    _check_money_params(db, body, current_user)
     _run_write(db, lambda: economy_sim_crud.update_sim(
         db, tick_enabled=body.tick_enabled, params_in=body.params.dict(), user_id=current_user.id))
     logger.info("economy sim settings updated: user=%s tick_enabled=%s", current_user.id, body.tick_enabled)
@@ -794,3 +817,150 @@ def post_bank_loan_write_off(
     """«Списать долг»: the bank's loss, no money moves; clears «Должник»."""
     return _run_write(db, lambda: economy_bank_crud.write_off_loan(
         db, loan_id, comment=body.comment, actor_user_id=current_user.id))
+
+
+# ---------------------------------------------------------------------------
+# FEAT-191 mint — player API (contract 3.8 / 3.10)
+# ---------------------------------------------------------------------------
+# Minter check order = the banker order: 1 JWT + ownership + player -> 2 minter exists / role / alive -> 3 activity
+# lock (POST) -> 4 same location -> 5 FEAT-145 gate (POST, fail-closed, no open DB transaction) -> 6 the minter's
+# region must be the effective capital (409) -> the mint must work (409 with the reason).
+
+@router.get("/economy/mint/npc/{npc_id}", response_model=schemas.MintView)
+def get_mint_view(
+    npc_id: int,
+    character_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """The mint window at this minter (read-only, no gate)."""
+    def action():
+        ctx, status = economy_mint_crud.minter_context(db, npc_id, character_id, current_user.id, write=False)
+        return economy_mint_crud.build_view(db, ctx, status)
+    return _read_or_error(db, action)
+
+
+def _mint_precheck(db: Session, npc_id: int, character_id: int, user_id: int):
+    """Steps 1-4; the read transaction is always closed before the gate's HTTP call."""
+    try:
+        return economy_mint_crud.resolve_minter(db, npc_id, character_id, user_id, write=True)
+    except economy_crud.EconomyApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except SQLAlchemyError:
+        logger.exception("mint precheck failed")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить данные монетного двора")
+    finally:
+        db.rollback()
+
+
+def _mint_commit(db: Session, npc_id: int, body: schemas.MintIn, user_id: int) -> dict:
+    """Ensure the season counter (own short commit), then steps 1-4 + 6 and the flow in ONE transaction, COMMIT."""
+    character_id = body.character_id
+    try:
+        ctx, status = economy_mint_crud.minter_context(db, npc_id, character_id, user_id, write=True)
+        if status.working:
+            economy_mint_crud.ensure_season_row(db, ctx.country_id, status.period.index)
+            ctx, status = economy_mint_crud.minter_context(db, npc_id, character_id, user_id, write=True)
+        result = economy_mint_crud.mint(db, ctx, status, body)
+        db.commit()
+    except economy_crud.EconomyApiError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    except IntegrityError:
+        db.rollback()
+        logger.warning("mint conflict: npc=%s character=%s", npc_id, character_id)
+        raise HTTPException(status_code=409, detail=economy_mint_crud.MSG_RETRY)
+    except core.EconomyError:
+        db.rollback()
+        logger.exception("mint rejected: npc=%s character=%s", npc_id, character_id)
+        raise HTTPException(status_code=400, detail=BANK_REJECTED)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("mint failed: npc=%s character=%s", npc_id, character_id)
+        raise HTTPException(status_code=500, detail=GENERIC_ERROR)
+    logger.info("player mint: user=%s character=%s npc=%s marks=%s op=%s", user_id, character_id, npc_id,
+                result["marks"], result["operation_id"])
+    view = _read(db, lambda: economy_mint_crud.build_view(db, ctx))
+    return {**result, "wallet": view["wallet"], "view": view}
+
+
+@router.post("/economy/mint/npc/{npc_id}/mint", response_model=schemas.MintActionOut)
+async def post_mint(npc_id: int, body: schemas.MintIn, db: Session = Depends(get_db),
+                    current_user: UserRead = Depends(get_current_user_via_http)):
+    ctx = await run_in_threadpool(_mint_precheck, db, npc_id, body.character_id, current_user.id)
+    try:
+        gate_open = await locations_client.check_npc_gate(body.character_id, ctx.location_id, npc_id)
+    except locations_client.GateUnavailable:
+        raise HTTPException(status_code=503, detail=economy_mint_crud.MSG_GATE_UNAVAILABLE)
+    if not gate_open:
+        raise HTTPException(status_code=403, detail=economy_mint_crud.MSG_GATE_CLOSED)
+    return await run_in_threadpool(_mint_commit, db, npc_id, body, current_user.id)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-191 mint — admin API (contract 3.10): reads economy:read, money-authorising writes settings + emit
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/economy/mint", response_model=schemas.MintAdminOut)
+def get_mint_admin(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_mint_crud.admin_view(db))
+
+
+@router.put("/admin/economy/mint/countries/{country_id}", response_model=schemas.MintCountryOut)
+def put_mint_country(
+    country_id: int,
+    body: schemas.MintCountryIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_all_permissions("economy:settings", "economy:emit")),
+):
+    result = _run_write(db, lambda: economy_mint_crud.update_country(
+        db, country_id, capital_region_id=body.capital_region_id, season_limit=body.season_limit,
+        is_enabled=body.is_enabled, actor_user_id=current_user.id))
+    logger.info("mint country: user=%s country=%s capital=%s limit=%s enabled=%s", current_user.id, country_id,
+                body.capital_region_id, body.season_limit, body.is_enabled)
+    return result
+
+
+@router.get("/admin/economy/mint/items", response_model=List[schemas.MintItemOut])
+def list_mint_items(
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_mint_crud.list_items(db))
+
+
+@router.put("/admin/economy/mint/items/{item_id}", response_model=schemas.MintItemOut)
+def put_mint_item(
+    item_id: int,
+    body: schemas.MintItemIn,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_all_permissions("economy:settings", "economy:emit")),
+):
+    result = _run_write(db, lambda: economy_mint_crud.upsert_item(
+        db, item_id, marks_per_item=body.marks_per_item, is_enabled=body.is_enabled, actor_user_id=current_user.id))
+    logger.info("mint item: user=%s item=%s rate=%s enabled=%s", current_user.id, item_id, body.marks_per_item,
+                body.is_enabled)
+    return result
+
+
+@router.delete("/admin/economy/mint/items/{item_id}", status_code=204)
+def delete_mint_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_all_permissions("economy:settings", "economy:emit")),
+):
+    _run_write(db, lambda: economy_mint_crud.delete_item(db, item_id))
+    logger.info("mint item removed: user=%s item=%s", current_user.id, item_id)
+    return Response(status_code=204)
+
+
+@router.get("/admin/economy/mint/quotas", response_model=List[schemas.QuotaOut])
+def list_mint_quotas(
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("economy:read")),
+):
+    return _read(db, lambda: economy_mint_crud.list_quotas(db, limit))
