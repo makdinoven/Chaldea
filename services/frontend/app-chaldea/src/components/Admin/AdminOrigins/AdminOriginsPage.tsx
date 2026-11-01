@@ -11,9 +11,11 @@ import {
   selectAdminOriginsError,
 } from '../../../redux/slices/originsSlice';
 import type { OriginCountryAdmin, OriginCountryCreatePayload } from '../../../api/origins';
+import { uploadOriginImage } from '../../../api/origins';
 import { selectPermissions, selectRole } from '../../../redux/slices/userSlice';
 import { hasPermission } from '../../../utils/permissions';
 import OriginForm from './OriginForm';
+import type { OriginImageFiles } from './OriginForm';
 import OriginStartingPoints from './OriginStartingPoints';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
@@ -93,24 +95,45 @@ const AdminOriginsPage = () => {
     setShowForm(true);
   };
 
-  const handleSave = async (data: OriginCountryCreatePayload) => {
+  const handleSave = async (data: OriginCountryCreatePayload, files: OriginImageFiles) => {
     setSaving(true);
+    let saved: OriginCountryAdmin;
     try {
-      if (editing) {
-        await dispatch(updateOriginThunk({ originId: editing.id, data })).unwrap();
-        toast.success('Происхождение обновлено');
-      } else {
-        await dispatch(createOriginThunk(data)).unwrap();
-        toast.success('Происхождение создано');
-      }
-      setShowForm(false);
-      setEditing(null);
-      dispatch(fetchOriginsAdminThunk(true));
+      saved = editing
+        ? await dispatch(updateOriginThunk({ originId: editing.id, data })).unwrap()
+        : await dispatch(createOriginThunk(data)).unwrap();
     } catch (err) {
       toast.error(typeof err === 'string' ? err : 'Не удалось сохранить происхождение.');
-    } finally {
       setSaving(false);
+      return;
     }
+
+    // The origin row exists now — upload the images picked on the admin's device.
+    const uploads: Array<[File | null, 'emblem' | 'map']> = [
+      [files.emblem, 'emblem'],
+      [files.map, 'map'],
+    ];
+    let uploadFailed = false;
+    for (const [file, kind] of uploads) {
+      if (!file) continue;
+      try {
+        await uploadOriginImage(saved.id, kind, file);
+      } catch (err) {
+        uploadFailed = true;
+        toast.error(err instanceof Error ? err.message : 'Не удалось загрузить изображение.');
+      }
+    }
+
+    if (uploadFailed) {
+      // Keep the form open on the saved origin so the admin can retry the upload.
+      setEditing(saved);
+    } else {
+      toast.success(editing ? 'Происхождение обновлено' : 'Происхождение создано');
+      setShowForm(false);
+      setEditing(null);
+    }
+    dispatch(fetchOriginsAdminThunk(true));
+    setSaving(false);
   };
 
   const handleConfirmHide = async () => {

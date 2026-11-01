@@ -126,3 +126,28 @@ export const deleteOrigin = async (originId: number): Promise<OriginDeleteRespon
 /** Restore a soft-deleted origin. There is no dedicated endpoint (N5). */
 export const restoreOrigin = (originId: number): Promise<OriginCountryAdmin> =>
   updateOrigin(originId, { is_active: true });
+
+// ── Images (photo-service, `photos:upload`) ─────────────────────────────────
+
+export type OriginImageKind = 'emblem' | 'map';
+
+/** Uploads the origin's emblem or map from the admin's device; returns the new URL. */
+export const uploadOriginImage = async (
+  originId: number,
+  kind: OriginImageKind,
+  file: File,
+): Promise<string> => {
+  const fd = new FormData();
+  fd.append('origin_id', String(originId));
+  fd.append('file', file);
+  const url = kind === 'emblem' ? '/photo/change_origin_emblem' : '/photo/change_origin_map';
+  try {
+    const { data } = await axios.post<{ emblem_url?: string; map_image_url?: string }>(url, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return (kind === 'emblem' ? data.emblem_url : data.map_image_url) ?? '';
+  } catch (error) {
+    const what = kind === 'emblem' ? 'герб' : 'карту';
+    throw new Error(apiErrorMessage(error, `Не удалось загрузить ${what} происхождения.`));
+  }
+};

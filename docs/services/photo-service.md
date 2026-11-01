@@ -34,6 +34,8 @@ photo-service/
 | POST | `/photo/map_outlines/preview` | Превью маски суши по образцам воды (`map_outlines.py`, numpy + OpenCV) |
 | POST | `/photo/map_outlines/apply` | Сохранить настройки и пересчитать `ClickableZones.precise_path` всех зон карты: грубый многоугольник ∩ суша → SVG-путь с островами. После загрузки новой карты области/страны пересчёт идёт сам по сохранённым настройкам (при сбое в ответе `outlines_warning`) |
 | POST | `/photo/change_region_map` | Карта региона |
+| POST | `/photo/change_origin_emblem` | Герб происхождения → `origin_countries.emblem_url` (папка `emblems/`, право `photos:upload`, 404 если происхождения нет) |
+| POST | `/photo/change_origin_map` | Карта происхождения → `origin_countries.map_image_url` (папка `maps/`, право `photos:upload`) |
 | POST | `/photo/change_region_image` | Изображение региона |
 | POST | `/photo/change_district_image` | Изображение района |
 | POST | `/photo/change_location_image` | Изображение локации |
@@ -74,6 +76,7 @@ photo-service/
 | users_avatar_character_preview | avatar | Превью персонажа |
 | Countries | map_image_url | Карта страны |
 | Regions | map_image_url, image_url | Карта/изображение региона |
+| origin_countries | emblem_url, map_image_url | Герб/карта происхождения (таблица locations-service) |
 | Districts | image_url | Изображение района |
 | Locations | image_url | Изображение локации |
 | skills | skill_image | Изображение навыка |

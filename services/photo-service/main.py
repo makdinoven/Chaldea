@@ -28,6 +28,7 @@ from crud import (
     update_conversation_avatar, get_conversation_avatar,
     is_conversation_participant, get_conversation_type, get_conversation_created_by,
     get_map_parent, get_clickable_zones, get_clickable_zone,
+    origin_exists, update_origin_image,
 )
 import map_outlines
 from utils import (
@@ -905,6 +906,49 @@ async def change_subrace_image(subrace_id: int = Form(...), file: UploadFile = F
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+ORIGIN_IMAGE_KINDS = {
+    # kind -> (S3 subdirectory, filename prefix, response field, success message)
+    "emblem": ("emblems", "origin_emblem", "emblem_url", "Герб происхождения загружен"),
+    "map": ("maps", "origin_map", "map_image_url", "Карта происхождения загружена"),
+}
+
+
+def _upload_origin_image(kind: str, origin_id: int, file: UploadFile, db: Session) -> dict:
+    validate_image_mime(file)
+    if not origin_exists(db, origin_id):
+        raise HTTPException(status_code=404, detail="Происхождение не найдено")
+    subdirectory, prefix, field, message = ORIGIN_IMAGE_KINDS[kind]
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename(prefix, origin_id, extension=result.extension)
+        url = upload_file_to_s3(result.data, unique_filename, subdirectory=subdirectory,
+                                content_type=result.content_type)
+        if not update_origin_image(db, origin_id, kind, url):
+            raise HTTPException(status_code=404, detail="Происхождение не найдено")
+        return {"message": message, field: url}
+    except HTTPException:
+        raise
+    except Exception:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Не удалось загрузить изображение")
+
+
+@app.post("/photo/change_origin_emblem")
+async def change_origin_emblem(origin_id: int = Form(...), file: UploadFile = File(...),
+                               current_user = Depends(require_permission("photos:upload")),
+                               db: Session = Depends(get_db)):
+    """Uploads an origin's emblem (origin_countries.emblem_url) from the admin's device."""
+    return _upload_origin_image("emblem", origin_id, file, db)
+
+
+@app.post("/photo/change_origin_map")
+async def change_origin_map(origin_id: int = Form(...), file: UploadFile = File(...),
+                            current_user = Depends(require_permission("photos:upload")),
+                            db: Session = Depends(get_db)):
+    """Uploads an origin's map image (origin_countries.map_image_url) from the admin's device."""
+    return _upload_origin_image("map", origin_id, file, db)
 
 
 @app.post("/photo/change_profile_background")

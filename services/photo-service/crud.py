@@ -3,6 +3,7 @@ from models import (
     User, Character, Area, Country, Region, District,
     Location, Skill, SkillRank, Item, GameRule, Race, Subrace,
     MobTemplate, Recipe, Conversation, ConversationParticipant, ClickableZone,
+    OriginCountry,
 )
 
 
@@ -206,6 +207,23 @@ def update_subrace_image(db: Session, subrace_id: int, image_url: str):
     if subrace:
         subrace.image = image_url
         db.commit()
+
+
+def origin_exists(db: Session, origin_id: int) -> bool:
+    return db.query(OriginCountry.id).filter(OriginCountry.id == origin_id).first() is not None
+
+
+def update_origin_image(db: Session, origin_id: int, kind: str, url: str) -> bool:
+    """Set the origin's emblem (kind="emblem") or map (kind="map"). False when the origin is gone."""
+    origin = db.query(OriginCountry).filter(OriginCountry.id == origin_id).first()
+    if origin is None:
+        return False
+    if kind == "emblem":
+        origin.emblem_url = url
+    else:
+        origin.map_image_url = url
+    db.commit()
+    return True
 
 
 def update_mob_template_avatar(db: Session, mob_template_id: int, avatar_url: str):

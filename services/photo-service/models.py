@@ -111,6 +111,15 @@ class Subrace(Base):
     image = Column(String(255), nullable=True)
 
 
+class OriginCountry(Base):
+    """Origin registry row (owned by locations-service, FEAT-154)."""
+    __tablename__ = "origin_countries"
+
+    id = Column(Integer, primary_key=True)
+    emblem_url = Column(String(255), nullable=True)
+    map_image_url = Column(String(255), nullable=True)
+
+
 class GameRule(Base):
     __tablename__ = "game_rules"
 

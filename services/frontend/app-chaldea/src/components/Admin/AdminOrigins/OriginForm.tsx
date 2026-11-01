@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   OriginCountryAdmin,
   OriginCountryCreatePayload,
@@ -15,9 +15,15 @@ import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
  * expressed only through its recommended starting points, curated on the
  * listing page.
  */
+/** Images picked on the admin's device; uploaded by the page after the origin is saved. */
+export interface OriginImageFiles {
+  emblem: File | null;
+  map: File | null;
+}
+
 interface OriginFormProps {
   origin: OriginCountryAdmin | null;
-  onSave: (data: OriginCountryCreatePayload) => void;
+  onSave: (data: OriginCountryCreatePayload, files: OriginImageFiles) => void;
   onCancel: () => void;
   loading: boolean;
 }
@@ -35,13 +41,71 @@ const trimmedOrNull = (value: string): string | null => {
   return trimmed ? trimmed : null;
 };
 
+interface ImageFieldProps {
+  label: string;
+  currentUrl: string | null;
+  file: File | null;
+  removed: boolean;
+  onFile: (file: File | null) => void;
+  onRemove: () => void;
+}
+
+/** File picker with a preview of the current or newly chosen image (same flow as other admin images). */
+const ImageField = ({ label, currentUrl, file, removed, onFile, onRemove }: ImageFieldProps) => {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const shown = previewUrl ?? (removed ? null : currentUrl);
+
+  return (
+    <div className="flex flex-col gap-2 min-w-0">
+      <label className={LABEL_CLASS}>{label}</label>
+      <input
+        type="file"
+        accept="image/*"
+        onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+        className="text-white/60 text-sm max-w-full"
+      />
+      {shown && (
+        <img
+          src={shown}
+          alt={label}
+          className="max-h-[120px] max-w-full w-auto object-contain rounded border border-white/10 self-start"
+        />
+      )}
+      {file && <p className="text-white/40 text-xs break-all">Выбрано: {file.name} — загрузится при сохранении</p>}
+      {!file && currentUrl && !removed && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="self-start text-xs text-white/50 hover:text-site-red transition-colors"
+        >
+          Убрать изображение
+        </button>
+      )}
+      {!file && removed && <p className="text-white/40 text-xs">Изображение будет убрано при сохранении</p>}
+    </div>
+  );
+};
+
 const OriginForm = ({ origin, onSave, onCancel, loading }: OriginFormProps) => {
   const [name, setName] = useState(origin?.name || '');
   const [summary, setSummary] = useState(origin?.summary || '');
   const [attitude, setAttitude] = useState(origin?.skitaltsy_attitude || '');
   const [archiveSlug, setArchiveSlug] = useState(origin?.archive_slug || '');
-  const [emblemUrl, setEmblemUrl] = useState(origin?.emblem_url || '');
-  const [mapImageUrl, setMapImageUrl] = useState(origin?.map_image_url || '');
+  const [emblemFile, setEmblemFile] = useState<File | null>(null);
+  const [mapFile, setMapFile] = useState<File | null>(null);
+  const [emblemRemoved, setEmblemRemoved] = useState(false);
+  const [mapRemoved, setMapRemoved] = useState(false);
   const [sortOrder, setSortOrder] = useState(String(origin?.sort_order ?? 0));
 
   const slugError = useMemo(() => {
@@ -63,15 +127,17 @@ const OriginForm = ({ origin, onSave, onCancel, loading }: OriginFormProps) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    onSave({
+    const data: OriginCountryCreatePayload = {
       name: name.trim(),
       summary: trimmedOrNull(summary),
       skitaltsy_attitude: trimmedOrNull(attitude),
       archive_slug: trimmedOrNull(archiveSlug),
-      emblem_url: trimmedOrNull(emblemUrl),
-      map_image_url: trimmedOrNull(mapImageUrl),
       sort_order: sortOrder.trim() ? Number(sortOrder) : 0,
-    });
+    };
+    // Image URLs are written by the upload itself; only an explicit «убрать» clears them here.
+    if (emblemRemoved && !emblemFile) data.emblem_url = null;
+    if (mapRemoved && !mapFile) data.map_image_url = null;
+    onSave(data, { emblem: emblemFile, map: mapFile });
   };
 
   return (
@@ -160,35 +226,29 @@ const OriginForm = ({ origin, onSave, onCancel, loading }: OriginFormProps) => {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className={LABEL_CLASS}>Ссылка на герб</label>
-            <input
-              type="text"
-              value={emblemUrl}
-              onChange={(e) => setEmblemUrl(e.target.value)}
-              placeholder="https://…"
-              className={FIELD_CLASS}
-            />
-          </div>
-          <div>
-            <label className={LABEL_CLASS}>Ссылка на карту</label>
-            <input
-              type="text"
-              value={mapImageUrl}
-              onChange={(e) => setMapImageUrl(e.target.value)}
-              placeholder="https://…"
-              className={FIELD_CLASS}
-            />
-          </div>
-        </div>
-
-        {emblemUrl.trim() && (
-          <img
-            src={emblemUrl.trim()}
-            alt="Герб"
-            className="max-h-[90px] w-auto object-contain rounded border border-white/10 self-start"
+          <ImageField
+            label="Герб"
+            currentUrl={origin?.emblem_url ?? null}
+            file={emblemFile}
+            removed={emblemRemoved}
+            onFile={(f) => {
+              setEmblemFile(f);
+              if (f) setEmblemRemoved(false);
+            }}
+            onRemove={() => setEmblemRemoved(true)}
           />
-        )}
+          <ImageField
+            label="Карта"
+            currentUrl={origin?.map_image_url ?? null}
+            file={mapFile}
+            removed={mapRemoved}
+            onFile={(f) => {
+              setMapFile(f);
+              if (f) setMapRemoved(false);
+            }}
+            onRemove={() => setMapRemoved(true)}
+          />
+        </div>
 
         <div className="sm:max-w-[50%]">
           <label className={LABEL_CLASS}>Порядок сортировки</label>
