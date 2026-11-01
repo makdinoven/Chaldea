@@ -27,7 +27,12 @@ import {
   isCoatingBlocked,
 } from "../../../../../utils/itemEffects";
 import { effectIconOf } from "../arenaTypes";
-import { skillPayment, type PayerBars } from "../../../../../utils/passiveCosts";
+import {
+  selfRestore,
+  skillPayment,
+  turnSlotCost,
+  type PayerBars,
+} from "../../../../../utils/passiveCosts";
 import { RuneIcon } from "../EffectRunes";
 
 const TITLES: Record<SkillPickerProps["type"], string> = {
@@ -212,7 +217,13 @@ const SkillFace = ({
     shortEnergy,
     short,
     shortText,
-  } = skillPayment(resolved?.cost_mana ?? 0, costEnergy, resources, passiveKey);
+  } = skillPayment(
+    resolved?.cost_mana ?? 0,
+    costEnergy,
+    resources,
+    passiveKey,
+    selfRestore(resolved?.effects),
+  );
   const onCooldown = cooldown > 0;
 
   const corners = (
@@ -496,7 +507,9 @@ const SkillHand = ({
                       (e) => e.target_side === "ally",
                     ),
                     // FEAT-189: the resolved (level-adjusted) mana cost, so the
-                    // slot tooltip shows the same price as this card.
+                    // slot tooltip shows the same price as this card; energy and
+                    // self restores let the other slots budget the whole turn.
+                    ...turnSlotCost(resolved),
                     cost_mana: resolved?.cost_mana,
                   }),
                 )

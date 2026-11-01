@@ -16,7 +16,7 @@ import { describeEffect, pluralizeTurn, type EffectLike } from "../battleEffects
 import { EQUIPMENT_SLOT_LABELS } from "../../../ProfilePage/constants";
 import type { WeaponCoating } from "../../../../utils/itemEffects";
 import type { ParticipantPassiveFields } from "../battleTypes";
-import type { PayerBars } from "../../../../utils/passiveCosts";
+import { effectiveManaCost, type PayerBars } from "../../../../utils/passiveCosts";
 import SkillPicker, {
   type BattleSkill,
   type BattleItem,
@@ -1258,6 +1258,50 @@ export const useBattleBar = ({
     return { mana: live?.mana ?? 0, energy: live?.energy ?? 0, hp: live?.hp ?? 0 };
   })();
 
+  /**
+   * The bars a card in `slotKey` is paid from: the server charges every chosen
+   * skill at the end of the turn, after self restores and the fast-slot item —
+   * so the OTHER slots' costs and restores count too (`passiveCosts.PayerBars`).
+   */
+  const turnBudgetFor = (slotKey: string): PayerBars => {
+    const live =
+      myData.participant_id != null
+        ? (runtimeData.participants[myData.participant_id] as
+            | (RuntimeParticipant & { max_mana?: number; max_energy?: number })
+            | undefined)
+        : undefined;
+    const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    let restoreMana = 0;
+    let restoreEnergy = 0;
+    let spentMana = 0;
+    let spentEnergy = 0;
+    for (const key of [SKILLS_KEYS.attack, SKILLS_KEYS.defense, SKILLS_KEYS.support]) {
+      if (key === slotKey) continue;
+      const chosen = turnData[key] as Record<string, unknown> | null;
+      if (!chosen) continue;
+      spentMana += effectiveManaCost(n(chosen.cost_mana), myPassiveKey);
+      spentEnergy += n(chosen.cost_energy);
+      restoreMana += n(chosen.restore_mana);
+      restoreEnergy += n(chosen.restore_energy);
+    }
+    if (slotKey !== SKILLS_KEYS.item) {
+      const item = turnData[SKILLS_KEYS.item] as Record<string, unknown> | null;
+      if (item) {
+        restoreMana += n(item.mana_recovery);
+        restoreEnergy += n(item.energy_recovery);
+      }
+    }
+    return {
+      ...myResources,
+      maxMana: live?.max_mana,
+      maxEnergy: live?.max_energy,
+      restoreMana,
+      restoreEnergy,
+      spentMana,
+      spentEnergy,
+    };
+  };
+
   /** Everything the skill / item chooser needs — the 2D modal and the 3D hand alike. */
   const pickerProps = (): SkillPickerProps | null => {
     if (!pickerType || isOpponentTurn) return null;
@@ -1296,7 +1340,7 @@ export const useBattleBar = ({
             weaponCoating:
               pid != null ? runtimeData.participants[pid]?.weapon_coating ?? null : null,
             passiveKey: myPassiveKey,
-            resources: myResources,
+            resources: turnBudgetFor(slotKey),
             selectedId,
             onSelectSkill: (skill) =>
               setTurnData((prev) => ({

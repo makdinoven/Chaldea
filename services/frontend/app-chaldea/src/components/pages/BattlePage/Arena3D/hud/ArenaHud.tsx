@@ -211,7 +211,7 @@ const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }:
       )}
 
       {/* In 3D the chooser is a hand of cards dealt over the table */}
-      {picker && <SkillHand {...picker} resources={bar.myResources} />}
+      {picker && <SkillHand {...picker} resources={picker.resources ?? bar.myResources} />}
     </div>
   );
 };

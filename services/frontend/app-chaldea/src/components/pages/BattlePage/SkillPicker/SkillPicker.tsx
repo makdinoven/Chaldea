@@ -21,7 +21,12 @@ import {
   type ItemBattleConfig,
   type WeaponCoating,
 } from "../../../../utils/itemEffects";
-import { skillPayment, type PayerBars } from "../../../../utils/passiveCosts";
+import {
+  selfRestore,
+  skillPayment,
+  turnSlotCost,
+  type PayerBars,
+} from "../../../../utils/passiveCosts";
 
 // --- Battle data shapes (flat snapshot rows) ---
 export interface BattleSkill {
@@ -238,7 +243,13 @@ const SkillPicker = ({
                 // FEAT-189 Caster discount + FEAT-190 Necromancer HP top-up; an
                 // unpayable skill is blocked like on the 3D hand.
                 const pay = resolved
-                  ? skillPayment(resolved.cost_mana, resolved.cost_energy, resources, passiveKey)
+                  ? skillPayment(
+                      resolved.cost_mana,
+                      resolved.cost_energy,
+                      resources,
+                      passiveKey,
+                      selfRestore(resolved.effects),
+                    )
                   : null;
                 const blocked = onCd || !!pay?.short;
                 return (
@@ -253,10 +264,13 @@ const SkillPicker = ({
                           (e) => e.target_side === "ally",
                         );
                         // FEAT-189: carry the resolved (level-adjusted) mana cost so
-                        // the slot tooltip shows the same price as this card.
+                        // the slot tooltip shows the same price as this card; plus
+                        // energy and self restores, so the other slots' cards can
+                        // budget the whole turn.
                         onSelectSkill({
                           ...s,
                           targets_ally: targetsAlly,
+                          ...turnSlotCost(resolved),
                           cost_mana: resolved?.cost_mana,
                         });
                         onClose();
