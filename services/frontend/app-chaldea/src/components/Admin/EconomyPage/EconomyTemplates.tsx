@@ -17,6 +17,15 @@ import { Population, populationTitle } from './CompactValue';
 import { compactNumber } from '../../../utils/compactNumber';
 import { FieldHint } from './ParamHint';
 import type { FieldHintKey } from './paramHints';
+import ClassSharesFields, {
+  draftToShares,
+  sharesEmpty,
+  sharesError,
+  sharesToDraft,
+  type ClassSharesDraft,
+} from './ClassSharesFields';
+import { ClassMixBar } from '../../WorldPage/RegionClassBar';
+import { CLASS_ORDER, sharePct } from './regionBits';
 
 /* Bounds of `PUT /admin/economy/templates/{code}` (feature file 3.7; same limits as the region editor). */
 const NAME_MAX = 100;
@@ -55,7 +64,15 @@ interface Draft {
   population: string;
   taxPercent: string;
   goods: Record<string, GoodsDraft>;
+  /** FEAT-194: default class shares, percent (empty when an older backend sends none — then not sent). */
+  classes: ClassSharesDraft;
 }
+
+/** FEAT-194: the template's default shares, or null when the backend does not send them yet. */
+const templateMix = (t: EconRegionTemplate) =>
+  t.class_poor != null && t.class_middling != null && t.class_rich != null
+    ? { poor: t.class_poor, middling: t.class_middling, rich: t.class_rich }
+    : null;
 
 const toDraft = (t: EconRegionTemplate, groups: EconGoodsGroup[]): Draft => {
   const byCode = Object.fromEntries(t.goods.map((g) => [g.group_code, g]));
@@ -66,6 +83,7 @@ const toDraft = (t: EconRegionTemplate, groups: EconGoodsGroup[]): Draft => {
     gender: t.noun_gender,
     population: String(t.default_population),
     taxPercent: String(Math.round(t.tax_rate * 10000) / 100),
+    classes: sharesToDraft(templateMix(t)),
     // Every group gets a row: a template missing a group would otherwise be impossible to fill in.
     goods: Object.fromEntries(
       groups.map((g) => [
@@ -129,7 +147,10 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
     const d = draft.goods[g.code];
     return !d || !inRange(d.production, 0, MAX_PRODUCTION) || !inRange(d.consumption, 0, MAX_CONSUMPTION_MULT);
   });
-  const formValid = nameValid && descriptionValid && nounValid && populationValid && taxValid && goodsErrors.length === 0;
+  const hasClasses = templateMix(template) !== null;
+  const classesError = hasClasses ? sharesError(draft.classes, false) : null;
+  const formValid =
+    nameValid && descriptionValid && nounValid && populationValid && taxValid && goodsErrors.length === 0 && !classesError;
 
   const setGoods = (code: string, patch: Partial<GoodsDraft>) =>
     setDraft({ ...draft, goods: { ...draft.goods, [code]: { ...draft.goods[code], ...patch } } });
@@ -152,6 +173,12 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
         consumption_mult: Number(draft.goods[g.code].consumption),
       })),
     };
+    if (hasClasses && !sharesEmpty(draft.classes)) {
+      const mix = draftToShares(draft.classes);
+      body.class_poor = mix.poor;
+      body.class_middling = mix.middling;
+      body.class_rich = mix.rich;
+    }
     setSaving(true);
     try {
       const saved = await putEconomyTemplate(template.code, body);
@@ -251,6 +278,28 @@ const TemplateEditor = ({ template, groups, canEdit, onBack, onSaved }: Template
           </div>
         </div>
       </section>
+
+      {hasClasses && (
+        <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-3 min-w-0">
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1">
+              <h3 className="gold-text text-lg font-medium uppercase tracking-[0.06em]">Классы жителей</h3>
+              <FieldHint field="template_classes" label="Классы жителей шаблона" />
+            </span>
+            <p className="text-white/50 text-sm">
+              Стартовые доли бедных, зажиточных и богатых. Изменение сразу меняет точку отсчёта спроса и налога у всех
+              регионов шаблона; их текущие доли не меняются — для этого «Применить шаблон» или «Заполнить регионы» с
+              галочкой «Сбросить и классы».
+            </p>
+          </div>
+          <ClassSharesFields
+            idPrefix="econ-tpl-class"
+            value={draft.classes}
+            onChange={(next) => setDraft({ ...draft, classes: next })}
+            disabled={!canEdit}
+          />
+        </section>
+      )}
 
       <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-4 min-w-0">
         <div className="flex flex-col gap-1">
@@ -458,6 +507,17 @@ const EconomyTemplates = () => {
                       налог <span className="text-white/80">{formatPercent(t.tax_rate)}</span>
                     </span>
                   </span>
+                  {(() => {
+                    const mix = templateMix(t);
+                    return mix ? (
+                      <span className="flex flex-col gap-1" title="Бедные / зажиточные / богатые">
+                        <ClassMixBar poor={mix.poor} middling={mix.middling} rich={mix.rich} heightClass="h-1.5" />
+                        <span className="text-white/50 text-[11px]">
+                          классы {CLASS_ORDER.map((k) => sharePct(mix[k], 0)).join(' / ')} %
+                        </span>
+                      </span>
+                    ) : null;
+                  })()}
                   {top.length > 0 && (
                     <span className="flex flex-wrap gap-1.5">
                       {top.map((n) => (

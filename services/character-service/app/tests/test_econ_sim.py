@@ -60,10 +60,11 @@ def _finite(*values):
 
 def test_default_params_match_the_migration_seed():
     # FEAT-183 merchant / FEAT-184 bank / FEAT-186 population_scale / FEAT-187 event / FEAT-191 mint + quota keys
-    # (FEAT-192 caravan keys and FEAT-193 guild keys too) are newer than the 028 seed (no migration): missing keys use the SimParams defaults.
+    # (FEAT-192 caravan keys, FEAT-193 guild keys and FEAT-194 class keys too) are newer than the 028 seed (no migration): missing keys use the SimParams defaults.
     defaults = S.SimParams().to_dict()
     seeded = {k: v for k, v in defaults.items()
-              if not k.startswith(("merchant_", "bank_", "event_", "events_", "mint_", "quota_", "caravan", "guild_"))
+              if not k.startswith(("merchant_", "bank_", "event_", "events_", "mint_", "quota_", "caravan", "guild_",
+                                   "class_", "classes_", "wealth_", "mob_", "grant_deficit"))
               and k != "population_scale"}
     assert seeded == pytest.approx(mig.DEFAULT_PARAMS)
     assert S.SimParams.from_mapping(mig.DEFAULT_PARAMS) == S.SimParams()

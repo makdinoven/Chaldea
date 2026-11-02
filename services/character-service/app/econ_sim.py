@@ -22,6 +22,9 @@ import math
 from dataclasses import dataclass, field, fields, replace
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+import econ_classes
+from econ_classes import ClassMix
+
 FOOD_CODE = "food"
 
 # Processing order of the default chains (3.4 step 3). Groups with inputs that are not listed here are
@@ -162,6 +165,31 @@ class SimParams:
     guild_xp_per_mark: float = 0.1            # XP per mark paid for an item no merchant of the region sells
     guild_xp_per_mark_merchant_items: float = 0.05  # XP per mark paid for an item a merchant of the region sells
     guild_xp_daily_cap: int = 200             # max base guild XP per character per UTC day; 0 = guild XP off
+    # FEAT-194 social classes and the wealth norm (3.14). Not in a seed either.
+    classes_enabled: int = 1                  # 0 = the whole class layer off (pre-FEAT-194 math, norm = purse_start_days)
+    class_norm_days_poor: float = 3.0         # wealth norm of a resident: days of his class's needs at base prices
+    class_norm_days_middling: float = 7.0
+    class_norm_days_rich: float = 21.0
+    wealth_tax_rate: float = 0.02             # share of the purse excess above the norm taxed into the treasury
+    class_tax_w_poor: float = 0.3             # income-tax weights (normalised to the template mix)
+    class_tax_w_middling: float = 1.0
+    class_tax_w_rich: float = 2.0
+    class_stab_poor_threshold: float = 0.6    # poor share above which unrest starts
+    class_stab_poor_w: float = 40.0           # stability points per 1.0 of poor share above the threshold
+    class_stab_poor_hunger_w: float = 50.0    # extra stability loss per (poor share x poor hunger)
+    class_stab_rich_free_tax: float = 0.12    # tax rate the rich accept
+    class_stab_rich_tax_w: float = 100.0      # stability loss per (rich share x tax above that)
+    mob_rate_up: float = 0.001                # max share of a class moving up per recount
+    mob_rate_down: float = 0.0015             # max share moving down per recount
+    mob_rich_factor: float = 0.5              # middling -> rich at this fraction of the poor -> middling rate
+    mob_dead_zone: float = 0.1                # weaker mobility signals move nobody
+    mob_w_prosperity: float = 0.4             # weights of the mobility signal
+    mob_w_money: float = 0.4
+    mob_w_stability: float = 0.2
+    mob_w_hunger: float = 1.0
+    class_share_min: float = 0.02             # mobility / events never push a share outside these bounds
+    class_share_max: float = 0.90
+    grant_deficit_share: float = 0.25         # share of the country grant pool split by the deficit below the norm
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping]) -> "SimParams":
@@ -197,6 +225,8 @@ class GroupDef:
     price_elasticity: float = 0.0
     is_food: bool = False
     inputs: Mapping[str, float] = field(default_factory=dict)  # input_code -> units of input per unit
+    # FEAT-194: per-capita demand weights of the poor / middling / rich (normalised to the template mix)
+    class_demand: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 
 
 @dataclass
@@ -227,6 +257,9 @@ class RegionState:
     hunger: float = 0.0
     satisfaction: float = 1.0
     treasury_target: int = 0
+    # FEAT-194: live class mix (None = no classes) and the template default mix every factor is normalised to
+    classes: Optional[ClassMix] = None
+    class_base: Optional[ClassMix] = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +291,12 @@ class SimResult:
     treasury_after: int
     needs_cost_day: float
     affordability: float
+    # FEAT-194 (defaults keep every caller valid). ``tax`` stays the income tax.
+    wealth_tax: int = 0                                     # purse -> treasury on top of ``tax`` (same ledger leg)
+    wealth_norm: int = 0                                    # purse norm (no classes: starting_purse)
+    class_hunger: Optional[Tuple[float, float, float]] = None
+    class_afford: Optional[Tuple[float, float, float]] = None
+    class_delta: Tuple[float, float] = (0.0, 0.0)           # (dpoor, drich) of this recount
 
 
 # --------------------------------------------------------------------------------------------- helpers
@@ -309,12 +348,17 @@ def norm_stock(
     groups: Mapping[str, GroupDef],
     goods: Mapping[str, GoodState],
     population: float,
+    factors: Optional[Mapping[str, float]] = None,
 ) -> float:
-    """Norm stock of ``code`` (3.4 step 6): norm_days x (household demand/day + input use of processing/day)."""
+    """Norm stock of ``code`` (3.4 step 6): norm_days x (household demand/day + input use of processing/day).
+
+    ``factors`` (FEAT-194): class demand factor per group, multiplies the household part only (None = no classes)."""
     group = groups[code]
     good = goods.get(code)
     cmult = good.consumption_mult if good is not None else 1.0
     per_day = household_demand_day(group, cmult, population)
+    if factors is not None:
+        per_day *= float(factors.get(code, 1.0))
     pop_k = population / 1000.0
     for other_code, other in groups.items():
         ratio = other.inputs.get(code) if other.inputs else None
@@ -333,13 +377,19 @@ def demand_tick(
     population: float,
     prosperity: float,
     params: SimParams = DEFAULT_PARAMS,
+    factor: Optional[float] = None,
 ) -> float:
-    """Household demand of one group for one tick (3.4 step 4), at the current price."""
+    """Household demand of one group for one tick (3.4 step 4), at the current price.
+
+    ``factor`` (FEAT-194): class demand factor of the group (None = no classes, the statement below unchanged)."""
     pop_k = population / 1000.0
     prosp_factor = max(PROSPERITY_FACTOR_FLOOR,
                        1.0 + float(group.prosperity_elasticity) * (float(prosperity) - 50.0) / 50.0)
     price_factor = max(float(good.price_mult), MIN_STOCK_RATIO) ** (-float(group.price_elasticity))
-    return float(group.norm_per_1000) * float(good.consumption_mult) * pop_k * prosp_factor * price_factor * params.dt
+    demand = float(group.norm_per_1000) * float(good.consumption_mult) * pop_k * prosp_factor * price_factor * params.dt
+    if factor is not None:
+        demand *= float(factor)
+    return demand
 
 
 def needs_cost_day(
@@ -349,19 +399,23 @@ def needs_cost_day(
     prosperity: float = 50.0,
     params: SimParams = DEFAULT_PARAMS,
     base_prices: bool = False,
+    factors: Optional[Mapping[str, float]] = None,
 ) -> float:
-    """Cost of one day of household demand. ``base_prices=True`` -> prices x1 (used by «Заполнить»)."""
+    """Cost of one day of household demand. ``base_prices=True`` -> prices x1 (used by «Заполнить»).
+
+    ``factors`` (FEAT-194): class demand factor per group (None = no classes)."""
     total = 0.0
     for code, good in goods.items():
         group = groups.get(code)
         if group is None:
             continue
+        factor = factors.get(code, 1.0) if factors is not None else None
         if base_prices:
             probe = replace(good, price_mult=1.0)
-            demand = demand_tick(group, probe, population, 50.0, params) / params.dt
+            demand = demand_tick(group, probe, population, 50.0, params, factor) / params.dt
             total += demand * float(group.base_price)
         else:
-            demand = demand_tick(group, good, population, prosperity, params) / params.dt
+            demand = demand_tick(group, good, population, prosperity, params, factor) / params.dt
             total += demand * float(group.base_price) * float(good.price_mult)
     return total
 
@@ -371,20 +425,46 @@ def starting_purse(
     goods: Mapping[str, GoodState],
     population: float,
     params: SimParams = DEFAULT_PARAMS,
+    classes: Optional[ClassMix] = None,
+    class_base: Optional[ClassMix] = None,
 ) -> int:
-    """Purse target for «Заполнить регионы по шаблонам»: ``purse_start_days`` of needs at base prices."""
+    """Purse target for «Заполнить регионы по шаблонам»: ``purse_start_days`` of needs at base prices.
+
+    FEAT-194: with ``classes`` (and ``params.classes_enabled``) the target is the class wealth norm
+    (:func:`econ_classes.wealth_norm`, normalised to ``class_base`` = the template mix; None -> ``classes``)."""
+    if classes is not None and params.classes_enabled:
+        return econ_classes.wealth_norm(groups, goods, population, classes, class_base or classes, params)[0]
     return int(math.floor(params.purse_start_days * needs_cost_day(groups, goods, population, params=params,
                                                                    base_prices=True)))
+
+
+def class_factors(groups: Mapping[str, GroupDef], region: RegionState,
+                  params: SimParams = DEFAULT_PARAMS) -> Optional[Dict[str, float]]:
+    """FEAT-194: demand factor per group of a region with classes (None = classes off / no shares)."""
+    if not params.classes_enabled or region.classes is None:
+        return None
+    return econ_classes.demand_factors(groups, region.classes, region.class_base or region.classes)
+
+
+def region_wealth_norm(groups: Mapping[str, GroupDef], goods: Mapping[str, GoodState], region: RegionState,
+                       params: SimParams = DEFAULT_PARAMS) -> int:
+    """FEAT-194 (3.4): the purse norm of a region — class wealth norm, or ``starting_purse`` without classes."""
+    pop = sim_population(region.population, params)
+    if params.classes_enabled and region.classes is not None:
+        return starting_purse(groups, goods, pop, params, region.classes, region.class_base)
+    return starting_purse(groups, goods, pop, params)
 
 
 def starting_goods(
     groups: Mapping[str, GroupDef],
     template_goods: Mapping[str, Tuple[float, float]],
     population: float,
+    factors: Optional[Mapping[str, float]] = None,
 ) -> Dict[str, GoodState]:
     """Goods rows of a freshly applied template: stock = norm, prices x1.
 
-    ``template_goods`` maps group code -> (production_per_1000, consumption_mult).
+    ``template_goods`` maps group code -> (production_per_1000, consumption_mult); ``factors`` (FEAT-194) = class
+    demand factors of the region (None = no classes).
     """
     goods = {
         code: GoodState(group_code=code,
@@ -393,7 +473,7 @@ def starting_goods(
         for code in groups
     }
     for code, good in goods.items():
-        good.norm_stock = norm_stock(code, groups, goods, population)
+        good.norm_stock = norm_stock(code, groups, goods, population, factors)
         good.stock = good.norm_stock
     return goods
 
@@ -433,16 +513,57 @@ def wage_amount(net_tax: int, grant: int, treasury_before: int, treasury_target:
 
 
 def country_grants(country_balance: int, region_populations: Mapping[int, int],
-                   params: SimParams = DEFAULT_PARAMS) -> Dict[int, int]:
+                   params: SimParams = DEFAULT_PARAMS,
+                   deficits: Optional[Mapping[int, int]] = None) -> Dict[int, int]:
     """Split ``country_grant_share`` of a country's positive balance between its simulated regions by population.
 
     Integer floor per region, so the sum never exceeds the granted pool.
+
+    FEAT-194 (3.10): with ``deficits`` (money below the region norm) ``grant_deficit_share`` of the pool goes to the
+    regions with a positive deficit ∝ deficit (each floored and capped at its deficit), the rest by population.
+    Nobody below the norm -> the whole pool by population. ``deficits=None`` -> the statement above, unchanged.
     """
     pool = int(math.floor(max(0, int(country_balance)) * params.country_grant_share))
     total_pop = sum(max(0, int(p)) for p in region_populations.values())
     if pool <= 0 or total_pop <= 0:
         return {rid: 0 for rid in region_populations}
-    return {rid: pool * max(0, int(p)) // total_pop for rid, p in region_populations.items()}
+    if deficits is None:
+        return {rid: pool * max(0, int(p)) // total_pop for rid, p in region_populations.items()}
+    grants = {rid: 0 for rid in region_populations}
+    below = {rid: int(deficits.get(rid) or 0) for rid in region_populations if int(deficits.get(rid) or 0) > 0}
+    if below:
+        total_deficit = sum(below.values())
+        tilt = int(math.floor(pool * _clamp(float(params.grant_deficit_share), 0.0, 1.0)))
+        for rid, d in below.items():
+            grants[rid] = min(d, tilt * d // total_deficit)
+    rest = pool - sum(grants.values())
+    for rid, p in region_populations.items():
+        grants[rid] += rest * max(0, int(p)) // total_pop
+    return grants
+
+
+def class_report(region: RegionState, goods: Mapping[str, GoodState], groups: Mapping[str, GroupDef], *,
+                 purse: int, treasury: int, params: SimParams = DEFAULT_PARAMS) -> Optional[Dict]:
+    """FEAT-194 (3.13): admin class report of a region with classes (None when classes are off / no shares).
+
+    Needs at the current prices / prosperity use the stored goods state (prices of the last recount)."""
+    if not params.classes_enabled or region.classes is None:
+        return None
+    mix = region.classes
+    base = region.class_base or region.classes
+    pop = sim_population(region.population, params)
+    goods = {c: g for c, g in goods.items() if c in groups}
+    _norm, norm_parts = econ_classes.wealth_norm(groups, goods, pop, mix, base, params)
+    cost = [0.0, 0.0, 0.0]
+    for code, good in goods.items():
+        weights, factor = econ_classes.demand_weights(groups[code], mix, base)
+        day = demand_tick(groups[code], good, pop, region.prosperity, params, factor) / params.dt
+        unit = float(groups[code].base_price) * float(good.price_mult)
+        for k, part in enumerate(econ_classes.class_parts(day, weights, factor)):
+            cost[k] += part * unit
+    return econ_classes.class_report(mix=mix, base=base, population=pop, norm_parts=norm_parts,
+                                     cost_parts_day=cost, purse=purse, treasury=treasury,
+                                     treasury_target=region.treasury_target, params=params)
 
 
 # --------------------------------------------------------------------------------------------- the tick
@@ -467,6 +588,13 @@ def simulate_region(
     ``mods`` (FEAT-187) are the aggregated levers of the region's active events: production / consumption multiply
     the working copies (never persisted), prices are multiplied after step 7, the tax after step 8 inputs, stability /
     prosperity deltas after steps 9 / 10. ``None`` executes none of these statements (results unchanged).
+
+    Social classes (FEAT-194, 3.2): when ``params.classes_enabled`` and ``region.classes`` is set, demand / norms are
+    scaled by the class demand factors (exactly 1.0 at the template mix ``region.class_base``), affordability and
+    consumption run per class (shortages served rich -> middling -> poor), the income tax is class-weighted, a wealth
+    tax takes ``wealth_tax_rate`` of the purse above the wealth norm into the treasury (not paid back as wages in the
+    same tick), stability gets the class terms and the mix drifts (mobility). Without classes none of these
+    statements run (results unchanged; ``wealth_norm`` = :func:`starting_purse`).
     """
     dt = params.dt
     pop = sim_population(region.population, params)
@@ -474,6 +602,20 @@ def simulate_region(
     purse = max(0, int(purse))
     treasury = int(treasury)
     grant = max(0, int(grant))
+    has_classes = bool(params.classes_enabled) and region.classes is not None
+    mix: Optional[ClassMix] = region.classes if has_classes else None
+    base: Optional[ClassMix] = (region.class_base or region.classes) if has_classes else None
+    factors: Optional[Dict[str, float]] = None
+    class_w: Dict[str, Tuple[float, float, float]] = {}
+    norm_total = 0
+    norm_parts: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    if has_classes:
+        # 0. class demand factors and the wealth norm (from the input goods: event mods never move the norm)
+        factors = {}
+        for code, group in groups.items():
+            class_w[code], factors[code] = econ_classes.demand_weights(group, mix, base)
+        norm_total, norm_parts = econ_classes.wealth_norm(groups, {c: g for c, g in goods.items() if c in groups},
+                                                          pop, mix, base, params)
     new = {code: replace(good) for code, good in goods.items() if code in groups}
     for good in new.values():
         good.prev_price_mult = good.price_mult
@@ -506,29 +648,69 @@ def simulate_region(
 
     # 4. demand
     for code, good in new.items():
-        good.last_demand = demand_tick(groups[code], good, pop, region.prosperity, params)
+        if factors is None:
+            good.last_demand = demand_tick(groups[code], good, pop, region.prosperity, params)
+        else:
+            good.last_demand = demand_tick(groups[code], good, pop, region.prosperity, params, factors[code])
 
     # 5. affordability & consumption
     cost_day = sum(g.last_demand / dt * float(groups[c].base_price) * g.price_mult for c, g in new.items())
-    afford = 1.0 if cost_day <= 0 else _clamp(purse / (cost_day * params.afford_days), 0.0, 1.0)
-    for good in new.values():
-        consumed = min(max(0.0, good.stock), good.last_demand * afford)
-        good.stock -= consumed
-        good.last_consumed = consumed
+    class_hunger: Optional[Tuple[float, float, float]] = None
+    class_afford: Optional[Tuple[float, float, float]] = None
+    food_group = next((g for g in groups.values() if g.is_food), None)
+    if not has_classes:
+        afford = 1.0 if cost_day <= 0 else _clamp(purse / (cost_day * params.afford_days), 0.0, 1.0)
+        for good in new.values():
+            consumed = min(max(0.0, good.stock), good.last_demand * afford)
+            good.stock -= consumed
+            good.last_consumed = consumed
+    else:
+        # per class: the purse split ∝ the class norm parts, afford_k against the class's cost at current prices;
+        # each group's class parts are served from the stock rich -> middling -> poor
+        parts = {c: econ_classes.class_parts(g.last_demand, class_w[c], factors[c]) for c, g in new.items()}
+        cost_k = [0.0, 0.0, 0.0]
+        for c, g in new.items():
+            unit = float(groups[c].base_price) * g.price_mult / dt
+            for k in range(3):
+                cost_k[k] += parts[c][k] * unit
+        money = econ_classes.split_money(purse, norm_parts if sum(norm_parts) > 0 else cost_k)
+        class_afford = tuple(econ_classes.class_afford(money[k], cost_k[k], params.afford_days)
+                             for k in range(3))  # type: ignore[assignment]
+        afford = (sum(cost_k[k] * class_afford[k] for k in range(3)) / cost_day) if cost_day > 0 else 1.0
+        food_got = (0.0, 0.0, 0.0)
+        for c, good in new.items():
+            got_k = econ_classes.allocate(good.stock, parts[c], class_afford)
+            consumed = min(max(0.0, good.stock), got_k[0] + got_k[1] + got_k[2])
+            good.stock -= consumed
+            good.last_consumed = consumed
+            if food_group is not None and c == food_group.code:
+                food_got = got_k
 
     hunger = 0.0
-    food_group = next((g for g in groups.values() if g.is_food), None)
     if food_group is not None and food_group.code in new:
         food = new[food_group.code]
         need = float(food_group.norm_per_1000) * float(food.consumption_mult) * pop_k * dt
-        hunger = _clamp(1.0 - food.last_consumed / need, 0.0, 1.0) if need > 0 else 0.0
+        if not has_classes:
+            hunger = _clamp(1.0 - food.last_consumed / need, 0.0, 1.0) if need > 0 else 0.0
+        else:
+            # class need = today's need x the class's per-capita weight (sums to need x F_food)
+            need_k = [need * w for w in class_w[food_group.code]]
+            class_hunger = tuple(_clamp(1.0 - food_got[k] / need_k[k], 0.0, 1.0) if need_k[k] > 0 else 0.0
+                                 for k in range(3))  # type: ignore[assignment]
+            need_total = sum(need_k)
+            hunger = _clamp(1.0 - sum(food_got) / need_total, 0.0, 1.0) if need_total > 0 else 0.0
+    elif has_classes:
+        class_hunger = (0.0, 0.0, 0.0)
     want = sum(g.last_demand * float(groups[c].base_price) for c, g in new.items() if not groups[c].is_food)
     got = sum(g.last_consumed * float(groups[c].base_price) for c, g in new.items() if not groups[c].is_food)
     satisfaction = _clamp(got / want, 0.0, 1.0) if want > 0 else 1.0
 
     # 6. norm & cap, 7. prices
     for code, good in new.items():
-        good.norm_stock = norm_stock(code, groups, new, pop)
+        if factors is None:
+            good.norm_stock = norm_stock(code, groups, new, pop)
+        else:
+            good.norm_stock = norm_stock(code, groups, new, pop, factors)
         cap = params.stock_cap_mult * good.norm_stock
         if good.stock > cap:
             good.last_spoiled = good.stock - cap
@@ -542,17 +724,37 @@ def simulate_region(
     # 8. money
     income_f = sum(g.last_produced * float(groups[c].base_price) * g.price_mult for c, g in new.items())
     income = int(math.floor(max(0.0, income_f)))
-    if mods is None:
-        tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate)))))
+    wealth_tax = 0
+    if not has_classes:
+        if mods is None:
+            tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate)))))
+        else:
+            tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate))
+                                            * max(0.0, float(mods.tax_income_mult)))))
+        country_tax = int(math.floor(tax * max(0.0, float(country_tax_rate))))
+        net_tax = tax - country_tax
+        treasury_target = int(math.floor(tax * (1.0 / dt) * params.treasury_reserve_days))
+        wages = wage_amount(net_tax, grant, treasury, treasury_target, params)
+        purse_after = purse - tax + wages
+        treasury_after = treasury + net_tax + grant - wages
     else:
-        tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate))
-                                        * max(0.0, float(mods.tax_income_mult)))))
-    country_tax = int(math.floor(tax * max(0.0, float(country_tax_rate))))
-    net_tax = tax - country_tax
-    treasury_target = int(math.floor(tax * (1.0 / dt) * params.treasury_reserve_days))
-    wages = wage_amount(net_tax, grant, treasury, treasury_target, params)
-    purse_after = purse - tax + wages
-    treasury_after = treasury + net_tax + grant - wages
+        # class-weighted income tax (x1.0 at the template mix) + wealth tax on the purse above the norm. Both go
+        # purse -> treasury in one ledger leg, the ledger forwards country_tax_rate of the sum to the country.
+        # treasury_target and wages come from the income tax only: the wealth tax is not paid back the same tick.
+        t_factor = econ_classes.tax_factor(mix, base, params)
+        if mods is None:
+            tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate)) * t_factor)))
+        else:
+            tax = min(purse, int(math.floor(income * max(0.0, float(region.tax_rate))
+                                            * max(0.0, float(mods.tax_income_mult)) * t_factor)))
+        wealth_tax = econ_classes.wealth_tax(purse - tax, norm_total, params)
+        rate = max(0.0, float(country_tax_rate))
+        country_tax = int(math.floor((tax + wealth_tax) * rate))
+        net_tax = tax - int(math.floor(tax * rate))
+        treasury_target = int(math.floor(tax * (1.0 / dt) * params.treasury_reserve_days))
+        wages = wage_amount(net_tax, grant, treasury, treasury_target, params)
+        purse_after = purse - tax - wealth_tax + wages
+        treasury_after = treasury + tax + wealth_tax - country_tax + grant - wages
 
     # 9. stability
     stab_target = (params.stab_base
@@ -560,6 +762,9 @@ def simulate_region(
                    - params.stab_goods_w * (1.0 - satisfaction)
                    - params.stab_tax_w * max(0.0, float(region.tax_rate) - params.stab_free_tax)
                    - (params.stab_debt_penalty if treasury_after < 0 else 0.0))
+    if has_classes:
+        stab_target -= econ_classes.stability_terms(mix, class_hunger[0] if class_hunger else 0.0,
+                                                    float(region.tax_rate), params)
     stab_target = _clamp(stab_target, 0.0, 100.0)
     stability = float(region.stability)
     rate = params.stab_rate_up if stab_target > stability else params.stab_rate_down
@@ -578,11 +783,24 @@ def simulate_region(
     if mods is not None:
         prosperity = _clamp(prosperity + float(mods.prosperity_delta), 0.0, 100.0)
 
+    if not has_classes:
+        new_region = replace(region, stability=stability, prosperity=prosperity, hunger=hunger,
+                             satisfaction=satisfaction, treasury_target=treasury_target)
+        return SimResult(region=new_region, goods=new, income=income, tax=tax, country_tax=country_tax, grant=grant,
+                         wages=wages, purse_after=purse_after, treasury_after=treasury_after,
+                         needs_cost_day=cost_day, affordability=afford,
+                         wealth_norm=starting_purse(groups, {c: g for c, g in goods.items() if c in groups}, pop,
+                                                    params))
+
+    # 11. mobility (slow drift of the mix; dead zone, share bounds)
+    r = purse_after / norm_total if norm_total > 0 else 0.0
+    new_mix, d_poor, d_rich = econ_classes.mobility(mix, stability, prosperity, hunger, r, params)
     new_region = replace(region, stability=stability, prosperity=prosperity, hunger=hunger,
-                         satisfaction=satisfaction, treasury_target=treasury_target)
+                         satisfaction=satisfaction, treasury_target=treasury_target, classes=new_mix)
     return SimResult(region=new_region, goods=new, income=income, tax=tax, country_tax=country_tax, grant=grant,
                      wages=wages, purse_after=purse_after, treasury_after=treasury_after,
-                     needs_cost_day=cost_day, affordability=afford)
+                     needs_cost_day=cost_day, affordability=afford, wealth_tax=wealth_tax, wealth_norm=norm_total,
+                     class_hunger=class_hunger, class_afford=class_afford, class_delta=(d_poor, d_rich))
 
 
 # --------------------------------------------------------------------------------------------- card
@@ -668,6 +886,15 @@ def prosperity_label(state: str, noun: str = "Регион", gender: str = "m") 
     return f"{_PROSPERITY_ADJ[state][_gender_index(gender)]} {_lower_first(noun)}"
 
 
+PROSPERITY_PHRASES = {"rich": "процветает", "wealthy": "живёт в достатке", "modest": "живёт скромно",
+                      "poor": "в упадке"}
+
+
+def prosperity_phrase(state: str, noun: str = "Регион") -> str:
+    """FEAT-194: «Город процветает», «Округа в упадке» — the prosperity state without the class-like adjective."""
+    return f"{noun} {PROSPERITY_PHRASES[state]}"
+
+
 def price_level_value(goods: Iterable[GoodState], groups: Mapping[str, GroupDef]) -> float:
     """Demand-value-weighted mean price multiplier (weights = last_demand x base_price); no demand -> 1.0."""
     weight = total = 0.0
@@ -724,8 +951,13 @@ def region_card(
     noun: str = "Регион",
     gender: str = "m",
     group_order: Optional[Sequence[str]] = None,
+    classes: Optional[ClassMix] = None,
 ) -> Dict:
-    """Qualitative player card body of 3.7 (without region_id / participating / updated_at). No numbers."""
+    """Qualitative player card body of 3.7 (without region_id / participating / updated_at). No numbers.
+
+    FEAT-194 (3.11): with ``classes`` the card gains ``classes`` {state, label, bar words}; ``phrases[0]`` becomes the
+    class label and the prosperity label loses its adjective («Город процветает» / «… в упадке» — only rich / poor
+    are added to the phrases, after the food phrase). ``classes=None`` -> the card is unchanged."""
     order = [c for c in (group_order or list(groups)) if c in goods and c in groups]
     food = food_state(region.hunger)
     treas = treasury_state(treasury, region.treasury_target)
@@ -745,7 +977,14 @@ def region_card(
         "shortages": shortages,
         "surpluses": surpluses,
     }
-    phrases = [card["prosperity"]["label"], card["food"]["label"]]
+    if classes is None:
+        phrases = [card["prosperity"]["label"], card["food"]["label"]]
+    else:
+        card["classes"] = econ_classes.class_card(classes, noun, gender)
+        card["prosperity"]["label"] = prosperity_phrase(prosp, noun)
+        phrases = [card["classes"]["label"], card["food"]["label"]]
+        if prosp in ("rich", "poor"):
+            phrases.append(card["prosperity"]["label"])
     if stab != "calm":
         phrases.append(card["stability"]["label"])
     if treas in ("full", "low", "debt"):

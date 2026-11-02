@@ -41,7 +41,7 @@ ALL_GROUPS = "*"
 
 PER_STEP_TYPES = ("production", "consumption", "labor", "price", "tax_income", "stability", "prosperity",
                   "merchants_halt", "bank_panic", "loan_boom")
-ONE_SHOT_TYPES = ("stock_loss", "treasury_expense", "population")
+ONE_SHOT_TYPES = ("stock_loss", "treasury_expense", "population", "class_shift")
 EFFECT_TYPES = PER_STEP_TYPES + ONE_SHOT_TYPES
 GROUP_TYPES = ("production", "consumption", "price", "stock_loss")
 
@@ -60,6 +60,7 @@ EFFECT_FIELDS: Dict[str, Tuple[str, ...]] = {
     "stock_loss": ("groups", "share"),
     "treasury_expense": ("share",),
     "population": ("pct",),
+    "class_shift": ("delta",),           # FEAT-194: share of the classes moved up (+) / down (-) once
 }
 # type -> (numeric field, lo, hi)
 EFFECT_BOUNDS: Dict[str, Tuple[str, float, float]] = {
@@ -74,11 +75,13 @@ EFFECT_BOUNDS: Dict[str, Tuple[str, float, float]] = {
     "stock_loss": ("share", 0.0, 0.9),
     "treasury_expense": ("share", 0.0, 0.9),
     "population": ("pct", -0.5, 0.5),
+    "class_shift": ("delta", -0.3, 0.3),
 }
 MAX_EFFECTS = 12
 MAX_ONE_SHOT_SHARE = 0.9      # cap of combined stock-loss / treasury-expense shares of one instance
 POPULATION_PCT_LIMIT = 0.5    # combined population change of one instance: +-50 %
 POPULATION_MAX = 2_000_000_000  # econ_regions.population is INT
+CLASS_SHIFT_LIMIT = 0.3       # combined class shift of one instance: +-0.3
 BANK_LOAN_SHARE_MAX = 0.9
 
 
@@ -270,21 +273,25 @@ class OneShots:
     stock_loss: Dict[str, float] = field(default_factory=dict)   # group -> share of the stock lost
     treasury_share: float = 0.0
     population_pct: float = 0.0
+    class_shift: float = 0.0                                      # FEAT-194: summed, clamped to +-0.3
 
     @property
     def empty(self) -> bool:
-        return not self.stock_loss and self.treasury_share <= 0 and self.population_pct == 0
+        return (not self.stock_loss and self.treasury_share <= 0 and self.population_pct == 0
+                and self.class_shift == 0)
 
 
 def one_shots(effects: Iterable[Effect], group_codes: Sequence[str] = ()) -> OneShots:
     """Combine the one-shot effects of ONE instance.
 
     Stock shares on one group combine as 1 - prod(1 - s) (capped at 0.9); treasury shares sum (cap 0.9); population
-    pcts sum, clamped to +-50 %. ``"*"`` in stock-loss groups expands to ``group_codes``.
+    pcts sum, clamped to +-50 %; class shifts (FEAT-194) sum, clamped to +-0.3. ``"*"`` in stock-loss groups expands
+    to ``group_codes``.
     """
     keep: Dict[str, float] = {}
     treasury = 0.0
     population = 0.0
+    class_shift = 0.0
     for eff in effects:
         if eff.type == "stock_loss":
             for code in _expand(eff.groups, list(group_codes)):
@@ -293,10 +300,13 @@ def one_shots(effects: Iterable[Effect], group_codes: Sequence[str] = ()) -> One
             treasury += _clamp(eff.share, 0.0, MAX_ONE_SHOT_SHARE)
         elif eff.type == "population":
             population += eff.pct
+        elif eff.type == "class_shift":
+            class_shift += eff.delta
     stock_loss = {c: _clamp(1.0 - k, 0.0, MAX_ONE_SHOT_SHARE) for c, k in keep.items()}
     return OneShots(stock_loss={c: s for c, s in stock_loss.items() if s > 0},
                     treasury_share=_clamp(treasury, 0.0, MAX_ONE_SHOT_SHARE),
-                    population_pct=_clamp(population, -POPULATION_PCT_LIMIT, POPULATION_PCT_LIMIT))
+                    population_pct=_clamp(population, -POPULATION_PCT_LIMIT, POPULATION_PCT_LIMIT),
+                    class_shift=_clamp(class_shift, -CLASS_SHIFT_LIMIT, CLASS_SHIFT_LIMIT))
 
 
 def stock_after_loss(stock: float, share: float) -> Tuple[float, float]:

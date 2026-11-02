@@ -6,7 +6,7 @@ import {
   EFFECT_TYPES,
   MAX_EFFECTS,
   MAX_EFFECT_GROUPS,
-  PERCENT_FIELDS,
+  isPercentEffect,
 } from './eventLabels';
 import { formatDecimal } from './economyLabels';
 import { FieldHint } from './ParamHint';
@@ -23,10 +23,7 @@ const PERCENT = 100;
 let nextKey = 1;
 const newKey = () => nextKey++;
 
-const isPercent = (type: EconEventEffectType): boolean => {
-  const field = EFFECT_SPECS[type].field;
-  return field !== null && PERCENT_FIELDS.includes(field);
-};
+const isPercent = (type: EconEventEffectType): boolean => isPercentEffect(type);
 
 /** Rounds away float noise: 0.15 * 100 → 15, not 15.000000000000002. */
 const tidy = (n: number): number => Math.round(n * 1e6) / 1e6;
@@ -150,7 +147,15 @@ const EventEffectsBuilder = ({ effects, groups, canEdit, onChange }: EventEffect
                 {spec.field && (
                   <div className="flex flex-col gap-1 sm:w-36 min-w-0">
                     <label htmlFor={inputId} className="text-white/60 text-xs uppercase tracking-[0.06em]">
-                      {spec.field === 'mult' ? 'Множитель ×' : spec.field === 'delta' ? 'За пересчёт ±' : pct ? 'Процент, %' : 'Значение'}
+                      {spec.field === 'mult'
+                        ? 'Множитель ×'
+                        : spec.field === 'delta' && pct
+                          ? 'Сдвиг, ±%'
+                          : spec.field === 'delta'
+                            ? 'За пересчёт ±'
+                            : pct
+                              ? 'Процент, %'
+                              : 'Значение'}
                     </label>
                     <input
                       id={inputId}

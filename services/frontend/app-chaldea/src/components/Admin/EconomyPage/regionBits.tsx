@@ -1,7 +1,9 @@
-/** Small shared pieces of the «Регионы» tab (FEAT-182): 0–100 bars, hunger badge, price multiplier, bank badge. */
+/** Small shared pieces of the «Регионы» tab (FEAT-182): 0–100 bars, hunger badge, price multiplier, bank badge,
+ * FEAT-194 class mix cell and money-vs-norm badge. */
 import { formatDecimal } from './economyLabels';
 import EventIcon from '../../common/EventIcon';
-import type { EconEventBadge } from '../../../types/economy';
+import type { EconClassKey, EconClassMix, EconEventBadge, EconRegionItem } from '../../../types/economy';
+import { ClassMixBar } from '../../WorldPage/RegionClassBar';
 
 /** Same thresholds as the player card: fed < 0.03 ≤ tight < 0.15 ≤ hunger. */
 const HUNGER_TIGHT = 0.03;
@@ -91,6 +93,77 @@ export const EventBadges = ({ events, className = '' }: { events?: EconEventBadg
           <EventIcon name={ev.icon} size={12} title={ev.name} />
         </span>
       ))}
+    </span>
+  );
+};
+
+/* ------------------------------------------------------------------ FEAT-194 social classes */
+
+/** Short class names for tight cells: Б / З / Бг. */
+export const CLASS_SHORT: Record<EconClassKey, string> = { poor: 'Б', middling: 'З', rich: 'Бг' };
+export const CLASS_LABELS: Record<EconClassKey, string> = { poor: 'Бедные', middling: 'Зажиточные', rich: 'Богатые' };
+export const CLASS_ORDER: EconClassKey[] = ['poor', 'middling', 'rich'];
+
+const PERCENT = 100;
+/** Money vs norm: below this share of the norm the region reads «ниже нормы» (gold), above the upper — «излишек». */
+const NORM_LOW = 0.95;
+const NORM_HIGH = 1.05;
+
+/** 0.3512 → «35,1». */
+export const sharePct = (share: number, digits = 1): string => formatDecimal(share * PERCENT, digits);
+
+/** Signed shift in percentage points: −0.00015 → «−0,015». */
+export const signedPp = (delta: number): string => {
+  const pp = delta * PERCENT;
+  const sign = pp > 0 ? '+' : pp < 0 ? '−' : '';
+  return `${sign}${formatDecimal(Math.abs(pp), 3)}`;
+};
+
+/** The region's shares, or null when it has no classes. */
+export const regionMix = (r: {
+  class_poor?: number | null;
+  class_middling?: number | null;
+  class_rich?: number | null;
+}): EconClassMix | null =>
+  r.class_poor == null || r.class_middling == null || r.class_rich == null
+    ? null
+    : { poor: r.class_poor, middling: r.class_middling, rich: r.class_rich };
+
+/** Mini bar + «Б 35 · З 45 · Бг 20 %» + the last recount shift (admin «Регионы»). */
+export const ClassMixCell = ({ region }: { region: EconRegionItem }) => {
+  const mix = regionMix(region);
+  if (!mix) return <span className="text-white/30 text-xs">—</span>;
+  const dpoor = region.class_dpoor ?? 0;
+  const drich = region.class_drich ?? 0;
+  const moved = dpoor !== 0 || drich !== 0;
+  return (
+    <span className="flex flex-col gap-1 min-w-[110px]">
+      <ClassMixBar
+        poor={mix.poor}
+        middling={mix.middling}
+        rich={mix.rich}
+        heightClass="h-1.5"
+        title={`Бедные ${sharePct(mix.poor)} %, зажиточные ${sharePct(mix.middling)} %, богатые ${sharePct(mix.rich)} %`}
+      />
+      <span className="text-white/70 text-xs whitespace-nowrap">
+        {CLASS_ORDER.map((k) => `${CLASS_SHORT[k]} ${sharePct(mix[k], 0)}`).join(' · ')} %
+      </span>
+      {moved && (
+        <span className="text-white/40 text-[11px] whitespace-nowrap" title="Сдвиг долей за последний пересчёт, п. п.">
+          сдвиг: Б {signedPp(dpoor)} · Бг {signedPp(drich)} п. п.
+        </span>
+      )}
+    </span>
+  );
+};
+
+/** «82 % нормы» — residents' money vs the wealth norm (gold below, blue above). */
+export const MoneyVsNorm = ({ ratio, className = '' }: { ratio?: number | null; className?: string }) => {
+  if (ratio == null || !Number.isFinite(ratio)) return null;
+  const tone = ratio < NORM_LOW ? 'text-gold' : ratio > NORM_HIGH ? 'text-site-blue' : 'text-white/60';
+  return (
+    <span className={`${tone} text-[11px] whitespace-nowrap ${className}`} title="Деньги жителей относительно нормы богатства">
+      {formatDecimal(ratio * PERCENT, 0)} % нормы
     </span>
   );
 };

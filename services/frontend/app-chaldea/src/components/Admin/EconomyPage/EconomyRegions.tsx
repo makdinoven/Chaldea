@@ -8,7 +8,7 @@ import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import type { EconFillResult, EconRegionItem } from '../../../types/economy';
 import RegionEconomyEditor from './RegionEconomyEditor';
 import { formatDateTime } from './economyLabels';
-import { BankBadge, EventBadges, HungerBadge, ScaleBar } from './regionBits';
+import { BankBadge, ClassMixCell, EventBadges, HungerBadge, MoneyVsNorm, ScaleBar, regionMix } from './regionBits';
 import { BigMoney, Population } from './CompactValue';
 
 const COMMENT_MIN = 3;
@@ -38,6 +38,7 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
   const [openBanks, setOpenBanks] = useState(true);
   const [returnPurseExcess, setReturnPurseExcess] = useState(false);
   const [returnTreasuryExcess, setReturnTreasuryExcess] = useState(false);
+  const [resetClasses, setResetClasses] = useState(false);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -55,6 +56,7 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
         open_banks: openBanks,
         return_purse_excess: returnPurseExcess,
         return_treasury_excess: returnTreasuryExcess,
+        reset_classes: resetClasses,
         comment: trimmed,
       });
       onDone(result);
@@ -85,7 +87,7 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
       checked: fundPurses,
       set: setFundPurses,
       label: 'Деньги жителям (эмиссия)',
-      hint: 'Кошельки жителей пополняются до стартового запаса. Повторное нажатие не добавит лишнего.',
+      hint: 'Кошельки жителей пополняются до нормы богатства (при выключенных классах — до стартового запаса). Повторное нажатие не добавит лишнего.',
     },
     {
       id: 'econ-fill-treasury',
@@ -106,7 +108,7 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
       checked: returnPurseExcess,
       set: setReturnPurseExcess,
       label: 'Вернуть излишек кошелька жителей в эмиссию',
-      hint: 'Всё, что в кошельке выше стартового запаса (7 дней потребностей при текущем масштабе населения), уходит обратно в эмиссию. Перед этим вклады и займы жителей в банке региона приводятся к масштабу (лишние вклады возвращаются в кошелёк, лишние займы гасятся из него; вклады игроков не трогаются). Нужно после перехода на масштаб населения, когда кошельки раздуты.',
+      hint: 'Всё, что в кошельке выше нормы богатства (при выключенных классах — стартового запаса: 7 дней потребностей при текущем масштабе населения), уходит обратно в эмиссию. Перед этим вклады и займы жителей в банке региона приводятся к масштабу (лишние вклады возвращаются в кошелёк, лишние займы гасятся из него; вклады игроков не трогаются). Нужно после перехода на масштаб населения, когда кошельки раздуты.',
     },
     {
       id: 'econ-fill-return-treasury',
@@ -114,6 +116,13 @@ const FillDialog = ({ templatedCount, onClose, onDone }: FillDialogProps) => {
       set: setReturnTreasuryExcess,
       label: 'Вернуть излишек казны в эмиссию',
       hint: 'Всё, что в казне региона выше резерва жалованья (7 дней налогов), уходит в эмиссию — в том числе деньги, пришедшие от игроков (налоги, платежи, комиссии).',
+    },
+    {
+      id: 'econ-fill-reset-classes',
+      checked: resetClasses,
+      set: setResetClasses,
+      label: 'Сбросить и классы к шаблону',
+      hint: 'Доли бедных, зажиточных и богатых возвращаются к долям шаблона (и вручную поправленные тоже). Без галочки доли сохраняются; регионы без долей получают доли шаблона в любом случае.',
     },
   ];
 
@@ -328,6 +337,12 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
               Без денег из-за нулевого населения: {fillResult.skipped_no_population.map(regionLabel).join(', ')}
             </span>
           )}
+          {fillResult.classes_reset !== undefined && fillResult.classes_reset.length > 0 && (
+            <span className="block text-white/50 mt-1">
+              Доли классов сброшены к шаблону ({fillResult.classes_reset.length}):{' '}
+              {fillResult.classes_reset.map(regionLabel).join(', ')}
+            </span>
+          )}
           {fillResult.banks_opened !== undefined && (
             <span className="block text-white/50 mt-1">
               {fillResult.banks_opened.length > 0
@@ -354,6 +369,7 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                   <th className="py-2 pr-3 font-normal text-right">Население</th>
                   <th className="py-2 pr-3 font-normal">Стабильность</th>
                   <th className="py-2 pr-3 font-normal">Достаток</th>
+                  <th className="py-2 pr-3 font-normal">Классы</th>
                   <th className="py-2 pr-3 font-normal">Еда</th>
                   <th className="py-2 pr-3 font-normal text-right">Жители</th>
                   <th className="py-2 pr-3 font-normal text-right">Казна</th>
@@ -386,9 +402,15 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                       {r.simulated ? <ScaleBar value={r.prosperity} tone="prosperity" label="Достаток" /> : <span className="text-white/30">—</span>}
                     </td>
                     <td className="py-2 pr-3">
+                      <ClassMixCell region={r} />
+                    </td>
+                    <td className="py-2 pr-3">
                       <HungerBadge hunger={r.hunger} simulated={r.simulated} />
                     </td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap text-white/80"><BigMoney value={r.purse} /></td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap text-white/80">
+                      <BigMoney value={r.purse} />
+                      <MoneyVsNorm ratio={r.money_vs_norm} className="block" />
+                    </td>
                     <td className={`py-2 pr-3 text-right whitespace-nowrap ${balanceClass(r.treasury)}`}><BigMoney value={r.treasury} /></td>
                     <td className="py-2 text-white/50 text-xs whitespace-nowrap">
                       {r.last_tick_at ? formatDateTime(r.last_tick_at) : '—'}
@@ -435,10 +457,17 @@ const EconomyRegions = ({ canSettings, canEmit, onMoneyChanged }: EconomyRegions
                       <ScaleBar value={r.prosperity} tone="prosperity" label="Достаток" />
                     </span>
                   )}
+                  {regionMix(r) && (
+                    <span className="flex flex-col gap-0.5 text-xs text-white/50">
+                      <span>Классы</span>
+                      <ClassMixCell region={r} />
+                    </span>
+                  )}
                   <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                     <HungerBadge hunger={r.hunger} simulated={r.simulated} />
                     <span className="text-white/50">
                       жители <BigMoney value={r.purse} className="text-white/80" />
+                      <MoneyVsNorm ratio={r.money_vs_norm} className="ml-1" />
                     </span>
                     <span className="text-white/50">
                       казна <BigMoney value={r.treasury} className={balanceClass(r.treasury)} />

@@ -543,6 +543,10 @@ class EconGoodsGroup(Base):
     norm_days = Column(Numeric(6, 2), nullable=False)
     prosperity_elasticity = Column(Numeric(5, 3), nullable=False, default=0, server_default="0")
     price_elasticity = Column(Numeric(5, 3), nullable=False, default=0, server_default="0")
+    # FEAT-194: per-capita demand weights of the poor / middling / rich (normalised to the template mix)
+    class_demand_poor = Column(Numeric(6, 3), nullable=False, default=1, server_default="1.000")
+    class_demand_middling = Column(Numeric(6, 3), nullable=False, default=1, server_default="1.000")
+    class_demand_rich = Column(Numeric(6, 3), nullable=False, default=1, server_default="1.000")
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
 
@@ -570,6 +574,10 @@ class EconRegionTemplate(Base):
     default_population = Column(Integer, nullable=False)
     tax_rate = Column(Numeric(5, 4), nullable=False)
     sort_order = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    # FEAT-194: default class mix of the template's regions (sum 1)
+    class_poor = Column(Numeric(6, 4), nullable=False, default=0.45, server_default="0.4500")
+    class_middling = Column(Numeric(6, 4), nullable=False, default=0.45, server_default="0.4500")
+    class_rich = Column(Numeric(6, 4), nullable=False, default=0.1, server_default="0.1000")
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -614,6 +622,14 @@ class EconRegion(Base):
     # FEAT-193 guild: the per-recount allowance (shares of the purse / positive treasury for food), set by the tick
     guild_budget = Column(BigInteger, nullable=False, default=0, server_default="0")
     guild_food_budget = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # FEAT-194 social classes: live mix (NULL = no classes), shift of the last recount, wealth norm / tax
+    class_poor = Column(Numeric(9, 6), nullable=True)
+    class_middling = Column(Numeric(9, 6), nullable=True)
+    class_rich = Column(Numeric(9, 6), nullable=True)
+    class_dpoor = Column(Numeric(9, 6), nullable=False, default=0, server_default="0")
+    class_drich = Column(Numeric(9, 6), nullable=False, default=0, server_default="0")
+    wealth_norm = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_wealth_tax = Column(BigInteger, nullable=False, default=0, server_default="0")
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -685,6 +701,12 @@ class EconRegionHistory(Base):
     wages = Column(BigInteger, nullable=False)
     grant_amount = Column(BigInteger, nullable=False)
     goods = Column(JSON, nullable=False)
+    # FEAT-194 (NULL for older rows)
+    class_poor = Column(Numeric(9, 6), nullable=True)
+    class_middling = Column(Numeric(9, 6), nullable=True)
+    class_rich = Column(Numeric(9, 6), nullable=True)
+    wealth_norm = Column(BigInteger, nullable=True)
+    wealth_tax = Column(BigInteger, nullable=True)
 
     __table_args__ = (
         Index("ix_erh_run", "run_id"),

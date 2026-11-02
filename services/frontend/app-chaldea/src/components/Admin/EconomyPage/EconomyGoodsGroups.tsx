@@ -22,6 +22,23 @@ const NORM_DAYS_MAX = 365;
 const ELASTICITY_MAX = 3;
 const RATIO_MIN = 0.001;
 const RATIO_MAX = 100;
+/** FEAT-194: `ECON_MAX_CLASS_DEMAND` of the backend. */
+const CLASS_DEMAND_MAX = 20;
+
+type ClassKey = 'poor' | 'middling' | 'rich';
+const CLASS_DEMAND_FIELDS: { key: ClassKey; field: 'class_demand_poor' | 'class_demand_middling' | 'class_demand_rich'; label: string }[] = [
+  { key: 'poor', field: 'class_demand_poor', label: 'Бедные' },
+  { key: 'middling', field: 'class_demand_middling', label: 'Зажиточные' },
+  { key: 'rich', field: 'class_demand_rich', label: 'Богатые' },
+];
+
+/** FEAT-194: the backend sends the class weights (older backends don't). */
+const hasClassDemand = (g: EconGoodsGroup): boolean =>
+  g.class_demand_poor != null && g.class_demand_middling != null && g.class_demand_rich != null;
+
+/** «1 / 1 / 1,2» */
+const classDemandText = (g: EconGoodsGroup): string =>
+  CLASS_DEMAND_FIELDS.map((f) => formatDecimal(g[f.field] ?? 1, 2)).join(' / ');
 
 interface InputDraft {
   code: string;
@@ -36,6 +53,8 @@ interface Draft {
   prosperityElasticity: string;
   priceElasticity: string;
   inputs: InputDraft[];
+  /** FEAT-194: per-capita demand weight of each class */
+  classDemand: Record<ClassKey, string>;
 }
 
 const toDraft = (g: EconGoodsGroup): Draft => ({
@@ -46,6 +65,11 @@ const toDraft = (g: EconGoodsGroup): Draft => ({
   prosperityElasticity: String(g.prosperity_elasticity),
   priceElasticity: String(g.price_elasticity),
   inputs: g.inputs.map((i) => ({ code: i.input_code, ratio: String(i.ratio) })),
+  classDemand: {
+    poor: String(g.class_demand_poor ?? 1),
+    middling: String(g.class_demand_middling ?? 1),
+    rich: String(g.class_demand_rich ?? 1),
+  },
 });
 
 const inRange = (text: string, min: number, max: number, integer = false): boolean => {
@@ -123,7 +147,12 @@ const GroupEditor = ({ group, groups, canEdit, onBack, onSaved }: GroupEditorPro
     return codes.filter((c) => reaches(graph, c, group.code));
   }, [groups, group.code, draft.inputs]);
 
+  const showClassDemand = hasClassDemand(group);
+  const classDemandValid =
+    !showClassDemand || CLASS_DEMAND_FIELDS.every((f) => inRange(draft.classDemand[f.key], 0, CLASS_DEMAND_MAX));
+
   const formValid =
+    classDemandValid &&
     nameValid &&
     basePriceValid &&
     normValid &&
@@ -156,6 +185,11 @@ const GroupEditor = ({ group, groups, canEdit, onBack, onSaved }: GroupEditorPro
       price_elasticity: Number(draft.priceElasticity),
       inputs: draft.inputs.map((i) => ({ input_code: i.code, ratio: Number(i.ratio) })),
     };
+    if (showClassDemand) {
+      body.class_demand_poor = Number(draft.classDemand.poor);
+      body.class_demand_middling = Number(draft.classDemand.middling);
+      body.class_demand_rich = Number(draft.classDemand.rich);
+    }
     setSaving(true);
     try {
       const saved = await putEconomyGoodsGroup(group.code, body);
@@ -245,6 +279,49 @@ const GroupEditor = ({ group, groups, canEdit, onBack, onSaved }: GroupEditorPro
             'Насколько спрос падает при дорогих ценах', `От 0 до ${ELASTICITY_MAX}`, { min: 0, max: ELASTICITY_MAX, step: 0.05 })}
         </div>
       </section>
+
+      {showClassDemand && (
+        <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-4 min-w-0">
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1">
+              <h3 className="gold-text text-lg font-medium uppercase tracking-[0.06em]">Спрос по классам</h3>
+              <FieldHint field="group_class_demand" label="Спрос по классам" />
+            </span>
+            <p className="text-white/50 text-sm">
+              Сколько этой группы покупает житель каждого класса (вес на душу; важно соотношение). Регион с долями
+              классов своего шаблона потребляет как раньше; больше богатых — больше спрос там, где у них большой вес.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-3 sm:gap-5">
+            {CLASS_DEMAND_FIELDS.map((f) => {
+              const id = `econ-gg-class-${f.key}`;
+              const ok = inRange(draft.classDemand[f.key], 0, CLASS_DEMAND_MAX);
+              return (
+                <div key={f.key} className="flex flex-col gap-1 min-w-0">
+                  <label htmlFor={id} className="text-white/60 text-xs uppercase tracking-[0.06em] truncate">
+                    {f.label}
+                  </label>
+                  <input
+                    id={id}
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    max={CLASS_DEMAND_MAX}
+                    step={0.05}
+                    className={`input-underline w-full ${ok ? '' : '!border-site-red'}`}
+                    value={draft.classDemand[f.key]}
+                    disabled={!canEdit}
+                    onChange={(e) =>
+                      setDraft({ ...draft, classDemand: { ...draft.classDemand, [f.key]: e.target.value } })
+                    }
+                  />
+                  {!ok && <p className="text-site-red text-xs">От 0 до {CLASS_DEMAND_MAX}</p>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-4 min-w-0">
         <div className="flex flex-col gap-1">
@@ -435,6 +512,7 @@ const EconomyGoodsGroups = () => {
                   <th className="py-2 pr-3 font-normal text-right">Запас, дней</th>
                   <th className="py-2 pr-3 font-normal text-right">Эл. достатка</th>
                   <th className="py-2 pr-3 font-normal text-right">Эл. цены</th>
+                  <th className="py-2 pr-3 font-normal text-right" title="Вес на душу: бедные / зажиточные / богатые">Б / З / Бг</th>
                   <th className="py-2 font-normal">Сырьё</th>
                 </tr>
               </thead>
@@ -454,6 +532,9 @@ const EconomyGoodsGroups = () => {
                     <td className="py-2 pr-3 text-right text-white/80">{formatDecimal(g.norm_days, 2)}</td>
                     <td className="py-2 pr-3 text-right text-white/80">{formatDecimal(g.prosperity_elasticity, 3)}</td>
                     <td className="py-2 pr-3 text-right text-white/80">{formatDecimal(g.price_elasticity, 3)}</td>
+                    <td className="py-2 pr-3 text-right text-white/80 whitespace-nowrap">
+                      {hasClassDemand(g) ? classDemandText(g) : <span className="text-white/30">—</span>}
+                    </td>
                     <td className="py-2 text-white/60 text-xs">{chain(g) ?? <span className="text-white/30">—</span>}</td>
                   </tr>
                 ))}
@@ -488,6 +569,11 @@ const EconomyGoodsGroups = () => {
                     <span>
                       эл. <span className="text-white/80">{formatDecimal(g.prosperity_elasticity, 2)} / {formatDecimal(g.price_elasticity, 2)}</span>
                     </span>
+                    {hasClassDemand(g) && (
+                      <span title="Вес на душу: бедные / зажиточные / богатые">
+                        классы <span className="text-white/80">{classDemandText(g)}</span>
+                      </span>
+                    )}
                   </span>
                   {chain(g) && <span className="text-white/50 text-xs break-words">Сырьё: {chain(g)}</span>}
                 </button>

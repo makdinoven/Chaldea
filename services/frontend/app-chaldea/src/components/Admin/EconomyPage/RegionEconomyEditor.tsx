@@ -11,6 +11,7 @@ import {
 import { apiErrorMessage } from '../../../api/errors';
 import ConfirmDialog from '../../pages/LocationPage/ConfirmDialog';
 import type {
+  EconClassMix,
   EconRegionDetail,
   EconRegionGoods,
   EconRegionGoodsUpdate,
@@ -21,7 +22,14 @@ import type {
 import { formatDateTime, formatDecimal, formatPercent, formatQty } from './economyLabels';
 import { BigMoney, populationTitle } from './CompactValue';
 import { compactNumber } from '../../../utils/compactNumber';
-import { HungerBadge, PriceMult, ScaleBar } from './regionBits';
+import { CLASS_LABELS, CLASS_ORDER, HungerBadge, MoneyVsNorm, PriceMult, ScaleBar, regionMix, sharePct, signedPp } from './regionBits';
+import ClassSharesFields, {
+  draftToShares,
+  sharesEmpty,
+  sharesError,
+  sharesToDraft,
+  type ClassSharesDraft,
+} from './ClassSharesFields';
 import RegionBankPanel from './RegionBankPanel';
 import { FieldHint } from './ParamHint';
 import { GuideIntro } from './GuideLink';
@@ -48,6 +56,9 @@ interface Draft {
   stability: string;
   prosperity: string;
   goods: Record<string, GoodsDraft>;
+  /** FEAT-194: class shares in percent; sent only when the admin touched them (every tick moves them a little). */
+  classes: ClassSharesDraft;
+  classesTouched: boolean;
 }
 
 const toDraft = (d: EconRegionDetail): Draft => ({
@@ -67,6 +78,8 @@ const toDraft = (d: EconRegionDetail): Draft => ({
       },
     ]),
   ),
+  classes: sharesToDraft(regionMix(d)),
+  classesTouched: false,
 });
 
 const inRange = (text: string, min: number, max: number, integer = false): boolean => {
@@ -109,7 +122,34 @@ const HintHeader = ({ children, hint, hintTitle }: { children: string; hint: Fie
   </span>
 );
 
+/** FEAT-194: «классы 35,0 / 45,0 / 20,0 % · норма … · налог с накоплений …» of a history row (null for old rows). */
+const HistoryClasses = ({ row }: { row: EconRegionHistoryRow }) => {
+  const mix = regionMix(row);
+  if (!mix && row.wealth_norm == null && row.wealth_tax == null) return null;
+  return (
+    <p className="flex flex-wrap gap-x-3 gap-y-0.5 pt-2 text-xs text-white/50">
+      {mix && (
+        <span title="бедные / зажиточные / богатые">
+          классы <span className="text-white/80">{CLASS_ORDER.map((k) => sharePct(mix[k])).join(' / ')} %</span>
+        </span>
+      )}
+      {row.wealth_norm != null && (
+        <span>
+          норма богатства <BigMoney value={row.wealth_norm} className="text-white/80" />
+        </span>
+      )}
+      {row.wealth_tax != null && row.wealth_tax > 0 && (
+        <span>
+          налог с накоплений <BigMoney value={row.wealth_tax} className="text-white/80" />
+        </span>
+      )}
+    </p>
+  );
+};
+
 const HistoryDetails = ({ row, groupNames }: { row: EconRegionHistoryRow; groupNames: Record<string, string> }) => (
+  <>
+  <HistoryClasses row={row} />
   <ul className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-1 py-2 text-xs">
     {Object.entries(row.goods).map(([code, g]) => (
       <li key={code} className="flex flex-wrap items-baseline gap-x-2">
@@ -122,6 +162,7 @@ const HistoryDetails = ({ row, groupNames }: { row: EconRegionHistoryRow; groupN
       </li>
     ))}
   </ul>
+  </>
 );
 
 /** One region's economy: template, population, tax, stability/prosperity, the 12 goods and the tick history. */
@@ -225,8 +266,20 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
       !inRange(d.stock, 0, Number.MAX_SAFE_INTEGER)
     );
   });
-  const formValid = populationValid && taxValid && stabilityValid && prosperityValid && goodsErrors.length === 0;
+  const hadClasses = regionMix(detail) !== null;
+  // A region that has shares cannot be emptied (the backend keeps them); a region without them may stay empty.
+  const classesError = draft.classesTouched ? sharesError(draft.classes, !hadClasses) : null;
+  const formValid =
+    populationValid && taxValid && stabilityValid && prosperityValid && goodsErrors.length === 0 && !classesError;
   const templateChanged = (detail.template_code ?? '') !== draft.template;
+  const draftTemplate = templates.find((t) => t.code === draft.template);
+  // Defaults of the template chosen in the draft; the stored `class_base` belongs to the saved template only.
+  const templateBase: EconClassMix | null =
+    draftTemplate && draftTemplate.class_poor != null && draftTemplate.class_middling != null && draftTemplate.class_rich != null
+      ? { poor: draftTemplate.class_poor, middling: draftTemplate.class_middling, rich: draftTemplate.class_rich }
+      : !templateChanged
+        ? detail.class_base ?? null
+        : null;
   const hasGoods = detail.goods.length > 0;
 
   const save = async () => {
@@ -250,6 +303,12 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
         if (d.stockTouched) row.stock = Number(d.stock);
         return row;
       });
+    }
+    if (draft.classesTouched && !sharesEmpty(draft.classes)) {
+      const mix = draftToShares(draft.classes);
+      body.class_poor = mix.poor;
+      body.class_middling = mix.middling;
+      body.class_rich = mix.rich;
     }
     setSaving(true);
     try {
@@ -319,7 +378,9 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
     { label: 'Налог', value: detail.last_tax },
     { label: 'Жалованье', value: detail.last_wages },
     { label: 'Грант страны', value: detail.last_grant },
+    ...(detail.last_wealth_tax != null ? [{ label: 'Налог с накоплений', value: detail.last_wealth_tax }] : []),
   ];
+  const report = detail.classes && detail.classes.classes ? detail.classes : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -380,6 +441,11 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
             казна <BigMoney value={detail.treasury} />
           </span>
           <span className="text-white/40 text-xs break-words">резерв казны <BigMoney value={detail.treasury_target} /></span>
+          {detail.wealth_norm != null && detail.wealth_norm > 0 && (
+            <span className="text-white/40 text-xs break-words">
+              норма жителей <BigMoney value={detail.wealth_norm} /> <MoneyVsNorm ratio={detail.money_vs_norm} />
+            </span>
+          )}
         </div>
       </div>
 
@@ -467,6 +533,27 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
           </div>
         </div>
 
+        <div className="flex flex-col gap-2 border-t border-white/[0.07] pt-4">
+          <span className="flex items-center gap-1">
+            <span className="text-white/80 text-sm">Классы жителей</span>
+            <FieldHint field="region_classes" label="Классы жителей" />
+          </span>
+          <ClassSharesFields
+            idPrefix="econ-region-class"
+            value={draft.classes}
+            onChange={(next) => setDraft({ ...draft, classes: next, classesTouched: true })}
+            disabled={!canEdit}
+            allowEmpty={!hadClasses}
+            base={templateBase}
+          />
+          {((detail.class_dpoor ?? 0) !== 0 || (detail.class_drich ?? 0) !== 0) && (
+            <p className="text-white/40 text-xs">
+              Сдвиг за последний пересчёт: бедные {signedPp(detail.class_dpoor ?? 0)}, богатые{' '}
+              {signedPp(detail.class_drich ?? 0)} п. п.
+            </p>
+          )}
+        </div>
+
         {templateChanged && hasGoods && (
           <p className="field-hint">
             Шаблон сменится при сохранении, но товары региона останутся прежними. Чтобы скопировать товары нового
@@ -513,6 +600,100 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
           <p className="field-hint">Изменять экономику региона может только администратор с правом «economy:settings».</p>
         )}
       </section>
+
+      {report && (
+        <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-3 min-w-0">
+          <span className="flex items-center gap-1">
+            <h3 className="gold-text text-lg font-medium uppercase tracking-[0.06em]">Классы и норма богатства</h3>
+            <FieldHint field="region_class_report" label="Классы и норма богатства" />
+          </span>
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-white/50">
+            <span>
+              норма жителей <BigMoney value={report.wealth_norm} className="text-white/80" />
+            </span>
+            <span>
+              норма с резервом казны <BigMoney value={report.money_norm} className="text-white/80" />
+            </span>
+            <span>
+              нехватка{' '}
+              {report.deficit > 0 ? (
+                <BigMoney value={report.deficit} className="text-gold" />
+              ) : (
+                <span className="text-white/80">нет</span>
+              )}
+            </span>
+            {report.r != null && (
+              <span>
+                деньги жителей / норма <span className="text-white/80">{formatPercent(report.r, 0)}</span>
+              </span>
+            )}
+          </div>
+          {/* Table — md and up */}
+          <div className="hidden md:block overflow-x-auto gold-scrollbar">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-white/50 text-xs uppercase tracking-[0.06em] text-left border-b border-white/10">
+                  <th className="py-2 pr-3 font-normal">Класс</th>
+                  <th className="py-2 pr-3 font-normal text-right">Доля</th>
+                  <th className="py-2 pr-3 font-normal text-right">Шаблон</th>
+                  <th className="py-2 pr-3 font-normal text-right">Норма, дней</th>
+                  <th className="py-2 pr-3 font-normal text-right">Норма / жит.</th>
+                  <th className="py-2 pr-3 font-normal text-right">Деньги / жит.</th>
+                  <th className="py-2 pr-3 font-normal text-right">Нужды в день / жит.</th>
+                  <th className="py-2 font-normal text-right">Покупает</th>
+                </tr>
+              </thead>
+              <tbody>
+                {CLASS_ORDER.map((k) => {
+                  const row = report.classes[k];
+                  return (
+                    <tr key={k} className="border-b border-white/[0.07] last:border-b-0">
+                      <td className="py-1.5 pr-3 text-white">{CLASS_LABELS[k]}</td>
+                      <td className="py-1.5 pr-3 text-right text-white/80">{sharePct(row.share)} %</td>
+                      <td className="py-1.5 pr-3 text-right text-white/50">
+                        {row.base_share != null ? `${sharePct(row.base_share)} %` : '—'}
+                      </td>
+                      <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(row.norm_days, 1)}</td>
+                      <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(row.norm_per_resident, 2)}</td>
+                      <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(row.money_per_resident, 2)}</td>
+                      <td className="py-1.5 pr-3 text-right text-white/70">{formatDecimal(row.needs_per_resident_day, 2)}</td>
+                      <td className={`py-1.5 text-right ${row.afford < 1 ? 'text-gold' : 'text-white/80'}`}>
+                        {formatPercent(row.afford, 0)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* Cards — below md */}
+          <ul className="md:hidden flex flex-col gap-2">
+            {CLASS_ORDER.map((k) => {
+              const row = report.classes[k];
+              return (
+                <li key={k} className="rounded-card border border-white/[0.07] p-3 flex flex-col gap-1 text-xs">
+                  <span className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="text-white text-sm">{CLASS_LABELS[k]}</span>
+                    <span className="text-white/80">
+                      {sharePct(row.share)} %
+                      {row.base_share != null && <span className="text-white/40"> (шаблон {sharePct(row.base_share)} %)</span>}
+                    </span>
+                  </span>
+                  <span className="text-white/50 break-words">
+                    норма {formatDecimal(row.norm_days, 1)} дн. · {formatDecimal(row.norm_per_resident, 2)} на жит. · деньги{' '}
+                    {formatDecimal(row.money_per_resident, 2)}
+                  </span>
+                  <span className="text-white/50 break-words">
+                    нужды в день {formatDecimal(row.needs_per_resident_day, 2)} · покупает{' '}
+                    <span className={row.afford < 1 ? 'text-gold' : 'text-white/80'}>{formatPercent(row.afford, 0)}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="text-white/40 text-xs">Деньги — в расчётных единицах на одного расчётного жителя.</p>
+        </section>
+      )}
 
       {/* Goods */}
       <section className="bg-site-bg rounded-card border border-white/[0.07] p-4 sm:p-6 flex flex-col gap-3 min-w-0">
@@ -751,7 +932,7 @@ const RegionEconomyEditor = ({ regionId, canEdit, onBack, onChanged }: RegionEco
           title="Применить шаблон"
           message={`Производство, потребление и налог региона будут взяты из шаблона «${
             detail.template_name ?? detail.template_code
-          }»${resetStocks ? ', запасы выставлены в норму' : ''}. Население не меняется. Ручные правки товаров будут потеряны.`}
+          }»${resetStocks ? ', запасы выставлены в норму' : ''}, доли классов жителей сброшены к долям шаблона. Население не меняется. Ручные правки товаров и долей классов будут потеряны.`}
           confirmLabel="Применить"
           danger
           onConfirm={applyTemplate}

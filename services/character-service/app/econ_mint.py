@@ -152,6 +152,20 @@ def split_quota(amount: int, populations: Mapping[int, int]) -> Dict[int, int]:
     return {rid: amt for rid, amt in sorted(shares.items()) if amt > 0}
 
 
+def split_by_deficit(amount: int, deficits: Mapping[int, int]) -> Dict[int, int]:
+    """FEAT-194 (3.9): the season quota only for regions below their money norm.
+
+    Regions with ``deficit > 0`` only; issued ``X = min(amount, Σ deficits)`` split ∝ deficit by the largest remainder
+    of :func:`split_quota` (exact sum ``X``; each share ≤ its deficit, because ``X ≤ Σ deficits``). Nobody below the
+    norm -> empty (nothing is issued).
+    """
+    below = {int(rid): int(d) for rid, d in deficits.items() if int(d or 0) > 0}
+    total = sum(below.values())
+    if int(amount) <= 0 or total <= 0:
+        return {}
+    return split_quota(min(int(amount), total), below)
+
+
 # --------------------------------------------------------------------------------------------- formatting
 
 def fmt_date(value: Optional[datetime]) -> str:

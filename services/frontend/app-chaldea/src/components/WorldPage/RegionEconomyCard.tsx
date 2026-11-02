@@ -13,11 +13,13 @@ import type {
 import { apiErrorMessage } from '../../api/errors';
 import { parseServerDate } from '../../utils/serverDate';
 import EventIcon from '../common/EventIcon';
+import RegionClassBar from './RegionClassBar';
 import { useCurrency } from '../../hooks/useCurrency';
 
 /**
  * Player-facing "how is the region doing" card (FEAT-182, F4).
- * Words (phrases) + per-group price arrows; never any money numbers.
+ * Words (phrases) + per-group price arrows + the residents' class bar (FEAT-194, words only);
+ * never any money numbers.
  * Renders nothing for regions outside the simulation (`participating=false`).
  */
 
@@ -55,6 +57,8 @@ const TREND_META: Record<RegionGroupTrend, { glyph: string; title: string; class
 
 const phraseTone = (phrase: string, card: RegionCardData): string => {
   const states = [card.prosperity, card.food, card.stability, card.treasury, card.price_level];
+  // FEAT-194: the class phrase («Бедная округа») replaces the first prosperity phrase.
+  if (card.classes) states.unshift(card.classes);
   const match = states.find((s) => s.label === phrase);
   if (match && ALERT_STATES.has(match.state)) return 'text-site-red';
   if (match && WARN_STATES.has(match.state)) return 'text-gold';
@@ -256,6 +260,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
           </li>
         ))}
       </ul>
+      {card.classes && <RegionClassBar classes={card.classes} />}
 
       {card.groups.length > 0 && (
         <div className="mt-3 pt-3 border-t border-gold/15">

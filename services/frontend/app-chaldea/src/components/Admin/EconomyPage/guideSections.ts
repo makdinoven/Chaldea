@@ -21,6 +21,7 @@ export const GUIDE_SECTION_IDS = [
   'mint',
   'caravans',
   'guild',
+  'classes',
   'recipes',
   'recipe-hunger',
   'recipe-empty-treasury',
@@ -33,6 +34,7 @@ export const GUIDE_SECTION_IDS = [
   'recipe-mint',
   'recipe-caravans',
   'recipe-guild',
+  'recipe-classes',
 ] as const;
 
 export type GuideSectionId = (typeof GUIDE_SECTION_IDS)[number];
@@ -63,6 +65,8 @@ export const GUIDE_SECTION_TITLE: Record<GuideSectionId, string> = {
   'recipe-caravans': 'Как открыть торговлю между двумя странами',
   guild: 'Гильдия торговцев',
   'recipe-guild': 'Как открыть гильдию в регионе',
+  classes: 'Классы жителей и норма богатства',
+  'recipe-classes': 'Регион копит деньги или беднеет',
 };
 
 /** Tabs of the admin «Экономика» page (EconomyPage.tsx). */

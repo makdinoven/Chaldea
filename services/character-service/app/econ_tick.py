@@ -89,6 +89,16 @@ econ_guild_orders (asc id) → econ_guild_xp_days → econ_mint_seasons → npc_
 region_id) → bank_deposits (asc id) → bank_loans (asc id) → character_inventory (asc id) → characters (asc id) →
 econ_accounts (asc id) → character_attributes``.
 
+Social classes (FEAT-194, 3.2 / 3.9 / 3.10) - inside the region transaction a one-shot ``class_shift`` of a newly
+applied event moves the region's class shares (``econ_regions.class_*``) together with the other one-shots; the
+simulation (class demand, per-class affordability, class-weighted income tax, wealth tax, mobility) runs against the
+template default mix loaded once per run; the new shares, the shift of the recount (``class_dpoor / class_drich``),
+``wealth_norm`` and ``last_wealth_tax`` are written with the region row. The wealth tax is part of the ``region_tick``
+``purse -> region`` tax leg (the ledger forwards the country share of the sum): no new operation, no new key. The grant
+plan tilts ``grant_deficit_share`` of each country pool toward regions below their money norm and the quota pass splits
+the season quota by that deficit (nobody below the norm -> nothing posted, retried next tick); both read the stored
+``wealth_norm`` / ``treasury_target`` and the balances without locks. Lock order unchanged.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -106,6 +116,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import econ_classes
 import econ_core as core
 import econ_events
 import econ_ledger
@@ -327,16 +338,56 @@ def load_groups(session: Session) -> Dict[str, econ_sim.GroupDef]:
             norm_per_1000=_float(row.norm_per_1000), norm_days=_float(row.norm_days),
             prosperity_elasticity=_float(row.prosperity_elasticity), price_elasticity=_float(row.price_elasticity),
             is_food=bool(row.is_food), inputs=inputs.get(row.code, {}),
+            class_demand=(_class_weight(getattr(row, "class_demand_poor", None)),
+                          _class_weight(getattr(row, "class_demand_middling", None)),
+                          _class_weight(getattr(row, "class_demand_rich", None))),
         )
     return groups
 
 
-def region_state(row: "models.EconRegion") -> econ_sim.RegionState:
+def _class_weight(value) -> float:
+    return 1.0 if value is None else float(value)
+
+
+def region_classes(row) -> Optional[econ_classes.ClassMix]:
+    """FEAT-194: the live class mix of an ``econ_regions`` row (None = no shares)."""
+    return econ_classes.ClassMix.of(getattr(row, "class_poor", None), getattr(row, "class_middling", None),
+                                    getattr(row, "class_rich", None))
+
+
+def load_class_bases(session: Session) -> Dict[str, econ_classes.ClassMix]:
+    """FEAT-194: {template code: default class mix} — the base every class factor is normalised to."""
+    bases: Dict[str, econ_classes.ClassMix] = {}
+    for row in session.query(models.EconRegionTemplate).all():
+        mix = econ_classes.ClassMix.of(getattr(row, "class_poor", None), getattr(row, "class_middling", None),
+                                       getattr(row, "class_rich", None))
+        if mix is not None:
+            bases[row.code] = mix
+    return bases
+
+
+def class_base_of(session: Session, template_code: Optional[str]) -> Optional[econ_classes.ClassMix]:
+    if template_code is None:
+        return None
+    row = session.get(models.EconRegionTemplate, template_code)
+    if row is None:
+        return None
+    return econ_classes.ClassMix.of(row.class_poor, row.class_middling, row.class_rich)
+
+
+def region_state(row: "models.EconRegion",
+                 base: Optional[econ_classes.ClassMix] = None) -> econ_sim.RegionState:
+    """``base`` (FEAT-194) = the template default mix; None -> the region normalises against its own mix."""
     return econ_sim.RegionState(
         population=int(row.population or 0), tax_rate=_float(row.tax_rate), stability=_float(row.stability),
         prosperity=_float(row.prosperity), hunger=_float(row.hunger), satisfaction=_float(row.satisfaction),
-        treasury_target=int(row.treasury_target or 0),
+        treasury_target=int(row.treasury_target or 0), classes=region_classes(row), class_base=base,
     )
+
+
+def store_classes(row: "models.EconRegion", mix: econ_classes.ClassMix) -> None:
+    """FEAT-194: write a mix (poor / rich at 6 decimals, middling = 1 - poor - rich)."""
+    row.class_poor, row.class_middling, row.class_rich = econ_classes.decimals(mix)
 
 
 def good_state(row: "models.EconRegionGood") -> econ_sim.GoodState:
@@ -371,18 +422,42 @@ def participating_regions(session: Session) -> List[Tuple[int, int, Optional[int
             for r in session.execute(text(SQL_PARTICIPATING)).fetchall()]
 
 
+def _balances(session: Session, kind: str) -> Dict[int, int]:
+    return {int(r[0]): int(r[1] or 0) for r in session.execute(
+        text("SELECT ref_id, balance FROM econ_accounts WHERE kind = :kind"), {"kind": kind}).fetchall()}
+
+
+def region_deficits(session: Session) -> Dict[int, int]:
+    """FEAT-194 (3.9): {region_id: money below its norm} of the participating regions, from the stored
+    ``wealth_norm`` / ``treasury_target`` (at most one recount old) and the current balances. Plain reads."""
+    purses = _balances(session, core.KIND_POPULATION_PURSE)
+    treasuries = _balances(session, core.KIND_REGION_TREASURY)
+    rows = session.execute(text(
+        "SELECT e.region_id, e.wealth_norm, e.treasury_target FROM econ_regions e "
+        "JOIN Regions r ON r.id = e.region_id "
+        "WHERE e.template_code IS NOT NULL AND e.population > 0 ORDER BY e.region_id"
+    )).fetchall()
+    return {int(r[0]): econ_classes.deficit(int(r[1] or 0), int(r[2] or 0), purses.get(int(r[0]), 0),
+                                            treasuries.get(int(r[0]), 0))
+            for r in rows}
+
+
 def build_grant_plan(session: Session, params: econ_sim.SimParams) -> Dict[str, int]:
-    """{str(region_id): grant} for every participating region (grant 0 included — the plan is the region list too)."""
+    """{str(region_id): grant} for every participating region (grant 0 included — the plan is the region list too).
+
+    FEAT-194 (3.10): ``grant_deficit_share`` of each country's pool goes to its regions below their money norm."""
     by_country: Dict[Optional[int], Dict[int, int]] = {}
     for region_id, population, country_id in participating_regions(session):
         by_country.setdefault(country_id, {})[region_id] = population
+    deficits = region_deficits(session) if by_country else {}
     plan: Dict[str, int] = {}
     for country_id, populations in by_country.items():
         if country_id is None:
             grants = {rid: 0 for rid in populations}
         else:
             balance = account_balance(session, core.AccountRef.country(country_id))
-            grants = econ_sim.country_grants(balance, populations, params)
+            grants = econ_sim.country_grants(balance, populations, params,
+                                             deficits={rid: deficits.get(rid, 0) for rid in populations})
         for region_id, grant in grants.items():
             plan[str(region_id)] = int(grant)
     return dict(sorted(plan.items(), key=lambda kv: int(kv[0])))
@@ -714,6 +789,7 @@ def _process_region(
     merchant_npcs: Sequence[int] = (),
     with_events: bool = True,
     with_guild: bool = False,
+    class_bases: Optional[Mapping[str, econ_classes.ClassMix]] = None,
 ) -> _RegionOutcome:
     session = session_factory()
     merchants: Optional[_MerchantOutcome] = None
@@ -750,6 +826,10 @@ def _process_region(
             event_rows = (event_query.with_for_update() if for_update else event_query).all()
         group_codes = list(groups)
         parsed = [econ_events.parse_effects(row.effects) for row in event_rows]
+        # FEAT-194: the class mix before this recount (event shifts + mobility are reported as one shift)
+        classes_on = bool(params.classes_enabled)
+        mix_before = region_classes(region)
+        mix_now = mix_before
         for row, effects in zip(event_rows, parsed):
             if row.applied_at is not None:
                 continue
@@ -772,11 +852,18 @@ def _process_region(
                 outcome_data["stock_lost"] = lost_map
             if shots.treasury_share > 0:
                 expenses.append((row, shots.treasury_share))
+            if shots.class_shift and classes_on and mix_now is not None:
+                shifted, _dp, _dr = econ_classes.event_shift(mix_now, shots.class_shift, params)
+                outcome_data["class_shift"] = {"before": [round(v, 6) for v in mix_now.as_tuple()],
+                                               "after": [round(v, 6) for v in shifted.as_tuple()]}
+                mix_now = shifted
             row.outcome = outcome_data
             row.applied_at = now
             row.applied_run_id = run_id
             events_applied += 1
         ev = econ_events.aggregate(parsed, group_codes, params) if event_rows else None
+        if mix_now is not mix_before:
+            store_classes(region, mix_now)
 
         # FEAT-193 (3.2 / 3.7): the region's open guild orders are locked after its event rows.
         guild_orders: list = []
@@ -808,8 +895,12 @@ def _process_region(
         purse = account_balance(session, purse_ref)
         treasury = account_balance(session, treasury_ref)
 
+        if class_bases is not None:
+            base = class_bases.get(region.template_code)
+        else:
+            base = class_base_of(session, region.template_code)
         result = econ_sim.simulate_region(
-            region_state(region), {row.group_code: good_state(row) for row in goods_rows}, groups,
+            region_state(region, base), {row.group_code: good_state(row) for row in goods_rows}, groups,
             purse=purse, treasury=treasury, grant=grant,
             country_tax_rate=country_tax_rate if country_id is not None else 0.0, params=params,
             mods=ev.mods if ev is not None else None,
@@ -825,6 +916,18 @@ def _process_region(
         region.last_tax = result.tax
         region.last_wages = result.wages
         region.last_grant = result.grant
+        # FEAT-194: mix after mobility, shift of this recount (events + mobility), wealth norm / tax
+        class_meta = classes_on and state.classes is not None
+        if class_meta:
+            store_classes(region, state.classes)
+            old_p, _old_m, old_r = econ_classes.decimals(mix_before)
+            region.class_dpoor = region.class_poor - old_p
+            region.class_drich = region.class_rich - old_r
+        else:
+            region.class_dpoor = Decimal(0)
+            region.class_drich = Decimal(0)
+        region.wealth_norm = int(result.wealth_norm)
+        region.last_wealth_tax = int(result.wealth_tax)
         region.last_run_id = run_id
         region.last_tick_at = now
         # FEAT-187 riot clock: when stability first dropped below the threshold (a timestamp — runs do not count)
@@ -845,15 +948,19 @@ def _process_region(
             row.last_demand = _round(good.last_demand, _SCALE_STOCK)
             row.last_spoiled = _round(good.last_spoiled, _SCALE_STOCK)
 
-        legs = [core.Leg(purse_ref, treasury_ref, result.tax)]
+        # FEAT-194 (3.6): the wealth tax rides in the same purse -> treasury leg (the ledger adds the country leg on
+        # the sum, as the sim predicted)
+        legs = [core.Leg(purse_ref, treasury_ref, result.tax + result.wealth_tax)]
         if country_id is not None:
             legs.append(core.Leg(core.AccountRef.country(country_id), treasury_ref, result.grant))
         legs.append(core.Leg(treasury_ref, purse_ref, result.wages))
+        metadata = {"run_id": run_id, "tax": result.tax, "grant": result.grant, "wages": result.wages,
+                    "income": result.income, "hunger": round(state.hunger, _SCALE_SHARE)}
+        if class_meta:
+            metadata["wealth_tax"] = result.wealth_tax
         posting = econ_ledger.post_operation(
             session, op_type=core.OP_REGION_TICK, legs=legs, source_service=SOURCE_SERVICE, region_id=region_id,
-            idempotency_key=f"region_tick:{run_id}:r:{region_id}",
-            metadata={"run_id": run_id, "tax": result.tax, "grant": result.grant, "wages": result.wages,
-                      "income": result.income, "hunger": round(state.hunger, _SCALE_SHARE)},
+            idempotency_key=f"region_tick:{run_id}:r:{region_id}", metadata=metadata,
         )
         if purse == 0 and result.wages == 0:
             logger.warning(
@@ -926,6 +1033,10 @@ def _process_region(
                           "produced": round(g.last_produced, _SCALE_STOCK),
                           "consumed": round(g.last_consumed, _SCALE_STOCK)}
                    for code, g in result.goods.items()},
+            class_poor=region.class_poor if class_meta else None,
+            class_middling=region.class_middling if class_meta else None,
+            class_rich=region.class_rich if class_meta else None,
+            wealth_norm=int(result.wealth_norm), wealth_tax=int(result.wealth_tax),
         ))
         session.commit()
         return _RegionOutcome("done", posted=posting.operation_id is not None, merchants=merchants,
@@ -1228,6 +1339,7 @@ def run_tick(
         summary = RunSummary(run_id=run_id, trigger=run.trigger_kind, slot=run.slot, status=STATUS_RUNNING,
                              resumed=resumed, regions_total=len(plan), started_at=run.started_at)
         groups = load_groups(session)
+        class_bases = load_class_bases(session)        # FEAT-194: template default mixes, once per run
         country_tax_rate = float(econ_ledger.get_economy_settings(session).country_tax_rate)
         session.rollback()  # release the read snapshot; the run row is not held
     finally:
@@ -1254,7 +1366,7 @@ def run_tick(
         outcome = _process_region(session_factory, run_id=run_id, region_id=region_id, grant=grant, groups=groups,
                                   params=params, country_tax_rate=country_tax_rate, now=start,
                                   merchant_npcs=merchant_map.get(region_id, ()), with_events=events_on,
-                                  with_guild=guild_on)
+                                  with_guild=guild_on, class_bases=class_bases)
         summary.events_applied += outcome.events_applied
         summary.event_expense_ops += outcome.expense_ops
         if outcome.status == "failed":
@@ -1376,7 +1488,12 @@ def run_tick(
 
 def _quota_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary, params: econ_sim.SimParams,
                 now: datetime) -> None:
-    """Season quota (3.7): once per game season, emission -> participating region treasuries by population."""
+    """Season quota (3.7): once per game season, emission -> region treasuries.
+
+    FEAT-194 (3.9): only regions below their money norm (``wealth_norm + treasury_target`` vs purse + treasury) get
+    it, in proportion to the deficit and capped at the total deficit (the rest of the season amount is not issued).
+    Nobody below the norm -> nothing is posted and every next tick of the season re-checks (the period key stays the
+    only marker)."""
     amount = int(params.quota_season_amount)
     if amount <= 0:
         return
@@ -1390,10 +1507,13 @@ def _quota_pass(session_factory: SessionFactory, run_id: int, summary: RunSummar
         key = f"{mint_crud.KEY_QUOTA}:p{period.index}"
         if session.execute(text(core.SQL_SELECT_OPERATION_BY_KEY), {"key": key}).first() is not None:
             return
-        populations = {rid: pop for rid, pop, _country in participating_regions(session)}
-        shares = econ_mint.split_quota(amount, populations)
-        if not shares:
+        deficits = region_deficits(session)
+        if not deficits:
             logger.warning("economy tick run %s: no participating regions, season quota skipped", run_id)
+            return
+        shares = econ_mint.split_by_deficit(amount, deficits)
+        if not shares:
+            logger.info("economy tick run %s: season quota waits: no region below its norm", run_id)
             return
         legs = [core.Leg(core.AccountRef.emission(), core.AccountRef.region(rid), amt)
                 for rid, amt in sorted(shares.items())]
@@ -1402,6 +1522,8 @@ def _quota_pass(session_factory: SessionFactory, run_id: int, summary: RunSummar
             idempotency_key=key,
             metadata={"period_index": period.index, "year": period.year, "season": period.season,
                       "amount": sum(shares.values()), "regions": {str(r): a for r, a in sorted(shares.items())},
+                      "requested": amount,
+                      "deficits": {str(r): d for r, d in sorted(deficits.items()) if d > 0},
                       "run_id": run_id},
         )
         session.commit()

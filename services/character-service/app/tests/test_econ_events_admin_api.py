@@ -587,3 +587,26 @@ def test_template_strings_stored_literally(api):
 ])
 def test_start_wrong_types_422(api, body):
     assert api.post(f"{EVENTS}/start", json=body).status_code == 422
+
+
+# --------------------------------------------------------------------------------------------- FEAT-194 class_shift
+
+def test_class_shift_effect_round_trip(api):
+    """FEAT-194 (3.15): the one-shot «сдвиг классов» is accepted with a signed delta within ±0.3."""
+    effects = [{"type": "class_shift", "delta": -0.06}, {"type": "tax_income", "mult": 0.85}]
+    resp = api.post(f"{EVENTS}/templates", json=_template_body(code="ruin_t", effects=effects, chains=[]))
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["effects"] == effects
+    resp = api.post(f"{EVENTS}/templates", json=_template_body(code="boom_t", chains=[],
+                                                                effects=[{"type": "class_shift", "delta": 0.3}]))
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.parametrize("effect", [
+    {"type": "class_shift", "delta": 0.31}, {"type": "class_shift", "delta": -0.5}, {"type": "class_shift"},
+    {"type": "class_shift", "delta": "вниз"}, {"type": "class_shift", "delta": True},
+    {"type": "class_shift", "delta": 0.1, "mult": 2}, {"type": "class_shift", "delta": 0.1, "groups": ["food"]},
+])
+def test_class_shift_effect_validation_422(api, effect):
+    resp = api.post(f"{EVENTS}/templates", json=_template_body(code="bad_t", chains=[], effects=[effect]))
+    assert resp.status_code == 422, resp.text

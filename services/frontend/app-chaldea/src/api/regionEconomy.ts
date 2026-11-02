@@ -33,6 +33,21 @@ interface RegionCardHidden {
   guild_wants?: RegionCardGuildWant[];
 }
 
+/** FEAT-194 (3.11): coarse word per class — the page turns it into a bar width, no shares leave the API. */
+export type RegionClassAmount = 'few' | 'some' | 'many';
+export type RegionClassState = 'poor' | 'modest' | 'wealthy' | 'rich';
+
+export interface RegionCardClasses {
+  state: RegionClassState;
+  /** «Зажиточный город, много бедняков» — also sent as `phrases[0]` */
+  label: string;
+  bar: {
+    poor: RegionClassAmount;
+    middling: RegionClassAmount;
+    rich: RegionClassAmount;
+  };
+}
+
 export interface RegionCardData {
   region_id: number;
   participating: true;
@@ -56,6 +71,8 @@ export interface RegionCardData {
   caravans?: RegionCardCaravans;
   /** FEAT-193: goods groups the regional guild has open, payable orders for (optional — older backends don't send it) */
   guild_wants?: RegionCardGuildWant[];
+  /** FEAT-194: social classes in words (absent / null when classes are off or the region has no shares) */
+  classes?: RegionCardClasses | null;
 }
 
 /** FEAT-193 (3.9): a goods group the guild of the region is looking for — words only, no units or money. */

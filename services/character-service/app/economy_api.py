@@ -288,6 +288,7 @@ def post_regions_fill(
         reset_stocks=body.reset_stocks, fund_purses=body.fund_purses, treasury_to_reserve=body.treasury_to_reserve,
         comment=body.comment, actor_user_id=current_user.id, open_banks=body.open_banks,
         return_purse_excess=body.return_purse_excess, return_treasury_excess=body.return_treasury_excess,
+        reset_classes=body.reset_classes,
     ))
     logger.info("economy fill: user=%s regions=%s emitted=%s returned=%s ops=%s", current_user.id, result["regions"],
                 result["emitted"], result["returned"], result["operation_ids"])

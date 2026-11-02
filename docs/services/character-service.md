@@ -1413,3 +1413,92 @@ character_attributes`; `npc_shop_items` / `characters` торговцев чит
 | `POST /economy/guild/npc/{npc_id}/hand-in` | JWT + гейт | `GuildHandInIn {character_id ≥1, item_id ≥1, quantity 1…10000, request_id [A-Za-z0-9-]{8,64}}` → `GuildActionOut {message, operation_id, quantity, requested, partial, unit_price, total, xp, xp_capped, wallet, view}`; `message` уже содержит «и N опыта» |
 | `GET /admin/economy/guild?status=open/filled/closed/all&region_id=&group_code=&limit=50&offset=0` | `economy:read` | `GuildAdminOut {params (9), totals {open, units_left_value, paid_last_7d, hand_ins_last_7d, xp_last_7d}, regions [{region_id, region_name, guild_budget, guild_food_budget, open_orders, masters [{npc_id, name, npc_status, location_name}]}], total, items [...]}`; `status=closed` — закрытые **и** выполненные; неизвестная группа → 400; `limit 1…200` |
 | `GET /economy/regions/{id}/card` | публично | новое поле `guild_wants [{group_code, group_name}]` (обе формы; только при живом НПС гильдии в регионе, открытый заказ с остатком и бюджетом; до 12; без чисел) |
+
+## Social classes and the wealth norm (FEAT-194)
+
+У каждого участвующего региона — доли трёх классов жителей: бедные / зажиточные / богатые (сумма 1). Состав влияет на
+спрос, налог, стабильность и покупательную способность, задаёт **норму богатства** (нормальные деньги жителей) и
+медленно дрейфует сам. Деньги не сжигаются: излишок сверх нормы остывает налогом с накоплений в казну. Модули: чистый
+`app/econ_classes.py` (формулы), класс-путь в `econ_sim.simulate_region`, тик — `econ_tick`, API — `economy_sim_crud`.
+
+### Нормировка и выключатель
+- Регион «с классами» ⇔ `classes_enabled = 1` **и** три колонки долей не NULL. Иначе вся математика — прежняя,
+  инструкция в инструкцию (`wealth_norm` = `starting_purse` = `purse_start_days` дней нужд по базовым ценам).
+- Все классовые множители нормированы на **долю шаблона по умолчанию** (`econ_region_templates.class_*`): регион с
+  долями шаблона считает множитель ровно 1.0 → выкатка не двигает спрос, нормы, цены и подоходный налог. Правка долей
+  шаблона перебалансирует все его регионы; правка долей одного региона двигает только его спрос.
+
+### Формулы (раздел 3 фичи)
+- **Спрос** (3.3): у группы товаров веса на душу `class_demand_poor/_middling/_rich`; `w_kg = s_k c_kg / Σ base_j c_jg`,
+  `F_g = Σ s_k c_kg / Σ base_j c_jg` (ровно 1.0 на шаблонной смеси; нулевой знаменатель → 1). Спрос группы, норма
+  запаса (часть домохозяйств) — ×`F_g`; часть класса `D_kg = D_g × w_kg / F_g`.
+- **Норма богатства** (3.4): `Σ_k class_norm_days_k × (нужды класса k в день по базовым ценам)`; по умолчанию 3 / 7 / 21
+  дня → столица ≈ 10 дней всех нужд, сельская округа ≈ 6. Пишется в `econ_regions.wealth_norm` каждым пересчётом,
+  «Заполнить» и «Применить шаблон»; цель кошелька в «Заполнить» = норма.
+- **Покупательная способность** (3.5): кошелёк делится между классами ∝ их частям нормы; `afford_k = деньги_k /
+  (стоимость_k × afford_days)`; запас группы раздаётся богатые → зажиточные → бедные, поэтому дороговизна и нехватка бьют
+  по бедным первыми. Голод по классам: потреблено / (норма еды × вес класса). Потребление денег не двигает (как раньше).
+- **Налоги** (3.6): подоходный ×`Σ s_k t_k / Σ base_k t_k` (веса 0.3 / 1.0 / 2.0); **налог с накоплений** `floor(
+  wealth_tax_rate × max(0, кошелёк после подоходного − норма))` (0.02 за пересчёт). Оба идут **одной ногой** `purse →
+  region` операции `region_tick` (книга сама добавляет 10 % стране с суммы); новой операции и ключа нет, в metadata —
+  `wealth_tax`. `treasury_target` и зарплаты считаются только от подоходного налога — налог с накоплений возвращается
+  в кошелёк медленным выпуском излишка казны (`treasury_release_ticks`), а не в тот же пересчёт.
+  `econ_regions.last_tax` — подоходный, `last_wealth_tax` — с накоплений.
+- **Стабильность** (3.7): минус `class_stab_poor_w × max(0, бедные − порог)`, `class_stab_poor_hunger_w × бедные ×
+  голод бедных`, `class_stab_rich_tax_w × богатые × max(0, ставка − class_stab_rich_free_tax)`; на шаблонных долях = 0.
+- **Мобильность** (3.8): сигнал `mob_w_prosperity·(достаток−50)/50 + mob_w_money·clamp(r−1) +
+  mob_w_stability·clamp((стаб−50)/50) − mob_w_hunger·clamp(голод/0.15)` (r = кошелёк / норма), мёртвая зона
+  `mob_dead_zone`; вверх `mob_rate_up` (бедные → зажиточные, зажиточные → богатые ×`mob_rich_factor`), вниз
+  `mob_rate_down`. Доли не выталкиваются за `class_share_min / class_share_max`; хранение — бедные / богатые с 6 знаками,
+  зажиточные = 1 − бедные − богатые (сумма ровно 1). Сдвиг пересчёта (события + мобильность) — `class_dpoor / class_drich`.
+- **Квота сезона** (3.9): нехватка региона `max(0, wealth_norm + treasury_target − кошелёк − казна)` (сохранённые
+  колонки + текущие балансы, без блокировок). Квота делится только между регионами с нехваткой ∝ нехватке
+  (`econ_mint.split_by_deficit`, наибольший остаток, каждому ≤ его нехватки), выдаётся `min(сумма, Σ нехваток)`, остаток
+  не выдаётся. Никого ниже нормы → ничего не проводится, следующий пересчёт сезона проверяет снова (ключ
+  `season_quota:p<период>` — единственный маркер). В metadata — `requested`, `deficits`.
+- **Гранты страны** (3.10): `grant_deficit_share` (0.25) пула — регионам с нехваткой ∝ нехватке (не больше нехватки),
+  остальное — по населению; никого ниже нормы → весь пул по населению.
+
+### Событие `class_shift` (3.15)
+Разовый эффект `{"type": "class_shift", "delta": d}`, d ∈ [−0.3, 0.3]: d > 0 — доля d бедных в зажиточные и
+d × `mob_rich_factor` зажиточных в богатые; d < 0 — вниз. Применяется вместе с другими разовыми эффектами (один раз,
+`applied_at`), только если у региона есть классы; `outcome.class_shift = {before: [p, m, r], after: [p, m, r]}`.
+Миграция 037 дописала его в Бунт −0.03, Набег −0.02, Чума −0.02, Богатая жила +0.02, Ярмарка +0.01 и добавила плохое
+событие «Разорение» (`ruin`: −0.06, доход казны ×0.85, достаток −1, стабильность −0.5, 5–10 дней, любой шаблон).
+
+### Таблицы (миграция `037_econ_social_classes`, без FK, без ENUM, перезапускаемая)
+- `econ_region_templates.class_poor / class_middling / class_rich` DECIMAL(6,4) (по умолчанию 0.45 / 0.45 / 0.10;
+  сид: столица 35/45/20, порт 45/42/13, шахтёрский 55/37/8, аграрный 55/38/7, лесной 50/42/8, магический 30/50/20,
+  крепость 45/48/7, сельская округа 60/35/5).
+- `econ_regions.class_poor / class_middling / class_rich` DECIMAL(9,6) NULL (NULL = нет классов; заполнены из шаблона),
+  `class_dpoor / class_drich` DECIMAL(9,6), `wealth_norm`, `last_wealth_tax` BIGINT.
+- `econ_region_history.class_* / wealth_norm / wealth_tax` (NULL у старых строк).
+- `econ_goods_groups.class_demand_poor / _middling / _rich` DECIMAL(6,3) (сид — таблица 3.3: еда 1/1/1.2 … украшения
+  0.05/0.6/6).
+- Откат: удалить колонки, убрать `class_shift` из эффектов шаблонов, удалить `ruin` (или выключить, если есть экземпляры).
+
+### Параметры (`PUT /admin/economy/sim`, право `economy:settings`; без сид-миграции)
+`classes_enabled` (1, 0…1), `class_norm_days_poor/_middling/_rich` (3 / 7 / 21, 0…365), `wealth_tax_rate` (0.02,
+0…0.2), `class_tax_w_poor/_middling/_rich` (0.3 / 1 / 2, 0…5), `class_stab_poor_threshold` (0.6, 0…1),
+`class_stab_poor_w` (40, 0…500), `class_stab_poor_hunger_w` (50, 0…500), `class_stab_rich_free_tax` (0.12, 0…1),
+`class_stab_rich_tax_w` (100, 0…2000), `mob_rate_up` (0.001, 0…0.05), `mob_rate_down` (0.0015, 0…0.05),
+`mob_rich_factor` (0.5, 0…1), `mob_dead_zone` (0.1, 0…0.9), `mob_w_prosperity / _money / _stability / _hunger`
+(0.4 / 0.4 / 0.2 / 1, 0…5), `class_share_min` (0.02, 0…0.3) < `class_share_max` (0.9, 0.4…1) — иначе 400 «Нижняя
+граница доли класса должна быть меньше верхней», `grant_deficit_share` (0.25, 0…1).
+
+### API (префикс `/characters`)
+| Метод и путь | Изменение |
+|---|---|
+| `GET /admin/economy/regions` | элемент + `class_poor, class_middling, class_rich` (float \| null), `class_base {poor, middling, rich} \| null` (доли шаблона), `class_dpoor, class_drich` (сдвиг последнего пересчёта), `wealth_norm`, `last_wealth_tax`, `money_vs_norm` (кошелёк / норма \| null) |
+| `GET /admin/economy/regions/{id}` | + `classes`: `null` или `{classes: {poor\|middling\|rich: {share, base_share, norm_days, norm_per_resident, money_per_resident, needs_per_resident_day, afford}}, wealth_norm, money_norm, deficit, r}` (на одного жителя симуляции, нужды — по текущим ценам) |
+| `PUT /admin/economy/regions/{id}` | необязательные `class_poor, class_middling, class_rich` (0…1, иначе 422): все три или ни одной (400 «Укажите все три доли»), сумма 1 ± 0.001 (400 «Сумма долей должна быть 100 %»); хранятся бедные / богатые с 6 знаками, зажиточные = остаток. Не переданы — сохраняются; строка без долей с шаблоном получает доли шаблона |
+| `POST /admin/economy/regions/{id}/apply-template` | ещё сбрасывает доли к шаблону, обнуляет сдвиг, пересчитывает `wealth_norm` |
+| `POST /admin/economy/regions/fill` | тело + `reset_classes` (bool, false); ответ + `classes_reset [region_id]` (сброшены к шаблону или получили доли впервые); цель кошелька = норма богатства |
+| `GET /admin/economy/regions/{id}/history` | строки + `class_poor, class_middling, class_rich, wealth_norm, wealth_tax` (null у старых) |
+| `GET/PUT /admin/economy/templates[/{code}]` | + `class_poor, class_middling, class_rich` (PUT: необязательны, все три или ни одной, хранятся с 4 знаками) |
+| `GET/PUT /admin/economy/goods-groups[/{code}]` | + `class_demand_poor, class_demand_middling, class_demand_rich` (PUT: необязательны, 0…20, None — сохраняются) |
+| `GET /economy/regions/{id}/card` | при классах (включены и доли есть): `classes {state: poor\|modest\|wealthy\|rich, label: «Скромный край, много бедняков», bar {poor, middling, rich: few\|some\|many}}`; `phrases[0]` = `classes.label`; `prosperity.label` — без прилагательного («Город процветает» / «живёт в достатке» / «живёт скромно» / «в упадке»), в фразы добавляется только «процветает» / «в упадке». Без классов карточка прежняя; чисел нет |
+
+Пороги карточки: индекс = зажиточные × 0.5 + богатые; < 0.25 бедный, < 0.32 скромный, < 0.40 зажиточный, иначе
+богатый. Хвост «, много бедняков» при бедных ≥ 0.5 (если не «бедный»), иначе «, много богачей» при богатых ≥ 0.18 (если
+не «богатый»). Полоска: бедные / зажиточные few < 0.30 ≤ some < 0.50 ≤ many, богатые few < 0.08 ≤ some < 0.18 ≤ many.

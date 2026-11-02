@@ -127,7 +127,19 @@ const Outcome = ({ ev, groupNames }: { ev: EconRegionEvent; groupNames: Record<s
       </span>,
     );
   }
-  const hasOneShots = ev.effects.some((e) => ['stock_loss', 'treasury_expense', 'population'].includes(e.type));
+  const shift = ev.outcome?.class_shift;
+  if (shift && shift.before?.length === 3 && shift.after?.length === 3) {
+    const pct = (v: number) => Math.round(v * 1000) / 10;
+    const mix = (m: number[]) => `${pct(m[0])} / ${pct(m[1])} / ${pct(m[2])} %`;
+    lines.push(
+      <span key="classes" title="бедные / зажиточные / богатые">
+        классы: {mix(shift.before)} → {mix(shift.after)}
+      </span>,
+    );
+  }
+  const hasOneShots = ev.effects.some((e) =>
+    ['stock_loss', 'treasury_expense', 'population', 'class_shift'].includes(e.type),
+  );
   if (lines.length === 0) {
     if (!ev.applied_at && hasOneShots && ev.status === 'active') {
       return <p className="text-white/40 text-xs">Разовые эффекты сработают в ближайшем пересчёте.</p>;

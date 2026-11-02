@@ -277,7 +277,10 @@ def test_public_card_needs_no_auth(world):
 REGION_KEYS = {"region_id", "name", "country_id", "country_name", "template_code", "template_name", "population",
                "tax_rate", "stability", "prosperity", "hunger", "satisfaction", "purse", "treasury",
                "treasury_target", "last_income", "last_tax", "last_wages", "last_grant", "last_tick_at",
-               "simulated", "bank_enabled", "sim_population"}
+               "simulated", "bank_enabled", "sim_population",
+               # FEAT-194 social classes
+               "class_poor", "class_middling", "class_rich", "class_base", "class_dpoor", "class_drich",
+               "wealth_norm", "last_wealth_tax", "money_vs_norm"}
 GOOD_KEYS = {"group_code", "name", "production_per_1000", "consumption_mult", "stock", "norm_stock", "price_mult",
              "prev_price_mult", "last_produced", "last_consumed", "last_demand", "last_spoiled"}
 
@@ -301,7 +304,7 @@ def test_regions_list_shape_includes_every_world_region(world):
 
 def test_region_detail_shape_and_404(world):
     detail = _region(world, 10)
-    assert set(detail) == REGION_KEYS | {"goods"}
+    assert set(detail) == REGION_KEYS | {"goods", "classes"}                 # FEAT-194: class report
     assert [g["group_code"] for g in detail["goods"]] == list(core.GOODS_GROUPS)
     for good in detail["goods"]:
         assert set(good) == GOOD_KEYS
@@ -423,7 +426,7 @@ def test_fill_shape_and_idempotent_top_up(world, engine):
     assert set(first) == {"regions", "operation_id", "operation_ids", "emitted", "emitted_purses",
                           "emitted_treasuries", "skipped_no_population", "banks_opened", "returned",
                           "returned_purses", "returned_treasuries", "resident_deposits_out",
-                          "resident_loans_repaid"}
+                          "resident_loans_repaid", "classes_reset"}
     assert first["returned"] == first["returned_purses"] == first["returned_treasuries"] == 0
     assert first["regions"] == 3
     assert first["skipped_no_population"] == [20]
@@ -586,7 +589,8 @@ def test_history_after_run_and_limit_bounds(world):
     items = resp.json()["items"]
     assert len(items) == 2 and items[0]["id"] > items[1]["id"]              # newest first
     assert set(items[0]) == {"id", "run_id", "region_id", "created_at", "population", "stability", "prosperity",
-                             "hunger", "purse", "treasury", "income", "tax", "wages", "grant_amount", "goods"}
+                             "hunger", "purse", "treasury", "income", "tax", "wages", "grant_amount", "goods",
+                             "class_poor", "class_middling", "class_rich", "wealth_norm", "wealth_tax"}  # FEAT-194
     assert set(items[0]["goods"]["food"]) == {"stock", "price_mult", "produced", "consumed"}
     assert len(world.get(f"{BASE}/regions/10/history", params={"limit": 1}).json()["items"]) == 1
     assert world.get(f"{BASE}/regions/20/history").json()["items"] == []
@@ -603,7 +607,8 @@ def test_goods_groups_list_shape(api):
     items = resp.json()["items"]
     assert [g["code"] for g in items] == list(core.GOODS_GROUPS)
     assert set(items[0]) == {"code", "name", "sort_order", "is_food", "base_price", "norm_per_1000", "norm_days",
-                             "prosperity_elasticity", "price_elasticity", "inputs", "updated_at"}
+                             "prosperity_elasticity", "price_elasticity", "inputs", "updated_at",
+                             "class_demand_poor", "class_demand_middling", "class_demand_rich"}  # FEAT-194
     weapons = next(g for g in items if g["code"] == "weapons")
     assert weapons["inputs"] == [{"input_code": "ore_metal", "ratio": 3.0}]
 
@@ -657,7 +662,8 @@ def test_templates_list_shape(api):
     items = api.get(f"{BASE}/templates").json()["items"]
     assert [t["code"] for t in items] == [t[0] for t in mig.TEMPLATES]
     assert set(items[0]) == {"code", "name", "description", "settlement_noun", "noun_gender", "default_population",
-                             "tax_rate", "sort_order", "updated_at", "goods", "default_sim_population"}
+                             "tax_rate", "sort_order", "updated_at", "goods", "default_sim_population",
+                             "class_poor", "class_middling", "class_rich"}  # FEAT-194
     assert items[0]["default_sim_population"] == items[0]["default_population"] / SCALE
     assert [g["group_code"] for g in items[0]["goods"]] == list(core.GOODS_GROUPS)
 
@@ -963,7 +969,8 @@ def test_summary_population_purses(world, engine):
 
 CARD_KEYS = {"region_id", "participating", "updated_at", "food", "treasury", "stability", "prosperity",
              "price_level", "shortages", "surpluses", "phrases", "groups", "has_bank",
-             "events", "has_mint", "caravans", "guild_wants"}  # FEAT-184 has_bank, FEAT-187 events, FEAT-191 has_mint, FEAT-192, FEAT-193
+             "events", "has_mint", "caravans", "guild_wants",
+             "classes"}  # FEAT-184 has_bank, FEAT-187 events, FEAT-191 has_mint, FEAT-192, FEAT-193, FEAT-194 classes
 
 
 def _numbers(value, path=""):
@@ -996,8 +1003,12 @@ def test_card_shape_has_no_money_numbers(world):
         assert card["food"]["label"] == "Крепость сыта"
     assert [g["code"] for g in card["groups"]] == list(core.GOODS_GROUPS)
     assert all(set(g) == {"code", "name", "level", "trend"} for g in card["groups"])
-    assert card["phrases"][:2] == [card["prosperity"]["label"], card["food"]["label"]]
-    assert card["prosperity"]["label"].endswith("крепость")                  # «Зажиточная крепость»
+    # FEAT-194: the class phrase leads («Скромная крепость»), prosperity reads as a state («Крепость живёт …»)
+    assert card["phrases"][:2] == [card["classes"]["label"], card["food"]["label"]]
+    assert card["classes"]["label"].split(",")[0].endswith("крепость")
+    assert set(card["classes"]) == {"state", "label", "bar"}
+    assert set(card["classes"]["bar"]) == {"poor", "middling", "rich"}
+    assert card["prosperity"]["label"].startswith("Крепость")
     text_dump = resp.text
     for word in ("purse", "balance", "stock", "price_mult", "treasury_target", "population"):
         assert word not in text_dump
@@ -1208,7 +1219,8 @@ def test_card_phrases_say_region_with_lore_populations(world, engine):
     for rid, _t, _p in LORE_WORLD:
         card = client.get(f"/characters/economy/regions/{rid}/card").json()
         assert card["food"]["label"] == "Регион сыт", card
-        assert card["prosperity"]["label"].endswith("регион")
+        assert card["prosperity"]["label"].startswith("Регион")          # FEAT-194: «Регион живёт …»
+        assert card["classes"]["label"].split(",")[0].endswith("регион")  # FEAT-194: «Богатый регион»
         assert "population" not in str(card)
     _run_ok(world)
     for rid, _t, _p in LORE_WORLD:

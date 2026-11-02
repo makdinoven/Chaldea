@@ -211,6 +211,54 @@ export interface EconRegionItem {
   bank_enabled?: boolean;
   /** FEAT-187: active events of the region (optional — older backends don't send it) */
   active_events?: EconEventBadge[];
+  /* FEAT-194 social classes (3.13) — optional, older backends don't send them */
+  /** Live shares 0..1; null = the region has no classes */
+  class_poor?: number | null;
+  class_middling?: number | null;
+  class_rich?: number | null;
+  /** Default shares of the region's template (what «Применить шаблон» resets to) */
+  class_base?: EconClassMix | null;
+  /** Shift of the poor / rich share at the last recount (signed share, e.g. −0.0002) */
+  class_dpoor?: number | null;
+  class_drich?: number | null;
+  /** Purse norm of the region (marks) */
+  wealth_norm?: number | null;
+  /** Wealth tax of the last recount (purse → treasury) */
+  last_wealth_tax?: number | null;
+  /** purse / wealth_norm; null when the norm is 0 */
+  money_vs_norm?: number | null;
+}
+
+/** FEAT-194: three class shares, sum 1. */
+export interface EconClassMix {
+  poor: number;
+  middling: number;
+  rich: number;
+}
+
+export type EconClassKey = keyof EconClassMix;
+
+/** FEAT-194 (3.13): one class row of the region detail report (money in sim units per resident). */
+export interface EconClassReportRow {
+  share: number;
+  base_share: number | null;
+  norm_days: number;
+  norm_per_resident: number;
+  money_per_resident: number;
+  needs_per_resident_day: number;
+  /** 0..1 — how much of its basket the class can afford at current prices */
+  afford: number;
+}
+
+/** FEAT-194 (3.13): `classes` of the region detail (`econ_classes.class_report`). */
+export interface EconClassReport {
+  classes: Record<EconClassKey, EconClassReportRow>;
+  wealth_norm: number;
+  /** wealth_norm + treasury_target */
+  money_norm: number;
+  deficit: number;
+  /** purse / wealth_norm */
+  r: number | null;
 }
 
 export interface EconRegionGoods {
@@ -230,6 +278,8 @@ export interface EconRegionGoods {
 
 export interface EconRegionDetail extends EconRegionItem {
   goods: EconRegionGoods[];
+  /** FEAT-194: class report, null when the region has no classes */
+  classes?: EconClassReport | null;
 }
 
 export interface EconRegionGoodsUpdate {
@@ -246,6 +296,10 @@ export interface EconRegionUpdate {
   stability?: number;
   prosperity?: number;
   goods?: EconRegionGoodsUpdate[];
+  /** FEAT-194: all three or none, each 0..1, sum 1 ± 0.001; omitted → kept */
+  class_poor?: number;
+  class_middling?: number;
+  class_rich?: number;
 }
 
 export interface EconApplyTemplateBody {
@@ -266,6 +320,8 @@ export interface EconFillBody {
   return_purse_excess?: boolean;
   /** FEAT-186: move the treasury part above the wage reserve back into emission (backend default false) */
   return_treasury_excess?: boolean;
+  /** FEAT-194: also reset the class shares to the template (rows without shares always get them; default false) */
+  reset_classes?: boolean;
   comment: string;
 }
 
@@ -290,6 +346,8 @@ export interface EconFillResult {
   resident_deposits_out?: number;
   /** FEAT-186: residents' bank loans above the scaled target repaid from the purse */
   resident_loans_repaid?: number;
+  /** FEAT-194: regions whose class shares this fill reset to the template */
+  classes_reset?: number[];
 }
 
 /** Per-group snapshot inside a history row. */
@@ -317,6 +375,12 @@ export interface EconRegionHistoryRow {
   wages: number;
   grant_amount: number;
   goods: Record<string, EconHistoryGoods>;
+  /* FEAT-194 — null for rows written before the classes */
+  class_poor?: number | null;
+  class_middling?: number | null;
+  class_rich?: number | null;
+  wealth_norm?: number | null;
+  wealth_tax?: number | null;
 }
 
 export interface EconGroupInput {
@@ -336,6 +400,10 @@ export interface EconGoodsGroup {
   price_elasticity: number;
   inputs: EconGroupInput[];
   updated_at?: string | null;
+  /* FEAT-194: per-capita demand weight of each class (optional — older backends don't send it) */
+  class_demand_poor?: number;
+  class_demand_middling?: number;
+  class_demand_rich?: number;
 }
 
 export interface EconGoodsGroupUpdate {
@@ -346,6 +414,10 @@ export interface EconGoodsGroupUpdate {
   prosperity_elasticity: number;
   price_elasticity: number;
   inputs: EconGroupInput[];
+  /** FEAT-194: 0..20 each, omitted → kept */
+  class_demand_poor?: number;
+  class_demand_middling?: number;
+  class_demand_rich?: number;
 }
 
 export interface EconTemplateGoods {
@@ -365,6 +437,10 @@ export interface EconRegionTemplate {
   sort_order: number;
   goods: EconTemplateGoods[];
   updated_at?: string | null;
+  /* FEAT-194: default class shares of the template (optional — older backends don't send them) */
+  class_poor?: number;
+  class_middling?: number;
+  class_rich?: number;
 }
 
 export interface EconTemplateUpdate {
@@ -375,6 +451,10 @@ export interface EconTemplateUpdate {
   default_population: number;
   tax_rate: number;
   goods: EconTemplateGoods[];
+  /** FEAT-194: all three or none, sum 1 ± 0.001; omitted → kept */
+  class_poor?: number;
+  class_middling?: number;
+  class_rich?: number;
 }
 
 export interface EconItemGroupRow {
@@ -517,6 +597,31 @@ export interface EconSimParams {
   guild_xp_per_mark: number;
   guild_xp_per_mark_merchant_items: number;
   guild_xp_daily_cap: number;
+  /* FEAT-194 social classes and the wealth norm (feature file 3.14) — older backends may not send them yet */
+  classes_enabled: number;
+  class_norm_days_poor: number;
+  class_norm_days_middling: number;
+  class_norm_days_rich: number;
+  wealth_tax_rate: number;
+  class_tax_w_poor: number;
+  class_tax_w_middling: number;
+  class_tax_w_rich: number;
+  class_stab_poor_threshold: number;
+  class_stab_poor_w: number;
+  class_stab_poor_hunger_w: number;
+  class_stab_rich_free_tax: number;
+  class_stab_rich_tax_w: number;
+  mob_rate_up: number;
+  mob_rate_down: number;
+  mob_rich_factor: number;
+  mob_dead_zone: number;
+  mob_w_prosperity: number;
+  mob_w_money: number;
+  mob_w_stability: number;
+  mob_w_hunger: number;
+  class_share_min: number;
+  class_share_max: number;
+  grant_deficit_share: number;
 }
 
 export type EconTickTrigger = 'auto' | 'manual';
@@ -843,7 +948,9 @@ export type EconEventEffectType =
   | 'loan_boom'
   | 'stock_loss'
   | 'treasury_expense'
-  | 'population';
+  | 'population'
+  /* FEAT-194: one-shot shift of the class shares, `delta` −0.3…0.3 (>0 up, <0 down) */
+  | 'class_shift';
 
 /** One effect of an event template: only the fields of its type are sent (the backend rejects extra ones). */
 export interface EconEventEffect {
@@ -940,6 +1047,8 @@ export interface EconRegionEventOutcome {
   stock_lost?: Record<string, number> | null;
   treasury_expense?: number | null;
   operation_id?: number | null;
+  /** FEAT-194: class shares [poor, middling, rich] before / after the one-shot `class_shift` */
+  class_shift?: { before: number[]; after: number[] } | null;
 }
 
 export interface EconEventStartBody {

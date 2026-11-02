@@ -122,13 +122,33 @@ def _pops(factory):
     return dict(_rows(factory, "SELECT region_id, population FROM econ_regions"))
 
 
+BIG_NORM = 10 ** 12
+
+
+def _below_norm(factory, *region_ids):
+    """FEAT-194: the quota goes only to regions below their money norm — put the regions far below it (the region
+    step of a run rewrites wealth_norm, so call this again before every run that should issue)."""
+    for rid in region_ids:
+        _exec(factory, "UPDATE econ_regions SET wealth_norm = :n WHERE region_id = :r", n=BIG_NORM, r=rid)
+
+
+def _deficits(factory):
+    db = factory()
+    try:
+        return econ_tick.region_deficits(db)
+    finally:
+        db.close()
+
+
 # --------------------------------------------------------------------------------------------- season quota
 
-def test_quota_issued_once_per_season_split_by_population(world):
+def test_quota_issued_once_per_season_split_by_deficit(world):
     _add_region(world, 1, template="capital")
     _add_region(world, 2, template="agrarian")
     _add_region(world, 3, template="rural", country_id=2)
     _set_params(world, quota_season_amount=10_001)
+    _below_norm(world, 1, 2, 3)
+    deficits = _deficits(world)
 
     first = econ_tick.run_tick(world, trigger="manual", now=T0)
     assert first.quota_amount == 10_001 and first.quota_failed is False
@@ -139,13 +159,15 @@ def test_quota_issued_once_per_season_split_by_population(world):
     meta = _meta(meta)
     assert (meta["period_index"], meta["year"], meta["season"], meta["amount"], meta["run_id"]) == \
         (0, 1, "spring", 10_001, first.run_id)
-    expected = econ_mint.split_quota(10_001, _pops(world))
+    expected = econ_mint.split_by_deficit(10_001, deficits)          # FEAT-194: by the deficit below the norm
     assert {int(k): v for k, v in meta["regions"].items()} == expected
+    assert meta["requested"] == 10_001 and {int(k): v for k, v in meta["deficits"].items()} == deficits
     legs = _legs(world, op_id)
     assert [(a, b, r, n) for a, b, r, n in legs] == \
         [("emission", "region_treasury", rid, expected[rid]) for rid in sorted(expected)]
     assert sum(n for *_x, n in legs) == 10_001
 
+    _below_norm(world, 1, 2, 3)
     second = econ_tick.run_tick(world, trigger="manual", now=T0 + timedelta(minutes=30))
     assert second.quota_amount == 0 and second.quota_failed is False
     assert len(_ops(world, "season_quota")) == 1
@@ -168,6 +190,7 @@ def test_quota_only_for_participating_regions(world):
     _exec(world, "UPDATE econ_regions SET template_code = NULL WHERE region_id = 3")
     _exec(world, "INSERT INTO Regions (id, name, country_id) VALUES (5, 'Без экономики', 1)")
     _set_params(world, quota_season_amount=900)
+    _below_norm(world, 1, 2, 3, 4)
 
     summary = econ_tick.run_tick(world, trigger="manual", now=T0)
     assert summary.quota_amount == 900
@@ -178,9 +201,11 @@ def test_quota_only_for_participating_regions(world):
 def test_auto_and_resumed_runs_do_not_issue_twice(world):
     _add_region(world, 1, template="capital")
     _set_params(world, quota_season_amount=500)
+    _below_norm(world, 1)
     first = econ_tick.run_tick(world, now=T0)
     assert first is not None and first.quota_amount == 500
     assert econ_tick.run_tick(world, now=T0 + timedelta(minutes=10)) is None        # same slot is done
+    _below_norm(world, 1)
     later = econ_tick.run_tick(world, now=T0 + timedelta(hours=6))                  # next slot, same season
     assert later is not None and later.quota_amount == 0
     manual = econ_tick.run_tick(world, trigger="manual", now=T0 + timedelta(hours=7))
@@ -192,6 +217,7 @@ def test_quota_pass_twice_in_one_run_is_idempotent(world):
     """A resumed run re-enters the pass: the pre-check (and the UNIQUE key) stops a second issue."""
     _add_region(world, 1, template="capital")
     _set_params(world, quota_season_amount=300)
+    _below_norm(world, 1)
     params = _params(world)
     s1, s2 = _summary(7), _summary(7)
     econ_tick._quota_pass(world, 7, s1, params, T0)
@@ -222,7 +248,9 @@ def test_quota_new_season_is_issued_again(world):
     _add_region(world, 1, template="capital")
     _add_region(world, 2, template="agrarian")
     _set_params(world, quota_season_amount=1000)
+    _below_norm(world, 1, 2)
     econ_tick.run_tick(world, trigger="manual", now=T0)
+    _below_norm(world, 1, 2)
     summary = econ_tick.run_tick(world, trigger="manual", now=NEXT_SEASON)
     assert summary.quota_amount == 1000
     keys = [k for _i, k, _r, _m in _ops(world, "season_quota")]
@@ -234,10 +262,43 @@ def test_quota_new_season_is_issued_again(world):
 def test_missed_seasons_are_not_caught_up(world):
     _add_region(world, 1, template="capital")
     _set_params(world, quota_season_amount=100)
+    _below_norm(world, 1)
     econ_tick.run_tick(world, trigger="manual", now=T0)
+    _below_norm(world, 1)
     econ_tick.run_tick(world, trigger="manual", now=T0 + timedelta(days=49 * 3))     # period 3 (0 -> 3)
     keys = [k for _i, k, _r, _m in _ops(world, "season_quota")]
     assert keys == ["season_quota:p0", "season_quota:p3"]
+
+
+def test_quota_waits_while_nobody_is_below_the_norm(world):
+    """FEAT-194 (3.9): nobody below the money norm -> nothing posted, the next run of the season re-checks."""
+    _add_region(world, 1, template="capital")
+    _set_params(world, quota_season_amount=400)
+    _exec(world, "UPDATE econ_regions SET wealth_norm = 0, treasury_target = 0")
+    params = _params(world)
+    waited = _summary(3)
+    econ_tick._quota_pass(world, 3, waited, params, T0)
+    assert waited.quota_amount == 0 and waited.quota_failed is False
+    assert _ops(world, "season_quota") == []
+    _below_norm(world, 1)
+    retried = _summary(4)
+    econ_tick._quota_pass(world, 4, retried, params, T0 + timedelta(hours=6))
+    assert retried.quota_amount == 400 and len(_ops(world, "season_quota")) == 1
+
+
+def test_quota_is_capped_at_the_total_deficit(world):
+    """FEAT-194 (3.9): a small deficit takes only what it lacks; the rest of the season amount is not issued."""
+    _add_region(world, 1, template="capital")
+    _set_params(world, quota_season_amount=1_000_000)
+    deficit = 123
+    _exec(world, "UPDATE econ_regions SET treasury_target = 0")
+    purse = _balance(world, "population_purse", 1)
+    _exec(world, "UPDATE econ_regions SET wealth_norm = :n", n=purse + deficit)
+    summary = _summary(5)
+    econ_tick._quota_pass(world, 5, summary, _params(world), T0)
+    assert summary.quota_amount == deficit
+    meta = _meta(_ops(world, "season_quota")[0][3])
+    assert meta["regions"] == {"1": deficit} and meta["requested"] == 1_000_000
 
 
 def test_quota_amount_zero_is_skipped(world):
@@ -281,6 +342,7 @@ def test_quota_failure_marks_the_run_and_is_retried(world, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(econ_mint, "split_quota", boom)
+    _below_norm(world, 1)
     failed = econ_tick.run_tick(world, trigger="manual", now=T0)
     assert failed.quota_failed is True and failed.quota_amount == 0
     assert failed.regions_done == 1 and failed.status == "done"              # the regions still ticked
@@ -289,6 +351,7 @@ def test_quota_failure_marks_the_run_and_is_retried(world, monkeypatch):
     assert _ops(world, "season_quota") == []
 
     monkeypatch.undo()
+    _below_norm(world, 1)
     retried = econ_tick.run_tick(world, trigger="manual", now=T0 + timedelta(minutes=30))
     assert retried.quota_amount == 100 and retried.quota_failed is False
     assert _scalar(world, "SELECT error FROM econ_tick_runs WHERE id = :i", i=retried.run_id) is None
@@ -536,6 +599,7 @@ def test_full_run_quota_then_regions_then_court_mint(world):
     _add_region(world, 1, template="capital", population=40_000)
     _add_region(world, 2, template="mining")
     _set_params(world, quota_season_amount=5000, mint_season_limit=1_000_000, mint_court_threshold_pct=0.0)
+    _below_norm(world, 1, 2)
 
     summary = econ_tick.run_tick(world, trigger="manual", now=T0)
     assert summary.status == "done" and summary.quota_amount == 5000

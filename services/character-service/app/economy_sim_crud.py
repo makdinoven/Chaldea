@@ -8,6 +8,7 @@ on any exception), money moves only through ``econ_ledger.post_operation``, raw 
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy import text
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session
 import econ_core as core
 import econ_ledger
 import econ_bank
+import econ_classes
 import econ_sim
 import econ_tick
 import economy_bank_crud
@@ -47,6 +49,9 @@ _SCALE_PRICE = 3
 ERR_REGION_NOT_FOUND = "Регион не найден"
 ERR_TEMPLATE_UNKNOWN = "Неизвестный шаблон региона"
 ERR_NO_TEMPLATE = "Сначала выберите шаблон региона"
+ERR_CLASS_SHARES_ALL = "Укажите все три доли"
+ERR_CLASS_SHARES_SUM = "Сумма долей должна быть 100 %"
+CLASS_SUM_TOLERANCE = 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +64,10 @@ def _f(value) -> float:
 
 def _i(value) -> int:
     return int(value or 0)
+
+
+def _opt_f(value) -> Optional[float]:
+    return None if value is None else float(value)
 
 
 def _for_update(db: Session) -> bool:
@@ -102,17 +111,45 @@ def _round(value: float, scale: int):
     return econ_tick._round(value, scale)
 
 
+def _class_shares(body) -> Optional[econ_classes.ClassMix]:
+    """FEAT-194: the class shares of a request body — all three or none (400), sum 1 ± 0.001 (400)."""
+    shares = [getattr(body, k, None) for k in ("class_poor", "class_middling", "class_rich")]
+    given = [v is not None for v in shares]
+    if not any(given):
+        return None
+    if not all(given):
+        raise EconomyApiError(400, ERR_CLASS_SHARES_ALL)
+    if abs(sum(float(v) for v in shares) - 1.0) > CLASS_SUM_TOLERANCE:
+        raise EconomyApiError(400, ERR_CLASS_SHARES_SUM)
+    return econ_classes.ClassMix(float(shares[0]), float(shares[1]), float(shares[2]))
+
+
+def _template_shares(template: Optional["models.EconRegionTemplate"]) -> Optional[econ_classes.ClassMix]:
+    if template is None:
+        return None
+    return econ_classes.ClassMix.of(template.class_poor, template.class_middling, template.class_rich)
+
+
+def _region_factors(db: Session, region: "models.EconRegion", groups: Dict[str, econ_sim.GroupDef],
+                    params: econ_sim.SimParams) -> Optional[Dict[str, float]]:
+    """FEAT-194: class demand factors of a region (None = no classes) — the norms the tick will compute."""
+    return econ_sim.class_factors(
+        groups, econ_tick.region_state(region, econ_tick.class_base_of(db, region.template_code)), params)
+
+
 def _recompute_norms(goods_rows: Dict[str, "models.EconRegionGood"], groups: Dict[str, econ_sim.GroupDef],
-                     population: int, params: econ_sim.SimParams, reset_stocks: bool = False) -> None:
+                     population: int, params: econ_sim.SimParams, reset_stocks: bool = False,
+                     factors: Optional[Dict[str, float]] = None) -> None:
     """Norm stock of every row from the current production/consumption; ``reset_stocks`` → stock = norm, price ×1.
 
-    ``population`` is the lore number; norms are computed for the simulated one (FEAT-186 ``population_scale``)."""
+    ``population`` is the lore number; norms are computed for the simulated one (FEAT-186 ``population_scale``).
+    ``factors`` (FEAT-194) = class demand factors of the region (None = no classes)."""
     sim_pop = econ_sim.sim_population(population, params)
     states = {code: econ_tick.good_state(row) for code, row in goods_rows.items() if code in groups}
     for code, row in goods_rows.items():
         if code not in groups:
             continue
-        norm = econ_sim.norm_stock(code, groups, states, sim_pop)
+        norm = econ_sim.norm_stock(code, groups, states, sim_pop, factors)
         row.norm_stock = _round(norm, _SCALE_STOCK)
         if reset_stocks:
             row.stock = _round(norm, _SCALE_STOCK)
@@ -136,7 +173,8 @@ def _apply_template_goods(db: Session, region: "models.EconRegion", groups: Dict
             rows[code] = row
         row.production_per_1000 = _round(production, 3)
         row.consumption_mult = _round(cmult, 3)
-    _recompute_norms(rows, groups, _i(region.population), params, reset_stocks=reset_stocks)
+    _recompute_norms(rows, groups, _i(region.population), params, reset_stocks=reset_stocks,
+                     factors=_region_factors(db, region, groups, params))
     db.flush()
     return rows
 
@@ -167,7 +205,9 @@ def _last_posting_id(db: Session, ref: core.AccountRef) -> int:
 SQL_REGIONS = """
 SELECT r.id, r.name, r.country_id, co.name, e.template_code, t.name, e.population, e.tax_rate, e.stability,
        e.prosperity, e.hunger, e.satisfaction, e.treasury_target, e.last_income, e.last_tax, e.last_wages,
-       e.last_grant, e.last_tick_at
+       e.last_grant, e.last_tick_at,
+       e.class_poor, e.class_middling, e.class_rich, e.class_dpoor, e.class_drich, e.wealth_norm,
+       e.last_wealth_tax, t.class_poor, t.class_middling, t.class_rich
 FROM Regions r
 LEFT JOIN Countries co ON co.id = r.country_id
 LEFT JOIN econ_regions e ON e.region_id = r.id
@@ -180,6 +220,7 @@ def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int], banks:
     region_id = int(row[0])
     has_econ = row[6] is not None
     population = _i(row[6])
+    wealth_norm = _i(row[23])
     return {
         "region_id": region_id,
         "name": row[1],
@@ -204,6 +245,17 @@ def _region_item(row, purses: Dict[int, int], treasuries: Dict[int, int], banks:
         "last_tick_at": row[17],
         "simulated": row[4] is not None and population > 0,
         "bank_enabled": region_id in banks,       # FEAT-184 «Банк есть»
+        # FEAT-194 social classes (shares null = no classes; class_base = the template's default mix)
+        "class_poor": _opt_f(row[18]),
+        "class_middling": _opt_f(row[19]),
+        "class_rich": _opt_f(row[20]),
+        "class_base": (None if row[25] is None or row[26] is None or row[27] is None
+                       else {"poor": _f(row[25]), "middling": _f(row[26]), "rich": _f(row[27])}),
+        "class_dpoor": _f(row[21]),
+        "class_drich": _f(row[22]),
+        "wealth_norm": wealth_norm,
+        "last_wealth_tax": _i(row[24]),
+        "money_vs_norm": round(purses.get(region_id, 0) / wealth_norm, 4) if wealth_norm > 0 else None,
     }
 
 
@@ -248,6 +300,14 @@ def get_region(db: Session, region_id: int) -> dict:
         }
         for code in order if code in rows for g in [rows[code]]
     ]
+    # FEAT-194 (3.13): class report (null without classes / with classes switched off)
+    item["classes"] = None
+    econ = db.get(models.EconRegion, region_id)
+    if econ is not None:
+        params = econ_tick.load_params(db)
+        state = econ_tick.region_state(econ, econ_tick.class_base_of(db, econ.template_code))
+        goods = {code: econ_tick.good_state(g) for code, g in rows.items() if code in groups}
+        item["classes"] = econ_sim.class_report(state, goods, groups, purse=purse, treasury=treasury, params=params)
     return item
 
 
@@ -265,6 +325,7 @@ def update_region(db: Session, region_id: int, body) -> dict:
         region = models.EconRegion(region_id=region_id, stability=70, prosperity=50, hunger=0, satisfaction=1,
                                    treasury_target=0, last_income=0, last_tax=0, last_wages=0, last_grant=0)
         db.add(region)
+    shares = _class_shares(body)
     region.template_code = body.template_code
     region.population = int(body.population)
     region.tax_rate = _round(body.tax_rate, 4)
@@ -272,6 +333,13 @@ def update_region(db: Session, region_id: int, body) -> dict:
         region.stability = _round(body.stability, 2)
     if body.prosperity is not None:
         region.prosperity = _round(body.prosperity, 2)
+    # FEAT-194: shares given -> stored (middling derived); a row without shares copies its template's
+    if shares is not None:
+        econ_tick.store_classes(region, shares)
+    elif region.class_poor is None and body.template_code is not None:
+        template_mix = _template_shares(templates.get(body.template_code))
+        if template_mix is not None:
+            econ_tick.store_classes(region, template_mix)
     db.flush()
 
     rows = _goods_rows(db, region_id)
@@ -292,7 +360,8 @@ def update_region(db: Session, region_id: int, body) -> dict:
         row.consumption_mult = _round(good.consumption_mult, 3)
         if good.stock is not None:
             row.stock = _round(good.stock, _SCALE_STOCK)
-    _recompute_norms(rows, groups, int(region.population), params)
+    _recompute_norms(rows, groups, int(region.population), params,
+                     factors=_region_factors(db, region, groups, params))
     db.flush()
     return get_region(db, region_id)
 
@@ -307,8 +376,19 @@ def apply_template(db: Session, region_id: int, reset_stocks: bool) -> dict:
     if template is None:
         raise EconomyApiError(400, ERR_TEMPLATE_UNKNOWN)
     region.tax_rate = template.tax_rate
-    _apply_template_goods(db, region, econ_tick.load_groups(db), _template_goods(db, template.code), reset_stocks,
-                          econ_tick.load_params(db))
+    # FEAT-194: the class shares go back to the template, the recount shift is cleared
+    template_mix = _template_shares(template)
+    if template_mix is not None:
+        econ_tick.store_classes(region, template_mix)
+    region.class_dpoor = Decimal(0)
+    region.class_drich = Decimal(0)
+    groups = econ_tick.load_groups(db)
+    params = econ_tick.load_params(db)
+    rows = _apply_template_goods(db, region, groups, _template_goods(db, template.code), reset_stocks, params)
+    goods = {code: econ_tick.good_state(row) for code, row in rows.items() if code in groups}
+    region.wealth_norm = econ_sim.region_wealth_norm(groups, goods, econ_tick.region_state(region, template_mix),
+                                                     params)
+    db.flush()
     return get_region(db, region_id)
 
 
@@ -326,6 +406,11 @@ def region_history(db: Session, region_id: int, limit: int) -> List[dict]:
             "prosperity": _f(row.prosperity), "hunger": _f(row.hunger), "purse": _i(row.purse),
             "treasury": _i(row.treasury), "income": _i(row.income), "tax": _i(row.tax), "wages": _i(row.wages),
             "grant_amount": _i(row.grant_amount),
+            # FEAT-194 (null for rows before the migration / without classes)
+            "class_poor": _opt_f(row.class_poor), "class_middling": _opt_f(row.class_middling),
+            "class_rich": _opt_f(row.class_rich),
+            "wealth_norm": None if row.wealth_norm is None else int(row.wealth_norm),
+            "wealth_tax": None if row.wealth_tax is None else int(row.wealth_tax),
             "goods": {code: {"stock": _f(g.get("stock")), "price_mult": _f(g.get("price_mult")),
                              "produced": _f(g.get("produced")), "consumed": _f(g.get("consumed"))}
                       for code, g in goods.items() if isinstance(g, dict)},
@@ -340,7 +425,7 @@ def region_history(db: Session, region_id: int, limit: int) -> List[dict]:
 def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_from_template: bool,
                  reset_stocks: bool, fund_purses: bool, treasury_to_reserve: bool, comment: str,
                  actor_user_id: Optional[int], open_banks: bool = False, return_purse_excess: bool = False,
-                 return_treasury_excess: bool = False) -> dict:
+                 return_treasury_excess: bool = False, reset_classes: bool = False) -> dict:
     """Apply template goods (stocks → norm), optionally population from the template (rows with population 0), and
     top up money via admin emission: the population purse to ``starting_purse`` and (``treasury_to_reserve``, added
     by B6) the region treasury to its wage reserve target. Top-up = ``max(0, target − balance)``, so a re-click emits 0.
@@ -355,6 +440,10 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
     loans above target repaid ``purse → bank``, netted into one leg of that operation; player deposits / the vault are
     not touched). Together with the top-up the balance ends exactly at the target, so a
     second click moves nothing; the world sum stays 0 (money only leaves through the source account).
+
+    FEAT-194: rows without class shares always get the template's, ``reset_classes`` resets every target row to its
+    template mix (``classes_reset`` lists both); the purse target is the region's wealth norm (classes on) or
+    ``starting_purse`` (off), and the treasury probe runs with the classes.
     """
     lock_sql = "SELECT region_id FROM econ_regions WHERE "
     params: dict = {}
@@ -393,6 +482,7 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
     bank_rows = economy_bank_crud.lock_banks(db, lock_ids)
 
     processed, skipped = 0, []
+    classes_reset: List[int] = []
     operation_ids: List[int] = []
     emitted_purses = emitted_treasuries = 0
     returned_purses = returned_treasuries = 0
@@ -404,6 +494,12 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
         region_id = int(region.region_id)
         if population_from_template and _i(region.population) == 0:
             region.population = int(template.default_population)
+        template_mix = _template_shares(template)
+        if template_mix is not None and (reset_classes or region.class_poor is None):
+            econ_tick.store_classes(region, template_mix)
+            region.class_dpoor = Decimal(0)
+            region.class_drich = Decimal(0)
+            classes_reset.append(region_id)
         rows = _apply_template_goods(db, region, groups, _template_goods(db, template.code), reset_stocks,
                                      sim_params)
         processed += 1
@@ -413,13 +509,14 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
             continue
 
         goods = {code: econ_tick.good_state(row) for code, row in rows.items() if code in groups}
-        purse_target = econ_sim.starting_purse(groups, goods, econ_sim.sim_population(population, sim_params),
-                                               sim_params)
+        state = econ_tick.region_state(region, template_mix)
+        purse_target = econ_sim.region_wealth_norm(groups, goods, state, sim_params)
         # Dry run of one tick from the filled state: its treasury_target is the wage reserve the tick will use.
-        probe = econ_sim.simulate_region(econ_tick.region_state(region), goods, groups, purse=purse_target,
+        probe = econ_sim.simulate_region(state, goods, groups, purse=purse_target,
                                          treasury=0, grant=0, country_tax_rate=country_tax_rate, params=sim_params)
         treasury_target = int(probe.region.treasury_target)
         region.treasury_target = treasury_target
+        region.wealth_norm = purse_target
 
         purse_ref, treasury_ref = core.AccountRef.purse(region_id), core.AccountRef.region(region_id)
         purse_balance = econ_tick.account_balance(db, purse_ref)
@@ -496,6 +593,7 @@ def fill_regions(db: Session, *, region_ids: Optional[List[int]], population_fro
         "resident_loans_repaid": repaid_bank_loans,         # FEAT-186: residents' bank loans repaid from the purse
         "skipped_no_population": skipped,
         "banks_opened": banks_opened,
+        "classes_reset": classes_reset,                     # FEAT-194: regions whose shares were set from the template
     }
 
 
@@ -538,6 +636,9 @@ def _group_dict(row: "models.EconGoodsGroup", inputs: Dict[str, List[dict]]) -> 
         "base_price": _i(row.base_price), "norm_per_1000": _f(row.norm_per_1000), "norm_days": _f(row.norm_days),
         "prosperity_elasticity": _f(row.prosperity_elasticity), "price_elasticity": _f(row.price_elasticity),
         "inputs": inputs.get(row.code, []), "updated_at": row.updated_at,
+        # FEAT-194: per-capita demand weights of the classes
+        "class_demand_poor": _f(row.class_demand_poor), "class_demand_middling": _f(row.class_demand_middling),
+        "class_demand_rich": _f(row.class_demand_rich),
     }
 
 
@@ -598,6 +699,10 @@ def update_goods_group(db: Session, code: str, body) -> dict:
     row.norm_days = _round(body.norm_days, 2)
     row.prosperity_elasticity = _round(body.prosperity_elasticity, 3)
     row.price_elasticity = _round(body.price_elasticity, 3)
+    for name in ("class_demand_poor", "class_demand_middling", "class_demand_rich"):   # FEAT-194: None -> kept
+        value = getattr(body, name, None)
+        if value is not None:
+            setattr(row, name, _round(value, 3))
     db.query(models.EconGroupInput).filter(models.EconGroupInput.group_code == code).delete(
         synchronize_session=False)
     for input_code, ratio in new_inputs.items():
@@ -621,6 +726,8 @@ def _template_dict(db: Session, row: "models.EconRegionTemplate", order: List[st
         "default_population": _i(row.default_population), "tax_rate": _f(row.tax_rate),
         "default_sim_population": round(econ_sim.sim_population(_i(row.default_population), params), 2),
         "sort_order": _i(row.sort_order), "updated_at": row.updated_at,
+        # FEAT-194: default class mix of the template's regions
+        "class_poor": _f(row.class_poor), "class_middling": _f(row.class_middling), "class_rich": _f(row.class_rich),
         "goods": [{"group_code": c, "production_per_1000": goods[c][0], "consumption_mult": goods[c][1]}
                   for c in codes],
     }
@@ -641,6 +748,12 @@ def update_template(db: Session, code: str, body) -> dict:
     row = db.get(models.EconRegionTemplate, code)
     if row is None:
         raise EconomyApiError(404, "Шаблон региона не найден")
+    shares = _class_shares(body)
+    if shares is not None:
+        # FEAT-194: stored at 4 decimals, middling derived (sum exactly 1)
+        poor = Decimal(str(round(shares.poor, 4)))
+        rich = Decimal(str(round(shares.rich, 4)))
+        row.class_poor, row.class_middling, row.class_rich = poor, Decimal(1) - poor - rich, rich
     row.name = body.name
     row.description = body.description
     row.settlement_noun = body.settlement_noun
@@ -815,6 +928,8 @@ def update_sim(db: Session, *, tick_enabled: bool, params_in: dict, user_id: Opt
         raise EconomyApiError(400, "Минимальный множитель цены должен быть меньше максимального")
     if not merged["prod_price_min"] < merged["prod_price_max"]:
         raise EconomyApiError(400, "Нижняя граница отклика производства на цену должна быть меньше верхней")
+    if not merged["class_share_min"] < merged["class_share_max"]:
+        raise EconomyApiError(400, "Нижняя граница доли класса должна быть меньше верхней")
     params = econ_sim.SimParams.from_mapping(merged).to_dict()
     row = db.get(models.EconSimSettings, 1)
     if row is None:
@@ -850,11 +965,13 @@ def region_card(db: Session, region_id: int) -> dict:
     groups = econ_tick.load_groups(db)
     goods = {code: econ_tick.good_state(row) for code, row in _goods_rows(db, region_id).items() if code in groups}
     treasury = econ_tick.account_balance(db, core.AccountRef.region(region_id))
+    # FEAT-194: class words only when the class layer is on and the region has shares
+    classes = econ_tick.region_classes(region) if econ_tick.load_params(db).classes_enabled else None
     card = econ_sim.region_card(
         econ_tick.region_state(region), goods, groups, treasury=treasury,
         noun=template.settlement_noun if template is not None else "Регион",
         gender=template.noun_gender if template is not None else "m",
-        group_order=list(groups),
+        group_order=list(groups), classes=classes,
     )
     return {"region_id": region_id, "participating": True, "updated_at": region.last_tick_at, **card,
             "has_bank": has_bank, "has_mint": has_mint, "events": economy_events_crud.card_events(db, region_id),

@@ -33,6 +33,8 @@ export interface EffectSpec {
   initial: number;
   /** Applied once per event (at the first recount after the start) rather than every recount. */
   oneShot: boolean;
+  /** Edited in percent even though the field is not share / pct (FEAT-194 `class_shift.delta`). */
+  percent?: boolean;
 }
 
 export const EFFECT_SPECS: Record<EconEventEffectType, EffectSpec> = {
@@ -101,6 +103,18 @@ export const EFFECT_SPECS: Record<EconEventEffectType, EffectSpec> = {
     help: 'Разово и навсегда: лорное население меняется на указанный процент (не ниже 1 жителя расчёта).',
     groups: false, field: 'pct', min: -0.5, max: 0.5, initial: -0.01, oneShot: true,
   },
+  class_shift: {
+    label: 'Сдвиг классов',
+    help: 'Разово: «+» — эта доля бедных становится зажиточными (и вдвое меньшая — богатыми), «−» — сдвиг вниз. Только в регионах с классами.',
+    groups: false, field: 'delta', min: -0.3, max: 0.3, initial: -0.02, oneShot: true, percent: true,
+  },
+};
+
+/** The value of this effect type is edited / shown in percent. */
+export const isPercentEffect = (type: EconEventEffectType): boolean => {
+  const spec = EFFECT_SPECS[type];
+  if (!spec || spec.field === null) return false;
+  return spec.percent === true || PERCENT_FIELDS.includes(spec.field);
 };
 
 export const EFFECT_TYPES = Object.keys(EFFECT_SPECS) as EconEventEffectType[];
@@ -114,6 +128,7 @@ export const ALL_GROUPS = '*';
 
 /** Field units in the UI: share / pct are edited in percent. */
 export const PERCENT_FIELDS: EffectValueField[] = ['share', 'pct'];
+
 
 export const KIND_LABELS: Record<EconEventKind, string> = {
   bad: 'Кризис',
@@ -181,6 +196,10 @@ export const describeEffect = (effect: EconEventEffect, groupNames: Record<strin
   if (!spec) return String(effect.type);
   const groups = spec.groups ? groupsText(effect.groups, groupNames) : '';
   const head = groups ? `${spec.label}: ${groups}` : spec.label;
+  if (effect.type === 'class_shift') {
+    const d = effect.delta ?? 0;
+    return `${head} ${percentText(d, true)} ${d >= 0 ? 'вверх' : 'вниз'} (разово)`;
+  }
   switch (spec.field) {
     case 'mult':
       return `${head} ×${formatDecimal(effect.mult ?? 1)}`;

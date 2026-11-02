@@ -1875,6 +1875,8 @@ ECON_MAX_BASE_PRICE = 1_000_000
 ECON_MAX_NORM_PER_1000 = 100_000
 ECON_MIN_NORM_DAYS, ECON_MAX_NORM_DAYS = 0.5, 365
 ECON_MAX_ELASTICITY = 3
+ECON_MAX_CLASS_DEMAND = 20          # FEAT-194: per-capita class demand weight of a goods group
+ECON_CLASS_SUM_TOLERANCE = 0.001    # FEAT-194: the three class shares must sum to 1 within this
 ECON_MIN_RATIO, ECON_MAX_RATIO = 0.001, 100
 ECON_NAME_MAX = 100
 ECON_DESCRIPTION_MAX = 500
@@ -1985,6 +1987,31 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "guild_xp_per_mark": (0.0, 10.0),
     "guild_xp_per_mark_merchant_items": (0.0, 10.0),
     "guild_xp_daily_cap": (0, 1_000_000),
+    # FEAT-194 social classes and the wealth norm
+    "classes_enabled": (0, 1),
+    "class_norm_days_poor": (0.0, 365.0),
+    "class_norm_days_middling": (0.0, 365.0),
+    "class_norm_days_rich": (0.0, 365.0),
+    "wealth_tax_rate": (0.0, 0.2),
+    "class_tax_w_poor": (0.0, 5.0),
+    "class_tax_w_middling": (0.0, 5.0),
+    "class_tax_w_rich": (0.0, 5.0),
+    "class_stab_poor_threshold": (0.0, 1.0),
+    "class_stab_poor_w": (0.0, 500.0),
+    "class_stab_poor_hunger_w": (0.0, 500.0),
+    "class_stab_rich_free_tax": (0.0, 1.0),
+    "class_stab_rich_tax_w": (0.0, 2000.0),
+    "mob_rate_up": (0.0, 0.05),
+    "mob_rate_down": (0.0, 0.05),
+    "mob_rich_factor": (0.0, 1.0),
+    "mob_dead_zone": (0.0, 0.9),
+    "mob_w_prosperity": (0.0, 5.0),
+    "mob_w_money": (0.0, 5.0),
+    "mob_w_stability": (0.0, 5.0),
+    "mob_w_hunger": (0.0, 5.0),
+    "class_share_min": (0.0, 0.3),
+    "class_share_max": (0.4, 1.0),
+    "grant_deficit_share": (0.0, 1.0),
 }
 ECON_SIM_INT_PARAMS = frozenset({
     "treasury_release_ticks", "history_retention_days",
@@ -1995,6 +2022,7 @@ ECON_SIM_INT_PARAMS = frozenset({
     "caravans_enabled", "caravan_travel_domestic", "caravan_travel_foreign", "caravan_min_value",
     "caravan_max_per_run",
     "guild_enabled", "guild_min_order_value", "guild_xp_daily_cap",
+    "classes_enabled",
 })
 
 
@@ -2059,6 +2087,9 @@ def _econ_bulk_ids(v, label: str):
     return sorted(set(v))
 
 
+_ECON_CLASS_LABELS = {"class_poor": "Доля бедных", "class_middling": "Доля зажиточных", "class_rich": "Доля богатых"}
+
+
 class EconRegionGoodsIn(BaseModel):
     group_code: str
     production_per_1000: float
@@ -2087,6 +2118,15 @@ class EconRegionUpdateRequest(BaseModel):
     stability: Optional[float] = None
     prosperity: Optional[float] = None
     goods: Optional[List[EconRegionGoodsIn]] = None
+    # FEAT-194: all three or none (omitted -> kept; checked with the sum in economy_sim_crud -> 400);
+    # middling is stored as 1 - poor - rich
+    class_poor: Optional[float] = None
+    class_middling: Optional[float] = None
+    class_rich: Optional[float] = None
+
+    @validator("class_poor", "class_middling", "class_rich", pre=True)
+    def _class_share(cls, v, field):
+        return None if v is None else _econ_number(v, 0, 1, _ECON_CLASS_LABELS[field.name])
 
     @validator("template_code", pre=True)
     def _template(cls, v):
@@ -2131,6 +2171,8 @@ class EconFillRequest(BaseModel):
     # FEAT-186 «Привести к масштабу»: return the purse / treasury part above the fill targets to emission
     return_purse_excess: StrictBool = False
     return_treasury_excess: StrictBool = False
+    # FEAT-194: also reset the class shares to the template (rows without shares always get the template's)
+    reset_classes: StrictBool = False
     comment: str
 
     _comment = validator("comment", pre=True, allow_reuse=True)(_econ_comment)
@@ -2176,6 +2218,14 @@ class EconGoodsGroupUpdateRequest(BaseModel):
     prosperity_elasticity: float
     price_elasticity: float
     inputs: List[EconGroupInputIn] = []
+    # FEAT-194: per-capita demand weights of the classes (None -> kept)
+    class_demand_poor: Optional[float] = None
+    class_demand_middling: Optional[float] = None
+    class_demand_rich: Optional[float] = None
+
+    @validator("class_demand_poor", "class_demand_middling", "class_demand_rich", pre=True)
+    def _class_demand(cls, v):
+        return None if v is None else _econ_number(v, 0, ECON_MAX_CLASS_DEMAND, "Спрос класса")
 
     @validator("name", pre=True)
     def _name(cls, v):
@@ -2226,6 +2276,14 @@ class EconTemplateUpdateRequest(BaseModel):
     default_population: int
     tax_rate: float
     goods: List[EconTemplateGoodsIn] = []
+    # FEAT-194: default class mix, all three or none (None -> kept); middling stored as 1 - poor - rich
+    class_poor: Optional[float] = None
+    class_middling: Optional[float] = None
+    class_rich: Optional[float] = None
+
+    @validator("class_poor", "class_middling", "class_rich", pre=True)
+    def _class_share(cls, v, field):
+        return None if v is None else _econ_number(v, 0, 1, _ECON_CLASS_LABELS[field.name])
 
     @validator("name", pre=True)
     def _name(cls, v):
@@ -2368,6 +2426,30 @@ class EconSimParamsIn(BaseModel):
     guild_xp_per_mark: Optional[float] = None
     guild_xp_per_mark_merchant_items: Optional[float] = None
     guild_xp_daily_cap: Optional[int] = None
+    classes_enabled: Optional[int] = None
+    class_norm_days_poor: Optional[float] = None
+    class_norm_days_middling: Optional[float] = None
+    class_norm_days_rich: Optional[float] = None
+    wealth_tax_rate: Optional[float] = None
+    class_tax_w_poor: Optional[float] = None
+    class_tax_w_middling: Optional[float] = None
+    class_tax_w_rich: Optional[float] = None
+    class_stab_poor_threshold: Optional[float] = None
+    class_stab_poor_w: Optional[float] = None
+    class_stab_poor_hunger_w: Optional[float] = None
+    class_stab_rich_free_tax: Optional[float] = None
+    class_stab_rich_tax_w: Optional[float] = None
+    mob_rate_up: Optional[float] = None
+    mob_rate_down: Optional[float] = None
+    mob_rich_factor: Optional[float] = None
+    mob_dead_zone: Optional[float] = None
+    mob_w_prosperity: Optional[float] = None
+    mob_w_money: Optional[float] = None
+    mob_w_stability: Optional[float] = None
+    mob_w_hunger: Optional[float] = None
+    class_share_min: Optional[float] = None
+    class_share_max: Optional[float] = None
+    grant_deficit_share: Optional[float] = None
 
     class Config:
         extra = Extra.forbid
@@ -2614,6 +2696,7 @@ EVENT_EFFECT_LABELS = {
     "tax_income": "доход казны", "stability": "стабильность", "prosperity": "достаток",
     "merchants_halt": "торговцы не докупают", "bank_panic": "паника в банке", "loan_boom": "бум займов",
     "stock_loss": "потеря запасов", "treasury_expense": "расход казны", "population": "население",
+    "class_shift": "сдвиг классов",
 }
 _EVENT_FIELD_LABELS = {"groups": "группы товаров", "mult": "множитель", "share": "долю", "delta": "изменение",
                        "pct": "изменение населения"}
@@ -2628,7 +2711,8 @@ class EventEffectIn(BaseModel):
     """One effect of a template (3.4): exactly the fields of its type; null fields count as absent."""
 
     type: Literal["production", "consumption", "labor", "price", "tax_income", "stability", "prosperity",
-                  "merchants_halt", "bank_panic", "loan_boom", "stock_loss", "treasury_expense", "population"]
+                  "merchants_halt", "bank_panic", "loan_boom", "stock_loss", "treasury_expense", "population",
+                  "class_shift"]
     groups: Optional[conlist(_EVENT_GROUP, min_items=1, max_items=12)] = None
     mult: Optional[confloat(ge=0, le=5)] = None
     share: Optional[confloat(ge=0, le=0.9)] = None
