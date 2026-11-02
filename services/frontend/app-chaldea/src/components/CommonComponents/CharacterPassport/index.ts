@@ -15,12 +15,17 @@ export {
 
 export {
   computeDerivedStats,
+  computeInitiative,
   formatDerivedValue,
   PASSPORT_DERIVED_ROWS,
   PASSPORT_STAT_LABELS,
   POINTS_PER_LEVEL,
   PRESET_TOTAL_POINTS,
+  RESOURCE_BASE,
+  RESOURCE_MULTIPLIER,
+  resourceStatPart,
 } from './derived';
+export type { ResourceGrowthInput } from './derived';
 
 export { PASSPORT_STAT_ORDER } from './types';
 

@@ -9,7 +9,9 @@ test suites replace `buffs` with a MagicMock and logic here would silently
 become a mock.
 """
 from random import choice
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from stat_caps import effective_delta
 
 # Stat keys the skill / item editors write → the attribute names the engine reads
 # (character-attributes-service columns). The editors offer "Шанс уклонения" as
@@ -459,10 +461,11 @@ def _expand_complex_effect(name: str, magnitude: float) -> Dict[str, float] | No
     return None
 
 
-# Derived stats per point of a primary attribute — mirrors
-# character-attributes-service `compute_derived_stats` (constants.py there:
+# Derived stats per EFFECTIVE point of a primary attribute — mirrors
+# character-attributes-service `PRIMARY_DERIVED_EFFECTS` (constants.py there:
 # STAT_BONUS_PER_POINT = 0.1, ENDURANCE_RES_EFFECTS_MULTIPLIER = 0.2). A battle
-# effect that moves a primary attribute moves these with it.
+# effect that moves a primary attribute moves these with it; FEAT-195: by
+# per_point * (eff(base + delta) - eff(base)) when the base value is known.
 _PHYSICAL_RESISTS = ("res_physical", "res_catting", "res_crushing", "res_piercing")
 _MAGICAL_RESISTS = ("res_magic", "res_fire", "res_ice", "res_watering",
                     "res_electricity", "res_wind", "res_sainting", "res_damning")
@@ -471,17 +474,27 @@ _DERIVED_PER_POINT = {
     "agility": {"dodge": 0.1},
     "intelligence": {k: 0.1 for k in _MAGICAL_RESISTS},
     "endurance": {"res_effects": 0.2},
+    "luck": {"dodge": 0.1, "critical_hit_chance": 0.1, "res_effects": 0.1},
 }
 
 
-def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]:
+def aggregate_modifiers(
+    effects_for_participant: List[Dict],
+    base_attributes: Optional[Dict] = None,
+) -> Dict[str, float]:
     """
     Складывает magnitude по движковым ключам. Сложные эффекты-модификаторы
     (ArmorBreak, Freeze, Electrify, Daze, Wet, Holy, Curse) раскрываются в
     соответствующие каналы; остальные (StatModifier / Buff: / Resist: /
     MagicImpact через attribute_key) используют свой нормализованный attribute.
     Изменение первичного атрибута тянет за собой производные (уклонение,
-    сопротивления) — так же, как в character-attributes-service.
+    сопротивления, крит, сопротивление эффектам) — так же, как в
+    character-attributes-service.
+
+    FEAT-195: base_attributes — атрибуты участника БЕЗ баффов. Если переданы,
+    прирост производных = per_point * (eff(base + Δ) - eff(base)) (кап от суммы,
+    порог 100/200 учитывается). Без них (только знак, `_is_stat_down`) —
+    линейный per_point * Δ: знак тот же, eff монотонна.
     """
     summary: Dict[str, float] = {}
     for eff in effects_for_participant:
@@ -506,8 +519,13 @@ def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]
         delta = summary.get(primary)
         if not delta:
             continue
+        if base_attributes is not None:
+            base_value = base_attributes.get(primary, 0) or 0
+            worth = effective_delta(base_value, base_value + delta)
+        else:
+            worth = delta
         for key, per_point in derived.items():
-            summary[key] = summary.get(key, 0.0) + delta * per_point
+            summary[key] = summary.get(key, 0.0) + worth * per_point
     return summary
 
 

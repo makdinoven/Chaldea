@@ -161,7 +161,7 @@ class TestApplySatiety:
         attr = reload(db)
         assert attr.strength == 12
         assert attr.res_fire == pytest.approx(1.5)
-        assert attr.res_physical == pytest.approx(0.0)  # no derived propagation
+        assert attr.res_physical == pytest.approx(0.2)  # FEAT-195: food strength propagates
         assert attr.health == 1
         assert attr.max_health == 110  # +1 point = +10 max
         # 50 + 10 (max shift) + 30 recovery = 90, capped at new max 110

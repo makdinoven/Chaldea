@@ -142,8 +142,12 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
       await axios.post(`/attributes/${selectedMob.character_id}/recalculate`);
       toast.success('Статы пересчитаны');
       loadAttributes(selectedMob.character_id);
-    } catch {
-      toast.error('Не удалось пересчитать статы');
+    } catch (err) {
+      let message = 'Не удалось пересчитать статы';
+      if (axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string') {
+        message = err.response.data.detail;
+      }
+      toast.error(message);
     } finally {
       setSaving(false);
     }

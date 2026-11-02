@@ -535,10 +535,11 @@ class TestSatietyInSettle:
 
     def test_expiry_removes_modifiers_exactly_once(self, db):
         seed(db, cur=100, mx=100, strength=10, res_fire=1.0)
-        # simulate bonuses applied when eaten
+        # simulate bonuses applied when eaten (FEAT-195: incl. derived +0.2 phys)
         attr = regen.lock_attributes(db, CID)
         attr.strength = 12
         attr.res_fire = 2.5
+        attr.res_physical = 0.2
         db.commit()
         add_satiety(db, rarity="rare", started=h(-23), expires=h(1), modifiers={"strength": 2, "res_fire": 1.5})
 
@@ -546,7 +547,7 @@ class TestSatietyInSettle:
         assert changed is True
         assert attr.strength == 10
         assert attr.res_fire == pytest.approx(1.0)
-        # derived stats are NOT touched (equipment-style removal)
+        # FEAT-195: derived stats are reversed too (0.1 * (eff(10) - eff(12)))
         assert attr.res_physical == pytest.approx(0.0)
 
         attr, changed = settle(db, h(3))
@@ -643,7 +644,7 @@ _OWNER_COLUMNS = [
     ("dungeon-service/app/models.py", "dungeon_sessions", ["status", "started_at", "finished_at"]),
     ("dungeon-service/app/models.py", "dungeon_session_members", ["session_id", "character_id"]),
     ("locations-service/app/models.py", "gathering_sessions", ["character_id", "started_at", "complete_at", "status", "finished_at"]),
-    ("character-service/app/models.py", "characters", ["is_npc"]),
+    ("character-service/app/models.py", "characters", ["is_npc", "level", "id_class"]),
 ]
 
 

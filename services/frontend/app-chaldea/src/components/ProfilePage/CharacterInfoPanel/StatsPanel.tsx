@@ -1,8 +1,16 @@
 import { Heart, Droplet, Zap, Wind } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAppSelector } from '../../../redux/store';
-import { selectAttributes, selectProfile } from '../../../redux/slices/profileSlice';
+import {
+  selectAttributes,
+  selectProfile,
+  selectRaceInfo,
+} from '../../../redux/slices/profileSlice';
+import type { CharacterAttributes } from '../../../redux/slices/profileSlice';
 import { RESOURCE_BARS, STAT_LABELS } from '../constants';
+import { RESOURCE_BASE, resourceStatPart } from '../../CommonComponents/CharacterPassport';
+import { levelResourceRate } from '../../../utils/resourceGrowth';
+import type { GrowthResource } from '../../../utils/resourceGrowth';
 
 // FEAT-149: vitals use icon-only labels (no text next to icons — user decision).
 // Icons come from lucide-react (already a project dependency), colored with the
@@ -21,9 +29,41 @@ const VITAL_ICON_COLOR: Record<string, string> = {
   stamina: 'text-stat-stamina',
 };
 
+const signed = (value: number): string => (value >= 0 ? `+ ${value}` : `− ${Math.abs(value)}`);
+
+/**
+ * FEAT-196 — where the maximum comes from: base + level growth + the resource
+ * stat (points, gear, food — after the FEAT-195 cap). The stored max is the
+ * truth; any gap is shown as «прочее», never hidden.
+ */
+const buildMaxBreakdown = (
+  resource: GrowthResource,
+  storedMax: number,
+  attributes: CharacterAttributes | null | undefined,
+  level: number | null | undefined,
+  classId: number | null | undefined,
+): string | null => {
+  if (!attributes) return null;
+  const base = RESOURCE_BASE[resource];
+  const statPart = resourceStatPart(resource, attributes[resource]);
+  const rate = levelResourceRate(resource, classId);
+  const lvl = typeof level === 'number' && level >= 1 ? Math.floor(level) : 0;
+  const levelPart = lvl * rate;
+  const parts = [`база ${base}`];
+  if (levelPart > 0) parts.push(`за уровень ${lvl}×${rate} = ${levelPart}`);
+  parts.push(`от очков и снаряжения ${statPart}`);
+  let text = parts.join(' + ');
+  const rest = Math.round(storedMax) - (base + levelPart + statPart);
+  if (rest !== 0) text += ` ${signed(rest)} прочее`;
+  return `Максимум: ${text} = ${Math.round(storedMax)}`;
+};
+
 export default function StatsPanel() {
   const attributes = useAppSelector(selectAttributes);
   const profile = useAppSelector(selectProfile);
+  const raceInfo = useAppSelector(selectRaceInfo);
+  const level = profile?.level ?? raceInfo?.level;
+  const classId = raceInfo?.id_class;
 
   if (!attributes && !profile) {
     return (
@@ -64,9 +104,12 @@ export default function StatsPanel() {
         const percent = max > 0 ? Math.min((current / max) * 100, 100) : 0;
         const Icon = VITAL_ICONS[key];
         const tooltip = STAT_LABELS[key] ?? label;
+        const breakdown = buildMaxBreakdown(key, max, attributes, level, classId);
+        const title = breakdown ? `${tooltip}
+${breakdown}` : tooltip;
 
         return (
-          <div key={key} className="flex flex-col gap-[7px]" title={tooltip}>
+          <div key={key} className="flex flex-col gap-[7px]" title={title}>
             <div className="flex justify-between items-center">
               <span
                 className={`flex ${VITAL_ICON_COLOR[key] ?? 'text-white'}`}

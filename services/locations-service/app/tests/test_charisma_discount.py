@@ -129,21 +129,26 @@ class TestComputeCharismaDiscount:
         from main import _compute_charisma_discount
         assert _compute_charisma_discount(0) == 0.0
 
+    # FEAT-195: 0.1 % per EFFECTIVE point (full to 100, half to 200, quarter above)
     def test_charisma_50(self):
         from main import _compute_charisma_discount
-        assert _compute_charisma_discount(50) == 10.0
+        assert _compute_charisma_discount(50) == 5.0
 
     def test_charisma_100(self):
         from main import _compute_charisma_discount
-        assert _compute_charisma_discount(100) == 20.0
+        assert _compute_charisma_discount(100) == 10.0
 
-    def test_charisma_250_cap(self):
+    def test_charisma_250_diminishing(self):
         from main import _compute_charisma_discount
-        assert _compute_charisma_discount(250) == 50.0
+        assert _compute_charisma_discount(250) == 16.25
 
-    def test_charisma_300_cap_enforced(self):
+    def test_charisma_300_diminishing(self):
         from main import _compute_charisma_discount
-        assert _compute_charisma_discount(300) == 50.0
+        assert _compute_charisma_discount(300) == 17.5
+
+    def test_charisma_huge_cap_enforced(self):
+        from main import _compute_charisma_discount
+        assert _compute_charisma_discount(100000) == 50.0
 
     def test_charisma_none(self):
         from main import _compute_charisma_discount
@@ -155,7 +160,7 @@ class TestComputeCharismaDiscount:
 
     def test_charisma_1(self):
         from main import _compute_charisma_discount
-        assert _compute_charisma_discount(1) == pytest.approx(0.2)
+        assert _compute_charisma_discount(1) == pytest.approx(0.1)
 
 
 # ===========================================================================
@@ -212,7 +217,7 @@ class TestBuyFromNpcWithDiscount:
         mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
-        """Purchase with charisma=50 -> price reduced by 10%."""
+        """Purchase with charisma=50 -> price reduced by 5% (FEAT-195)."""
         from main import app
 
         mock_shop_item.return_value = _make_shop_item(buy_price=1000, npc_id=5)
@@ -227,8 +232,8 @@ class TestBuyFromNpcWithDiscount:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["discount_percent"] == 10.0
-        assert data["total_price"] == 900
+        assert data["discount_percent"] == 5.0
+        assert data["total_price"] == 950
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
@@ -272,7 +277,7 @@ class TestBuyFromNpcWithDiscount:
         mock_shop_item, mock_deduct,
         mock_item_name, mock_httpx_cls, client,
     ):
-        """Purchase with charisma=250 -> 50% discount (max cap)."""
+        """Purchase with charisma=250 -> 16.25% discount (eff 162.5, FEAT-195)."""
         from main import app
 
         mock_shop_item.return_value = _make_shop_item(buy_price=1000, npc_id=5)
@@ -287,8 +292,8 @@ class TestBuyFromNpcWithDiscount:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["discount_percent"] == 50.0
-        assert data["total_price"] == 500
+        assert data["discount_percent"] == 16.25
+        assert data["total_price"] == 838  # ceil(1000 * 0.8375)
 
     @patch("main.httpx.AsyncClient")
     @patch("crud.get_item_name", new_callable=AsyncMock, return_value="Test Sword")
@@ -317,8 +322,8 @@ class TestBuyFromNpcWithDiscount:
         assert response.status_code == 200
         data = response.json()
         assert "discount_percent" in data
-        assert data["discount_percent"] == 20.0
-        assert data["total_price"] == 80
+        assert data["discount_percent"] == 10.0
+        assert data["total_price"] == 90
 
 
 # ===========================================================================
@@ -342,8 +347,8 @@ class TestGetNpcShopWithDiscount:
         data = response.json()
         assert len(data) == 1
         assert data[0]["discounted_buy_price"] is not None
-        # charisma=50 → 10% discount: ceil(1000 * 0.9) = 900
-        assert data[0]["discounted_buy_price"] == 900
+        # charisma=50 → 5% discount (FEAT-195): ceil(1000 * 0.95) = 950
+        assert data[0]["discounted_buy_price"] == 950
 
     @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
     def test_shop_without_character_id_no_discounted_price(
@@ -367,7 +372,7 @@ class TestGetNpcShopWithDiscount:
     def test_shop_max_discount_applied(
         self, mock_shop_items, mock_fetch_charisma, shop_owner_client,
     ):
-        """GET /npcs/{npc_id}/shop?character_id=X with charisma=250 → 50% discount."""
+        """GET /npcs/{npc_id}/shop?character_id=X with charisma=250 → 16.25% (FEAT-195)."""
         item = _make_shop_item(buy_price=1000, npc_id=5)
         mock_shop_items.return_value = [item]
 
@@ -375,7 +380,7 @@ class TestGetNpcShopWithDiscount:
 
         assert response.status_code == 200
         data = response.json()
-        assert data[0]["discounted_buy_price"] == 500
+        assert data[0]["discounted_buy_price"] == 838  # ceil(1000 * 0.8375)
 
     @patch("main._fetch_charisma", new_callable=AsyncMock, return_value=0)
     @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)

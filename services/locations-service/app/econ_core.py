@@ -731,8 +731,14 @@ def settings_from_row(row) -> EconomySettings:
 # (ceil for what a player pays, floor for what a player / merchant receives).
 # ---------------------------------------------------------------------------
 
-MAX_CHARISMA_DISCOUNT = Decimal("0.5")          # 50 % at 250 charisma
-CHARISMA_DISCOUNT_PER_POINT = Decimal("0.2")    # percent per charisma point
+MAX_CHARISMA_DISCOUNT = Decimal("0.5")          # safety ceiling (50 % = eff 500, i.e. charisma 1600)
+CHARISMA_DISCOUNT_PER_POINT = Decimal("0.1")    # percent per EFFECTIVE charisma point (FEAT-195)
+# FEAT-195 stat caps, same thresholds as stat_caps.py (character-attributes-service, canonical):
+# eff(x) = x up to 100, half effect 100..200, quarter effect above 200.
+STAT_SOFT_CAP = Decimal(100)
+STAT_HARD_CAP = Decimal(200)
+STAT_SOFT_RATE = Decimal("0.5")
+STAT_HARD_RATE = Decimal("0.25")
 DEFAULT_MERCHANT_BID_SHARE = Decimal("0.5")     # buy-back share of item_base outside the assortment
 DEFAULT_RESTOCK_TARGET = 10                     # «норма склада» of a new / migrated shop row
 MAX_TRADE_TAX_RATE = Decimal("1")
@@ -862,8 +868,19 @@ def wholesale_price(base_ask, mult, share) -> int:
     return max(1, _floor(_dec(base_ask) * _dec(mult) * _dec(share)))
 
 
+def _effective_stat_dec(value: Decimal) -> Decimal:
+    """Decimal twin of stat_caps.effective_stat (FEAT-195) for an already-parsed finite value."""
+    if value <= STAT_SOFT_CAP:
+        return value
+    if value <= STAT_HARD_CAP:
+        return STAT_SOFT_CAP + (value - STAT_SOFT_CAP) * STAT_SOFT_RATE
+    return (STAT_SOFT_CAP + (STAT_HARD_CAP - STAT_SOFT_CAP) * STAT_SOFT_RATE
+            + (value - STAT_HARD_CAP) * STAT_HARD_RATE)
+
+
 def charisma_discount_pct(charisma) -> Decimal:
-    """Buy discount in percent: min(charisma * 0.2, 50); 0 for None / non-positive / garbage charisma."""
+    """Buy discount in percent: min(eff(charisma) * 0.1, 50) - 0.1 % per effective point (FEAT-195
+    soft/hard cap: 100 -> 10 %, 250 -> 16.25 %, 530 -> 23.25 %); 0 for None / non-positive / garbage."""
     if charisma is None or isinstance(charisma, bool):
         return Decimal(0)
     try:
@@ -872,7 +889,7 @@ def charisma_discount_pct(charisma) -> Decimal:
         return Decimal(0)
     if not value.is_finite() or value <= 0:
         return Decimal(0)
-    return min(value * CHARISMA_DISCOUNT_PER_POINT, MAX_CHARISMA_DISCOUNT * _HUNDRED)
+    return min(_effective_stat_dec(value) * CHARISMA_DISCOUNT_PER_POINT, MAX_CHARISMA_DISCOUNT * _HUNDRED)
 
 
 def discounted_ask(ask, discount_pct) -> int:

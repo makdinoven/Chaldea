@@ -50,6 +50,7 @@ from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, b
     build_percent_resist_buffs, _normalize_effect, tick_periodic_effects, evaluate_control, \
     first_cycle_limit_skills, remove_effects
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
+from stat_caps import effective_stat
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative, \
     utc_now, parse_deadline, deadline_epoch, STATE_TTL_HOURS, get_saber_run_stacks, set_saber_run_stacks
@@ -70,6 +71,10 @@ logging.basicConfig(
     format="%(levelname)s | %(name)s | %(asctime)s | %(message)s",
 )
 logger = logging.getLogger("battle-service")
+
+# FEAT-195: luck adds 0.1 pp per EFFECTIVE point to the attacker's effect procs
+# (mirror of battle_engine.LUCK_PROC_PER_POINT, used for the hit roll).
+LUCK_PROC_PER_POINT = 0.1
 
 
 def _internal_token_headers() -> dict:
@@ -2768,8 +2773,20 @@ async def _make_action_core(
 
     # Fetch attacker's class for class-aware damage formula
     attacker_class_id = await fetch_character_class_id(db_session, attacker_character_id)
-    # Luck bonus for all attacker offensive procs (+0.1% per luck point)
-    attacker_luck_bonus = base_attacker_attributes.get("luck", 0) * 0.1
+    # Luck bonus for the attacker's effect procs: 0.1 pp per EFFECTIVE point of
+    # the attacker's BUFFED luck — the same value the hit roll uses (FEAT-195).
+    # Same formula as battle_engine.luck_proc_bonus; computed here from the
+    # never-mocked stat_caps because test suites swap battle_engine for a mock.
+    _buffed_attacker = apply_flat_modifiers(
+        base_attacker_attributes,
+        aggregate_modifiers(
+            battle_state.get("active_effects", {}).get(str(request.participant_id), []),
+            base_attributes=base_attacker_attributes,
+        ),
+    )
+    attacker_luck_bonus = LUCK_PROC_PER_POINT * effective_stat(
+        _buffed_attacker.get("luck", 0) if isinstance(_buffed_attacker, dict) else 0
+    )
 
     # События этого хода копим в список
     turn_events: List[Dict] = []
@@ -2885,7 +2902,8 @@ async def _make_action_core(
 
     base_defender_attributes = await attrs(defender_character_id)
     defender_buff_modifiers = aggregate_modifiers(
-        battle_state.get("active_effects", {}).get(str(defender_pid), [])
+        battle_state.get("active_effects", {}).get(str(defender_pid), []),
+        base_attributes=base_defender_attributes,
     )
     defender_attributes = apply_flat_modifiers(
         base_defender_attributes, defender_buff_modifiers
@@ -2898,8 +2916,11 @@ async def _make_action_core(
         _pd = participants_map.get(str(pid))
         if not _pd:
             return 0
-        _mods = aggregate_modifiers(battle_state.get("active_effects", {}).get(str(pid), []))
-        _a = apply_flat_modifiers(await attrs(_pd["character_id"]), _mods)
+        _base = await attrs(_pd["character_id"])
+        _mods = aggregate_modifiers(
+            battle_state.get("active_effects", {}).get(str(pid), []), base_attributes=_base,
+        )
+        _a = apply_flat_modifiers(_base, _mods)
         # Vulnerability to effects eats into it, as vul_<type> does for damage
         # (buffs.net_resist; not imported — test suites mock `buffs` by name).
         return float(_a.get("res_effects") or 0) - float(_a.get("vul_effects") or 0)
@@ -3064,12 +3085,11 @@ async def _make_action_core(
         return ctx
 
     async def _build_target_ctx(pid: int, allow_redirect: bool = True) -> Dict:
+        _base = await attrs(participants_map[str(pid)]["character_id"])
         _mods = aggregate_modifiers(
-            battle_state.get("active_effects", {}).get(str(pid), [])
+            battle_state.get("active_effects", {}).get(str(pid), []), base_attributes=_base,
         )
-        _tattrs = apply_flat_modifiers(
-            await attrs(participants_map[str(pid)]["character_id"]), _mods
-        )
+        _tattrs = apply_flat_modifiers(_base, _mods)
         return _finish_target_ctx(
             pid, _tattrs, build_percent_resist_buffs(_mods, _tattrs), allow_redirect,
         )
@@ -3077,12 +3097,11 @@ async def _make_action_core(
     async def _plain_ctx(pid: int) -> Dict:
         """FEAT-190 E19: ctx for an ally hit by a redirected «Обман» blow —
         attrs + effect mods and resists only: no H4/H5, no dodge, no deceit."""
+        _base = await attrs(participants_map[str(pid)]["character_id"])
         _mods = aggregate_modifiers(
-            battle_state.get("active_effects", {}).get(str(pid), [])
+            battle_state.get("active_effects", {}).get(str(pid), []), base_attributes=_base,
         )
-        _tattrs = apply_flat_modifiers(
-            await attrs(participants_map[str(pid)]["character_id"]), _mods
-        )
+        _tattrs = apply_flat_modifiers(_base, _mods)
         return {
             "attrs": _tattrs,
             "resists": build_percent_resist_buffs(_mods, _tattrs),
@@ -3639,7 +3658,8 @@ async def _make_action_core(
                 item_damage_total = 0
                 if item_damage_rows:
                     _item_mods = aggregate_modifiers(
-                        battle_state.get("active_effects", {}).get(me, [])
+                        battle_state.get("active_effects", {}).get(me, []),
+                        base_attributes=base_attacker_attributes,
                     )
                     _item_plain_attrs = apply_flat_modifiers(
                         base_attacker_attributes, _item_mods
@@ -3900,7 +3920,8 @@ async def _make_action_core(
                     turn_events.append(_effects_event(_enemy_pid, "attack", _applied, _pc))
 
         attacker_buff_modifiers = aggregate_modifiers(
-            battle_state.get("active_effects", {}).get(str(request.participant_id), [])
+            battle_state.get("active_effects", {}).get(str(request.participant_id), []),
+            base_attributes=base_attacker_attributes,
         )
         percent_damage_buffs = build_percent_damage_buffs(attacker_buff_modifiers)
         # FEAT-190 E19: effects-only buffs for «Обман» redirects (no rage, no
@@ -3941,7 +3962,8 @@ async def _make_action_core(
         attacker_attributes = _actor_attrs(_plain_attacker_attributes)
 
         defender_buff_modifiers = aggregate_modifiers(
-            battle_state.get("active_effects", {}).get(str(defender_pid), [])
+            battle_state.get("active_effects", {}).get(str(defender_pid), []),
+            base_attributes=base_defender_attributes,
         )
         # Re-apply flat modifiers on defender too in case attack_enemy_effects
         # included flat stat debuffs that affect damage formula.

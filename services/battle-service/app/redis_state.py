@@ -20,6 +20,7 @@ import redis.asyncio as redis
 
 from config import settings
 from passives import SABER_RUN_STACKS_TTL_S
+from stat_caps import effective_stat
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +159,13 @@ def compute_initiative(attributes: Dict) -> float:
     Agility counts full (×1.0); strength and intelligence count at ×0.75.
     Endurance / luck / charisma do NOT contribute. So agility builds lead by
     default, but a warrior/mage with a much larger str/int pool can still
-    out-initiative a rogue.
+    out-initiative a rogue. FEAT-195: every stat goes through
+    stat_caps.effective_stat (soft cap 100, hard cap 200); the tie-break
+    stays on raw agility.
     """
-    agi = attributes.get("agility", 0) or 0
-    other = (attributes.get("strength", 0) or 0) + (attributes.get("intelligence", 0) or 0)
+    agi = effective_stat(attributes.get("agility", 0) or 0)
+    other = (effective_stat(attributes.get("strength", 0) or 0)
+             + effective_stat(attributes.get("intelligence", 0) or 0))
     return agi * 1.0 + other * 0.75
 
 

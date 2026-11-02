@@ -600,9 +600,9 @@ def apply_satiety(
             raise HTTPException(status_code=409, detail="Вы уже наелись")
 
         if modifiers:
-            # Equipment-style: raw values only, no derived propagation — the
-            # exact negation is applied on expiry.
-            crud._apply_modifiers_internal(db, character_id, modifiers, propagate_derived=False)
+            # FEAT-195: food primaries carry their derived effects like gear;
+            # the exact negation on expiry reverses them (eff deltas telescope).
+            crud._apply_modifiers_internal(db, character_id, modifiers)
 
         for resource in ("health", "mana", "energy", "stamina"):
             amount = int(recovery.get(f"{resource}_recovery", 0) or 0)
@@ -709,75 +709,20 @@ async def upgrade_attributes(
         # (Perk reconcile below runs anyway.)
         regen.settle_regen(db, attr)
 
-        b = 0.1  # bonus per stat point
-
-        # Strength: +0.1 to ALL physical resistance fields
-        attr.strength += upgrade_request.strength
-        if upgrade_request.strength:
-            str_bonus = upgrade_request.strength * b
-            for field in PHYSICAL_RESISTANCE_FIELDS:
-                setattr(attr, field, getattr(attr, field) + str_bonus)
-
-        # Agility: +0.1 to dodge
-        attr.agility += upgrade_request.agility
-        attr.dodge += upgrade_request.agility * b
-
-        # Intelligence: +0.1 to ALL magical resistance fields
-        attr.intelligence += upgrade_request.intelligence
-        if upgrade_request.intelligence:
-            int_bonus = upgrade_request.intelligence * b
-            for field in MAGICAL_RESISTANCE_FIELDS:
-                setattr(attr, field, getattr(attr, field) + int_bonus)
-
-        # Endurance: +0.2 to res_effects ONLY
-        attr.endurance += upgrade_request.endurance
-        if upgrade_request.endurance:
-            attr.res_effects += upgrade_request.endurance * ENDURANCE_RES_EFFECTS_MULTIPLIER
-
-        # Health: +10 max_health per point
-        attr.health += upgrade_request.health
-        attr.max_health += upgrade_request.health * 10
-        attr.current_health += upgrade_request.health * 10
-
-        # Energy: +5 max_energy per point
-        attr.energy += upgrade_request.energy
-        attr.max_energy += upgrade_request.energy * 5
-        attr.current_energy += upgrade_request.energy * 5
-
-        # Mana: +10 max_mana per point
-        attr.mana += upgrade_request.mana
-        attr.max_mana += upgrade_request.mana * 10
-        attr.current_mana += upgrade_request.mana * 10
-
-        # Stamina: +5 max_stamina per point
-        attr.stamina += upgrade_request.stamina
-        attr.max_stamina += upgrade_request.stamina * 5
-        attr.current_stamina += upgrade_request.stamina * 5
-
-        # Charisma: increment counter only
-        attr.charisma += upgrade_request.charisma
-
-        # Luck: +0.1 to dodge, critical_hit_chance, AND res_effects
-        attr.luck += upgrade_request.luck
-        if upgrade_request.luck:
-            luck_bonus = upgrade_request.luck * b
-            attr.dodge += luck_bonus
-            attr.critical_hit_chance += luck_bonus
-            attr.res_effects += luck_bonus
-
-        # Округляем
-        attr.current_health = int(attr.current_health)
-        attr.max_health = int(attr.max_health)
-        attr.current_mana = int(attr.current_mana)
-        attr.max_mana = int(attr.max_mana)
-        attr.current_energy = int(attr.current_energy)
-        attr.max_energy = int(attr.max_energy)
-        attr.current_stamina = int(attr.current_stamina)
-        attr.max_stamina = int(attr.max_stamina)
-        attr.health = int(attr.health)
-        attr.mana = int(attr.mana)
-        attr.energy = int(attr.energy)
-        attr.stamina = int(attr.stamina)
+        # FEAT-195: same path as equipment / perks / food — derived stats move
+        # by k * (eff(new) - eff(old)), resources by floor(m * eff) deltas.
+        crud.apply_attribute_modifiers(attr, {
+            "strength": upgrade_request.strength,
+            "agility": upgrade_request.agility,
+            "intelligence": upgrade_request.intelligence,
+            "endurance": upgrade_request.endurance,
+            "health": upgrade_request.health,
+            "energy": upgrade_request.energy,
+            "mana": upgrade_request.mana,
+            "stamina": upgrade_request.stamina,
+            "charisma": upgrade_request.charisma,
+            "luck": upgrade_request.luck,
+        })
 
         db.commit()
         db.refresh(attr)
@@ -838,12 +783,6 @@ async def upgrade_attributes(
 # -----------------------------
 # 5. apply_modifiers (общий)
 # -----------------------------
-from constants import (
-    HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER,
-    PHYSICAL_RESISTANCE_FIELDS, MAGICAL_RESISTANCE_FIELDS,
-    ENDURANCE_RES_EFFECTS_MULTIPLIER,
-)
-
 @router.post("/{character_id}/apply_modifiers")
 def apply_modifiers(
     character_id: int,
@@ -856,8 +795,10 @@ def apply_modifiers(
 
     Только для межсервисных вызовов (FEAT-167): требуется заголовок
     `X-Internal-Token`.
-    'health', 'mana', 'energy', 'stamina' => пересчитываем max_/current_.
-    Остальные поля (strength, damage, res_fire и т.д.) просто складываем.
+    FEAT-195: crud.apply_attribute_modifiers — 'health', 'mana', 'energy',
+    'stamina' => max_/current_ через floor(m * eff); основные статы (сила,
+    ловкость, ...) двигают производные на k * (eff(new) - eff(old));
+    остальные поля (damage, res_fire и т.д.) просто складываем.
     """
     with db.begin():
         attr = db.query(models.CharacterAttributes).filter(
@@ -870,140 +811,7 @@ def apply_modifiers(
         # FEAT-164: credit passive regen / satiety expiry first.
         satiety_expired = regen.settle_regen(db, attr)
 
-        # ------- health -------
-        delta_health = modifiers.get("health", 0)
-        if delta_health != 0:
-            old_health = attr.health
-            new_health = old_health + delta_health
-            if new_health < 0:
-                new_health = 0
-
-            old_max_health = attr.max_health
-            diff = (new_health - old_health) * HEALTH_MULTIPLIER
-            new_max_health = old_max_health + diff
-
-            new_current_health = attr.current_health + diff
-            if new_current_health < 0:
-                new_current_health = 0
-            if new_current_health > new_max_health:
-                new_current_health = new_max_health
-
-            attr.health = new_health
-            attr.max_health = new_max_health
-            attr.current_health = new_current_health
-
-        # ------- mana -------
-        delta_mana = modifiers.get("mana", 0)
-        if delta_mana != 0:
-            old_mana = attr.mana
-            new_mana = old_mana + delta_mana
-            if new_mana < 0:
-                new_mana = 0
-
-            old_max_mana = attr.max_mana
-            diff = (new_mana - old_mana) * MANA_MULTIPLIER
-            new_max_mana = old_max_mana + diff
-
-            new_current_mana = attr.current_mana + diff
-            if new_current_mana < 0:
-                new_current_mana = 0
-            if new_current_mana > new_max_mana:
-                new_current_mana = new_max_mana
-
-            attr.mana = new_mana
-            attr.max_mana = new_max_mana
-            attr.current_mana = new_current_mana
-
-        # ------- energy -------
-        delta_energy = modifiers.get("energy", 0)
-        if delta_energy != 0:
-            old_energy = attr.energy
-            new_energy = old_energy + delta_energy
-            if new_energy < 0:
-                new_energy = 0
-
-            old_max_energy = attr.max_energy
-            diff = (new_energy - old_energy) * ENERGY_MULTIPLIER
-            new_max_energy = old_max_energy + diff
-
-            new_current_energy = attr.current_energy + diff
-            if new_current_energy < 0:
-                new_current_energy = 0
-            if new_current_energy > new_max_energy:
-                new_current_energy = new_max_energy
-
-            attr.energy = new_energy
-            attr.max_energy = new_max_energy
-            attr.current_energy = new_current_energy
-
-        # ------- stamina -------
-        delta_stamina = modifiers.get("stamina", 0)
-        if delta_stamina != 0:
-            old_stamina = attr.stamina
-            new_stamina = old_stamina + delta_stamina
-            if new_stamina < 0:
-                new_stamina = 0
-
-            old_max_stamina = attr.max_stamina
-            diff = (new_stamina - old_stamina) * STAMINA_MULTIPLIER
-            new_max_stamina = old_max_stamina + diff
-
-            new_current_stamina = attr.current_stamina + diff
-            if new_current_stamina < 0:
-                new_current_stamina = 0
-            if new_current_stamina > new_max_stamina:
-                new_current_stamina = new_max_stamina
-
-            attr.stamina = new_stamina
-            attr.max_stamina = new_max_stamina
-            attr.current_stamina = new_current_stamina
-
-        # ------- Остальные (strength, agility, damage, dodge, resistances, etc.) -------
-        # Просто складываем. Перечислим все поля, которые есть в модели:
-        simple_keys = [
-            "strength",
-            "agility",
-            "intelligence",
-            "endurance",
-            "charisma",
-            "luck",
-            "damage",
-            "dodge",
-            "res_effects",
-            "res_physical",
-            "res_catting",
-            "res_crushing",
-            "res_piercing",
-            "res_magic",
-            "res_fire",
-            "res_ice",
-            "res_watering",    # в модели "res_watering"
-            "res_electricity",
-            "res_wind",
-            "res_sainting",
-            "res_damning",
-            "critical_hit_chance",
-            "critical_damage",
-            "vul_effects",
-            "vul_physical",
-            "vul_catting",
-            "vul_crushing",
-            "vul_piercing",
-            "vul_magic",
-            "vul_fire",
-            "vul_ice",
-            "vul_watering",
-            "vul_electricity",
-            "vul_sainting",
-            "vul_wind",
-            "vul_damning"
-            # ... если есть ещё поля, которые просто суммируются, добавьте.
-        ]
-
-        for key in simple_keys:
-            if key in modifiers and modifiers[key] != 0:
-                old_val = getattr(attr, key, 0)
-                setattr(attr, key, old_val + modifiers[key])
+        crud.apply_attribute_modifiers(attr, modifiers)
 
         db.flush()
 
@@ -1300,6 +1108,36 @@ def admin_update_attributes(
 # -----------------------------
 # 8. Admin: пересчёт производных статов
 # -----------------------------
+# FEAT-195: the rebuild needs what the character wears (inventory owns the item
+# maths: sharpening, gems, durability, slot type).
+RECALCULATE_BATCH_SIZE = 100
+INVENTORY_MODIFIERS_TIMEOUT = 15.0
+
+
+def _fetch_equipment_modifiers(character_ids) -> Optional[dict]:
+    """{character_id: {stat: value}} from inventory-service, or None on any failure."""
+    url = f"{settings.INVENTORY_SERVICE_URL.rstrip('/')}/internal/equipment-modifiers"
+    try:
+        resp = httpx.post(
+            url,
+            json={"character_ids": list(character_ids)},
+            headers=_internal_token_headers(),
+            timeout=INVENTORY_MODIFIERS_TIMEOUT,
+        )
+    except httpx.HTTPError as e:
+        logger.error(f"[recalculate] inventory-service недоступен: {e}")
+        return None
+    if resp.status_code != 200:
+        logger.error(f"[recalculate] inventory-service ответил {resp.status_code}")
+        return None
+    try:
+        raw = resp.json().get("modifiers")
+        return {int(cid): (mods or {}) for cid, mods in raw.items()}
+    except (ValueError, AttributeError, TypeError):
+        logger.error("[recalculate] некорректный ответ inventory-service")
+        return None
+
+
 @router.post("/{character_id}/recalculate")
 def recalculate_attributes_endpoint(
     character_id: int,
@@ -1307,13 +1145,77 @@ def recalculate_attributes_endpoint(
     admin: UserRead = Depends(require_permission("characters:update")),
 ):
     """
-    Пересчитывает все производные статы из базовых значений (10 прокачиваемых статов).
-    Не учитывает модификаторы экипировки — предназначен для админского использования.
+    FEAT-195: абсолютный пересчёт производных статов с учётом снаряжения,
+    перков и активной еды (crud.rebuild_derived_stats). Основные статы, урон,
+    крит. урон и уязвимости не трогаются. Идемпотентен.
+    Инвентарь недоступен -> 502, ничего не записано.
     """
-    result = crud.recalculate_attributes(db, character_id)
-    if result is None:
+    attr = regen.lock_attributes(db, character_id)
+    if attr is None:
+        db.rollback()
         raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+    # The row stays locked during the read-only inventory call: a concurrent
+    # equip waits on apply_modifiers and lands its delta after this rebuild.
+    modifiers = _fetch_equipment_modifiers([character_id])
+    if modifiers is None:
+        db.rollback()
+        raise HTTPException(status_code=502, detail="Не удалось получить снаряжение персонажа")
+
+    try:
+        expired = regen.settle_regen(db, attr)
+        crud.rebuild_derived_stats(db, attr, modifiers.get(character_id, {}))
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка пересчёта атрибутов персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось пересчитать атрибуты")
+    if expired:
+        regen.reconcile_perks_after_expiry(db, character_id)
     return {"detail": "Attributes recalculated", "character_id": character_id}
+
+
+@router.post("/internal/{character_id}/sync-level", response_model=schemas.SyncLevelResponse)
+def sync_level_resources_endpoint(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """
+    FEAT-196: character-service сообщает, что уровень/класс персонажа мог
+    измениться. Уровень и класс читаются из `characters`; максимумы ресурсов
+    ставятся абсолютно (база + кап(очки) + уровень×ставка класса). Рост
+    максимума двигает текущее значение на ту же разницу, падение — обрезает
+    текущее. Идемпотентен. Только для межсервисных вызовов (X-Internal-Token,
+    /attributes/internal/ закрыт nginx снаружи).
+    """
+    attr = regen.lock_attributes(db, character_id)
+    if attr is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+    try:
+        # Regen accrued so far is settled against the OLD max first.
+        expired = regen.settle_regen(db, attr)
+        level, class_id = crud.get_level_and_class(db, character_id)
+        crud.sync_level_resources(attr, level, class_id)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка синхронизации ресурсов персонажа {character_id} по уровню: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось обновить ресурсы персонажа")
+    if expired:
+        regen.reconcile_perks_after_expiry(db, character_id)
+    db.refresh(attr)
+    return {
+        "character_id": character_id,
+        "level": level,
+        "id_class": class_id,
+        "max_health": attr.max_health,
+        "max_mana": attr.max_mana,
+        "max_energy": attr.max_energy,
+        "max_stamina": attr.max_stamina,
+    }
 
 
 # -----------------------------
@@ -1396,39 +1298,55 @@ def admin_recalculate_all(
     admin: UserRead = Depends(require_permission("characters:update")),
 ):
     """
-    Пересчитывает производные статы для ВСЕХ персонажей в базе.
-    Коммитит батчами по 100 записей. Предназначен для использования
-    после изменения формул расчёта.
+    FEAT-195: пересчитывает производные статы ВСЕХ персонажей с учётом
+    снаряжения, перков и еды (crud.rebuild_derived_stats). Батчи по 100:
+    один запрос в inventory-service на батч, коммит на батч. Батч, для
+    которого инвентарь не ответил, пропускается (ничего не записано) и
+    попадает в `skipped`. Идемпотентен — можно запускать повторно.
     """
-    BATCH_SIZE = 100
-    all_attrs = db.query(models.CharacterAttributes).all()
-    total = len(all_attrs)
-    logger.info(f"[recalculate_all] Starting batch recalculation for {total} characters")
+    all_ids = [
+        row[0] for row in db.query(models.CharacterAttributes.character_id)
+        .order_by(models.CharacterAttributes.character_id).all()
+    ]
+    db.rollback()  # end the read snapshot before the locked batches
+    total = len(all_ids)
+    logger.info(f"[recalculate_all] Starting gear-aware rebuild for {total} characters")
 
-    # Bulk-fetch class_id for all characters to avoid N+1 queries
-    char_ids = [attr.character_id for attr in all_attrs]
-    class_lookup = {}
-    if char_ids:
-        placeholders = ",".join([f":id_{i}" for i in range(len(char_ids))])
-        params = {f"id_{i}": cid for i, cid in enumerate(char_ids)}
-        rows = db.execute(
-            text(f"SELECT id, id_class FROM characters WHERE id IN ({placeholders})"),
-            params,
-        ).fetchall()
-        class_lookup = {row[0]: row[1] for row in rows}
-
-    for i, attr in enumerate(all_attrs, start=1):
-        crud.compute_derived_stats(attr, class_id=class_lookup.get(attr.character_id))
-
-        if i % BATCH_SIZE == 0:
+    count = 0
+    skipped = []
+    for start in range(0, total, RECALCULATE_BATCH_SIZE):
+        chunk = all_ids[start:start + RECALCULATE_BATCH_SIZE]
+        try:
+            attrs = (
+                db.query(models.CharacterAttributes)
+                .filter(models.CharacterAttributes.character_id.in_(chunk))
+                .with_for_update()
+                .all()
+            )
+            modifiers = _fetch_equipment_modifiers(chunk)
+            if modifiers is None:
+                db.rollback()
+                skipped.extend(chunk)
+                logger.error(f"[recalculate_all] batch skipped: {chunk[0]}..{chunk[-1]}")
+                continue
+            expired_ids = []
+            for attr in attrs:
+                if regen.settle_regen(db, attr):
+                    expired_ids.append(attr.character_id)
+                crud.rebuild_derived_stats(db, attr, modifiers.get(attr.character_id, {}))
             db.commit()
-            logger.info(f"[recalculate_all] Committed batch — {i}/{total} characters processed")
+        except SQLAlchemyError as e:
+            db.rollback()
+            skipped.extend(chunk)
+            logger.error(f"[recalculate_all] batch {chunk[0]}..{chunk[-1]} failed: {e}")
+            continue
+        count += len(attrs)
+        for character_id in expired_ids:
+            regen.reconcile_perks_after_expiry(db, character_id)
+        logger.info(f"[recalculate_all] Committed batch — {count}/{total} characters rebuilt")
 
-    # Commit remaining records
-    db.commit()
-    logger.info(f"[recalculate_all] Done — {total} characters recalculated")
-
-    return {"detail": f"Recalculated {total} characters", "count": total}
+    logger.info(f"[recalculate_all] Done — {count} rebuilt, {len(skipped)} skipped")
+    return {"detail": f"Recalculated {count} characters", "count": count, "skipped": skipped}
 
 
 # -----------------------------

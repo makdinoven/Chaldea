@@ -183,8 +183,12 @@ class TestGrantedEqualsSnapshotted:
 
         _approve(client, req.id)
 
-        sent = cross_service["attributes"].call_args.args[1]
+        sent = dict(cross_service["attributes"].call_args.args[1])
         character = db_session.query(models.Character).one()
+        # FEAT-196: the create body also carries level/class for the per-level
+        # resource growth; they are not stats and not part of the snapshot.
+        assert sent.pop("level") == character.level
+        assert sent.pop("id_class") == character.id_class
         assert character.starting_attributes == sent
 
     def test_the_preset_is_resolved_exactly_once(self, db_session, client, cross_service):

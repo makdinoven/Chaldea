@@ -142,7 +142,13 @@ def admin_client(db_session):
     app.dependency_overrides[get_current_user_via_http] = override_admin
     # FEAT-171: the admin also passes the visibility gate on the player reads.
     app.dependency_overrides[get_optional_user] = override_admin
-    yield TestClient(app)
+    # FEAT-195: the recalculate endpoints ask inventory-service for worn gear;
+    # these tests run without it - nobody wears anything.
+    with patch(
+        "main._fetch_equipment_modifiers",
+        side_effect=lambda ids: {cid: {} for cid in ids},
+    ):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 

@@ -8,7 +8,7 @@
  * inventory-service as `effective_damage` on `GET /inventory/{id}/equipment`
  * (already sharpening-, gem- and durability-aware — a broken weapon is 0).
  *
- *   base                = <class main attribute> + attributes.damage
+ *   base                = eff(<class main attribute>) + attributes.damage
  *   Основной урон       = base + effective_damage(main_weapon)
  *   Дополнительный урон = base + effective_damage(additional_weapons)
  *   Урон без оружия     = base
@@ -18,10 +18,14 @@
  * the battle log must never disagree. Anything else that needs a damage number
  * must call this helper instead of re-summing the terms — the duplicated third
  * term is what caused the double-count bug this feature fixes.
+ *
+ * FEAT-195: the main attribute goes through `effectiveStat` (soft/hard cap),
+ * as in `battle_engine.compute_damage_with_rolls`; the flat `damage` does not.
  */
 
 import type { CharacterAttributes } from '../../../redux/slices/profileSlice';
 import { CLASS_MAIN_ATTRIBUTE } from '../constants';
+import { effectiveStat } from '../../../utils/statCaps';
 
 /** Weapon slots that contribute their own damage. */
 export type WeaponSlotType = 'main_weapon' | 'additional_weapons';
@@ -95,7 +99,7 @@ export const isWeaponBroken = (
 };
 
 /**
- * The «base» damage: class main attribute + the flat `damage` attribute.
+ * The «base» damage: eff(class main attribute) + the flat `damage` attribute.
  * Weapon damage is deliberately excluded — it lives on the slot.
  */
 export const baseDamage = (
@@ -106,7 +110,7 @@ export const baseDamage = (
   const mainAttrKey =
     (classId != null && CLASS_MAIN_ATTRIBUTE[classId]) || 'strength';
   const mainAttrValue = toNumber(attributes[mainAttrKey as keyof CharacterAttributes]);
-  return mainAttrValue + toNumber(attributes.damage);
+  return effectiveStat(mainAttrValue) + toNumber(attributes.damage);
 };
 
 /** All three damage values at once — the only supported way to display them. */

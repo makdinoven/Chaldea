@@ -9,6 +9,8 @@ import {
 } from '../../../redux/slices/mobsSlice';
 import { NPC_CLASSES, NPC_SEXES } from '../../../constants/npc';
 import type { MobTemplateCreatePayload } from '../../../api/mobs';
+import { effectiveStat, STAT_CAP_SHORT } from '../../../utils/statCaps';
+import { classGrowthText, levelResourceBonus } from '../../../utils/resourceGrowth';
 
 interface AdminMobTemplateFormProps {
   editingId: number | null;
@@ -99,25 +101,25 @@ const PREVIEW_RESISTANCE_KEYS = [
   'res_electricity', 'res_wind', 'res_sainting', 'res_damning', 'res_effects',
 ] as const;
 
-const computeDerivedStats = (base: Record<string, number>, idClass: number) => {
-  const str = base.strength ?? 0;
-  const agi = base.agility ?? 0;
-  const int = base.intelligence ?? 0;
-  const end = base.endurance ?? 0;
-  const luck = base.luck ?? 0;
-  const hp = base.health ?? 0;
-  const mana = base.mana ?? 0;
-  const energy = base.energy ?? 0;
-  const stamina = base.stamina ?? 0;
-
-  const mainAttrDamage = idClass === 1 ? str : idClass === 2 ? agi : int;
+// Mirrors character-attributes-service `compute_derived_stats` (FEAT-195:
+// every stat goes through `effectiveStat`, resource pools are floored).
+// `damage` is a pure flat bonus since FEAT-167 — the class main attribute is
+// added by the battle engine, not stored — so a fresh template starts at 0.
+// FEAT-196: resource maxima also get level × class rate (outside the cap).
+const computeDerivedStats = (base: Record<string, number>, level: number, classId: number) => {
+  const eff = (key: string): number => effectiveStat(base[key] ?? 0);
+  const str = eff('strength');
+  const agi = eff('agility');
+  const int = eff('intelligence');
+  const end = eff('endurance');
+  const luck = eff('luck');
 
   return {
-    max_health: 100 + hp * 10,
-    max_mana: 75 + mana * 10,
-    max_energy: 50 + energy * 5,
-    max_stamina: 100 + stamina * 5,
-    damage: mainAttrDamage,
+    max_health: 100 + Math.floor(eff('health') * 10) + levelResourceBonus('health', classId, level),
+    max_mana: 75 + Math.floor(eff('mana') * 10) + levelResourceBonus('mana', classId, level),
+    max_energy: 50 + Math.floor(eff('energy') * 5) + levelResourceBonus('energy', classId, level),
+    max_stamina: 100 + Math.floor(eff('stamina') * 5) + levelResourceBonus('stamina', classId, level),
+    damage: 0,
     dodge: 5.0 + agi * 0.1 + luck * 0.1,
     critical_hit_chance: 20.0 + luck * 0.1,
     critical_damage: 125.0,
@@ -147,8 +149,8 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const derivedStats = useMemo(
-    () => computeDerivedStats(form.base_attributes, Number(form.id_class)),
-    [form.base_attributes, form.id_class],
+    () => computeDerivedStats(form.base_attributes, Number(form.level) || 0, Number(form.id_class)),
+    [form.base_attributes, form.level, form.id_class],
   );
 
   const totalPoints = Math.max(0, Number(form.level) || 0) * POINTS_PER_LEVEL;
@@ -160,6 +162,7 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
     [form.base_attributes],
   );
   const remainingPoints = totalPoints - spentPoints;
+  const growthText = classGrowthText(Number(form.id_class));
 
   const renderPreviewGroup = (title: string, keys: readonly string[], stats: Record<string, number>) => (
     <div className="flex flex-col gap-2">
@@ -436,6 +439,10 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
         <h3 className="gold-text text-sm font-medium uppercase tracking-[0.06em]">
           Расчётные характеристики (предпросмотр)
         </h3>
+        <p className="text-white/50 text-xs leading-snug">
+          Убывающая отдача характеристик: {STAT_CAP_SHORT}.
+          {growthText && ` Ресурсы с учётом роста по классу. ${growthText}.`}
+        </p>
         {renderPreviewGroup('Ресурсы', PREVIEW_RESOURCE_KEYS, derivedStats)}
         {renderPreviewGroup('Боевые', PREVIEW_COMBAT_KEYS, derivedStats)}
         {renderPreviewGroup('Сопротивления', PREVIEW_RESISTANCE_KEYS, derivedStats)}

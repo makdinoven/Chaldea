@@ -20,6 +20,7 @@ INVENTORY_SERVICE_URL = os.getenv(
     "http://inventory-service:8004",
 )
 import logging
+from stat_caps import effective_stat
 logger = logging.getLogger(__name__)
 
 
@@ -95,6 +96,17 @@ async def fetch_main_weapon(character_id: int) -> Dict | None:
 # ---------- class → main attribute mapping ----------------------------------
 CLASS_MAIN_ATTRIBUTE = {1: "strength", 2: "agility", 3: "intelligence"}
 
+# ---------- luck → offensive procs (FEAT-195) --------------------------------
+LUCK_PROC_PER_POINT = 0.1  # +0.1 pp per EFFECTIVE point of luck
+
+
+def luck_proc_bonus(attrs: Dict) -> float:
+    """Percentage points luck adds to the attacker's hit roll and effect procs:
+    0.1 * eff(luck) (soft cap 100, hard cap 200 — stat_caps.effective_stat).
+    Not added to the crit roll: the stored critical_hit_chance already
+    contains luck (FEAT-195 fix — luck used to be counted twice in crit)."""
+    return LUCK_PROC_PER_POINT * effective_stat((attrs or {}).get("luck", 0))
+
 # ---------- основной расчёт ------------------------------------------------
 def roll_dodge(dodge_percent: float) -> bool:
     """True — уклонился."""
@@ -125,8 +137,10 @@ async def compute_damage_with_rolls(
     """
     • roll_dodge, roll_chance, roll_crit
     • применяет +%баффы, криты, −%резисты
-    • class_id определяет основной атрибут урона (1=strength, 2=agility, 3=intelligence)
-    • luck атакующего добавляет +0.1% за единицу ко всем шансовым проверкам
+    • class_id определяет основной атрибут урона (1=strength, 2=agility, 3=intelligence);
+      FEAT-195: в урон идёт eff(атрибут) — убывающая отдача выше 100 и 200
+    • luck атакующего добавляет 0.1% за эффективную единицу к шансу попадания;
+      в крит удача уже входит через сохранённый critical_hit_chance
 
     FEAT-189 (subclass passives, all optional — defaults keep the old
     behaviour and the old log shape):
@@ -143,8 +157,10 @@ async def compute_damage_with_rolls(
     #    effective_damage (его считает inventory-service: шаблон + заточка + камни,
     #    0.0 у сломанного). В attacker_attr["damage"] урона оружия больше нет,
     #    поэтому weapon=None (навык no_weapon) даёт честный безоружный урон.
+    #    FEAT-195: основной атрибут идёт через eff() (attacker_attr уже содержит
+    #    баффы и пассивки, т.е. кап считается от суммы).
     main_attr_key = CLASS_MAIN_ATTRIBUTE.get(class_id, "strength")
-    base_stat = attacker_attr.get(main_attr_key, 0)
+    base_stat = effective_stat(attacker_attr.get(main_attr_key, 0))
     damage_bonus = attacker_attr.get("damage", 0)
     weapon_dmg = float(weapon.get("effective_damage") or 0.0) if weapon else 0.0
     base = max(0, base_stat + damage_bonus + weapon_dmg)
@@ -164,9 +180,8 @@ async def compute_damage_with_rolls(
         "after_buffs": round(raw, 2),
     }
 
-    # luck bonus: +0.1% per point of luck to all attacker offensive procs
-    attacker_luck = attacker_attr.get("luck", 0)
-    luck_bonus = attacker_luck * 0.1
+    # luck bonus: +0.1% per effective point of luck to the hit roll (FEAT-195)
+    luck_bonus = luck_proc_bonus(attacker_attr)
 
     # dodge — optional here so the caller can roll it ONCE per attack instead of
     # per damage_entry (avoids "dodged" + a landed hit in the same attack).
@@ -182,8 +197,9 @@ async def compute_damage_with_rolls(
         return 0.0, log
     log["hit_chance_failed"] = False
 
-    # crit (luck improves crit chance for attacker)
-    if force_crit or roll_crit(attacker_attr["critical_hit_chance"] + luck_bonus):
+    # crit: the stored critical_hit_chance (+ buff deltas) already contains
+    # 0.1 * eff(luck) — luck is NOT added a second time (FEAT-195).
+    if force_crit or roll_crit(attacker_attr["critical_hit_chance"]):
         crit_mul = (attacker_attr["critical_damage"] + crit_damage_bonus) / 100.0
         raw *= crit_mul
         log["critical"] = True

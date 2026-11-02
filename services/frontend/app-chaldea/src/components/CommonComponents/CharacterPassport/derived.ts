@@ -6,11 +6,17 @@
  * `crud.py::compute_derived_stats`. Initiative mirrors the battle engine
  * (FEAT-143), as already displayed by `ProfilePage/StatsTab/DerivedStatsSection`.
  *
+ * FEAT-195: every stat goes through `effectiveStat` (soft/hard cap) before it
+ * is converted, exactly like the backend and the battle engine.
+ *
  * Kept in this folder so the wizard's `StatExplainer` (task #17) can reuse the
  * exact same numbers the passport prints — the two must never disagree.
  */
 
 import type { DerivedStats, PassportStats } from './types';
+import { effectiveStat } from '../../../utils/statCaps';
+import { levelResourceBonus } from '../../../utils/resourceGrowth';
+import type { GrowthResource } from '../../../utils/resourceGrowth';
 
 // Mirrors character-attributes-service/app/constants.py
 const BASE_HEALTH = 100;
@@ -28,7 +34,36 @@ const STAMINA_MULTIPLIER = 5;
 
 const STAT_BONUS_PER_POINT = 0.1;
 
-// Initiative weights (FEAT-143): agility ×1.0 + (strength + intelligence) ×0.75.
+/** Base of each resource maximum (before stats and level growth). */
+export const RESOURCE_BASE: Readonly<Record<GrowthResource, number>> = {
+  health: BASE_HEALTH,
+  mana: BASE_MANA,
+  energy: BASE_ENERGY,
+  stamina: BASE_STAMINA,
+};
+
+/** How much one effective point of the resource stat adds to its maximum. */
+export const RESOURCE_MULTIPLIER: Readonly<Record<GrowthResource, number>> = {
+  health: HEALTH_MULTIPLIER,
+  mana: MANA_MULTIPLIER,
+  energy: ENERGY_MULTIPLIER,
+  stamina: STAMINA_MULTIPLIER,
+};
+
+/** The part of a resource maximum that comes from its stat: floor(m · eff(value)). */
+export const resourceStatPart = (resource: GrowthResource, value: unknown): number =>
+  Math.floor(effectiveStat(value) * RESOURCE_MULTIPLIER[resource]);
+
+/**
+ * FEAT-196 — level/class for the per-level resource growth. Omitted (or an
+ * unknown class) → no growth, i.e. the pre-FEAT-196 numbers.
+ */
+export interface ResourceGrowthInput {
+  level?: number | null;
+  classId?: number | null;
+}
+
+// Initiative weights (FEAT-143): eff(agility) ×1.0 + (eff(strength) + eff(intelligence)) ×0.75.
 const INITIATIVE_AGILITY_WEIGHT = 1.0;
 const INITIATIVE_MIND_BODY_WEIGHT = 0.75;
 
@@ -49,26 +84,42 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
  * Computes the values a player actually feels: resource pools, dodge, crit and
  * initiative. Missing stats count as 0, so a partial preset still renders.
  */
-export const computeDerivedStats = (stats: PassportStats | null | undefined): DerivedStats => {
-  const agility = num(stats, 'agility');
-  const luck = num(stats, 'luck');
-  const strength = num(stats, 'strength');
-  const intelligence = num(stats, 'intelligence');
+export const computeDerivedStats = (
+  stats: PassportStats | null | undefined,
+  growth?: ResourceGrowthInput,
+): DerivedStats => {
+  const eff = (key: string): number => effectiveStat(num(stats, key));
+  const agility = eff('agility');
+  const luck = eff('luck');
+  // max_R = BASE + floor(m · eff(R)) + level · rate(class, R) — mirrors
+  // character-attributes-service `crud.resource_max` (FEAT-196).
+  const maxOf = (resource: GrowthResource): number =>
+    RESOURCE_BASE[resource] +
+    resourceStatPart(resource, num(stats, resource)) +
+    levelResourceBonus(resource, growth?.classId, growth?.level);
 
   return {
-    maxHealth: Math.trunc(BASE_HEALTH + num(stats, 'health') * HEALTH_MULTIPLIER),
-    maxMana: Math.trunc(BASE_MANA + num(stats, 'mana') * MANA_MULTIPLIER),
-    maxEnergy: Math.trunc(BASE_ENERGY + num(stats, 'energy') * ENERGY_MULTIPLIER),
-    maxStamina: Math.trunc(BASE_STAMINA + num(stats, 'stamina') * STAMINA_MULTIPLIER),
+    maxHealth: maxOf('health'),
+    maxMana: maxOf('mana'),
+    maxEnergy: maxOf('energy'),
+    maxStamina: maxOf('stamina'),
     dodge: round2(BASE_DODGE + agility * STAT_BONUS_PER_POINT + luck * STAT_BONUS_PER_POINT),
     criticalHitChance: round2(BASE_CRIT + luck * STAT_BONUS_PER_POINT),
     criticalDamage: BASE_CRIT_DMG,
-    initiative: round2(
-      agility * INITIATIVE_AGILITY_WEIGHT +
-        (strength + intelligence) * INITIATIVE_MIND_BODY_WEIGHT,
-    ),
+    initiative: computeInitiative(stats),
   };
 };
+
+/**
+ * Initiative (FEAT-143, capped by FEAT-195): mirrors
+ * `battle-service/app/redis_state.py::compute_initiative`.
+ */
+export const computeInitiative = (stats: PassportStats | null | undefined): number =>
+  round2(
+    effectiveStat(num(stats, 'agility')) * INITIATIVE_AGILITY_WEIGHT +
+      (effectiveStat(num(stats, 'strength')) + effectiveStat(num(stats, 'intelligence'))) *
+        INITIATIVE_MIND_BODY_WEIGHT,
+  );
 
 /**
  * Russian labels for the preset stats. Duplicated from

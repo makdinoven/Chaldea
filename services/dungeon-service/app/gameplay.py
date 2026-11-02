@@ -89,6 +89,7 @@ import challenges
 import chat
 import econ_core
 import econ_ledger
+from stat_caps import effective_stat
 from econ_ledger import AccountRef, DuplicateOperation, InsufficientFunds, Leg, format_currency
 
 logger = logging.getLogger("dungeon-service.gameplay")
@@ -1607,6 +1608,27 @@ async def ping_board(
 # Stat checks / damage
 # =====================================================================
 
+# FEAT-195: a primary attribute is compared through stat_caps.effective_stat
+# (soft cap 100, hard cap 200); cumulative counters stay raw.
+PRIMARY_ATTRIBUTES = frozenset({
+    "strength", "agility", "intelligence", "endurance", "health",
+    "mana", "energy", "stamina", "charisma", "luck",
+})
+
+
+def _check_stat_value(attrs: Dict, stat_name: str):
+    """The number a stat check / challenge compares: a cumulative counter as is,
+    a primary attribute as floor(eff(total)), anything else raw."""
+    cumulative = attrs.get("cumulative_stats", {}) or {}
+    if stat_name in cumulative:
+        return cumulative[stat_name]
+    value = attrs.get(stat_name, 0)
+    if (stat_name in PRIMARY_ATTRIBUTES and isinstance(value, (int, float))
+            and not isinstance(value, bool)):
+        return math.floor(effective_stat(value))
+    return value
+
+
 async def perform_stat_check(
     session_state_data: Dict,
     stat_name: str,
@@ -1615,7 +1637,8 @@ async def perform_stat_check(
 ) -> Tuple[bool, str, int]:
     """
     Stat check against the best value among alive party members.
-    Returns (passed, best_character_name, best_value).
+    Returns (passed, best_character_name, best_value) — best_value is the
+    effective number that was compared (FEAT-195).
     """
     members = session_state_data.get("members", {})
     alive_ids = [int(cid) for cid, info in members.items() if info.get("status") == "alive"]
@@ -1631,8 +1654,7 @@ async def perform_stat_check(
             logger.warning("Не удалось получить атрибуты персонажа %d для проверки %s",
                            character_id, stat_name)
             continue
-        cumulative = attrs.get("cumulative_stats", {}) or {}
-        value = cumulative.get(stat_name, attrs.get(stat_name, 0))
+        value = _check_stat_value(attrs, stat_name)
         if isinstance(value, (int, float)) and value > best_value:
             best_value = int(value)
             best_id = character_id
@@ -3221,14 +3243,14 @@ async def _challenge_target(
 
 
 async def _challenger(character_id: int, kind: str) -> Tuple[int, bool]:
-    """The member's stat for the challenge, and whether it is someone else's craft."""
+    """The member's stat for the challenge (effective value for a primary
+    attribute, FEAT-195), and whether it is someone else's craft."""
     try:
         attrs = await http_clients.get_character_attributes(character_id)
     except Exception:
         raise HTTPException(status_code=502, detail="Не удалось получить характеристики персонажа")
     stat = challenges.KIND_STAT[kind]
-    cumulative = attrs.get("cumulative_stats", {}) or {}
-    value = cumulative.get(stat, attrs.get(stat, 0))
+    value = _check_stat_value(attrs, stat)
     try:
         class_id = (await http_clients.get_character_profile(character_id)).get("character_class_id")
     except Exception:

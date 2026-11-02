@@ -91,7 +91,7 @@ _GRID_MULTS = ("0.1", "0.333", "0.5", "0.85", "0.999", "1", "1.001", "1.17", "1.
 
 def test_bid_never_beats_any_ask_and_never_exceeds_own_price():
     """No buy->sell-back profit at max charisma, wholesale never above the ask, bid never above floor(base*mult)."""
-    max_pct = core.charisma_discount_pct(250)
+    max_pct = core.charisma_discount_pct(10 ** 6)  # the 50 % ceiling (FEAT-195: first reached at 1600)
     for base_ask, mult in itertools.product(_GRID_BASES, _GRID_MULTS):
         ask = core.market_ask(base_ask, mult)
         cheapest = core.discounted_ask(ask, max_pct)
@@ -156,15 +156,16 @@ def test_wholesale_price_edges(base, mult, share, expected):
 # charisma_discount_pct / discounted_ask
 # ---------------------------------------------------------------------------
 
+# FEAT-195: 0.1 % per EFFECTIVE point (full to 100, half to 200, quarter above), 50 % ceiling kept
 @pytest.mark.parametrize("charisma,expected", [
     (0, Decimal(0)),
-    (1, Decimal("0.2")),
-    (250, Decimal(50)),
-    (251, Decimal(50)),
+    (1, Decimal("0.1")),
+    (250, Decimal("16.25")),
+    (251, Decimal("16.275")),
     (10 ** 30, Decimal(50)),
-    (249.5, Decimal("49.9")),
-    ("100", Decimal(20)),
-    (Decimal("125"), Decimal(25)),
+    (249.5, Decimal("16.2375")),
+    ("100", Decimal(10)),
+    (Decimal("125"), Decimal("11.25")),
     (True, Decimal(0)),             # bool is not a charisma value
     (False, Decimal(0)),
     ("", Decimal(0)),
@@ -197,7 +198,9 @@ def test_discounted_ask_edges(ask, pct, expected):
 def test_discount_is_monotonic_in_charisma():
     prices = [core.discounted_ask(1000, core.charisma_discount_pct(c)) for c in range(0, 300)]
     assert prices[0] == 1000
-    assert prices[250] == prices[299] == 500
+    assert prices[250] == 838   # eff 162.5 -> 16.25 %
+    assert prices[299] == 826   # eff 174.75 -> 17.475 %
+    assert core.discounted_ask(1000, core.charisma_discount_pct(10 ** 6)) == 500
     assert all(a >= b for a, b in zip(prices, prices[1:]))
 
 

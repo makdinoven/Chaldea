@@ -84,7 +84,9 @@ def db():
                 "CREATE TABLE characters ("
                 "  id INTEGER PRIMARY KEY,"
                 "  name VARCHAR(255),"
-                "  user_id INTEGER NULL"
+                "  user_id INTEGER NULL,"
+                "  id_class INTEGER NULL,"
+                "  level INTEGER NULL"
                 ")"
             )
         )

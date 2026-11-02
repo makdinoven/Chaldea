@@ -26,11 +26,13 @@ character-attributes-service/app/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/attributes/` | Создать атрибуты для персонажа |
+| POST | `/attributes/` | Создать атрибуты для персонажа. FEAT-196: необязательные `level`, `id_class` в теле (не хранятся в строке атрибутов, только для прибавки ресурсов за уровень; не переданы → читаются из `characters`, нет строки → без прибавки) |
 | GET | `/attributes/{character_id}` | Получить все атрибуты. **FEAT-171 (A1): приватно** — владелец, админ/модератор с `characters:read`, NPC |
 | GET | `/attributes/{character_id}/passive_experience` | Пассивный опыт. **FEAT-171 (A4): приватно** |
 | POST | `/attributes/{character_id}/upgrade` | Прокачать статы (тратит stat points) |
-| POST | `/attributes/{character_id}/apply_modifiers` | **internal** (FEAT-167): применить модификаторы (экипировка/баффы) |
+| POST | `/attributes/{character_id}/apply_modifiers` | **internal** (FEAT-167): применить модификаторы (экипировка/баффы); FEAT-195: основные статы со снаряжения тоже двигают производные |
+| POST | `/attributes/{character_id}/recalculate` | Админ (`characters:update`): абсолютный пересчёт производных с учётом снаряжения/перков/еды (FEAT-195). Инвентарь недоступен → 502 «Не удалось получить снаряжение персонажа» |
+| POST | `/attributes/admin/recalculate_all` | Админ (`characters:update`): то же для всех персонажей батчами по 100 → `{"detail", "count", "skipped": [id...]}` (FEAT-195) |
 | POST | `/attributes/{character_id}/recover` | **internal** (FEAT-167): восстановить ресурсы (health/mana/energy/stamina) |
 | PUT | `/attributes/{character_id}/active_experience` | **internal** (FEAT-167): изменить активный опыт |
 | PUT | `/attributes/{character_id}/passive_experience` | **internal** (FEAT-167): изменить пассивный опыт |
@@ -41,6 +43,7 @@ character-attributes-service/app/
 | POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id). **FEAT-169: `X-Internal-Token`** |
 | POST | `/attributes/internal/{character_id}/reconcile-perks` | FEAT-143, internal: пересчёт активности перков. **FEAT-169: `X-Internal-Token`** |
 | GET | `/attributes/internal/{character_id}` | **FEAT-171 (A1i):** двойник `GET /attributes/{character_id}` для межсервисных вызовов (общий хелпер `_build_full_attributes`, тело идентично). `X-Internal-Token`, fail-closed. Вызывающие — battle-service, character-service, locations-service, skills-service |
+| POST | `/attributes/internal/{character_id}/sync-level` | **FEAT-196**, internal (`X-Internal-Token`), без тела: перечитать `level`/`id_class` из `characters` и выставить максимумы ресурсов (см. «Рост ресурсов за уровень»). 404 «Атрибуты персонажа не найдены», 500 «Не удалось обновить ресурсы персонажа». Ответ `{character_id, level, id_class, max_health, max_mana, max_energy, max_stamina}`. Вызывающий — character-service |
 | GET | `/attributes/internal/{character_id}/passive_experience` | **FEAT-171 (A4i):** двойник `GET /attributes/{character_id}/passive_experience` (общий хелпер `_build_passive_experience`). `X-Internal-Token`. Вызывающий — character-service (`full_profile`) |
 
 ## Аутентификация изменяющих эндпоинтов (FEAT-167)
@@ -166,7 +169,7 @@ character-service, inventory-service и (в async-варианте) skills-servi
 - **Занятость (восстановление не идёт):** из общей БД берутся интервалы — бой (`battle_participants.joined_at`/`battles.created_at` … `dropped_out_at` или «сейчас» для активного боя), подземелье (только `dungeon_sessions.status='active'`, `started_at` … `finished_at`; лобби `forming` = покой), сбор (`gathering_sessions.started_at` … `finished_at`/`complete_at`). Время покоя = окно минус объединение интервалов. `now`/начало окна передаются bind-параметрами. Ошибка чтения интервалов логируется (ERROR), восстановление не начисляется, якорь не сдвигается.
 - **Конец боя:** battle-service при синхронизации ресурсов ставит `regen_anchor_at = UTC_TIMESTAMP()`.
 - **Мобы/NPC** (`characters.is_npc = 1`) и персонажи без строки в `characters` пропускаются.
-- **Сытость** — таблица `character_satiety` (одна строка на персонажа, `UNIQUE(character_id)`): `item_id`, `source_item_name`, `rarity`, `regen_bonus`, `modifiers` (JSON), `started_at`, `expires_at` (24 ч, naive UTC). Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. Пока сытость активна, новая еда → 409 «Вы уже наелись». Модификаторы еды добавляются в базовые колонки как у экипировки (без производных бонусов) и вычитаются при первом пересчёте после `expires_at` (строка удаляется в той же транзакции), затем выполняется reconcile перков. Если сытость закончилась посреди окна, до `expires_at` считается с бонусом, после — без.
+- **Сытость** — таблица `character_satiety` (одна строка на персонажа, `UNIQUE(character_id)`): `item_id`, `source_item_name`, `rarity`, `regen_bonus`, `modifiers` (JSON), `started_at`, `expires_at` (24 ч, naive UTC). Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. Пока сытость активна, новая еда → 409 «Вы уже наелись». Модификаторы еды добавляются в базовые колонки как у экипировки (FEAT-195: с производными бонусами, через `apply_attribute_modifiers`) и вычитаются при первом пересчёте после `expires_at` (строка удаляется в той же транзакции), затем выполняется reconcile перков. Если сытость закончилась посреди окна, до `expires_at` считается с бонусом, после — без.
 - **Святилище дома** (FEAT-180 6б): благословение `regen` из `house_buffs` (locations-service; `source='shrine'`,
   `kind='regen'`) умножает покой на (1 + value) до своего `expires_at` — так же, как окно сытости (`regen.
   get_shrine_regen`, в `_effective_hours` складывается с сытостью и сном). locations-service досчитывает реген
@@ -194,19 +197,23 @@ character-service, inventory-service и (в async-варианте) skills-servi
 
 ## Модель CharacterAttributes
 
+Все коэффициенты ниже — за **эффективную** единицу стата `eff(x)` (FEAT-195, см. раздел «Убывающая отдача статов»).
+
 ### Ресурсы (current + max)
-- `health` (base 100, +10 за point)
-- `mana` (base 75, +10 за point)
-- `energy` (base 50, +5 за point)
-- `stamina` (base 50, +5 за point)
+- `health` (base 100, +10 за point) — `max = 100 + floor(10·eff(health)) + level·rate`
+- `mana` (base 75, +10 за point) — `max = 75 + floor(10·eff(mana)) + level·rate`
+- `energy` (base 50, +5 за point) — `max = 50 + floor(5·eff(energy)) + level·rate`
+- `stamina` (base 100, +5 за point) — `max = 100 + floor(5·eff(stamina)) + level·rate`
+
+`level·rate` — прибавка за уровень по классу (FEAT-196, раздел ниже).
 
 ### Прокачиваемые статы
-- `strength` -> +0.1 к res_physical
+- `strength` -> +0.1 ко всем 4 физическим сопротивлениям
 - `agility` -> +0.1 к dodge
-- `intelligence` -> +0.1 к res_magic
-- `endurance` -> +0.1 к res_effects
-- `luck` -> +0.1 к critical_hit_chance и dodge
-- `charisma` -> (без автоматического бонуса)
+- `intelligence` -> +0.1 ко всем 8 магическим сопротивлениям
+- `endurance` -> +0.2 к res_effects
+- `luck` -> +0.1 к critical_hit_chance, dodge и res_effects
+- `charisma` -> скидка у торговцев 0.1 % за эффективную единицу (считается в `econ_core.charisma_discount_pct`, не хранится)
 
 ### Боевые характеристики
 - `damage`, `dodge` (base 5.0), `critical_hit_chance` (base 20.0), `critical_damage` (base 125)
@@ -222,17 +229,80 @@ character-service, inventory-service и (в async-варианте) skills-servi
 ### Опыт
 - `passive_experience`, `active_experience`
 
+## Убывающая отдача статов (FEAT-195)
+
+`app/stat_caps.py` (каноническая копия; байт-в-байт копии в battle-service и dungeon-service,
+сверяет `scripts/check_econ_copies.sh`): `eff(x) = x` до 100, `100 + (x−100)·0.5` до 200,
+`150 + (x−200)·0.25` выше (250 → 162.5, 530 → 232.5; отрицательные — линейно). Число стата
+в профиле не меняется — режется только то, во что оно превращается. Кап берётся от **суммы**
+всех источников (очки + снаряжение с заточкой/камнями + еда + перки).
+
+**Инвариант хранения.** Производное поле = `BASE + плоские бонусы + Σ k·eff(итоговый стат)`.
+Единственный путь изменения — `crud.apply_attribute_modifiers(attr, modifiers)`: основной
+стат `+= Δ`, его производные `+= k·(eff(new) − eff(old))`, ресурсы `max/current +=
+floor(m·eff(new)) − floor(m·eff(old))`, остальные ключи — простое сложение. Через него идут
+прокачка (`/upgrade`), снаряжение (`/apply_modifiers`), перки (`_apply_modifiers_internal`)
+и еда (наедание и истечение). Дельты телескопируются, поэтому снятие предмета ровно отменяет
+надевание при любых промежуточных изменениях. Параметра `propagate_derived` больше нет —
+снаряжение и еда теперь тоже дают производные (раньше давали только очки и перки).
+
+**Пересчёт с нуля.** `crud.rebuild_derived_stats(db, attr, equipment_mods)` — абсолютная,
+идемпотентная сборка: плоские бонусы = надетое (`POST /inventory/internal/equipment-modifiers`)
++ все перки + активная еда; сопротивления/уклонение/крит/res_effects и `max_*` выставляются по
+формуле, `current_*` только урезается до максимума. Не трогает основные статы, `damage`,
+`critical_damage`, `vul_*` (старый пересчёт обнулял урон и бонусы предметов — исправлено).
+`compute_derived_stats` используется только при создании строки (нет снаряжения/перков/еды).
+
+**Выкатка на прод:** один раз вызвать `POST /attributes/admin/recalculate_all` (JWT админа) и
+проверить, что `skipped` пустой; повторный запуск безопасен.
+
+## Рост ресурсов за уровень (FEAT-196)
+
+`max_R = BASE_R + floor(m_R·eff(R)) + level·rate(class, R)` — слагаемое за уровень **вне** `eff`
+(это не стат, кап FEAT-195 его не режет). Уровень 1 уже даёт прибавку. Подкласс не влияет.
+
+| Класс (`id_class`) | здоровье | мана | энергия | выносливость |
+|---|---|---|---|---|
+| 1 Воин | **15** | 10 | 10 | 10 |
+| 2 Плут | 10 | 10 | **15** | 10 |
+| 3 Маг | 10 | **15** | 10 | 10 |
+
+Константы — `constants.py` (`MAIN_RESOURCE_PER_LEVEL`, `OTHER_RESOURCE_PER_LEVEL`,
+`CLASS_MAIN_RESOURCE`, `LEVEL_RESOURCE_GROWTH`), зеркало на фронте —
+`src/utils/resourceGrowth.ts`. `crud.level_resource_bonus(resource, class_id, level)`:
+неизвестный/`None` класс или уровень `None`/`< 1` → 0, без ошибки.
+
+Где применяется:
+- **Создание** (`POST /attributes/`): уровень и класс из тела (строка `characters` у вызывающего
+  ещё только `flush()`-нута и не видна), иначе `SELECT level, id_class FROM characters`, иначе без
+  прибавки. Текущие = максимум.
+- **Смена уровня/класса** — `POST /attributes/internal/{id}/sync-level` (`crud.sync_level_resources`):
+  блокировка строки → досчёт восстановления по старому максимуму → `get_level_and_class` →
+  абсолютная цель `T`. Рост максимума двигает текущее на ту же разницу (как вложение очков,
+  без доп. долечивания), падение (админ понизил уровень) — обрезает текущее до `T`.
+  Идемпотентен, без хранимого «применённого уровня», без миграций.
+- **Пересчёт** (`rebuild_derived_stats`: `/recalculate`, `/admin/recalculate_all`) читает
+  уровень и класс из `characters` — абсолютно; ошибка SQL не глотается (батч → `skipped`).
+- **`apply_attribute_modifiers`** не менялся: постоянное слагаемое сокращается в дельте.
+- **Мобы и NPC** — те же строки `characters`/`character_attributes`; множитель данжа
+  (`mob_multiplier`) масштабирует только базовые статы, не уровень.
+
+**Выкатка:** тот же единственный `recalculate_all` из FEAT-195 начисляет прибавку всем
+игрокам, NPC и мобам задним числом (текущие не доливаются — их наполнит восстановление).
+Откат: вернуть код и снова `recalculate_all`.
+
 ## Система прокачки (upgrade)
 
 1. HTTP -> character-service: получить stat_points персонажа
 2. Проверить достаточно ли points
-3. Применить множители за каждый вложенный point
+3. Применить вложенные очки через `crud.apply_attribute_modifiers` (FEAT-195: с убывающей отдачей)
 4. HTTP -> character-service: списать stat_points
 5. Используется `with_for_update()` для блокировки строки (race condition protection)
 
 ## Коммуникация
 
 ### HTTP (исходящие)
+- `inventory-service:8004` -> POST `/inventory/internal/equipment-modifiers` (**FEAT-195**: сумма модификаторов надетого для `recalculate` / `recalculate_all`, заголовок `X-Internal-Token`; строка атрибутов заблокирована на время запроса)
 - `character-service:8005` -> GET `/characters/{id}/full_profile` (stat points)
 - `character-service:8005` -> PUT `/characters/internal/{id}/deduct_points` (списание points, заголовок `X-Internal-Token`)
 - `character-service:8005` -> POST `/characters/internal/{id}/logs` (запись в журнал персонажа, заголовок `X-Internal-Token`)
@@ -248,7 +318,7 @@ character-service, inventory-service и (в async-варианте) skills-servi
 2. **Нет валидации в apply_modifiers** - принимает произвольный dict, может установить отрицательные значения
 3. **Нет constraints в БД** - current_* поля могут стать отрицательными
 4. **Float precision** - сопротивления используют Float без явного округления
-5. **Неиспользуемые URL** - INVENTORY_SERVICE_URL, SKILLS_SERVICE_URL, USER_SERVICE_URL определены, но не используются
+5. **Неиспользуемые URL** - SKILLS_SERVICE_URL, USER_SERVICE_URL определены, но не используются (INVENTORY_SERVICE_URL используется пересчётом с FEAT-195)
 
 ### reconcile_perks: сначала решения, потом записи (2026-10-16)
 

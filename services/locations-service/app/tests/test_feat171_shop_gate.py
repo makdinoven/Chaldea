@@ -93,7 +93,7 @@ def _shop_item(buy_price=20):
 # ===========================================================================
 # 1. NPC shop — the reported hole
 # ===========================================================================
-@patch("main._fetch_charisma", new_callable=AsyncMock, return_value=30)
+@patch("main._fetch_charisma", new_callable=AsyncMock, return_value=60)
 @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
 class TestNpcShopGate:
     PATH = f"/locations/npcs/5/shop?character_id={CHARACTER_ID}"
@@ -151,7 +151,7 @@ class TestNpcShopGate:
         resp = client.get(self.PATH)
 
         assert resp.status_code == 200
-        # charisma 30 → 6% → ceil(20 * 0.94) = 19
+        # charisma 60 → 6% (FEAT-195: 0.1 % per effective point) → ceil(20 * 0.94) = 19
         assert resp.json()[0]["discounted_buy_price"] == 19
 
     def test_admin_gets_the_discount(self, mock_items, mock_charisma, gated_client):

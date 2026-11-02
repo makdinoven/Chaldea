@@ -142,7 +142,13 @@ def admin_client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_via_http] = override_auth
-    yield TestClient(app)
+    # FEAT-195: the recalculate endpoints ask inventory-service for worn gear;
+    # these tests run without it — nobody wears anything.
+    with patch(
+        "main._fetch_equipment_modifiers",
+        side_effect=lambda ids: {cid: {} for cid in ids},
+    ):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 
@@ -665,7 +671,7 @@ class TestRecalculateEndpoint:
                 f"{field} should be {expected}, got {getattr(attr, field)}"
 
     def test_recalculate_critical_damage_unchanged(self, admin_client, db_session):
-        """critical_damage = BASE_CRIT_DMG (125), only modified by items."""
+        """FEAT-195: the rebuild leaves critical_damage alone (items own it)."""
         _make_attrs(db_session, character_id=1, critical_damage=50)
 
         resp = admin_client.post("/attributes/1/recalculate")
@@ -675,7 +681,7 @@ class TestRecalculateEndpoint:
             character_id=1
         ).first()
         db_session.refresh(attr)
-        assert attr.critical_damage == BASE_CRIT_DMG
+        assert attr.critical_damage == 50
 
     def test_recalculate_not_found(self, admin_client, db_session):
         resp = admin_client.post("/attributes/999/recalculate")
@@ -715,7 +721,7 @@ class TestRecalculateEndpoint:
         assert attr.critical_hit_chance == pytest.approx(
             BASE_CRIT + 12 * b, abs=1e-6
         )
-        assert attr.critical_damage == BASE_CRIT_DMG
+        assert attr.critical_damage == 0  # FEAT-195: rebuild does not touch it
 
         # Physical resistances from strength only
         assert attr.res_physical == pytest.approx(10 * b, abs=1e-6)
@@ -893,21 +899,27 @@ class TestUpgradeCombined:
 # ===========================================================================
 class TestRecalculateCrud:
 
-    def test_recalculate_returns_none_for_missing_character(self, db_session):
-        result = crud.recalculate_attributes(db_session, character_id=99999)
-        assert result is None
+    def test_rebuild_adds_equipment_flats(self, db_session):
+        """FEAT-195: crud.rebuild_derived_stats keeps worn flat bonuses."""
+        attr = _make_attrs(db_session, character_id=1, strength=10, agility=20)
+        crud.rebuild_derived_stats(db_session, attr, {"res_fire": 4.0, "dodge": 1.5})
+        db_session.commit()
+        b = STAT_BONUS_PER_POINT
+        assert attr.res_fire == pytest.approx(4.0, abs=1e-6)
+        assert attr.dodge == pytest.approx(BASE_DODGE + 1.5 + 20 * b, abs=1e-6)
+        assert attr.res_physical == pytest.approx(10 * b, abs=1e-6)
 
     def test_recalculate_sets_all_fields(self, db_session):
-        """Direct test of crud.recalculate_attributes function."""
-        _make_attrs(
+        """Direct test of crud.rebuild_derived_stats (no gear, perks, food)."""
+        result = _make_attrs(
             db_session, character_id=1,
             strength=10, agility=20, intelligence=15, endurance=5,
             health=8, mana=6, energy=4, stamina=3,
             luck=12,
         )
 
-        result = crud.recalculate_attributes(db_session, character_id=1)
-        assert result is not None
+        crud.rebuild_derived_stats(db_session, result, {})
+        db_session.commit()
 
         b = STAT_BONUS_PER_POINT
 

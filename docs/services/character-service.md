@@ -256,6 +256,22 @@ PUT заменяет таблицу целиком (уровни подряд с
 - При получении профиля: проверка `passive_experience` >= threshold -> level up
 - **+10 stat points** за каждый уровень
 - Опыт списывается при повышении уровня
+- **FEAT-196: рост ресурсов за уровень.** Максимумы ресурсов растут на `уровень × ставка класса`
+  (воин здоровье +15, плут энергия +15, маг мана +15, остальное +10; считает
+  character-attributes-service, см. его доку). character-service только **сообщает** о смене:
+  `crud.notify_level_changed(character_id)` → `POST /attributes/internal/{id}/sync-level`
+  (`X-Internal-Token`, таймаут 5 с, sync `httpx`; любая ошибка → WARNING, не падает — следующий
+  sync / `recalculate` / `recalculate_all` всё починит, они абсолютные). Вызывается после commit:
+  в `check_and_update_level` только при повышении (покрывает `full_profile`, награды за бой,
+  титулы, экономику), в админском `PUT /characters/admin/{id}` при изменении уровня (вверх и вниз)
+  и в `PUT /characters/admin/npcs/{id}` при изменении уровня или класса (из async-ручек — через
+  `asyncio.to_thread`). Если `notify_level_changed` вызван прямо на потоке event loop
+  (`check_and_update_level` из async `full_profile` / титулов), POST уходит в daemon-поток
+  (fire-and-forget): иначе блокирующий вызов замораживал бы весь однопроцессный сервис, а
+  атрибуты при истёкшей сытости зовут обратно `full_profile` → зависание до таймаута 5 с. При создании (одобрение заявки, NPC из админки, спавн моба) `level` и
+  `id_class` кладутся в тело `POST /attributes/` — строка `characters` там ещё только `flush()`-нута.
+  У одобрения тело — копия: слепок `starting_attributes` их не содержит. У моба ключи
+  добавляются **после** множителя данжа (уровень не масштабируется).
 
 ### Книги опыта (FEAT-168 #6)
 
@@ -297,7 +313,7 @@ PUT заменяет таблицу целиком (уровни подряд с
 ### HTTP (исходящие)
 - `inventory-service:8004` - POST `/inventory/` (создание инвентаря + слотов экипировки, стартовый набор — `crud.send_inventory_request`). **FEAT-167 задача #18: роут стал internal-only**, вызов обязан слать `X-Internal-Token` (хелпер `crud._internal_token_headers()`, читает `auth_http.INTERNAL_SERVICE_TOKEN` в момент вызова). Вызов log-and-continue, поэтому потеря заголовка была бы молчаливой — покрыт `tests/test_internal_headers.py`
 - `skills-service:8003` - POST `/skills/internal/assign_multiple` (назначение навыков; FEAT-169: публичный `/skills/assign_multiple` ушёл под `require_permission("skills:create")` для админского редактора НПС, сервисный вызов — на internal-двойника с заголовком `X-Internal-Token`), POST `/skills/` (legacy «Basic Attack», тоже закрыт internal-токеном)
-- `character-attributes-service:8002` - POST `/attributes/` (создание строки атрибутов: `crud.send_attributes_request` — одобрение заявки, **хард-фейл с откатом персонажа**, и создание NPC из админки; `crud._sync_send_attributes_request` — спавн моба), GET `/{id}`, GET `/{id}/passive_experience`. **FEAT-167 задача #17: `POST /attributes/` стал internal-only** — оба вызова шлют `X-Internal-Token` через `crud._internal_token_headers()`. **FEAT-171 (Pass A):** чтения из `full_profile` переехали на internal-двойники — GET `/attributes/internal/{id}` (A1i) и GET `/attributes/internal/{id}/passive_experience` (A4i), оба с `X-Internal-Token`
+- `character-attributes-service:8002` - POST `/attributes/` (создание строки атрибутов: `crud.send_attributes_request` — одобрение заявки, **хард-фейл с откатом персонажа**, и создание NPC из админки; `crud._sync_send_attributes_request` — спавн моба), GET `/{id}`, GET `/{id}/passive_experience`. **FEAT-167 задача #17: `POST /attributes/` стал internal-only** — оба вызова шлют `X-Internal-Token` через `crud._internal_token_headers()`. **FEAT-171 (Pass A):** чтения из `full_profile` переехали на internal-двойники — GET `/attributes/internal/{id}` (A1i) и GET `/attributes/internal/{id}/passive_experience` (A4i), оба с `X-Internal-Token`. **FEAT-196:** POST `/attributes/internal/{id}/sync-level` (`crud.notify_level_changed`, `X-Internal-Token`) после смены уровня/класса; тело `POST /attributes/` дополнено `level`, `id_class`
 - `user-service:8000` - POST `/users/user_characters/`, PUT `/users/{id}/update_character`, GET `/users/{id}`, GET `/users/me` (auth во всех защищённых эндпоинтах)
 - `locations-service:8006` — **новая зависимость, появилась в FEAT-154** (`LOCATIONS_SERVICE_URL`, дефолт `http://locations-service:8006`). Клиент — `app/locations_client.py`, таймаут 5 с, три чтения:
   - GET `/locations/starting-points/{id}` — проверка выбранной стартовой точки при подаче и при одобрении заявки

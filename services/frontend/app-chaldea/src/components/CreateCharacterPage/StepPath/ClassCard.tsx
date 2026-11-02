@@ -1,5 +1,6 @@
 import { motion } from 'motion/react';
 import type { GameClass } from '../../../api/characterRequests';
+import { classGrowthText } from '../../../utils/resourceGrowth';
 
 import warriorImg from '../../../assets/classWarriorImg.png';
 import plutImg from '../../../assets/classPlutImg.png';
@@ -36,6 +37,7 @@ interface ClassCardProps {
 const ClassCard = ({ gameClass, isSelected, onSelect }: ClassCardProps) => {
   const art = CLASS_ART[gameClass.id_class];
   const mainStat = CLASS_MAIN_STAT[gameClass.id_class];
+  const growth = classGrowthText(gameClass.id_class);
 
   return (
     <motion.button
@@ -64,10 +66,15 @@ const ClassCard = ({ gameClass, isSelected, onSelect }: ClassCardProps) => {
         {gameClass.description || 'Описание класса пока не заполнено.'}
       </p>
 
-      {mainStat && (
-        <p className="text-white/45 text-[11px] uppercase tracking-[0.06em] mt-auto">
-          Основная характеристика: {mainStat}
-        </p>
+      {(mainStat || growth) && (
+        <div className="flex flex-col gap-1 mt-auto">
+          {mainStat && (
+            <p className="text-white/45 text-[11px] uppercase tracking-[0.06em]">
+              Основная характеристика: {mainStat}
+            </p>
+          )}
+          {growth && <p className="text-white/45 text-[11px] leading-snug">{growth}</p>}
+        </div>
       )}
     </motion.button>
   );

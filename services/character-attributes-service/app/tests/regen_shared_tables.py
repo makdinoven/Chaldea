@@ -5,7 +5,8 @@ These tables are owned by OTHER services, so they are not part of
 ``models.Base`` here. The DDL below mirrors the owners' real column names —
 keep it in sync with:
 
-  * characters               -> character-service/app/models.py (is_npc)
+  * characters               -> character-service/app/models.py
+                                (is_npc, level, id_class — FEAT-196)
   * battles                  -> battle-service/app/models.py (status, created_at)
   * battle_participants      -> battle-service/app/models.py (joined_at, dropped_out_at)
   * dungeon_sessions         -> dungeon-service/app/models.py (status, started_at, finished_at)
@@ -44,6 +45,7 @@ SHARED_TABLES_DDL = (
         user_id INTEGER NULL,
         name VARCHAR(255),
         id_class INTEGER NULL,
+        level INTEGER NULL,
         is_npc BOOLEAN NOT NULL DEFAULT 0
     )
     """,
@@ -137,24 +139,32 @@ def drop_shared_tables(engine) -> None:
 
 
 def add_character(
-    db, character_id: int, is_npc: bool = False, user_id: Optional[int] = None
+    db,
+    character_id: int,
+    is_npc: bool = False,
+    user_id: Optional[int] = None,
+    level: Optional[int] = None,
+    id_class: Optional[int] = None,
 ) -> None:
     """Insert a row into the shared ``characters`` table.
 
     ``user_id`` defaults to NULL, which FEAT-171's ``visibility.can_view_private``
     reads as "NPC/mob — no private layer", i.e. publicly readable. Pass an owner
-    id to exercise the player path.
+    id to exercise the player path. ``level`` / ``id_class`` default to NULL,
+    which FEAT-196 reads as "no per-level resource growth".
     """
     db.execute(
         text(
-            "INSERT INTO characters (id, name, is_npc, user_id) "
-            "VALUES (:id, :n, :npc, :uid)"
+            "INSERT INTO characters (id, name, is_npc, user_id, level, id_class) "
+            "VALUES (:id, :n, :npc, :uid, :lvl, :cls)"
         ),
         {
             "id": character_id,
             "n": f"char{character_id}",
             "npc": 1 if is_npc else 0,
             "uid": user_id,
+            "lvl": level,
+            "cls": id_class,
         },
     )
     db.commit()

@@ -397,7 +397,7 @@ class TestComputeDamageClassAware:
 
 
 class TestLuckBonusOnProcs:
-    """Verify that luck adds +0.1% per point to hit chance and crit chance."""
+    """Verify that luck adds +0.1% per effective point to hit chance (crit: stored value only)."""
 
     @pytest.mark.asyncio
     async def test_luck_improves_hit_chance(self):
@@ -426,8 +426,9 @@ class TestLuckBonusOnProcs:
         assert recorded_chances[0] == pytest.approx(60.0)
 
     @pytest.mark.asyncio
-    async def test_luck_improves_crit_chance(self):
-        """Luck adds bonus to crit chance."""
+    async def test_luck_not_added_twice_to_crit_chance(self):
+        """FEAT-195: the stored critical_hit_chance already contains luck, so
+        the crit roll uses it as is (luck used to be counted twice)."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(critical_hit_chance=20, luck=50)
         defender = _base_defender_attrs()
@@ -446,9 +447,9 @@ class TestLuckBonusOnProcs:
                 entry, attacker, None, {}, defender, {}, class_id=1
             )
 
-        # crit chance = 20 + (50 * 0.1) = 25
+        # crit chance = stored 20, no second luck term
         assert len(recorded_crit_chances) > 0
-        assert recorded_crit_chances[0] == pytest.approx(25.0)
+        assert recorded_crit_chances[0] == pytest.approx(20.0)
 
     @pytest.mark.asyncio
     async def test_zero_luck_no_bonus(self):

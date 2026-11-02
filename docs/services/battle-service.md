@@ -93,17 +93,37 @@ battle-service/app/
 
 ### Формула урона (compute_damage_with_rolls)
 ```
-1. base = главная характеристика класса (CLASS_MAIN_ATTRIBUTE[class_id])
+1. base = eff(главная характеристика класса)   # CLASS_MAIN_ATTRIBUTE[class_id], FEAT-195
           + attrs["damage"]                    # база: перки, броня, украшения, баффы/еда
           + weapon["effective_damage"]         # урон оружия выбранного слота (0, если слот пуст)
 2. damage_type -> определить тип (или взять с оружия если "all")
 3. raw_damage = base + skill_damage_amount
 4. raw_damage *= (1 + percent_buffs / 100)
 5. Roll dodge -> если попал, урон = 0
-6. Roll hit_chance -> если промах, урон = 0
-7. Roll crit -> если крит, raw_damage *= crit_multiplier
+6. Roll hit_chance + 0.1·eff(luck) -> если промах, урон = 0
+7. Roll crit (сохранённый critical_hit_chance + баффы, без второй удачи) -> raw_damage *= crit_multiplier
 8. final = raw_damage * (1 - resists / 100)
 ```
+
+### Убывающая отдача статов (FEAT-195)
+
+`app/stat_caps.py` — байт-в-байт копия канонического
+`character-attributes-service/app/stat_caps.py` (сверяет `scripts/check_econ_copies.sh`):
+`eff(x) = x` до 100, `100 + (x−100)·0.5` до 200, `150 + (x−200)·0.25` выше.
+Кап считается от суммы: `attacker_attr` уже содержит баффы и пассивки.
+
+- **Урон:** `base_stat = eff(основной атрибут)` (250 → 162.5).
+- **Удача:** `battle_engine.luck_proc_bonus(attrs) = 0.1·eff(luck)` — к броску попадания;
+  к шансу эффектов (`attacker_luck_bonus` в `main.py`) — та же формула от **баффнутой** удачи
+  (константа `LUCK_PROC_PER_POINT` продублирована в `main.py`: тесты подменяют `battle_engine`
+  моком). В бросок крита удача больше не добавляется — она уже есть в сохранённом
+  `critical_hit_chance` (раньше считалась дважды).
+- **Баффы статов:** `buffs.aggregate_modifiers(effects, base_attributes=None)` — производные
+  (сопротивления, уклонение, крит, res_effects) от изменения основного стата считаются как
+  `k·(eff(base+Δ) − eff(base))`; удача теперь тоже тянет dodge / critical_hit_chance / res_effects
+  по 0.1. Без `base_attributes` (только `_is_stat_down`, нужен знак) — линейно.
+- **Инициатива:** `redis_state.compute_initiative = eff(agi)·1.0 + (eff(str) + eff(int))·0.75`;
+  тай-брейк по сырой ловкости не изменился.
 
 ### Три значения урона и `effective_damage` (FEAT-167)
 
@@ -151,7 +171,7 @@ battle-service/app/
 Исходная строка эффекта (та же форма, что у `skill_perk_effects` в skills-service):
 `{target_side, effect_name, chance, duration, magnitude, attribute_key}`. `target_side` —
 `self` / `enemy` / `ally` / `all_allies` / `all_enemies`. Шанс срабатывания фильтруется в
-`main._filter_effects_by_chance` (`chance + удача×0.1 − живучесть цели×0.2`).
+`main._filter_effects_by_chance` (`chance + 0.1·eff(удача атакующего с баффами) − живучесть цели×0.2`, FEAT-195).
 
 - **Instant**: `hp` / `mana` / `energy` / `stamina` — применяются сразу, clamp 0..max
   (`buffs.apply_new_effects`). Для врага положительная magnitude инвертируется в урон.

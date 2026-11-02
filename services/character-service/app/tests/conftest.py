@@ -198,3 +198,24 @@ def admin_mock_client(mock_db_session):
     app.dependency_overrides[OAUTH2_SCHEME] = override_token
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# FEAT-196: keep the "level/class changed" notification off the network
+# ---------------------------------------------------------------------------
+# `crud.notify_level_changed` posts to character-attributes-service after every
+# level-up / admin level change / NPC level|class change. Inside the dev
+# container that hostname resolves to the REAL attributes service, so an
+# unpatched call from an unrelated test would touch the dev database. Every
+# test gets a recording stub; test_level_resource_sync.py keeps a reference to
+# the real function (captured at import time) to test the helper itself.
+import crud as _crud  # noqa: E402
+
+REAL_NOTIFY_LEVEL_CHANGED = _crud.notify_level_changed
+
+
+@pytest.fixture(autouse=True)
+def stub_notify_level_changed(monkeypatch):
+    stub = MagicMock(return_value=True)
+    monkeypatch.setattr(_crud, "notify_level_changed", stub)
+    return stub

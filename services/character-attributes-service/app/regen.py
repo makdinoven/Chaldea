@@ -363,14 +363,15 @@ def settle_regen(db: Session, attr, now: Optional[datetime] = None) -> bool:
                     attr.regen_anchor_at = now
 
     # Expiry: subtract the satiety modifiers exactly once (row deleted in the
-    # same transaction).
+    # same transaction). FEAT-195: their derived effects are reversed too
+    # (eff deltas telescope back to the state without the food).
     if satiety is not None and to_datetime(satiety.expires_at) <= now:
         import crud  # local import: crud does not import regen at module level
 
         db.flush()
         reverse = negate_modifiers(satiety.modifiers)
         if reverse:
-            crud._apply_modifiers_internal(db, character_id, reverse, propagate_derived=False)
+            crud._apply_modifiers_internal(db, character_id, reverse)
         db.delete(satiety)
         db.flush()
         logger.info("Сытость персонажа %s истекла, бонусы сняты", character_id)

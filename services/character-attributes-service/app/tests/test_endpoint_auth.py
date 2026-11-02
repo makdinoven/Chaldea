@@ -76,7 +76,9 @@ def db_session():
             """CREATE TABLE IF NOT EXISTS characters (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                id_class INTEGER,
+                level INTEGER
             )"""
         ))
         conn.commit()

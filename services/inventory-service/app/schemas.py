@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, root_validator, validator, constr
+from pydantic import BaseModel, root_validator, validator, constr, StrictInt
 from typing import List, Optional, Any, Dict
 from enum import Enum
 from datetime import datetime
@@ -2361,3 +2361,29 @@ class PublicEquipmentSlot(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+# FEAT-195: sum of what every equipped item gives its wearer (gear-aware rebuild
+# of derived stats in character-attributes-service).
+MAX_EQUIPMENT_MODIFIERS_BATCH = 500
+
+
+class EquipmentModifiersRequest(BaseModel):
+    character_ids: List[StrictInt]
+
+    @validator("character_ids")
+    def _check_character_ids(cls, value):
+        if not value:
+            raise ValueError("Список персонажей не должен быть пустым")
+        if len(value) > MAX_EQUIPMENT_MODIFIERS_BATCH:
+            raise ValueError(
+                f"Не больше {MAX_EQUIPMENT_MODIFIERS_BATCH} персонажей за запрос"
+            )
+        if any(cid <= 0 for cid in value):
+            raise ValueError("Идентификаторы персонажей должны быть положительными")
+        return list(dict.fromkeys(value))  # duplicates ignored, order kept
+
+
+class EquipmentModifiersResponse(BaseModel):
+    # {"<character_id>": {"strength": 15, "res_fire": 4.0}} — empty dict = nothing worn
+    modifiers: Dict[str, Dict[str, float]]

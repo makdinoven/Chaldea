@@ -283,8 +283,9 @@ class TestNpcBuy:
     """Legacy merchant (region without simulation): the treasury of his place is paid."""
 
     async def test_buy_with_charisma_pays_the_region_and_taxes_the_country(self, shop_db):
-        # charisma 50 -> 10 % off; ceil(155 * 0.9) = 140 per unit, 2 units = 280
-        with _Shop(item=_shop_item(NPC_REGION, price=155), charisma=50) as shop:
+        # charisma 100 -> 10 % off (FEAT-195: 0.1 % per effective point);
+        # ceil(155 * 0.9) = 140 per unit, 2 units = 280
+        with _Shop(item=_shop_item(NPC_REGION, price=155), charisma=100) as shop:
             out = await _buy(shop_db, NPC_REGION, quantity=2)
         assert (out["total_price"], out["discount_percent"], out["new_balance"]) == (280, 10.0, 720)
         assert await _balance(shop_db, PLAYER) == 720

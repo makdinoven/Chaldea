@@ -1,3 +1,5 @@
+import asyncio
+import threading
 import httpx
 import math
 import re
@@ -1314,6 +1316,57 @@ async def assign_character_to_user(user_id: int, character_id: int, token: str =
         return False
 
 
+# FEAT-196: timeout of the "level/class changed" notification to attributes.
+LEVEL_SYNC_TIMEOUT_SECONDS = 5.0
+
+
+def notify_level_changed(character_id: int) -> bool:
+    """FEAT-196: tell character-attributes-service that the level and/or class
+    of a character may have changed; it re-reads them from `characters` and
+    sets the resource maximums (per-level growth by class).
+
+    Call only AFTER the change is committed. Non-fatal: any error is logged
+    and swallowed (the next sync, /recalculate or recalculate_all repairs it,
+    every one of them is absolute).
+
+    check_and_update_level is also reached from ASYNC handlers (full_profile,
+    titles) on the event-loop thread. A blocking post there would freeze the
+    whole (single-worker) service for the round trip — and attributes may call
+    back /characters/internal/{id}/full_profile while settling an expired
+    satiety, which then cannot be served until the 5 s timeout. So on the loop
+    thread the post goes to a daemon thread (fire-and-forget, returns True =
+    scheduled); from worker threads / sync code it stays synchronous.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _post_sync_level(character_id)
+    threading.Thread(
+        target=_post_sync_level, args=(character_id,),
+        name=f"sync-level-{character_id}", daemon=True,
+    ).start()
+    return True
+
+
+def _post_sync_level(character_id: int) -> bool:
+    """The actual blocking POST of notify_level_changed; never raises."""
+    try:
+        response = httpx.post(
+            f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/sync-level",
+            headers=_internal_token_headers(),
+            timeout=LEVEL_SYNC_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning(f"[sync-level] персонаж {character_id}: attributes-service недоступен: {e}")
+        return False
+    if response.status_code != 200:
+        logger.warning(
+            f"[sync-level] персонаж {character_id}: attributes-service ответил {response.status_code}"
+        )
+        return False
+    return True
+
+
 def check_and_update_level(db: Session, character_id: int, passive_experience: int):
     """
     Проверяет и обновляет уровень персонажа на основе пассивного опыта.
@@ -1351,6 +1404,8 @@ def check_and_update_level(db: Session, character_id: int, passive_experience: i
         db.commit()
         db.refresh(character)
         logger.info(f"Персонаж ID {character_id} обновлен после повышения уровня. Новый уровень: {character.level}, stat_points: {character.stat_points}")
+        # FEAT-196: resource maximums grow with the level (by class).
+        notify_level_changed(character_id)
 
     return character
 
@@ -1783,6 +1838,12 @@ def spawn_mob_from_template(
     # (health, strength, agility, ...). 1.0 = template as authored.
     if stat_multiplier and stat_multiplier != 1.0:
         attributes = _scale_mob_attributes(attributes, stat_multiplier)
+
+    # FEAT-196: level/class for the per-level resource growth — the row is only
+    # flushed, attributes-service cannot read it yet. Added AFTER the scaling:
+    # the dungeon multiplier never scales the level.
+    attributes["level"] = new_character.level
+    attributes["id_class"] = new_character.id_class
 
     attributes_response = _sync_send_attributes_request(new_character.id, attributes)
 

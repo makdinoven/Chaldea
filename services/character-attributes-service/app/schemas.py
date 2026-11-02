@@ -27,6 +27,10 @@ class CharacterAttributesBase(BaseModel):
 # Схема для создания характеристик персонажа
 class CharacterAttributesCreate(CharacterAttributesBase):
     character_id: int
+    # FEAT-196: used only for the per-level resource growth (not stored on the
+    # attributes row). Omitted -> read from `characters`, else no bonus.
+    level: Optional[int] = None
+    id_class: Optional[int] = None
 
     class Config:
         schema_extra = {
@@ -140,6 +144,17 @@ class RefundStaminaResponse(BaseModel):
     current_stamina: int
     max_stamina: int
     refunded: int
+
+
+# FEAT-196: POST /attributes/internal/{id}/sync-level
+class SyncLevelResponse(BaseModel):
+    character_id: int
+    level: Optional[int] = None
+    id_class: Optional[int] = None
+    max_health: int
+    max_mana: int
+    max_energy: int
+    max_stamina: int
 
 
 # Схема для админского обновления атрибутов (все поля Optional — partial update)

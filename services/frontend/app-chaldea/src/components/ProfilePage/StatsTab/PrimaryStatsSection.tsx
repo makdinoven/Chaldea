@@ -1,5 +1,6 @@
 import { CharacterAttributes } from '../../../redux/slices/profileSlice';
 import { MAIN_STATS, STAT_LABELS } from '../constants';
+import { STAT_CAP_NOTE } from '../../../utils/statCaps';
 
 interface PrimaryStatsSectionProps {
   attributes: CharacterAttributes;
@@ -57,7 +58,8 @@ const PrimaryStatsSection = ({ attributes }: PrimaryStatsSectionProps) => {
         {MAIN_STATS.map((stat) => {
           const value = attributes[stat] ?? 0;
           return (
-            <div key={stat} className="flex flex-col gap-1">
+            // FEAT-195: the bar's green/red/dark tiers are the cap thresholds.
+            <div key={stat} className="flex flex-col gap-1" title={STAT_CAP_NOTE}>
               <div className="flex justify-between items-center">
                 <span className="text-white text-sm font-medium">
                   {STAT_LABELS[stat]}

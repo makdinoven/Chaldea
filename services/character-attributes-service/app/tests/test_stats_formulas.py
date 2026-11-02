@@ -173,7 +173,13 @@ def admin_client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_via_http] = override_auth
-    yield TestClient(app)
+    # FEAT-195: the recalculate endpoints ask inventory-service for worn gear;
+    # these tests run without it - nobody wears anything.
+    with patch(
+        "main._fetch_equipment_modifiers",
+        side_effect=lambda ids: {cid: {} for cid in ids},
+    ):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 
@@ -738,12 +744,13 @@ class TestEdgeCases:
         crud.compute_derived_stats(attr)
 
         b = STAT_BONUS_PER_POINT
+        eff = 2600  # FEAT-195: eff(10000) = 150 + (10000 - 200) * 0.25
 
         # Resources should compute without overflow
-        assert attr.max_health == int(BASE_HEALTH + 10000 * HEALTH_MULTIPLIER)
-        assert attr.max_mana == int(BASE_MANA + 10000 * MANA_MULTIPLIER)
-        assert attr.max_energy == int(BASE_ENERGY + 10000 * ENERGY_MULTIPLIER)
-        assert attr.max_stamina == int(BASE_STAMINA + 10000 * STAMINA_MULTIPLIER)
+        assert attr.max_health == int(BASE_HEALTH + eff * HEALTH_MULTIPLIER)
+        assert attr.max_mana == int(BASE_MANA + eff * MANA_MULTIPLIER)
+        assert attr.max_energy == int(BASE_ENERGY + eff * ENERGY_MULTIPLIER)
+        assert attr.max_stamina == int(BASE_STAMINA + eff * STAMINA_MULTIPLIER)
 
         # Current clamped to max
         assert attr.current_health == attr.max_health
@@ -753,21 +760,21 @@ class TestEdgeCases:
 
         # Resistances should compute without overflow
         for field in PHYSICAL_RESISTANCE_FIELDS:
-            assert getattr(attr, field) == pytest.approx(10000 * b, abs=1e-2)
+            assert getattr(attr, field) == pytest.approx(eff * b, abs=1e-2)
         for field in MAGICAL_RESISTANCE_FIELDS:
-            assert getattr(attr, field) == pytest.approx(10000 * b, abs=1e-2)
+            assert getattr(attr, field) == pytest.approx(eff * b, abs=1e-2)
 
         # Dodge and crit should compute without overflow
         assert attr.dodge == pytest.approx(
-            BASE_DODGE + 10000 * b + 10000 * b, abs=1e-2
+            BASE_DODGE + eff * b + eff * b, abs=1e-2
         )
         assert attr.critical_hit_chance == pytest.approx(
-            BASE_CRIT + 10000 * b, abs=1e-2
+            BASE_CRIT + eff * b, abs=1e-2
         )
 
         # res_effects = endurance * 0.2 + luck * 0.1
         assert attr.res_effects == pytest.approx(
-            10000 * ENDURANCE_RES_EFFECTS_MULTIPLIER + 10000 * b, abs=1e-2
+            eff * ENDURANCE_RES_EFFECTS_MULTIPLIER + eff * b, abs=1e-2
         )
 
     def test_single_stat_isolation_strength(self, db_session):

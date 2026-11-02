@@ -981,6 +981,61 @@ def get_equipment_slots_internal(
     return crud.get_equipment_slots_with_damage(db, character_id)
 
 
+@router.post(
+    "/internal/equipment-modifiers",
+    response_model=schemas.EquipmentModifiersResponse,
+)
+def get_equipment_modifiers_internal(
+    payload: schemas.EquipmentModifiersRequest,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """FEAT-195: сумма модификаторов всего надетого на каждом персонаже.
+
+    Только service-to-service (`X-Internal-Token`), nginx закрывает
+    `/inventory/internal/` снаружи. Только чтение. Каждый слот считается ровно
+    так, как его применило надевание (`_worn_modifiers`): заточка, камни,
+    прочность (сломанный предмет ничего не даёт), тип слота (оружие не несёт
+    `damage`). Нужна для пересчёта производных статов с учётом снаряжения в
+    character-attributes-service. Каждый запрошенный id есть в ответе
+    (пустой словарь — ничего не надето).
+    """
+    character_ids = payload.character_ids
+    result = {str(cid): {} for cid in character_ids}
+    slots = (
+        db.query(models.EquipmentSlot)
+        .filter(
+            models.EquipmentSlot.character_id.in_(character_ids),
+            models.EquipmentSlot.item_id.isnot(None),
+        )
+        .all()
+    )
+    item_ids = {slot.item_id for slot in slots}
+    items = {
+        item.id: item
+        for item in db.query(models.Items).filter(models.Items.id.in_(item_ids)).all()
+    } if item_ids else {}
+
+    for slot in slots:
+        item = items.get(slot.item_id)
+        if item is None:
+            continue
+        gems = crud.get_socketed_gems(slot)
+        mods = crud.build_modifiers_dict(
+            item,
+            enhancement_bonuses=crud.get_enhancement_bonuses(slot),
+            gem_items=crud.load_gem_items(db, gems) if gems else [],
+            current_durability=slot.current_durability,
+            max_durability=item.max_durability,
+            slot_type=slot.slot_type,
+        )
+        totals = result[str(slot.character_id)]
+        for key, value in mods.items():
+            if value:
+                totals[key] = totals.get(key, 0) + value
+    return {"modifiers": result}
+
+
 # Registered BEFORE "/{character_id}/equipment" for readability; the paths have a
 # different number of segments, so the order is not load-bearing.
 @router.get(

@@ -171,7 +171,11 @@ export const fromWizardDraft = (draft: PassportWizardDraft): PassportData => ({
   stats: toStats(draft.stats),
   // Nothing has been assessed yet — no record, no reconstruction caption.
   statsIsSnapshot: null,
-  derived: draft.stats ? computeDerivedStats(draft.stats) : undefined,
+  // FEAT-196: once a class is picked, the level-1 growth is included so the
+  // preview equals what the backend creates.
+  derived: draft.stats
+    ? computeDerivedStats(draft.stats, { level: 1, classId: draft.gameClass?.id })
+    : undefined,
 
   starterKit: draft.kitPreview ?? undefined,
   // `null` = nothing granted yet, so the kit block reads «будет выдан».
@@ -233,7 +237,10 @@ export const fromCharacterPublic = (
     // undefined and the stat block is skipped entirely, so the fallback below
     // is never actually read.
     statsIsSnapshot: startingStats ? (character.starting_attributes_is_snapshot ?? false) : null,
-    derived: startingStats ? computeDerivedStats(startingStats) : undefined,
+    // Starting snapshot = the character at УР 1 with its class (FEAT-196).
+    derived: startingStats
+      ? computeDerivedStats(startingStats, { level: 1, classId: character.id_class })
+      : undefined,
 
     starterKit: buildKit(grantedKit, extras),
     // `false` = reconstructed for a pre-feature character (D18).

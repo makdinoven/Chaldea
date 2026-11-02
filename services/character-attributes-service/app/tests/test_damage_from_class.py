@@ -66,6 +66,8 @@ class _Character(database.Base):
     user_id = Column(Integer, nullable=True)
     name = Column(String(100), nullable=True)
     id_class = Column(Integer, nullable=True)
+    # FEAT-196: rebuild/create read characters.level (NULL -> no level bonus).
+    level = Column(Integer, nullable=True)
     # FEAT-164: settle_regen reads characters.is_npc (real column, character-service).
     is_npc = Column(Boolean, nullable=False, default=False, server_default="0")
     # Minimal columns needed by queries across test files (id_class for
@@ -181,9 +183,23 @@ class TestComputeDerivedStatsLeavesDamageAlone:
 # 2. Integration: the two paths that used to seed damage from the class
 # ===========================================================================
 
+def _rebuild(db, character_id):
+    """FEAT-195: the admin recalculate is now the gear-aware rebuild
+    (crud.rebuild_derived_stats) — it never touches `damage` at all."""
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).first()
+    if attr is None:
+        return None
+    crud.rebuild_derived_stats(db, attr, {})
+    db.commit()
+    db.refresh(attr)
+    return attr
+
+
 class TestRecalculateAttributesLeavesDamageAlone:
-    """`recalculate_attributes` reads characters.id_class — and must not use it
-    to seed damage."""
+    """The rebuild (FEAT-195) leaves `damage` alone — it must not seed it from
+    the class's main attribute."""
 
     @pytest.mark.parametrize("id_class, stats", [
         (1, {"strength": 42}),
@@ -193,24 +209,24 @@ class TestRecalculateAttributesLeavesDamageAlone:
     def test_damage_is_zero_after_recalculation(self, db_session, id_class, stats):
         _make_character(db_session, character_id=1, id_class=id_class)
         _make_attr(db_session, character_id=1, **stats)
-        result = crud.recalculate_attributes(db_session, 1)
+        result = _rebuild(db_session, 1)
         assert result is not None
         assert result.damage == 0
 
     def test_no_character_row_damage_zero(self, db_session):
         _make_attr(db_session, character_id=7, strength=50)
-        result = crud.recalculate_attributes(db_session, 7)
+        result = _rebuild(db_session, 7)
         assert result is not None
         assert result.damage == 0
 
     def test_raising_the_main_stat_does_not_raise_damage(self, db_session):
         _make_character(db_session, character_id=1, id_class=1)
         attr = _make_attr(db_session, character_id=1, strength=20)
-        crud.recalculate_attributes(db_session, 1)
+        _rebuild(db_session, 1)
 
         attr.strength = 80
         db_session.commit()
-        result = crud.recalculate_attributes(db_session, 1)
+        result = _rebuild(db_session, 1)
         assert result.strength == 80
         assert result.damage == 0
 

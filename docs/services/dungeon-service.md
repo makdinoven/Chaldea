@@ -366,7 +366,7 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 | `battle_started` | `battle_id`, `room_id`, `room_name`, `corridor_id`, `mob_character_ids`, `mob_names` |
 | `battle_ended` | `battle_id`, `party_won`, `aborted`, `casualties`, `boss_cleared`, `mana_core_revealed`, `room_event` |
 | `member_status_changed` | `character_id`, `name`, `status` (= `new_status`) |
-| `trap_triggered` | `passed`, `stat_check`, `difficulty`, `best_character`, `best_value`, `damage`, `damage_report`, `message` |
+| `trap_triggered` | `passed`, `stat_check`, `difficulty`, `best_character`, `best_value` (FEAT-195: эффективное значение, с которым сравнивали), `damage`, `damage_report`, `message` |
 | `loot_added` | `items[{item_id,item_name,quantity}]`, `item_name` (через запятую), `source`, `message` |
 | `event_result` | `outcome_type`, `message`, `loot_gained`, `damage_taken`, `effect_applied`, `teleported_to`, (`battle_id`, `mob_names`) |
 | `rest_started` / `rest_completed` | параметры отдыха |
@@ -406,3 +406,13 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 `gameplay._charge_gold`/`_pay_gold`); настоящий ledger проверяют `test_econ_contract.py` (общие сценарии
 `econ_contract_cases.py` через async-исполнитель) и `test_econ_dungeon.py` (отдых/воскрешение/торговец/событие,
 упавший коммит, сумма мира = 0).
+
+## Убывающая отдача статов в проверках (FEAT-195)
+
+`app/stat_caps.py` — байт-в-байт копия `character-attributes-service/app/stat_caps.py`
+(сверяет `scripts/check_econ_copies.sh`). `gameplay._check_stat_value`: если стат проверки —
+один из 10 основных атрибутов и его нет в `cumulative_stats`, сравнивается
+`floor(eff(значение))` (`eff(x) = x` до 100, `100 + (x−100)·0.5` до 200, `150 + (x−200)·0.25`
+выше; сила 250 → 162 против сложности 170 — провал). Счётчики `cumulative_stats` сравниваются
+как есть. Используется в `perform_stat_check` (ловушки, порталы, замки, тайники) и `_challenger`
+(мини-игры получают эффективное значение; `challenges.py` не менялся).

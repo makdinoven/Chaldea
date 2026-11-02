@@ -495,7 +495,12 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
                 logger.warning(f"Ошибка при назначении навыков для персонажа {new_character.id}: {e}")
 
         # 7) Создаем атрибуты через attributes-service
-        attributes_response = await crud.send_attributes_request(new_character.id, attributes)
+        # FEAT-196: level/class in the body — the row is only flushed here.
+        # A copy: `attributes` is also the `starting_attributes` snapshot.
+        attributes_response = await crud.send_attributes_request(
+            new_character.id,
+            {**attributes, "level": new_character.level, "id_class": new_character.id_class},
+        )
         if attributes_response:
             logger.info(f"Атрибуты созданы для персонажа {new_character.id}")
         else:
@@ -770,6 +775,10 @@ async def admin_update_character(
         db.rollback()
         logger.error(f"Balance adjustment failed for character {character_id}: {e}")
         raise HTTPException(status_code=400, detail="Не удалось изменить баланс")
+
+    # FEAT-196: resource maximums follow the level (up or down); non-fatal.
+    if character.level != old_level:
+        await asyncio.to_thread(crud.notify_level_changed, character_id)
 
     # Log admin changes to character log
     try:
@@ -2990,6 +2999,9 @@ async def admin_create_npc(
 
         # Create attributes via character-attributes-service
         attributes = crud.generate_attributes_for_subrace(db, data.id_subrace)
+        # FEAT-196: level/class in the body — the row is only flushed here.
+        attributes["level"] = new_npc.level
+        attributes["id_class"] = new_npc.id_class
         attributes_response = await crud.send_attributes_request(new_npc.id, attributes)
         if attributes_response:
             new_npc.id_attributes = attributes_response.get("id")
@@ -3089,6 +3101,8 @@ async def admin_update_npc(
 
     old_subrace_id = npc.id_subrace
     old_role = npc.npc_role
+    old_level = npc.level
+    old_class_id = npc.id_class
 
     # FEAT-181 C6: gold is not an ORM field here — a changed value needs economy:adjust and
     # becomes an admin_adjust posting in the same commit.
@@ -3137,6 +3151,10 @@ async def admin_update_npc(
                 await crud.send_recalculate_request(npc.id, token)
             except Exception as e:
                 logger.warning(f"Failed to update attributes for NPC {npc_id} after subrace change: {e}")
+
+    # FEAT-196: resource maximums follow the level and the class; non-fatal.
+    if npc.level != old_level or npc.id_class != old_class_id:
+        await asyncio.to_thread(crud.notify_level_changed, npc.id)
 
     return {"detail": "NPC обновлен", "id": npc.id}
 

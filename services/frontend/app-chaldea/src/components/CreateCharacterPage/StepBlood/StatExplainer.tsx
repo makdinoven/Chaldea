@@ -10,6 +10,8 @@ import {
   PASSPORT_STAT_ORDER,
 } from '../../CommonComponents/CharacterPassport';
 import type { StatPreset } from '../types';
+import { STAT_CAP_NOTE } from '../../../utils/statCaps';
+import { RESOURCE_GROWTH_NOTE } from '../../../utils/resourceGrowth';
 
 /**
  * FEAT-154 (task #17) — rules 5-7.
@@ -25,8 +27,10 @@ import type { StatPreset } from '../types';
  * for the same character.
  */
 
-/** What one point of each stat actually does. Mirrors
- *  `character-attributes-service/app/crud.py::compute_derived_stats`. */
+/** What one point of each stat actually does (below the soft cap). Mirrors
+ *  `character-attributes-service/app/crud.py::compute_derived_stats`; the
+ *  diminishing returns above 100 (FEAT-195) are explained once by
+ *  `STAT_CAP_NOTE` under the list. */
 const STAT_EFFECTS: Record<string, string> = {
   strength: 'Урон воина. +0.1% ко всем физическим сопротивлениям за очко и вклад в инициативу.',
   agility: 'Урон плута. +0.1% к уклонению за очко и наибольший вклад в инициативу.',
@@ -36,7 +40,7 @@ const STAT_EFFECTS: Record<string, string> = {
   mana: '+10 к запасу маны за очко.',
   energy: '+5 к запасу энергии за очко.',
   stamina: '+5 к запасу выносливости за очко.',
-  charisma: 'Пока не участвует в боевых расчётах — задел под социальные проверки.',
+  charisma: 'Скидка у торговцев: 0.1% за очко (с учётом убывающей отдачи).',
   luck: '+0.1% к шансу крита, к уклонению и к сопротивлению эффектам за очко.',
 };
 
@@ -214,6 +218,14 @@ const StatExplainer = ({ statPreset, subraceName, allPresets }: StatExplainerPro
         })}
       </div>
 
+      <p className="field-hint -mt-3">
+        <span className="font-medium">Убывающая отдача.</span> {STAT_CAP_NOTE}
+      </p>
+
+      <p className="field-hint -mt-3">
+        <span className="font-medium">Рост с уровнем.</span> {RESOURCE_GROWTH_NOTE}
+      </p>
+
       {/* Derived values — computed by the passport module, never re-derived here */}
       <div className="flex flex-col gap-2">
         <h5 className="gold-text text-base font-medium uppercase">
@@ -235,7 +247,8 @@ const StatExplainer = ({ statPreset, subraceName, allPresets }: StatExplainerPro
           ))}
         </div>
         <p className="field-hint">
-          Значения посчитаны без экипировки и навыков — только кровь.
+          Значения посчитаны без экипировки и навыков — только кровь. Класс с первого
+          же уровня добавит к запасам свою прибавку.
         </p>
       </div>
 

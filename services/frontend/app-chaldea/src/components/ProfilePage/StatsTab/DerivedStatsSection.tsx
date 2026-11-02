@@ -2,6 +2,8 @@ import { AlertTriangle } from 'lucide-react';
 import { CharacterAttributes, EquipmentSlotData } from '../../../redux/slices/profileSlice';
 import { STAT_LABELS, PERCENTAGE_STATS } from '../constants';
 import { computeDamageValues } from './damage';
+import { computeInitiative } from '../../CommonComponents/CharacterPassport/derived';
+import { STAT_CAP_SHORT } from '../../../utils/statCaps';
 
 /** Shown under a damage card when that hand's weapon is broken (FEAT-167). */
 const BROKEN_WEAPON_NOTE = 'Оружие сломано';
@@ -59,12 +61,14 @@ const DerivedStatsSection = ({ attributes, classId, equipment }: DerivedStatsSec
   // as 0 and all three cards simply show the unarmed (base) value.
   const damage = computeDamageValues(attributes, classId, equipment);
 
-  // Initiative (FEAT-143): agility ×1.0 + (strength + intelligence) ×0.75.
-  // Drives turn order in battle after the initiator.
-  const agility = Number(attributes.agility ?? 0);
-  const strength = Number(attributes.strength ?? 0);
-  const intelligence = Number(attributes.intelligence ?? 0);
-  const initiative = agility * 1.0 + (strength + intelligence) * 0.75;
+  // Initiative (FEAT-143, capped by FEAT-195): eff(agility) ×1.0 +
+  // (eff(strength) + eff(intelligence)) ×0.75 — the passport helper mirrors the
+  // battle engine. Drives turn order in battle after the initiator.
+  const initiative = computeInitiative({
+    agility: Number(attributes.agility ?? 0),
+    strength: Number(attributes.strength ?? 0),
+    intelligence: Number(attributes.intelligence ?? 0),
+  });
 
   const combatCards: {
     key: string;
@@ -84,7 +88,7 @@ const DerivedStatsSection = ({ attributes, classId, equipment }: DerivedStatsSec
       fullWidth: true,
       tooltip: damage.mainBroken
         ? 'Основной урон — оружие в основной руке сломано и не даёт бонусов, пока его не починят'
-        : 'Основной урон — база + оружие в основной руке',
+        : `Основной урон — база (основная характеристика класса + бонус урона) + оружие в основной руке. Характеристика: ${STAT_CAP_SHORT}`,
       note: damage.mainBroken ? BROKEN_WEAPON_NOTE : undefined,
     },
     {
@@ -110,7 +114,7 @@ const DerivedStatsSection = ({ attributes, classId, equipment }: DerivedStatsSec
       value: initiative,
       isPercent: false,
       highlighted: true,
-      tooltip: 'Ловкость ×1.0 + (Сила + Интеллект) ×0.75 — определяет очередь хода в бою',
+      tooltip: `Ловкость ×1.0 + (Сила + Интеллект) ×0.75 — определяет очередь хода в бою. Каждая характеристика: ${STAT_CAP_SHORT}`,
     },
     {
       key: 'dodge',

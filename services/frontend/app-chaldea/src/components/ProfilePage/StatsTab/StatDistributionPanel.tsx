@@ -7,6 +7,7 @@ import {
   UpgradeStatsPayload,
 } from '../../../redux/slices/profileSlice';
 import { UPGRADEABLE_STATS, STAT_LABELS } from '../constants';
+import { STAT_CAP_NOTE } from '../../../utils/statCaps';
 
 interface StatDistributionPanelProps {
   characterId: number;
@@ -87,9 +88,11 @@ const StatDistributionPanel = ({
           aria-hidden="true"
         />
       </div>
-      <span className="block text-site-blue text-sm font-medium mb-3">
+      <span className="block text-site-blue text-sm font-medium mb-1">
         Нераспределённые очки: {remaining}
       </span>
+      {/* FEAT-195: diminishing returns — explained where the points are spent */}
+      <p className="text-white/50 text-xs leading-snug mb-3">{STAT_CAP_NOTE}</p>
 
       <div className="flex flex-col gap-1">
         {UPGRADEABLE_STATS.map((stat) => {

@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from sqlalchemy.orm import Session
 import models, schemas
@@ -5,57 +6,102 @@ import regen
 import traceback
 from sqlalchemy import text as sa_text
 from constants import (
-    BASE_HEALTH, BASE_MANA, BASE_ENERGY, BASE_STAMINA,
     BASE_DODGE, BASE_CRIT, BASE_CRIT_DMG,
-    HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER,
-    STAT_BONUS_PER_POINT, ALL_RESISTANCE_FIELDS,
-    PHYSICAL_RESISTANCE_FIELDS, MAGICAL_RESISTANCE_FIELDS,
-    ENDURANCE_RES_EFFECTS_MULTIPLIER,
     CLASS_MAIN_ATTRIBUTE,
+    PRIMARY_DERIVED_EFFECTS, PRIMARY_ATTRIBUTE_KEYS, RESOURCE_STATS,
+    FLAT_MODIFIER_KEYS, DERIVED_FLAT_KEYS, LEVEL_RESOURCE_GROWTH,
 )
+from stat_caps import effective_stat, effective_delta
+
+# Stored float derived fields are rounded to this many decimals by the absolute
+# formulas (creation / rebuild). eff() of an integer is a multiple of 0.25, so
+# 0.1 * eff needs 3 decimals; 4 keeps a margin and stays readable.
+DERIVED_ROUND_DIGITS = 4
 
 
-def compute_derived_stats(attr, class_id=None):
+def level_resource_bonus(resource: str, class_id, level) -> int:
+    """FEAT-196: level * rate(class, resource). Unknown/None class or a
+    missing/non-positive level -> 0 (never raises)."""
+    rates = LEVEL_RESOURCE_GROWTH.get(class_id)
+    if not rates or level is None or level < 1:
+        return 0
+    return int(level) * rates.get(resource, 0)
+
+
+def resource_max(resource: str, value, level=None, class_id=None) -> int:
+    """FEAT-195/196: max_R = BASE_R + floor(m_R * eff(R)) + level * rate(class, R).
+    The level term is outside eff (not a stat, not capped)."""
+    base, multiplier = RESOURCE_STATS[resource]
+    return int(base + math.floor(multiplier * effective_stat(value or 0))
+               + level_resource_bonus(resource, class_id, level))
+
+
+def get_level_and_class(db: Session, character_id: int):
+    """FEAT-196: (level, id_class) from the shared `characters` table;
+    (None, None) when the row is missing. SQL errors propagate."""
+    row = db.execute(
+        sa_text("SELECT level, id_class FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+    if not row:
+        return None, None
+    return row[0], row[1]
+
+
+def sync_level_resources(attr, level, class_id) -> None:
+    """FEAT-196: set every max_R to its absolute target for (stats, level,
+    class). Growth moves current by the same amount (like investing points, no
+    extra top-up); a drop clamps current down to the new max. Idempotent.
+    No commit."""
+    for resource in RESOURCE_STATS:
+        target = resource_max(resource, getattr(attr, resource), level, class_id)
+        old_max = getattr(attr, f"max_{resource}") or 0
+        diff = target - old_max
+        if diff == 0:
+            continue
+        current = getattr(attr, f"current_{resource}") or 0
+        if diff > 0:
+            current += diff
+        current = max(0, min(current, target))
+        setattr(attr, f"max_{resource}", target)
+        setattr(attr, f"current_{resource}", current)
+
+
+def _derived_from_primaries(attr, flat: dict) -> dict:
+    """Absolute derived values: BASE + flat + sum(k * eff(primary total))."""
+    values = {field: float(flat.get(field, 0) or 0) for field in DERIVED_FLAT_KEYS}
+    values["dodge"] += BASE_DODGE
+    values["critical_hit_chance"] += BASE_CRIT
+    for primary, effects in PRIMARY_DERIVED_EFFECTS.items():
+        eff = effective_stat(getattr(attr, primary, 0) or 0)
+        for field, per_point in effects.items():
+            values[field] += per_point * eff
+    return {field: round(value, DERIVED_ROUND_DIGITS) for field, value in values.items()}
+
+
+def compute_derived_stats(attr, class_id=None, level=None):
     """
-    Compute all derived stats on a CharacterAttributes ORM object
-    from its base (upgradeable) stats. Sets resource maximums,
-    combat stats and resistances in-place, and clears the `damage`
-    bonus field.
+    Compute all derived stats on a FRESH CharacterAttributes ORM object
+    (creation: no gear, perks or food yet) from its base (upgradeable) stats.
+    Sets resource maximums, combat stats and resistances in-place, and clears
+    the `damage` bonus field. FEAT-195: every primary converts through
+    stat_caps.effective_stat (soft cap 100, hard cap 200).
 
-    :param class_id: kept for call-site compatibility; the class's main
-        attribute is applied by the damage formula itself, not here.
+    :param class_id, level: FEAT-196 per-level resource growth
+        (level * rate(class)); the class's main attribute itself is applied
+        by the damage formula, not here.
     """
-    b = STAT_BONUS_PER_POINT
+    # Resource stats; clamp current to not exceed new max
+    for resource in RESOURCE_STATS:
+        new_max = resource_max(resource, getattr(attr, resource), level, class_id)
+        setattr(attr, f"max_{resource}", new_max)
+        current = getattr(attr, f"current_{resource}")
+        setattr(attr, f"current_{resource}", new_max if current is None else min(current, new_max))
 
-    # Resource stats
-    attr.max_health = int(BASE_HEALTH + attr.health * HEALTH_MULTIPLIER)
-    attr.max_mana = int(BASE_MANA + attr.mana * MANA_MULTIPLIER)
-    attr.max_energy = int(BASE_ENERGY + attr.energy * ENERGY_MULTIPLIER)
-    attr.max_stamina = int(BASE_STAMINA + attr.stamina * STAMINA_MULTIPLIER)
-
-    # Clamp current to not exceed new max
-    attr.current_health = min(attr.current_health, attr.max_health)
-    attr.current_mana = min(attr.current_mana, attr.max_mana)
-    attr.current_energy = min(attr.current_energy, attr.max_energy)
-    attr.current_stamina = min(attr.current_stamina, attr.max_stamina)
-
-    # Combat stats
-    attr.dodge = round(BASE_DODGE + attr.agility * b + attr.luck * b, 2)
-    attr.critical_hit_chance = round(BASE_CRIT + attr.luck * b, 2)
+    # Combat stats and resistances (no flat sources on a fresh row)
+    for field, value in _derived_from_primaries(attr, {}).items():
+        setattr(attr, field, value)
     attr.critical_damage = BASE_CRIT_DMG  # Only modified by items
-
-    # Physical resistances (boosted by Strength)
-    for field in PHYSICAL_RESISTANCE_FIELDS:
-        setattr(attr, field, round(attr.strength * b, 2))
-
-    # Magical resistances (boosted by Intelligence)
-    for field in MAGICAL_RESISTANCE_FIELDS:
-        setattr(attr, field, round(attr.intelligence * b, 2))
-
-    # res_effects: endurance * 0.2 + luck * 0.1
-    attr.res_effects = round(
-        attr.endurance * ENDURANCE_RES_EFFECTS_MULTIPLIER + attr.luck * b, 2
-    )
 
     # `damage` is a PURE BONUS field: equipment, sharpening and perks only.
     #
@@ -66,6 +112,110 @@ def compute_derived_stats(attr, class_id=None):
     # bought two points of damage. One strength = one damage, so the attribute
     # is counted once, on the formula's side, and nothing seeds it here.
     attr.damage = 0
+
+
+def apply_attribute_modifiers(attr, modifiers: dict) -> None:
+    """FEAT-195: the ONE way to add modifiers to an already-locked
+    CharacterAttributes row (stat upgrade, equipment, perks, food).
+
+    - Resources (health/mana/energy/stamina): value += delta (clamped >= 0);
+      max/current move by floor(m*eff(new)) - floor(m*eff(old)); current is
+      clamped to [0, max].
+    - Primaries: value += delta; every derived field of that primary gets
+      k * (eff(new) - eff(old)). eff is a function of the TOTAL, so the deltas
+      telescope: equip -> anything -> unequip returns exactly to eff of the rest.
+    - Everything else in FLAT_MODIFIER_KEYS: plain add.
+    No commit/flush.
+    """
+    if not modifiers:
+        return
+
+    for resource in RESOURCE_STATS:
+        delta = modifiers.get(resource, 0)
+        if not delta:
+            continue
+        old_val = getattr(attr, resource) or 0
+        new_val = old_val + delta
+        if new_val < 0:
+            new_val = 0
+        diff = resource_max(resource, new_val) - resource_max(resource, old_val)
+        new_max = (getattr(attr, f"max_{resource}") or 0) + diff
+        new_current = (getattr(attr, f"current_{resource}") or 0) + diff
+        new_current = max(0, min(new_current, new_max))
+        setattr(attr, resource, new_val)
+        setattr(attr, f"max_{resource}", new_max)
+        setattr(attr, f"current_{resource}", new_current)
+
+    for key in PRIMARY_ATTRIBUTE_KEYS:
+        delta = modifiers.get(key, 0)
+        if not delta:
+            continue
+        old_val = getattr(attr, key) or 0
+        new_val = old_val + delta
+        setattr(attr, key, new_val)
+        effects = PRIMARY_DERIVED_EFFECTS.get(key)
+        if effects:
+            worth = effective_delta(old_val, new_val)
+            for field, per_point in effects.items():
+                setattr(attr, field, (getattr(attr, field) or 0) + per_point * worth)
+
+    for key in FLAT_MODIFIER_KEYS:
+        value = modifiers.get(key, 0)
+        if value:
+            setattr(attr, key, (getattr(attr, key) or 0) + value)
+
+
+def _sum_derived_flats(sources) -> dict:
+    """Sum the derived-field keys (res_*, dodge, crit chance) of modifier dicts."""
+    flat = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in DERIVED_FLAT_KEYS:
+            value = source.get(key)
+            if not value:
+                continue
+            try:
+                flat[key] = flat.get(key, 0.0) + float(value)
+            except (TypeError, ValueError):
+                continue
+    return flat
+
+
+def rebuild_derived_stats(db: Session, attr, equipment_mods: dict) -> None:
+    """FEAT-195: absolute, idempotent, gear/perk/food-aware rebuild of the
+    stored derived stats.
+
+    The caller has locked the row and called regen.settle_regen (expired food
+    is already removed). Derived = BASE + flats (equipment + perks + active
+    food) + k*eff(primary total). Resource max = BASE + floor(m*eff(R))
+    + level*rate(class) (FEAT-196, level/class read from `characters`),
+    current is only clamped down (no top-up).
+    Untouched: the 10 primaries (already totals), damage, critical_damage,
+    vul_*, experience, regen fields. No commit.
+    """
+    sources = [equipment_mods or {}]
+    perks = (
+        db.query(models.Perk)
+        .join(models.CharacterPerk, models.CharacterPerk.perk_id == models.Perk.id)
+        .filter(models.CharacterPerk.character_id == attr.character_id)
+        .all()
+    )
+    for perk in perks:
+        sources.append(build_perk_modifiers_dict(perk))
+    satiety = regen.get_satiety(db, attr.character_id)
+    if satiety is not None:
+        sources.append(satiety.modifiers or {})
+
+    for field, value in _derived_from_primaries(attr, _sum_derived_flats(sources)).items():
+        setattr(attr, field, value)
+
+    level, class_id = get_level_and_class(db, attr.character_id)
+    for resource in RESOURCE_STATS:
+        new_max = resource_max(resource, getattr(attr, resource), level, class_id)
+        setattr(attr, f"max_{resource}", new_max)
+        current = getattr(attr, f"current_{resource}") or 0
+        setattr(attr, f"current_{resource}", max(0, min(current, new_max)))
 
 
 # Функция для создания атрибутов персонажа
@@ -91,21 +241,22 @@ def create_character_attributes(db: Session, attributes: schemas.CharacterAttrib
         luck=attributes.luck,
     )
 
-    # Set current resources to max before compute (so clamp works correctly)
-    db_attributes.current_health = int(BASE_HEALTH + attributes.health * HEALTH_MULTIPLIER)
-    db_attributes.current_mana = int(BASE_MANA + attributes.mana * MANA_MULTIPLIER)
-    db_attributes.current_energy = int(BASE_ENERGY + attributes.energy * ENERGY_MULTIPLIER)
-    db_attributes.current_stamina = int(BASE_STAMINA + attributes.stamina * STAMINA_MULTIPLIER)
+    # FEAT-196: level/class for the per-level resource growth. The caller's
+    # `characters` row is usually only flushed (invisible to this connection),
+    # so the body wins; the DB is a fallback for old callers; else no bonus.
+    level, class_id = attributes.level, attributes.id_class
+    if level is None or class_id is None:
+        db_level, db_class = get_level_and_class(db, attributes.character_id)
+        level = db_level if level is None else level
+        class_id = db_class if class_id is None else class_id
 
-    # Query character's class for damage computation
-    row = db.execute(
-        sa_text("SELECT id_class FROM characters WHERE id = :cid"),
-        {"cid": attributes.character_id},
-    ).fetchone()
-    class_id = row[0] if row else None
+    # Set current resources to max before compute (so clamp works correctly)
+    for resource in RESOURCE_STATS:
+        setattr(db_attributes, f"current_{resource}",
+                resource_max(resource, getattr(attributes, resource), level, class_id))
 
     # Compute all derived stats (resources, combat, resistances, damage)
-    compute_derived_stats(db_attributes, class_id=class_id)
+    compute_derived_stats(db_attributes, class_id=class_id, level=level)
 
     # FEAT-164: start the passive-regen clock at creation.
     db_attributes.regen_anchor_at = datetime.utcnow()
@@ -186,33 +337,6 @@ def refund_stamina(db: Session, character_id: int, amount: int):
         regen.reconcile_perks_after_expiry(db, character_id)
     db.refresh(attr)
     return attr, refunded
-
-
-def recalculate_attributes(db: Session, character_id: int):
-    """
-    Пересчитывает все производные статы из базовых значений (10 прокачиваемых статов).
-    Не учитывает модификаторы экипировки — предназначен для админского использования
-    при изменении формул.
-    """
-    attr = db.query(models.CharacterAttributes).filter(
-        models.CharacterAttributes.character_id == character_id
-    ).with_for_update().first()
-
-    if not attr:
-        return None
-
-    # Query character's class for damage computation
-    row = db.execute(
-        sa_text("SELECT id_class FROM characters WHERE id = :cid"),
-        {"cid": character_id},
-    ).fetchone()
-    class_id = row[0] if row else None
-
-    compute_derived_stats(attr, class_id=class_id)
-
-    db.commit()
-    db.refresh(attr)
-    return attr
 
 
 # --- Cumulative Stats ---
@@ -536,19 +660,15 @@ def build_perk_modifiers_dict(perk, negative: bool = False) -> dict:
     return result
 
 
-def _apply_modifiers_internal(db: Session, character_id: int, modifiers: dict, propagate_derived: bool = True):
+def _apply_modifiers_internal(db: Session, character_id: int, modifiers: dict):
     """
     Apply modifiers to character attributes. Internal version that works
-    directly with the DB session instead of making an HTTP call.
-    Same logic as the apply_modifiers endpoint in main.py.
-
-    propagate_derived: when True (default) a primary-attribute bonus also grants
-    its derived effects (resists / dodge / crit / res_effects). Set False to add
-    ONLY the raw values — used by the migration to undo legacy perk bonuses that
-    were applied before derived propagation existed.
+    directly with the DB session instead of making an HTTP call — same logic
+    as the apply_modifiers endpoint in main.py (both go through
+    apply_attribute_modifiers, FEAT-195): primary-attribute bonuses always
+    carry their derived effects (resists / dodge / crit / res_effects) via
+    eff(new) - eff(old), so a negated dict reverses them exactly.
     """
-    from constants import HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER
-
     attr = db.query(models.CharacterAttributes).filter(
         models.CharacterAttributes.character_id == character_id
     ).with_for_update().first()
@@ -556,79 +676,7 @@ def _apply_modifiers_internal(db: Session, character_id: int, modifiers: dict, p
     if not attr:
         return False
 
-    # Resource stats with max/current recalculation
-    for resource, multiplier in [
-        ("health", HEALTH_MULTIPLIER),
-        ("mana", MANA_MULTIPLIER),
-        ("energy", ENERGY_MULTIPLIER),
-        ("stamina", STAMINA_MULTIPLIER),
-    ]:
-        delta = modifiers.get(resource, 0)
-        if delta != 0:
-            old_val = getattr(attr, resource)
-            new_val = old_val + delta
-            if new_val < 0:
-                new_val = 0
-
-            diff = (new_val - old_val) * multiplier
-            old_max = getattr(attr, f"max_{resource}")
-            new_max = old_max + diff
-
-            new_current = getattr(attr, f"current_{resource}") + diff
-            if new_current < 0:
-                new_current = 0
-            if new_current > new_max:
-                new_current = new_max
-
-            setattr(attr, resource, new_val)
-            setattr(attr, f"max_{resource}", new_max)
-            setattr(attr, f"current_{resource}", new_current)
-
-    # Simple additive keys
-    simple_keys = [
-        "strength", "agility", "intelligence", "endurance", "charisma", "luck",
-        "damage", "dodge", "res_effects",
-        "res_physical", "res_catting", "res_crushing", "res_piercing",
-        "res_magic", "res_fire", "res_ice", "res_watering",
-        "res_electricity", "res_wind", "res_sainting", "res_damning",
-        "critical_hit_chance", "critical_damage",
-        "vul_effects", "vul_physical", "vul_catting", "vul_crushing", "vul_piercing",
-        "vul_magic", "vul_fire", "vul_ice", "vul_watering",
-        "vul_electricity", "vul_sainting", "vul_wind", "vul_damning",
-    ]
-
-    for key in simple_keys:
-        if key in modifiers and modifiers[key] != 0:
-            old_val = getattr(attr, key, 0)
-            setattr(attr, key, old_val + modifiers[key])
-
-    # Propagate the DERIVED effects of primary-attribute bonuses, exactly like
-    # the stat-upgrade endpoint — so a perk granting +N strength also grants the
-    # physical resistances (etc.) those points normally give, not just the raw
-    # stat. Modifier signs carry through, so perk revoke (negative modifiers)
-    # reverses these cleanly too.
-    if propagate_derived:
-        b = STAT_BONUS_PER_POINT
-        str_delta = modifiers.get("strength", 0)
-        if str_delta:
-            for field in PHYSICAL_RESISTANCE_FIELDS:
-                setattr(attr, field, getattr(attr, field) + str_delta * b)
-        int_delta = modifiers.get("intelligence", 0)
-        if int_delta:
-            for field in MAGICAL_RESISTANCE_FIELDS:
-                setattr(attr, field, getattr(attr, field) + int_delta * b)
-        agi_delta = modifiers.get("agility", 0)
-        if agi_delta:
-            attr.dodge += agi_delta * b
-        end_delta = modifiers.get("endurance", 0)
-        if end_delta:
-            attr.res_effects += end_delta * ENDURANCE_RES_EFFECTS_MULTIPLIER
-        luck_delta = modifiers.get("luck", 0)
-        if luck_delta:
-            attr.dodge += luck_delta * b
-            attr.critical_hit_chance += luck_delta * b
-            attr.res_effects += luck_delta * b
-
+    apply_attribute_modifiers(attr, modifiers)
     db.flush()
     return True
 
