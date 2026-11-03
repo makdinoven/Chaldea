@@ -14,14 +14,18 @@ import GeneralTab from './tabs/GeneralTab';
 import AttributesTab from './tabs/AttributesTab';
 import InventoryTab from './tabs/InventoryTab';
 import SkillsTab from './tabs/SkillsTab';
+import ReputationTab from './tabs/ReputationTab';
+import { selectPermissions } from '../../../redux/slices/userSlice';
+import { hasPermission } from '../../../utils/permissions';
 
-type TabKey = 'general' | 'attributes' | 'inventory' | 'skills';
+type TabKey = 'general' | 'attributes' | 'inventory' | 'skills' | 'reputation';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'general', label: 'Общее' },
   { key: 'attributes', label: 'Атрибуты' },
   { key: 'inventory', label: 'Инвентарь' },
   { key: 'skills', label: 'Навыки' },
+  { key: 'reputation', label: 'Репутация' },
 ];
 
 const AdminCharacterDetailPage = () => {
@@ -30,6 +34,9 @@ const AdminCharacterDetailPage = () => {
   const characters = useAppSelector(selectAdminCharacters);
   const selectedCharacter = useAppSelector(selectSelectedCharacter);
   const [activeTab, setActiveTab] = useState<TabKey>('general');
+  // FEAT-197: the reputation tab needs reputation:read (moderators and admins).
+  const canReadReputation = hasPermission(useAppSelector(selectPermissions), 'reputation:read');
+  const visibleTabs = TABS.filter((t) => t.key !== 'reputation' || canReadReputation);
   const charId = Number(characterId);
 
   // Load character data
@@ -92,12 +99,12 @@ const AdminCharacterDetailPage = () => {
       </h1>
 
       {/* Tab navigation */}
-      <nav className="flex gap-6 mb-8 border-b border-white/10 pb-0">
-        {TABS.map((tab) => (
+      <nav className="flex gap-4 sm:gap-6 mb-8 border-b border-white/10 pb-0 overflow-x-auto gold-scrollbar">
+        {visibleTabs.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`nav-link text-base pb-3 relative transition-colors duration-200 ${
+            className={`nav-link text-base pb-3 relative whitespace-nowrap transition-colors duration-200 ${
               activeTab === tab.key ? 'text-site-blue' : ''
             }`}
           >
@@ -126,6 +133,9 @@ const AdminCharacterDetailPage = () => {
         )}
         {activeTab === 'skills' && (
           <SkillsTab key="skills" characterId={charId} />
+        )}
+        {activeTab === 'reputation' && canReadReputation && (
+          <ReputationTab key="reputation" characterId={charId} />
         )}
       </AnimatePresence>
     </div>

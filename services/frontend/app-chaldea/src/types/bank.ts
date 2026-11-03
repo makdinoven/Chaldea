@@ -87,6 +87,8 @@ export interface BankView {
   max_loan_now: number;
   loan_refusal: string | null;
   bank_regions: BankRegion[];
+  /** FEAT-197: the banker refuses every action with this text (NPC reputation gate) */
+  reputation_lock?: string | null;
 }
 
 export interface BankActionResult {

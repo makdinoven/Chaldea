@@ -91,6 +91,16 @@ user-service/
 | last_used_at | DateTime | Последнее использование (обновляется не чаще раза в 5 минут; refresh — всегда) |
 | user_agent | String(255), NULL | Заголовок User-Agent при входе (обрезается) |
 
+## Разрешения RBAC (миграции)
+
+Разрешения модулей регистрируются Alembic-миграциями (идемпотентный SELECT-then-INSERT в `permissions` и `role_permissions`). Админ (role_id 4) получает **все** строки `permissions` автоматически (`crud.get_effective_permissions`), явная выдача ему не нужна.
+
+| Миграция | Разрешения | Модератор (3) | Редактор (2) |
+|---|---|---|---|
+| `0033_reputation_permissions` (FEAT-197) | `reputation:read` (просмотр репутации и журнала), `reputation:manage` (ручное изменение с причиной), `reputation:settings` (ступени, веса действий, роли NPC) | `read`, `manage` | — |
+
+`reputation:settings` — только админ (решение A3). Потребитель — админ-API репутации character-service (`/characters/admin/reputation/*`). Тест: явная секция репутации в `tests/test_rbac_permissions.py` (счётчики обновлены вручную, см. CLAUDE.md §10.13).
+
 ## Приватность (миграция 0030)
 
 **Правило аудитории** (`main._audience_allows`, одно на все настройки): владелец — всегда; `all` — любой, включая гостя; `friends` — у зрителя есть дружба `accepted` с владельцем (в любом направлении); `nobody` — только владелец. Обхода для админа/модератора **нет**. Неизвестное значение трактуется как `nobody` (fail closed).

@@ -93,6 +93,18 @@ def _shop_item(buy_price=20):
 # ===========================================================================
 # 1. NPC shop — the reported hole
 # ===========================================================================
+def _legacy_market():
+    """FEAT-197: the personal shop view reads the merchant's region for the reputation price; a legacy
+    merchant without a region = no reputation effect (the pre-FEAT-197 price)."""
+    import crud
+    import econ_core
+    return crud.MerchantMarket(
+        npc_id=5, living=False, reason=econ_core.MERCHANT_REASON_NOT_SIMULATED, location_id=None,
+        region_id=None, tax_rate=None, mults={}, group_base={}, bid_share=econ_core.DEFAULT_MERCHANT_BID_SHARE,
+    )
+
+
+@patch("crud.merchant_market", new=AsyncMock(side_effect=lambda *a, **k: _legacy_market()))
 @patch("main._fetch_charisma", new_callable=AsyncMock, return_value=60)
 @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
 class TestNpcShopGate:

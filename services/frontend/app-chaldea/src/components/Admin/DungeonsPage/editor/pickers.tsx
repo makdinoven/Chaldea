@@ -15,14 +15,16 @@ interface Option {
   sub?: string;
 }
 
-type Kind = 'item' | 'mob' | 'location';
+type Kind = 'item' | 'mob' | 'location' | 'npc' | 'quest';
 
 const TIER_LABELS: Record<string, string> = { normal: 'обычный', elite: 'элитный', boss: 'босс' };
 const SEARCH_LIMIT = 20;
 const BULK_MAX = 100;
 
 // Names already looked up, for every picker on the page.
-const known: Record<Kind, Map<number, Option>> = { item: new Map(), mob: new Map(), location: new Map() };
+const known: Record<Kind, Map<number, Option>> = {
+  item: new Map(), mob: new Map(), location: new Map(), npc: new Map(), quest: new Map(),
+};
 const remember = (kind: Kind, options: Option[]) => options.forEach((o) => known[kind].set(o.id, o));
 
 interface ItemCard {
@@ -45,6 +47,40 @@ const mobOption = (m: MobRow): Option => ({
   label: m.name,
   sub: `#${m.id} · ур. ${m.level} · ${TIER_LABELS[m.tier] ?? m.tier}`,
 });
+
+interface NpcRow {
+  id: number;
+  name: string;
+  level: number;
+  npc_role?: string | null;
+}
+interface QuestRow {
+  id: number;
+  title: string;
+  npc_id: number;
+}
+
+const npcOption = (n: NpcRow): Option => ({
+  id: n.id,
+  label: n.name,
+  sub: [`#${n.id}`, `ур. ${n.level}`, n.npc_role].filter(Boolean).join(' · '),
+});
+const questOption = (q: QuestRow): Option => ({ id: q.id, label: q.title, sub: `#${q.id} · НПС #${q.npc_id}` });
+
+// The admin quest list has no search: it is loaded once and filtered here.
+let questCache: Promise<Option[]> | null = null;
+const allQuests = (): Promise<Option[]> => {
+  if (!questCache) {
+    questCache = axios
+      .get<QuestRow[]>('/locations/admin/quests')
+      .then(({ data }) => (Array.isArray(data) ? data : []).map(questOption))
+      .catch((e) => {
+        questCache = null;
+        throw e;
+      });
+  }
+  return questCache;
+};
 
 const isId = (q: string) => /^\d+$/.test(q.trim());
 
@@ -75,6 +111,23 @@ const search: Record<Kind, (q: string) => Promise<Option[]>> = {
       label: l.name,
       sub: [`#${l.id}`, l.district_name, l.region_name, l.country_name].filter(Boolean).join(' · '),
     })),
+  npc: async (q) => {
+    const byName = axios
+      .get('/characters/admin/npcs', { params: { q, page: 1, page_size: SEARCH_LIMIT } })
+      .then(({ data }) => ((data.items ?? []) as NpcRow[]).map(npcOption));
+    const byId = isId(q)
+      ? axios.get<NpcRow>(`/characters/admin/npcs/${q.trim()}`).then(({ data }) => [npcOption(data)]).catch(() => [])
+      : Promise.resolve([] as Option[]);
+    const [ids, names] = await Promise.all([byId, byName]);
+    return [...ids, ...names.filter((o) => !ids.some((i) => i.id === o.id))];
+  },
+  quest: async (q) => {
+    questCache = null; // a search always sees quests created since the page opened
+    const needle = q.trim().toLowerCase();
+    return (await allQuests())
+      .filter((o) => String(o.id) === needle || o.label.toLowerCase().includes(needle))
+      .slice(0, SEARCH_LIMIT);
+  },
 };
 
 /** Names for ids picked earlier (saved configs come with ids only). */
@@ -96,6 +149,11 @@ const lookup: Record<Kind, (ids: number[]) => Promise<Option[]>> = {
   location: async (ids) =>
     (await Promise.all(ids.map((id) => search.location(String(id)).catch(() => [] as Option[])))).flat()
       .filter((o) => ids.includes(o.id)),
+  npc: async (ids) =>
+    (await Promise.all(
+      ids.map((id) => axios.get<NpcRow>(`/characters/admin/npcs/${id}`).then(({ data }) => npcOption(data)).catch(() => null)),
+    )).filter((o): o is Option => o !== null),
+  quest: async (ids) => (await allQuests()).filter((o) => ids.includes(o.id)),
 };
 
 /** The names of these ids; unknown ones read "#id" until (or unless) they are found. */
@@ -127,6 +185,8 @@ const PLACEHOLDERS: Record<Kind, string> = {
   item: 'Предмет: название или id',
   mob: 'Моб: название или id',
   location: 'Локация: название или id',
+  npc: 'НПС: имя или id',
+  quest: 'Квест: название или id',
 };
 
 /** A search box with a list of what it found; picking one hands its id over. */

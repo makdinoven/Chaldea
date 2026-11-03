@@ -77,6 +77,53 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "real_activity_lock: run the real FEAT-175 activity-lock query",
     )
+    config.addinivalue_line(
+        "markers", "real_reputation: run the real FEAT-197 reputation reads (tables from reputation_sqlite.py)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-197 region reputation. The reputation tables and characters.reputation_min_tier
+# belong to character-service; mocked DBs and hand-written table mirrors here don't
+# carry them. Default: every character is «Скиталец» everywhere (value 0, default
+# tiers, no NPC gate, no region for the quest reputation call) — the pre-FEAT-197
+# behaviour. Tests of the real reads opt out with @pytest.mark.real_reputation and
+# create the tables with tests/reputation_sqlite.py.
+# ---------------------------------------------------------------------------
+import reputation_core as _reputation_core  # noqa: E402
+import reputation_read as _reputation_read  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reputation_default_neutral(request, monkeypatch):
+    if request.node.get_closest_marker("real_reputation"):
+        return
+
+    async def _settings(session):
+        return _reputation_core.DEFAULT_SETTINGS
+
+    async def _tiers(session):
+        return list(_reputation_core.DEFAULT_TIERS)
+
+    async def _value(session, character_id, region_id, *, now=None):
+        return 0
+
+    async def _npc_gate(session, npc_id):
+        return None, None
+
+    async def _region(session, location_id):
+        return None
+
+    monkeypatch.setattr(_reputation_read, "load_settings", _settings)
+    monkeypatch.setattr(_reputation_read, "load_tiers", _tiers)
+    monkeypatch.setattr(_reputation_read, "effective_value", _value)
+    monkeypatch.setattr(_reputation_read, "npc_gate", _npc_gate)
+    monkeypatch.setattr(_reputation_read, "location_region", _region)
+
+    async def _quest_region(session, npc_id, character_id):
+        return None
+
+    monkeypatch.setattr(_reputation_read, "quest_reward_region", _quest_region)
 
 
 @pytest.fixture(autouse=True)

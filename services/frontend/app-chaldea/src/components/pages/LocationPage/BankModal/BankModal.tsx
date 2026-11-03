@@ -99,6 +99,9 @@ const BankModal = ({ npcId, npcName, npcAvatar, onClose }: BankModalProps) => {
     </div>
   );
 
+  /** FEAT-197: a reputation-locked banker refuses every action — the forms stay visible but inert. */
+  const actionsBlocked = pending || Boolean(view?.reputation_lock);
+
   return (
     <ModalShell open onClose={onClose} title={npcName} size="lg" icon={icon} dismissible={!pending}>
       {loading && !view ? (
@@ -134,6 +137,12 @@ const BankModal = ({ npcId, npcName, npcAvatar, onClose }: BankModalProps) => {
             </div>
           </div>
 
+          {view.reputation_lock && (
+            <div role="alert" className="rounded-card border border-site-red/30 bg-site-red/[0.05] px-3 py-2 text-xs sm:text-sm text-site-red break-words">
+              {view.reputation_lock}
+            </div>
+          )}
+
           {!view.bank_enabled && (
             <div className="rounded-card border border-white/15 bg-white/[0.03] px-3 py-2 text-xs sm:text-sm text-white/70">
               <span className="text-gold font-medium">Банк закрыт.</span> Новые вклады и займы не принимаются,
@@ -158,13 +167,13 @@ const BankModal = ({ npcId, npcName, npcAvatar, onClose }: BankModalProps) => {
           </div>
 
           {characterId && tab === 'deposits' && (
-            <BankDepositsTab view={view} characterId={characterId} npcId={npcId} pending={pending} run={run} />
+            <BankDepositsTab view={view} characterId={characterId} npcId={npcId} pending={actionsBlocked} run={run} />
           )}
           {characterId && tab === 'loan' && (
-            <BankLoanTab view={view} characterId={characterId} npcId={npcId} pending={pending} run={run} />
+            <BankLoanTab view={view} characterId={characterId} npcId={npcId} pending={actionsBlocked} run={run} />
           )}
           {characterId && tab === 'transfers' && (
-            <BankTransfersTab view={view} characterId={characterId} npcId={npcId} pending={pending} run={run} />
+            <BankTransfersTab view={view} characterId={characterId} npcId={npcId} pending={actionsBlocked} run={run} />
           )}
         </div>
       )}

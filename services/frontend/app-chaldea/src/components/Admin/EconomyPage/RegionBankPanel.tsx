@@ -9,6 +9,7 @@ import ConfirmDialog from '../../pages/LocationPage/ConfirmDialog';
 import type { EconBankAdminItem } from '../../../types/economy';
 import { BankBadge } from './regionBits';
 import { FieldHint } from './ParamHint';
+import BankLoanTierField from './BankLoanTierField';
 
 const HTTP_NOT_FOUND = 404;
 
@@ -162,6 +163,8 @@ const RegionBankPanel = ({ regionId, regionName, canEdit, onChanged }: RegionBan
               </div>
             </dl>
           )}
+
+          {bank && <BankLoanTierField bank={bank} canEdit={canEdit} onSaved={setBank} />}
 
           {bank && enabled && bankersCount(bank) === 0 && (
             <p className="text-gold text-xs">В регионе нет живого банкира — игроки не смогут открыть банк.</p>

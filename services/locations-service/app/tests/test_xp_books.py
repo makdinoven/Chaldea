@@ -90,6 +90,9 @@ class _FakeQuest:
         self.reward_exp = reward_exp
         self.reward_currency = reward_currency
         self.reward_items = reward_items or []
+        # FEAT-197 Quest columns (the complete route reads them for the reputation call)
+        self.npc_id = None
+        self.reputation_reward = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

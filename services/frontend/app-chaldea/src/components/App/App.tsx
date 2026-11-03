@@ -39,6 +39,7 @@ import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
 import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 import EconomyPage from "../Admin/EconomyPage/EconomyPage";
+import ReputationPage from "../Admin/ReputationPage/ReputationPage";
 import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
@@ -190,6 +191,11 @@ const App = () => {
             <Route path="admin/economy" element={
               <ProtectedRoute requiredPermission="economy:read">
                 <EconomyPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/reputation" element={
+              <ProtectedRoute requiredPermission="reputation:read">
+                <ReputationPage />
               </ProtectedRoute>
             } />
             <Route path="admin/floating-structures" element={

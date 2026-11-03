@@ -437,6 +437,9 @@ def minter_context(db: Session, npc_id: int, character_id: int, user_id: int, *,
     """Steps 1–4 + 6: the context and the country's mint status. 409 MSG_NO_MINT when the country has a capital
     and it is not the minter's region (a country without a capital answers via the closed reason)."""
     ctx = with_region(db, resolve_minter(db, npc_id, character_id, user_id, write=write))
+    if write:
+        import reputation_crud  # local: reputation_crud -> economy_crud stays out of this module's import chain
+        reputation_crud.require_npc_tier(db, ctx.character_id, ctx.npc_id, ctx.region_id)   # FEAT-197 NPC gate
     status = mint_status(db, ctx.country_id)
     if status.capital.region_id is not None and status.capital.region_id != ctx.region_id:
         raise EconomyApiError(409, MSG_NO_MINT)
@@ -487,6 +490,11 @@ def _wallet(db: Session, character_id: int) -> int:
                          {"id": int(character_id)}).scalar())
 
 
+def _reputation_lock(db: Session, ctx: MinterContext) -> Optional[str]:
+    import reputation_crud
+    return reputation_crud.npc_gate_failure(db, ctx.character_id, ctx.npc_id, ctx.region_id)
+
+
 def build_view(db: Session, ctx: MinterContext, status: Optional[MintStatus] = None) -> dict:
     """``MintView`` (read-only)."""
     status = status or mint_status(db, ctx.country_id)
@@ -518,6 +526,7 @@ def build_view(db: Session, ctx: MinterContext, status: Optional[MintStatus] = N
             "max_by_limit": remaining // int(row.marks_per_item) if int(row.marks_per_item) > 0 else 0,
         } for row, market in items],
         "wallet": _wallet(db, ctx.character_id),
+        "reputation_lock": _reputation_lock(db, ctx),
     }
 
 

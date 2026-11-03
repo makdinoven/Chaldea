@@ -17,6 +17,8 @@ import schemas
 import crud
 import econ_core
 import econ_ledger
+import reputation_core
+import reputation_read
 import visibility
 import activity_lock
 from database import get_db
@@ -852,6 +854,8 @@ async def _require_npc_gate(session, character_id: int, npc_id: int) -> None:
             status_code=403,
             detail="Нужен пост-намерение «Диалог с НПС» с этим персонажем",
         )
+    # FEAT-197 D8: the NPC's reputation tier gate (region of the NPC) — 403 «Нужна репутация: X»
+    await reputation_read.require_npc_tier(session, character_id, npc_id)
 
 
 @router.post("/posts/", response_model=schemas.PostResponse)
@@ -2554,6 +2558,8 @@ async def get_npc_dialogue(
                 status_code=403,
                 detail="Нужен пост-намерение «Диалог с НПС» с этим персонажем, чтобы заговорить",
             )
+        # FEAT-197 D8: the NPC's reputation tier gate
+        await reputation_read.require_npc_tier(session, character_id, npc_id)
     return node_data
 
 
@@ -2816,14 +2822,22 @@ async def get_npc_shop(
     items = await crud.get_npc_shop_items_player(session, npc_id)
 
     if character_id is not None:
+        # FEAT-197: reputation of the merchant's region — 409 for a refused tier (Вне закона), else a
+        # discount / markup on top of charisma (econ_core.reputation_ask) with the reasons.
+        terms = reputation_read.NEUTRAL_TERMS
+        if items:
+            market = await crud.merchant_market(session, npc_id)
+            terms = await reputation_read.trade_terms(session, character_id, market.region_id)
+            reputation_read.require_trade(terms)
         charisma = await _fetch_charisma(character_id)
         discount_pct = econ_core.charisma_discount_pct(charisma)
+        reasons, _net = reputation_read.ask_reasons(discount_pct, terms)
         result = []
         for item in items:
             fields = _shop_item_fields(item)
-            discounted = econ_core.discounted_ask(fields["buy_price"], discount_pct)
+            discounted = econ_core.reputation_ask(fields["buy_price"], discount_pct, terms.price_pct)
             result.append(
-                schemas.NpcShopItemRead(**fields, discounted_buy_price=discounted)
+                schemas.NpcShopItemRead(**fields, discounted_buy_price=discounted, price_reasons=reasons)
             )
         return result
 
@@ -2849,6 +2863,8 @@ async def get_npc_shop_sell_offers(
     await visibility.require_private_access(session, character_id, current_user)
     if not await crud.npc_exists(session, npc_id):
         raise HTTPException(status_code=404, detail="NPC не найден")
+    # FEAT-197: NPC tier gate (403); the outlaw refusal (409) and the bid cut live in crud.get_sell_offers
+    await reputation_read.require_npc_tier(session, character_id, npc_id)
     return await crud.get_sell_offers(session, npc_id, character_id, schemas.SHOP_MAX_QUANTITY)
 
 
@@ -2902,6 +2918,9 @@ async def buy_from_npc(
 
     market = await crud.merchant_market(session, npc_id)
     _require_shop_open(market)
+    # FEAT-197: reputation in the merchant's region (plain reads, before the money transaction)
+    terms = await reputation_read.trade_terms(session, body.character_id, market.region_id)
+    reputation_read.require_trade(terms)
     item_markets = await crud.get_item_markets(session, [shop_item.item_id])
     prices = crud.price_shop_row(market, item_markets.get(shop_item.item_id),
                                  shop_item.buy_price, shop_item.sell_price)
@@ -2912,8 +2931,8 @@ async def buy_from_npc(
 
     charisma = await _fetch_charisma(body.character_id)
     discount = econ_core.charisma_discount_pct(charisma)
-    discount_pct = float(discount)
-    unit_price = econ_core.discounted_ask(prices["ask"], discount)
+    price_reasons, discount_pct = reputation_read.ask_reasons(discount, terms)
+    unit_price = econ_core.reputation_ask(prices["ask"], discount, terms.price_pct)
     total_price = unit_price * quantity
     tax = econ_core.trade_tax(total_price, market.tax_rate or 0) if market.living else 0
 
@@ -2923,6 +2942,9 @@ async def buy_from_npc(
                 "ask": prices["ask"], "living": market.living}
     if market.living:
         buy_meta["trade_tax"] = tax
+    if terms.tier is not None and terms.price_pct != 0:
+        buy_meta["reputation_tier"] = terms.tier.code
+        buy_meta["reputation_pct"] = float(terms.price_pct)
 
     # 4. One transaction: the stock is taken BEFORE the payment (lock order 3.5:
     # shop row -> characters -> accounts), so two buyers of the last unit cannot
@@ -3027,6 +3049,7 @@ async def buy_from_npc(
         "quantity": quantity,
         "total_price": total_price,
         "discount_percent": discount_pct,
+        "price_reasons": price_reasons,
     }
 
 
@@ -3073,7 +3096,10 @@ async def sell_to_npc(
     # 3. The merchant's bid and (living) his cash, plain reads
     market = await crud.merchant_market(session, npc_id)
     _require_shop_open(market)
-    quote = (await crud.quote_bids(session, market, [body.item_id])).get(body.item_id)
+    # FEAT-197 A1: an outlaw is refused (409); a low tier gets a lower bid (0 = «does not buy»)
+    terms = await reputation_read.trade_terms(session, body.character_id, market.region_id)
+    reputation_read.require_trade(terms)
+    quote = (await crud.quote_bids(session, market, [body.item_id], terms.sell_pct)).get(body.item_id)
     if quote is None:
         raise HTTPException(status_code=400, detail=SHOP_NOT_BUYING_MESSAGE)
     total_price = quote.unit_price * quantity
@@ -3108,6 +3134,10 @@ async def sell_to_npc(
     # 5. Credit (FEAT-183): lock order 3.5 — shop row first, then characters / accounts.
     sell_meta = {"npc_id": npc_id, "item_id": body.item_id, "quantity": quantity,
                  "sell_price": quote.unit_price, "living": market.living}
+    if quote.base_unit_price is not None and terms.tier is not None:
+        sell_meta["base_sell_price"] = quote.base_unit_price
+        sell_meta["reputation_tier"] = terms.tier.code
+        sell_meta["reputation_sell_pct"] = float(terms.sell_pct)
     try:
         if market.living:
             row_id = await crud.store_item_bought_from_player(session, npc_id, body.item_id, quantity, quote)
@@ -3150,6 +3180,7 @@ async def sell_to_npc(
         "item_name": item_name,
         "quantity": quantity,
         "total_price": total_price,
+        "price_reasons": reputation_read.bid_reasons(terms) if quote.base_unit_price is not None else [],
     }
 
 
@@ -3273,6 +3304,49 @@ async def get_active_quests(
     return await crud.get_active_quests(session, character_id)
 
 
+QUEST_REPUTATION_ATTEMPTS = 2       # FEAT-197 §3.4: one retry
+
+
+async def _apply_quest_reputation(character_id: int, region_id: int, character_quest_id: int,
+                                  delta: Optional[int]) -> bool:
+    """FEAT-197 §3.4: POST /characters/internal/reputation/apply for a completed quest.
+
+    Called AFTER the completion commit (no transaction across HTTP). The idempotency key
+    `quest_reward:cq:{id}` makes the retry (and any later manual replay) safe. `delta` None = the
+    action's default points. Network errors / 5xx are retried once; a failure is logged and never
+    fails the completion. True when character-service answered 200.
+    """
+    payload = {
+        "character_id": int(character_id),
+        "region_id": int(region_id),
+        "action": reputation_core.ACTION_QUEST,
+        "idempotency_key": f"quest_reward:cq:{character_quest_id}",
+    }
+    if delta is not None:
+        payload["delta"] = int(delta)
+    for attempt in range(1, QUEST_REPUTATION_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{settings.CHARACTER_SERVICE_URL}/characters/internal/reputation/apply",
+                    json=payload,
+                    headers=_internal_token_headers(),
+                )
+            if resp.status_code == 200:
+                return True
+            if resp.status_code < 500:
+                logger.error("Quest reputation refused for character %s (cq %s, region %s): status %s",
+                             character_id, character_quest_id, region_id, resp.status_code)
+                return False
+            logger.warning("Quest reputation attempt %s failed for cq %s: status %s",
+                           attempt, character_quest_id, resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("Quest reputation attempt %s failed for cq %s: %s", attempt, character_quest_id, exc)
+    logger.error("Quest reputation NOT applied for character %s (cq %s, region %s) after %s attempts",
+                 character_id, character_quest_id, region_id, QUEST_REPUTATION_ATTEMPTS)
+    return False
+
+
 @router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
 async def complete_quest(
     quest_id: int,
@@ -3344,6 +3418,13 @@ async def complete_quest(
             await session.rollback()
             raise HTTPException(status_code=409, detail="Награда за этот квест уже получена")
 
+    # FEAT-197: region of the quest giver for the reputation (resolved like the gold, plain reads here;
+    # the HTTP call itself happens after the commit)
+    rep_region_id = None
+    rep_delta = quest.reputation_reward
+    if rep_delta != 0:
+        rep_region_id = await reputation_read.quest_reward_region(session, quest.npc_id, body.character_id)
+
     # Award experience (add_experience commits — together with the completion and the gold)
     awarded_exp = quest.reward_exp
     if quest.reward_exp > 0:
@@ -3379,6 +3460,10 @@ async def complete_quest(
                         )
             except httpx.HTTPError as e:
                 logger.warning(f"Inventory service error for quest reward: {e}")
+
+    # FEAT-197: reputation in the quest giver's region (after the commit; never fails the completion)
+    if rep_region_id:
+        await _apply_quest_reputation(body.character_id, rep_region_id, cq_id, rep_delta)
 
     # Track cumulative stats: quests_completed + gold earned from quest
     quest_increments = {"quests_completed": 1}

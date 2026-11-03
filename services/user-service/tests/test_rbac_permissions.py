@@ -1436,3 +1436,163 @@ class TestEconomyPermissions:
         db.add(models.UserPermission(user_id=mod.id, permission_id=perm.id, granted=True))
         db.commit()
         require_permission(db, mod, "economy:adjust")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# 13. FEAT-197: reputation permissions (migration 0033)
+# ---------------------------------------------------------------------------
+#
+# Seeded explicitly (CLAUDE.md §10.13): TestAdminAutoPermissions works on this
+# file's synthetic seed and never reads the migration tree, so the three new
+# `permissions` rows are not covered by it automatically.
+
+REPUTATION_PERMISSIONS = [
+    ("reputation", "read"),
+    ("reputation", "manage"),
+    ("reputation", "settings"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0033. Admin (4) is absent on purpose —
+# it receives every row of `permissions`. Editor (2) gets nothing;
+# reputation:settings is admin-only (FEAT-197 §3.14 A3).
+REPUTATION_ROLE_ACTIONS = {
+    3: ["read", "manage"],  # Moderator — view + per-character adjust with a reason
+}
+
+
+def _seed_reputation_permissions(db):
+    """Seed the 3 reputation permissions and their role grants (mirrors 0033)."""
+    perm_objects = []
+    for module, action in REPUTATION_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Reputation: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()
+
+    for perm in perm_objects:
+        for role_id, actions in REPUTATION_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_reputation(rbac_db):
+    """Base RBAC seed + reputation permissions from migration 0033."""
+    _seed_reputation_permissions(rbac_db)
+    return rbac_db
+
+
+class TestReputationPermissions:
+    """FEAT-197: reputation:read/manage/settings."""
+
+    def test_seed_mirrors_the_migration(self):
+        """The mirror above must match migration 0033 — otherwise this suite
+        tests a different permission set than production gets."""
+        import importlib.util
+        from pathlib import Path
+        path = (Path(__file__).resolve().parents[1] / "alembic" / "versions"
+                / "0033_reputation_permissions.py")
+        spec = importlib.util.spec_from_file_location("mig_0033", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        assert [(m, a) for m, a, _ in mig.PERMISSIONS] == REPUTATION_PERMISSIONS
+        assert mig.ROLE_ACTIONS == REPUTATION_ROLE_ACTIONS
+        assert mig.revision == "0033" and mig.down_revision == "0032"
+
+    def test_exactly_three_reputation_permissions(self, rbac_db_with_reputation):
+        db = rbac_db_with_reputation
+        assert db.query(models.Permission).filter(
+            models.Permission.module == "reputation").count() == 3
+
+    def test_admin_gets_all_three(self, rbac_db_with_reputation):
+        db = rbac_db_with_reputation
+        admin = _make_user(db, id=700, username="rpadmin", email="rpadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in REPUTATION_PERMISSIONS:
+            assert f"{module}:{action}" in perms
+        # 8 base + 3 reputation = 11
+        assert len(perms) == 11
+
+    def test_moderator_gets_exactly_read_and_manage(self, rbac_db_with_reputation):
+        db = rbac_db_with_reputation
+        mod = _make_user(db, id=701, username="rpmod", email="rpmod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert sorted(p for p in perms if p.startswith("reputation:")) == \
+            ["reputation:manage", "reputation:read"]
+        assert "reputation:settings" not in perms
+        # 4 base items:* + reputation:read + reputation:manage = 6
+        assert len(perms) == 6
+
+    def test_editor_gets_none(self, rbac_db_with_reputation):
+        db = rbac_db_with_reputation
+        editor = _make_user(db, id=702, username="rpeditor", email="rpeditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert not any(p.startswith("reputation:") for p in perms)
+        assert len(perms) == 2  # base *:read, unchanged
+
+    def test_regular_user_gets_none(self, rbac_db_with_reputation):
+        db = rbac_db_with_reputation
+        user = _make_user(db, id=703, username="rpuser", email="rpuser@test.com",
+                          role_id=1, role_str="user")
+        assert get_effective_permissions(db, user) == []
+
+    def test_require_permission_matrix(self, rbac_db_with_reputation):
+        """Admin passes all three; moderator read+manage; editor/user nothing."""
+        db = rbac_db_with_reputation
+        admin = _make_user(db, id=704, username="rpadmin2", email="rpadmin2@test.com",
+                           role_id=4, role_str="admin")
+        mod = _make_user(db, id=705, username="rpmod2", email="rpmod2@test.com",
+                         role_id=3, role_str="moderator")
+        editor = _make_user(db, id=706, username="rpeditor2", email="rpeditor2@test.com",
+                            role_id=2, role_str="editor")
+        user = _make_user(db, id=707, username="rpuser2", email="rpuser2@test.com",
+                          role_id=1, role_str="user")
+
+        for module, action in REPUTATION_PERMISSIONS:
+            perm = f"{module}:{action}"
+            require_permission(db, admin, perm)
+            if action in ("read", "manage"):
+                require_permission(db, mod, perm)
+            else:
+                with pytest.raises(HTTPException) as exc_info:
+                    require_permission(db, mod, perm)
+                assert exc_info.value.status_code == 403
+            for blocked in (editor, user):
+                with pytest.raises(HTTPException) as exc_info:
+                    require_permission(db, blocked, perm)
+                assert exc_info.value.status_code == 403
+
+    def test_settings_can_be_delegated_and_revoked(self, rbac_db_with_reputation):
+        """reputation:settings can be granted per person via user_permissions."""
+        db = rbac_db_with_reputation
+        mod = _make_user(db, id=708, username="rpmod3", email="rpmod3@test.com",
+                         role_id=3, role_str="moderator")
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == "reputation",
+            models.Permission.action == "settings",
+        ).one()
+        override = models.UserPermission(user_id=mod.id, permission_id=perm.id, granted=True)
+        db.add(override)
+        db.commit()
+        require_permission(db, mod, "reputation:settings")  # must not raise
+        override.granted = False
+        db.commit()
+        assert "reputation:settings" not in get_effective_permissions(db, mod)
+
+    def test_reputation_and_economy_together(self, rbac_db_with_reputation):
+        """Both module seeds at once: the counts grow by exactly the module sizes."""
+        db = rbac_db_with_reputation
+        _seed_economy_permissions(db)
+        admin = _make_user(db, id=709, username="rpadmin3", email="rpadmin3@test.com",
+                           role_id=4, role_str="admin")
+        assert len(get_effective_permissions(db, admin)) == 15  # 8 base + 4 economy + 3 reputation
+        mod = _make_user(db, id=710, username="rpmod4", email="rpmod4@test.com",
+                         role_id=3, role_str="moderator")
+        # 4 base items:* + economy:read + reputation:read + reputation:manage = 7
+        assert len(get_effective_permissions(db, mod)) == 7

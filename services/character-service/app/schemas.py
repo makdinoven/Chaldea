@@ -737,6 +737,35 @@ class RaceWithSubraces(BaseModel):
 
 # ========== NPC Schemas ==========
 
+# FEAT-197: reputation gate / kill-weight fields (shared by the NPC, bank and teleport admin schemas)
+import reputation_core as _rep_core  # noqa: E402
+
+REPUTATION_POINTS_LIMIT = 1000
+
+
+def _reputation_tier_code(v):
+    """'' / None -> None (no gate); a fixed tier code -> itself; anything else -> 422."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValueError("Неизвестная ступень репутации")
+    v = v.strip()
+    if not v:
+        return None
+    if v not in _rep_core.TIER_CODES:
+        raise ValueError("Неизвестная ступень репутации")
+    return v
+
+
+def _reputation_kill_points(v):
+    if v is None or v == "":
+        return None
+    v = int(v)
+    if not -REPUTATION_POINTS_LIMIT <= v <= REPUTATION_POINTS_LIMIT:
+        raise ValueError("Репутация за убийство — от −1000 до 1000")
+    return v
+
+
 class NpcCreate(BaseModel):
     name: str
     id_class: int
@@ -756,6 +785,11 @@ class NpcCreate(BaseModel):
     stat_points: int = 0
     currency_balance: int = 0
     current_location_id: Optional[int] = None
+    reputation_min_tier: Optional[str] = None       # FEAT-197 NPC gate (tier code, null = none)
+    reputation_kill_points: Optional[int] = None    # FEAT-197 per-NPC kill weight (null = role weight)
+
+    _rep_tier = validator("reputation_min_tier", pre=True, allow_reuse=True)(_reputation_tier_code)
+    _rep_kill = validator("reputation_kill_points", pre=True, allow_reuse=True)(_reputation_kill_points)
 
 
 class NpcUpdate(BaseModel):
@@ -778,6 +812,11 @@ class NpcUpdate(BaseModel):
     currency_balance: Optional[int] = None
     current_location_id: Optional[int] = None
     npc_status: Optional[str] = None
+    reputation_min_tier: Optional[str] = None       # FEAT-197 NPC gate (tier code, null = none)
+    reputation_kill_points: Optional[int] = None    # FEAT-197 per-NPC kill weight (null = role weight)
+
+    _rep_tier = validator("reputation_min_tier", pre=True, allow_reuse=True)(_reputation_tier_code)
+    _rep_kill = validator("reputation_kill_points", pre=True, allow_reuse=True)(_reputation_kill_points)
 
     @validator("npc_status")
     def validate_npc_status(cls, v):
@@ -1349,6 +1388,10 @@ class UpdateActiveMobStatusRequest(BaseModel):
 
 class UpdateNpcStatusRequest(BaseModel):
     status: str
+    # FEAT-197 (optional, backward compatible): the battle and every character of the winning team; only real
+    # players among them get the kill reputation, only on an alive -> dead transition.
+    battle_id: Optional[int] = None
+    killer_character_ids: Optional[List[int]] = Field(None, max_items=50)
 
     @validator("status")
     def validate_status(cls, v):
@@ -1454,6 +1497,9 @@ class TeleportLinkCreate(BaseModel):
     to_npc_id: int
     cost_gold: int
     bidirectional: bool = True
+    min_reputation_tier: Optional[str] = None       # FEAT-197 (applied to the reverse link too)
+
+    _rep_tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(_reputation_tier_code)
 
     @validator("cost_gold")
     def _cost_non_negative(cls, v):
@@ -1470,6 +1516,9 @@ class TeleportLinkCreate(BaseModel):
 
 class TeleportLinkUpdate(BaseModel):
     cost_gold: Optional[int] = None
+    min_reputation_tier: Optional[str] = None       # FEAT-197: sent -> stored (null clears), omitted -> unchanged
+
+    _rep_tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(_reputation_tier_code)
 
     @validator("cost_gold")
     def _cost_non_negative(cls, v):
@@ -1484,6 +1533,7 @@ class TeleportLinkRead(BaseModel):
     to_npc_id: int
     cost_gold: int
     created_at: Optional[datetime] = None
+    min_reputation_tier: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -1496,12 +1546,14 @@ class TeleportOption(BaseModel):
     to_location_id: Optional[int] = None
     to_location_name: Optional[str] = None
     cost_gold: int
+    locked_reason: Optional[str] = None             # FEAT-197 «Нужна репутация: X» for the active character
 
 
 class TeleportOptionsResponse(BaseModel):
     from_npc_id: int
     cooldown_seconds_remaining: int
     options: List[TeleportOption]
+    locked_reason: Optional[str] = None             # FEAT-197 NPC-level gate for the active character
 
 
 class TeleportRequest(BaseModel):
@@ -2632,6 +2684,7 @@ class BankView(BaseModel):
     max_loan_now: int                           # 0 when disabled / has loan / debtor; else min(cap, lendable)
     loan_refusal: Optional[str]                 # Russian reason when max_loan_now == 0
     bank_regions: List[BankRegionOut]           # enabled banks (transfer destinations)
+    reputation_lock: Optional[str] = None       # FEAT-197 NPC gate: every banker action is refused with this text
 
 
 class BankActionOut(BaseModel):
@@ -2654,6 +2707,9 @@ class BankSummary(BaseModel):
 class BankFlagIn(BaseModel):
     is_enabled: StrictBool
     seed_capital: StrictBool = True             # first switch-on takes the start capital from the treasury once
+    loan_min_reputation_tier: Optional[str] = None  # FEAT-197: sent -> stored (null clears), omitted -> unchanged
+
+    _rep_tier = validator("loan_min_reputation_tier", pre=True, allow_reuse=True)(_reputation_tier_code)
 
 
 class BankCapitalIn(BaseModel):
@@ -2971,6 +3027,7 @@ class MintView(BaseModel):
     remaining: int                               # 0 when closed
     items: List[MintItemView]
     wallet: int
+    reputation_lock: Optional[str] = None        # FEAT-197 NPC gate: minting is refused with this text
 
 
 class MintActionOut(BaseModel):
@@ -3270,6 +3327,7 @@ class GuildView(BaseModel):
     refused: List[GuildRefusedOut]
     xp: GuildXpInfo
     wallet: int
+    reputation_lock: Optional[str] = None        # FEAT-197 NPC gate / «Вне закона» (then working = false)
 
 
 class GuildActionOut(BaseModel):
@@ -3356,3 +3414,223 @@ class GuildWantOut(BaseModel):
     """Region card line «Гильдия ищет: …» — words only."""
     group_code: str
     group_name: str
+
+
+# ===========================================================================
+# FEAT-197 region reputation — API (contract §3.5; app/reputation_api.py)
+# ===========================================================================
+
+from uuid import UUID as _UUID  # noqa: E402
+
+REPUTATION_PAGE_MAX = 50
+REPUTATION_DELTA_LIMIT = 2000
+REPUTATION_REASON_MIN = 3
+REPUTATION_REASON_MAX = 500
+
+
+class ReputationTierBrief(BaseModel):
+    code: str
+    name: str
+    sort_order: int
+
+
+class ReputationRegionOut(BaseModel):
+    """Player view of one region — tier and bar only, never the number."""
+    region_id: int
+    region_name: Optional[str]
+    country_id: Optional[int]
+    country_name: Optional[str]
+    tier_code: str
+    tier_name: str
+    progress: float                              # 0..1 inside the tier band
+    trade_refused: bool                          # merchants of the region refuse (Вне закона)
+
+
+class ReputationView(BaseModel):
+    regions: List[ReputationRegionOut]
+    tiers: List[ReputationTierBrief]             # the scale, lowest first
+
+
+class ReputationHistoryItem(BaseModel):
+    created_at: datetime
+    region_id: int
+    region_name: Optional[str]
+    direction: str                               # up | down
+    action_name: str
+    text: str                                    # Russian phrase, no numbers
+    tier_after_name: str
+    tier_changed: bool
+
+
+class ReputationHistoryPage(BaseModel):
+    items: List[ReputationHistoryItem]
+    total: int
+
+
+class ReputationSettingsIn(BaseModel):
+    min_value: int
+    max_value: int
+    echo_pct: float
+    decay_per_day: float
+
+
+class ReputationTierIn(BaseModel):
+    code: str
+    name: str = Field(..., max_length=60)
+    min_value: Optional[int] = None
+    price_pct: float = 0
+    sell_pct: float = 0
+    trade_refused: bool = False
+
+
+class ReputationTierOut(ReputationTierIn):
+    sort_order: int
+
+
+class ReputationSettingsBody(BaseModel):
+    settings: ReputationSettingsIn
+    tiers: List[ReputationTierIn] = Field(..., min_items=8, max_items=8)
+
+
+class ReputationSettingsOut(BaseModel):
+    settings: ReputationSettingsIn
+    tiers: List[ReputationTierOut]
+
+
+class ReputationActionOut(BaseModel):
+    code: str
+    name: str
+    points: int
+    daily_cap: Optional[int]
+    is_builtin: bool
+    has_source: bool
+    sort_order: int
+
+
+def _rep_name(v):
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError("Название обязательно")
+    v = v.strip()
+    if len(v) > 100:
+        raise ValueError("Название — не длиннее 100 символов")
+    return v
+
+
+class ReputationActionUpdate(BaseModel):
+    name: str
+    points: int = Field(..., ge=-REPUTATION_POINTS_LIMIT, le=REPUTATION_POINTS_LIMIT)
+    daily_cap: Optional[int] = Field(None, ge=1, le=100000)
+    sort_order: Optional[int] = Field(None, ge=0, le=100000)
+
+    _name = validator("name", pre=True, allow_reuse=True)(_rep_name)
+
+
+class ReputationActionCreate(ReputationActionUpdate):
+    code: str = Field(..., regex=_rep_core.ACTION_CODE_RE)
+
+
+class ReputationRoleWeight(BaseModel):
+    role: str = Field(..., regex=_rep_core.ROLE_RE)
+    points: int = Field(..., ge=-REPUTATION_POINTS_LIMIT, le=REPUTATION_POINTS_LIMIT)
+
+
+class ReputationAdminRegionOut(BaseModel):
+    region_id: int
+    region_name: Optional[str]
+    country_id: Optional[int]
+    country_name: Optional[str]
+    value: int                                   # effective (decay applied)
+    tier_code: str
+    tier_name: str
+    decaying: bool
+    updated_at: Optional[datetime]
+
+
+class ReputationAdminHistoryItem(BaseModel):
+    id: int
+    created_at: datetime
+    region_id: int
+    region_name: Optional[str]
+    action: str
+    action_name: str
+    event_key: str
+    is_echo: bool
+    origin_region_id: Optional[int]
+    origin_region_name: Optional[str]
+    requested_delta: int
+    applied_delta: int
+    value_after: int
+    tier_before: str
+    tier_before_name: str
+    tier_after: str
+    tier_after_name: str
+    reason: Optional[str]
+    actor_user_id: Optional[int]
+    actor_username: Optional[str]
+
+
+class ReputationAdminHistoryPage(BaseModel):
+    items: List[ReputationAdminHistoryItem]
+    total: int
+
+
+class ReputationAdjustIn(BaseModel):
+    region_id: int = Field(..., ge=1)
+    delta: Optional[int] = Field(None, ge=-REPUTATION_DELTA_LIMIT, le=REPUTATION_DELTA_LIMIT)
+    action_code: Optional[str] = Field(None, max_length=40)
+    reason: str
+    echo: bool = False
+    request_id: _UUID
+
+    @validator("reason", pre=True)
+    def _reason(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("Причина обязательна")
+        v = v.strip()
+        if len(v) < REPUTATION_REASON_MIN:
+            raise ValueError(f"Причина — не короче {REPUTATION_REASON_MIN} символов")
+        if len(v) > REPUTATION_REASON_MAX:
+            raise ValueError(f"Причина — не длиннее {REPUTATION_REASON_MAX} символов")
+        return v
+
+    @root_validator(skip_on_failure=True)
+    def _one_of(cls, values):
+        delta, code = values.get("delta"), values.get("action_code")
+        if code is not None and not code.strip():
+            code = values["action_code"] = None
+        if (delta is None) == (code is None):
+            raise ValueError("Укажите либо изменение числом, либо действие")
+        if delta is not None and delta == 0:
+            raise ValueError("Изменение не может быть нулевым")
+        return values
+
+
+class ReputationChangeOut(BaseModel):
+    region_id: int
+    is_echo: bool
+    value_before: int
+    value_after: int
+    tier_before: str
+    tier_after: str
+
+
+class ReputationAdjustOut(BaseModel):
+    changes: List[ReputationChangeOut]
+    duplicate: bool
+
+
+class ReputationApplyIn(BaseModel):
+    """Internal (locations-service quest completion and future sources)."""
+    character_id: int = Field(..., ge=1)
+    region_id: int = Field(..., ge=1)
+    action: str = Field(..., min_length=1, max_length=40)
+    idempotency_key: str = Field(..., min_length=1, max_length=191)
+    delta: Optional[int] = Field(None, ge=-REPUTATION_DELTA_LIMIT, le=REPUTATION_DELTA_LIMIT)
+    reason: Optional[str] = Field(None, max_length=REPUTATION_REASON_MAX)
+    echo: bool = True
+
+
+class ReputationApplyOut(BaseModel):
+    applied: bool
+    duplicate: bool
+    skipped: Optional[str]                       # npc | zero | cap

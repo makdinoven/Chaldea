@@ -17,6 +17,7 @@ import { FIELD, LABEL } from '../../pages/EpisodesPage/EpisodeFormModal';
 import ImageField from '../../pages/EpisodesPage/ImageField';
 import PlotPlanEditor, { defaultPlan, planFromPlot, planToBody, validatePlan, type EditorPlan } from './PlotPlanEditor';
 import { useCurrency } from '../../../hooks/useCurrency';
+import ReputationTierSelect from '../ReputationPage/ReputationTierSelect';
 
 interface PlotFormModalProps {
   /** Absent → a new plot. */
@@ -53,6 +54,7 @@ const PlotFormModal = ({ plot, onClose, onSaved }: PlotFormModalProps) => {
     map_x: plot?.map_x ?? null,
     map_y: plot?.map_y ?? null,
     kind: plot?.kind ?? 'ready',
+    min_reputation_tier: plot?.min_reputation_tier ?? null,
   });
   const [plan, setPlan] = useState<EditorPlan | null>(plot ? null : defaultPlan());
   const [locationName, setLocationName] = useState(plot?.location_name ?? '');
@@ -240,6 +242,16 @@ const PlotFormModal = ({ plot, onClose, onSaved }: PlotFormModalProps) => {
           <span className={LABEL}>Цена ({forms.name.toLowerCase()})</span>
           <input type="number" min={0} value={form.price} onChange={(e) => set('price', Math.max(0, Number(e.target.value) || 0))} className={FIELD} />
         </label>
+
+        <div className="sm:max-w-xs">
+          <ReputationTierSelect
+            value={form.min_reputation_tier}
+            onChange={(code) => set('min_reputation_tier', code)}
+            labelClassName={LABEL}
+            selectClassName={FIELD}
+            hint="Купить дом на участке (и перекупить с рук) можно только с этой ступени в регионе"
+          />
+        </div>
 
         <div className="flex flex-col gap-2">
           <span className={LABEL}>Точка на карте региона, % (необязательно)</span>

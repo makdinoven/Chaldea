@@ -40,6 +40,7 @@ import econ_core as core
 import econ_ledger
 import models
 from economy_crud import EconomyApiError
+import reputation_crud
 
 logger = logging.getLogger("character-service.bank")
 
@@ -308,7 +309,19 @@ def with_region(db: Session, ctx: BankerContext) -> BankerContext:
 
 
 def banker_context(db: Session, npc_id: int, character_id: int, user_id: int, *, write: bool) -> BankerContext:
-    return with_region(db, resolve_banker(db, npc_id, character_id, user_id, write=write))
+    """Steps 1-4 + 6; for a write also the FEAT-197 NPC reputation gate (403 «Нужна репутация: X»)."""
+    ctx = with_region(db, resolve_banker(db, npc_id, character_id, user_id, write=write))
+    if write:
+        reputation_crud.require_npc_tier(db, ctx.character_id, ctx.npc_id, ctx.region_id)
+    return ctx
+
+
+def loan_gate_failure(db: Session, character_id: int, bank: Optional["models.EconBank"],
+                      region_id: int) -> Optional[str]:
+    """FEAT-197: the bank's ``loan_min_reputation_tier`` (None = open)."""
+    if bank is None or not bank.loan_min_reputation_tier:
+        return None
+    return reputation_crud.gate_failure(db, character_id, region_id, bank.loan_min_reputation_tier)
 
 
 # ------------------------------------------------------------------------------------------------- read models
@@ -426,12 +439,16 @@ def build_view(db: Session, ctx: BankerContext, *, params=None, now: Optional[da
                             {"id": ctx.character_id}).scalar() or 0)
     cap = econ_bank.loan_cap(character.level if character is not None else 1, params)
     max_loan, refusal = 0, None
+    reputation_lock = reputation_crud.npc_gate_failure(db, ctx.character_id, ctx.npc_id, region_id)
+    loan_gate = loan_gate_failure(db, ctx.character_id, bank, region_id)
     if not enabled:
         refusal = MSG_LOANS_CLOSED
     elif debtor:
         refusal = MSG_DEBTOR
     elif loan is not None:
         refusal = MSG_HAS_LOAN
+    elif reputation_lock or loan_gate:
+        refusal = reputation_lock or loan_gate
     else:
         free = econ_bank.lendable(bank_account_balance(db, region_id), int(bank.resident_deposits or 0), params)
         max_loan = min(cap, free)
@@ -452,6 +469,7 @@ def build_view(db: Session, ctx: BankerContext, *, params=None, now: Optional[da
         "max_loan_now": max_loan,
         "loan_refusal": refusal,
         "bank_regions": list_bank_regions(db),
+        "reputation_lock": reputation_lock,
     }
 
 
@@ -779,6 +797,9 @@ def take_loan(db: Session, ctx: BankerContext, body) -> dict:
     bank = banks.get(x)
     if not bank_is_open(bank, region_names(db, [x])):
         raise EconomyApiError(409, MSG_LOANS_CLOSED)
+    gate = loan_gate_failure(db, ctx.character_id, bank, x)
+    if gate:
+        raise EconomyApiError(403, gate)
     params = load_params(db)
     now = now_utc()
     existing = _open_loan(db, ctx.character_id)
@@ -1372,6 +1393,7 @@ def _admin_items(db: Session, banks: Sequence["models.EconBank"], *, params, now
             "capital_seeded_at": bank.capital_seeded_at,
             "last_tick_at": bank.last_tick_at,
             "last_stats": _stats(bank.last_stats),
+            "loan_min_reputation_tier": bank.loan_min_reputation_tier,
         })
     return items
 
@@ -1503,15 +1525,21 @@ def seed_capital(db: Session, bank: "models.EconBank", *, params, actor_user_id:
     return amount
 
 
+_UNCHANGED = object()
+
+
 def set_bank_flag(db: Session, region_id: int, *, is_enabled: bool, seed: bool,
-                  actor_user_id: Optional[int]) -> dict:
-    """«Банк есть»: creates the row; the first switch-on with ``seed`` takes the start capital once."""
+                  actor_user_id: Optional[int], loan_min_reputation_tier=_UNCHANGED) -> dict:
+    """«Банк есть»: creates the row; the first switch-on with ``seed`` takes the start capital once.
+    FEAT-197: ``loan_min_reputation_tier`` is stored when passed (None clears it)."""
     if int(region_id) not in region_names(db, [region_id]):
         raise EconomyApiError(404, MSG_REGION_NOT_FOUND)
     now = now_utc()
     params = load_params(db)
     bank = ensure_bank_row(db, region_id, now)
     bank.is_enabled = bool(is_enabled)
+    if loan_min_reputation_tier is not _UNCHANGED:
+        bank.loan_min_reputation_tier = loan_min_reputation_tier
     if is_enabled and seed:
         seed_capital(db, bank, params=params, actor_user_id=actor_user_id, now=now)
     db.flush()

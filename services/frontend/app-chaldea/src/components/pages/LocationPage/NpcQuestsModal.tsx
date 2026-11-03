@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
+import { apiErrorMessage } from '../../../api/errors';
 import { useAppSelector } from '../../../redux/store';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
@@ -25,6 +26,9 @@ interface Quest {
   reward_items: QuestRewardItem[];
   is_active: boolean;
   player_status: 'available' | 'active' | 'completed';
+  /* FEAT-197: minimum region reputation tier (code) and why the quest cannot be taken now. */
+  min_reputation_tier?: string | null;
+  locked_reason?: string | null;
 }
 
 interface NpcQuestsModalProps {
@@ -63,7 +67,7 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
         if (questsRes.status === 'fulfilled') {
           setQuests(questsRes.value.data);
         } else {
-          toast.error('Не удалось загрузить задания');
+          toast.error(apiErrorMessage(questsRes.reason, 'Не удалось загрузить задания'));
         }
 
         if (dqRes.status === 'fulfilled') {
@@ -90,11 +94,8 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
       // Remove accepted quest from list
       setQuests((prev) => prev.filter((q) => q.id !== questId));
     } catch (err) {
-      const message =
-        axios.isAxiosError(err) && err.response?.data?.detail
-          ? err.response.data.detail
-          : 'Не удалось принять задание';
-      toast.error(message);
+      // FEAT-197: a reputation gate answers 403 «Нужна репутация: X» — shown as is.
+      toast.error(apiErrorMessage(err, 'Не удалось принять задание'));
     } finally {
       setAccepting(null);
     }
@@ -131,11 +132,17 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
             Нет доступных заданий
           </p>
         ) : (
-          quests.map((quest) => (
+          quests.map((quest) => {
+            // FEAT-197: a reputation-gated quest stays visible, greyed, with the reason instead of «Принять».
+            const lockedReason = quest.player_status === 'available' ? quest.locked_reason : null;
+            return (
             <div
               key={quest.id}
-              className="bg-black/50 rounded-card p-4 border border-gold/20 hover:border-gold/40 transition-colors"
+              className={`bg-black/50 rounded-card p-4 border transition-colors ${
+                lockedReason ? 'border-white/10' : 'border-gold/20 hover:border-gold/40'
+              }`}
             >
+              <div className={lockedReason ? 'opacity-60' : ''}>
               {/* Title + type badge */}
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
                 <h3 className="text-white font-medium text-sm sm:text-base">
@@ -188,9 +195,21 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
                   </span>
                 ))}
               </div>
+              </div>
 
               {/* Action button based on status */}
-              {quest.player_status === 'active' ? (
+              {lockedReason ? (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full px-4 py-2.5 rounded-card border border-white/15 bg-white/[0.03] text-white/60 text-xs sm:text-sm font-medium tracking-wide cursor-not-allowed flex items-center justify-center gap-2 text-center"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <span className="break-words">{lockedReason}</span>
+                </button>
+              ) : quest.player_status === 'active' ? (
                 <div className="w-full px-4 py-2.5 rounded-card border border-site-blue/50 bg-site-blue/10 text-site-blue text-sm font-medium uppercase tracking-wide flex items-center justify-center gap-2">
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -231,7 +250,8 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
                 </button>
               )}
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </ModalShell>

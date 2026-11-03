@@ -2536,6 +2536,14 @@ async def _finalize_battle(
 
     # NPC death: mark defeated NPCs (not mobs) as dead
     if winner_team is not None:
+        # FEAT-197: every character of the winning side (alive or fallen) is a killer for the
+        # region reputation; character-service keeps only real players (is_npc = 0) and keys the
+        # event by battle_id, so a repeated report never applies twice.
+        killer_character_ids = sorted({
+            int(p["character_id"])
+            for p in battle_state["participants"].values()
+            if p["team"] == winner_team
+        })
         for pid_str, pdata in battle_state["participants"].items():
             if pdata["hp"] <= 0 and pdata["team"] != winner_team:
                 defeated_char_id = pdata["character_id"]
@@ -2553,7 +2561,11 @@ async def _finalize_battle(
                             async with httpx.AsyncClient(timeout=10.0) as client:
                                 resp = await client.put(
                                     f"{settings.CHARACTER_SERVICE_URL}/characters/internal/npc-status/{defeated_char_id}",
-                                    json={"status": "dead"},
+                                    json={
+                                        "status": "dead",
+                                        "battle_id": battle_id,
+                                        "killer_character_ids": killer_character_ids,
+                                    },
                                     headers=_internal_token_headers(),
                                 )
                                 if resp.status_code == 200:

@@ -45,6 +45,8 @@ import econ_sim
 import models
 from economy_crud import EconomyApiError
 from economy_mint_crud import take_plain_stacks
+import reputation_core
+import reputation_crud
 
 logger = logging.getLogger("character-service.guild")
 
@@ -416,7 +418,13 @@ def guild_context(db: Session, npc_id: int, character_id: int, user_id: int, *, 
     """Steps 1–4 + 6: the context with the NPC's region (None when the location resolves to no region)."""
     ctx = resolve_guild(db, npc_id, character_id, user_id, write=write)
     region_id, _country_id = econ_ledger.resolve_location(db, ctx.location_id)
-    return dataclasses.replace(ctx, region_id=int(region_id) if region_id else None)
+    ctx = dataclasses.replace(ctx, region_id=int(region_id) if region_id else None)
+    if write:
+        # FEAT-197: the NPC reputation gate, then «Вне закона» closes the guild (§3.14 A4)
+        lock = reputation_crud.guild_lock_reason(db, ctx.character_id, ctx.npc_id, ctx.region_id)
+        if lock:
+            raise EconomyApiError(403, lock)
+    return ctx
 
 
 def closed_reason(region: Optional["models.EconRegion"], params: econ_sim.SimParams) -> Optional[str]:
@@ -489,6 +497,9 @@ def build_view(db: Session, ctx: GuildContext, *, xp_multiplier: float = 1.0,
     region_name = (db.execute(text("SELECT name FROM Regions WHERE id = :r"), {"r": ctx.region_id}).scalar()
                    if ctx.region_id else None)
     reason = closed_reason(region, params)
+    reputation_lock = reputation_crud.guild_lock_reason(db, ctx.character_id, ctx.npc_id, ctx.region_id)
+    if reputation_lock and reason is None:
+        reason = reputation_lock                                 # FEAT-197: no orders shown to a locked character
     used = xp_used_today(db, ctx.character_id, today_utc(now))
     cap = _i(params.guild_xp_daily_cap)
     view = {
@@ -510,6 +521,7 @@ def build_view(db: Session, ctx: GuildContext, *, xp_multiplier: float = 1.0,
             "multiplier": float(xp_multiplier or 1.0),
         },
         "wallet": _wallet(db, ctx.character_id),
+        "reputation_lock": reputation_lock,
     }
     if reason is not None:
         return view
@@ -726,6 +738,16 @@ def hand_in(db: Session, ctx: GuildContext, body, *, xp_multiplier: float = 1.0,
         db.execute(text("UPDATE character_attributes SET passive_experience = COALESCE(passive_experience, 0) + :x "
                         "WHERE character_id = :c"), {"x": xp.granted, "c": ctx.character_id})
 
+    # 10b. FEAT-197 reputation (same transaction, same idempotency key as the posting; daily cap per region)
+    try:
+        rep = reputation_crud.apply_reputation(
+            db, character_id=ctx.character_id, region_id=region_id, action=reputation_core.ACTION_GUILD,
+            idem_key=key, now=now)
+    except reputation_crud.ReputationError as exc:      # unknown region row: the delivery itself still counts
+        logger.warning("guild reputation skipped: character=%s region=%s: %s", ctx.character_id, region_id,
+                       exc.detail)
+        rep = reputation_crud.ApplyResult()
+
     total_fmt = _fmt(db, acc.total)
     partial = accepted < quantity
     if partial:
@@ -748,6 +770,7 @@ def hand_in(db: Session, ctx: GuildContext, body, *, xp_multiplier: float = 1.0,
         "xp": xp.granted,
         "xp_capped": bool(xp.capped),
         "wallet": posted.balances.get(ctx.character_id, _wallet(db, ctx.character_id)),
+        "reputation_tier_changes": rep.tier_changes,     # popped by the router, published after the commit
     }
 
 

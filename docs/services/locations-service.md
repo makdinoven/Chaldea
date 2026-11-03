@@ -18,6 +18,8 @@ locations-service/app/
 ├── models.py      # 6 SQLAlchemy моделей
 ├── schemas.py     # Pydantic схемы (обширные)
 ├── crud.py        # Бизнес-логика
+├── reputation_core.py # FEAT-197: байтовая копия чистой математики репутации (канон — character-service)
+├── reputation_read.py # FEAT-197: чтение репутации SQL-ом, гейты, цены у торговцев (без HTTP)
 ├── config.py      # Настройки
 └── database.py    # Async SQLAlchemy
 ```
@@ -484,6 +486,7 @@ Country -> Region -> District -> Location
   - `updated_at` проставляется явно в `crud` (`datetime.now(timezone.utc)`), без MySQL `ON UPDATE` — чтобы порядок вытеснения был детерминированным и тестируемым.
   - **Вытеснение:** после каждой вставки `evict_drafts` оставляет персонажу 10 самых свежих строк по `updated_at`, остальные удаляет. Вытеснить может и живой черновик другой локации — это корректно: он по определению самый давно не трогавшийся из десяти.
   - Удаление локации уносит её черновики каскадом; удаление персонажа — через D7 (FK на `characters` в этом сервисе нет ни у одной таблицы).
+- **quests** (FEAT-197, миграция `054_reputation_gates`) — добавлены `reputation_reward` INT NULL и `min_reputation_tier` VARCHAR(20) NULL; **house_plots** — `min_reputation_tier` VARCHAR(20) NULL (см. «Региональная репутация»)
 - **npc_shop_items** - id, npc_id (cross-service, без FK), item_id (без FK), buy_price, sell_price, stock (NULL = без ограничений), is_active, created_at, **restock_target**, **origin** (admin/player), **updated_at**; `UNIQUE (npc_id, item_id)` (FEAT-183, миграция 053 — см. «Торговцы НПС»)
 - **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood/ingredient; ingredient — FEAT-165, миграция 043), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
 - **gathering_sessions** (FEAT-128) - id, node_id (FK gathering_nodes CASCADE), character_id, tool_inventory_item_id (nullable, no FK), tool_item_id, tool_durability_at_start, started_at, complete_at, effective_speed/double/stamina_bonus_pct (snapshot), stamina_paid, base_quantity, skill_slug, status enum(active/completed/cancelled/interrupted_by_battle/inventory_full), finished_at, result_quantity, xp_awarded, rank_up_to
@@ -516,6 +519,7 @@ Country -> Region -> District -> Location
 - `inventory-service:8004` -> POST `/inventory/internal/characters/{cid}/items` (+ `X-Internal-Token`, FEAT-167: лут локации, покупка у NPC, награда за квест — раньше был открытый `/inventory/{cid}/items` с проброшенным токеном игрока), POST `/inventory/internal/characters/{cid}/free_slots_check` (+ `X-Internal-Token` с FEAT-169; preflight на старте — падает **закрыто**: без заголовка игроку сказали бы «сумка полна»), POST `/inventory/internal/characters/{cid}/gathering/award` (+ `X-Internal-Token` с FEAT-169; атомарный award на finalize: ресурс + XP + ранг + прочность инструмента — вызов best-effort, потеря заголовка молча съела бы награду), GET `/inventory/characters/{cid}/gathering-skills` (ранговые бонусы для расчёта effective_*), GET `/inventory/internal/characters/{cid}/xp-multiplier` (+ `X-Internal-Token`, FEAT-168 #6: книга опыта за отыгрыш и за задания)
 - `party-service:8014` -> POST `/party/internal/xp-bonus` (+ `X-Internal-Token` с FEAT-169; отрядный бонус за пост, `crud.award_post_xp_and_log`), GET `/party/internal/active-members` (+ `X-Internal-Token` с FEAT-169; `crud._party_active_member_ids` — состав отряда на локации). Оба вызова best-effort и логируются на WARNING: без заголовка отрядные механики отказали бы молча
 - `battle-service:8010` -> POST `/battles/internal/party/leave-on-move` (+ `X-Internal-Token` с FEAT-170; три места: обычное перемещение, быстрое перемещение и `POST /locations/internal/character-left-location`). Предбоевой отряд привязан к локации, уход из неё выводит персонажа из отряда (уход лидера распускает отряд). Все три вызова best-effort (два `except: pass`, третий пишет WARNING и ставит `party_pruned=False`) — потеря заголовка молча оставила бы «призрака» в отряде
+- `character-service:8005` -> POST `/characters/internal/reputation/apply` (+ `X-Internal-Token`, FEAT-197) — репутация за выполненное задание после коммита, 2 попытки, ключ `quest_reward:cq:{id}`; провал только логируется (см. «Региональная репутация»)
 - `battle-pass-service:8012` -> POST `/battle-pass/internal/track-event` (+ `X-Internal-Token` с FEAT-170; два места: обычное и быстрое перемещение, событие `location_visit`). Fire-and-forget под `except: pass` — без заголовка прогресс боевого пропуска встал бы молча
 
 ### Книги опыта (FEAT-168 #6)
@@ -680,6 +684,75 @@ inventory → коммит (снимок чтения закрыт, через H
 `main`/`trade_tax`/`tax`, `NULL`-остаток = 0, компенсация и возврат из казны, 409 без вызова inventory, продажа в
 склад и новая строка игроков, чужая группа, возврат предмета при сбое зачисления, витрина и `sell-offers`);
 `test_charisma_discount.py`, `test_feat171_shop_gate.py` — скидка и гейт витрины.
+
+**FEAT-197:** цены и скупка учитывают репутацию в регионе торговца (`price_reasons`, наценка, срез скупки, 409 «Вне
+закона», гейт NPC на покупке / продаже / `sell-offers`) — см. «Региональная репутация».
+
+## Региональная репутация (FEAT-197, миграция 054)
+
+Таблицы репутации и `characters.reputation_min_tier` принадлежат character-service (миграция `038_reputation`,
+подробности — `docs/services/character-service.md`, раздел «Region reputation»). locations-service их **только
+читает** (`app/reputation_read.py`, сырые параметризованные `text()` на общих SQL-константах `reputation_core`) и
+считает эффективное (лениво забытое) значение и ступень ровно как владелец. В money-транзакциях HTTP нет. Пишет
+репутацию сервис только через `POST /characters/internal/reputation/apply`. `app/reputation_core.py` — **байтовая
+копия** канонического модуля character-service (проверяется `scripts/check_econ_copies.sh`). Пустые сид-таблицы
+читаются как значения по умолчанию из `reputation_core`.
+
+### Миграция `054_reputation_gates` (без бэкфилла; откат удаляет ровно три колонки)
+- `quests.reputation_reward` INT NULL — репутация за задание; NULL = очки действия `quest_complete` (+10), 0 = не давать.
+- `quests.min_reputation_tier` VARCHAR(20) NULL — код ступени, нужной, чтобы взять задание (в регионе квестодателя).
+- `house_plots.min_reputation_tier` VARCHAR(20) NULL — код ступени для покупки дома на участке и его перекупки.
+
+Админ-схемы: `QuestCreate` / `QuestUpdate` (+ `reputation_reward` −1000…1000, `min_reputation_tier`), `QuestRead`;
+`PlotIn` (участки, `houses.py`) + `min_reputation_tier`. Код проверяется по 8 фиксированным кодам
+(`schemas.validate_tier_code`; пусто → NULL, чужой → 422 «Неизвестная ступень репутации»).
+
+### Гейты (403 «Нужна репутация: {ступень}»; регион — регион NPC / участка; обхода для staff нет)
+| Гейт | Где |
+|---|---|
+| NPC (`characters.reputation_min_tier`) | `GET /locations/npcs/{id}/dialogue?character_id=` (после пост-намерения), `_require_npc_gate` → `POST .../shop/buy` и `.../shop/sell`, `GET .../shop/sell-offers`, список заданий (`locked_reason`) и `POST /locations/quests/{id}/accept`. Личная витрина `GET .../shop?character_id=` гейтом NPC **не** закрыта (там — только отказ «Вне закона») |
+| Задание (`quests.min_reputation_tier`) | `GET /locations/npcs/{npc_id}/quests`: доступное, но закрытое задание остаётся в списке с `locked_reason` (сначала гейт NPC, затем задания; у взятых / выполненных — null); `accept` → 403. **Завершение не гейтится** — падение ступени посреди задания работу не отменяет |
+| Участок (`house_plots.min_reputation_tier`) | `POST /locations/houses/plots/{plot_id}/buy` и перекупка `POST /locations/houses/{house_id}/buy`; регион — `house_plots.region_id`, иначе регион локации участка |
+
+### Цены у торговцев (econ_core, 4 байтовые копии + контрактные кейсы)
+Регион торговца — `merchant_market(...).region_id` (у живых и у legacy — регион локации NPC; нет региона → без
+эффекта). `reputation_read.trade_terms` → ступень, `price_pct`, `sell_pct` (≤ 0), `refused`.
+- **Покупка:** `econ_core.reputation_ask(ask, charisma_pct, reputation_pct)`: скидка ступени складывается с харизмой
+  и общий процент зажат на 50 % (`discounted_ask`); наценка (`price_pct < 0`) ложится **поверх** цены со скидкой
+  харизмы (`ceil`, ≥ 1) — цену только поднимает. Поэтому `discounted_buy_price` **может быть больше** `buy_price`.
+  `reputation_discount_split` делит применённую скидку на харизму и репутацию для объяснения.
+- **Скупка** (решение A1): `econ_core.reputation_bid(bid, sell_pct) = floor(bid × (1 + pct/100))`, pct ∈ [−100, 0] —
+  низкие ступени получают меньше (На заметке −10 %, Изгой −25 %), высокие **не** получают больше (нет арбитража).
+  Применяется в `quote_bids` (продажа и `sell-offers`); ставка, срезанная до 0, = «не покупает».
+- Контракт: `reputation_ask ≥ ceil(ask × 0,5) ≥ floor(ask × 0,5) ≥` любой скупки и цены гильдии; `reputation_bid ≤
+  bid`. Выплаты гильдии не меняются.
+- **«Вне закона»** (`trade_refused`): личная витрина `GET .../shop?character_id=`, `GET .../shop/sell-offers`,
+  `POST .../shop/buy`, `POST .../shop/sell` → **409** «Торговцы этого края отказываются иметь с вами дело (репутация:
+  Вне закона)». Публичная витрина (без `character_id`) не меняется.
+
+### Изменения ответов лавки
+- `PriceReason {source: "charisma" | "reputation", percent (со знаком в пользу игрока: + скидка, − наценка или срез
+  скупки), label}`; подписи «Скидка за харизму», «Скидка за репутацию ({ступень})», «Наценка за репутацию
+  ({ступень})», «Скупка дешевле из-за репутации ({ступень})». Процент репутации — **применённый** (после кэпа 50 %).
+- `NpcShopItemRead` (личная витрина) + `price_reasons`.
+- `ShopSellOfferRead` + `base_unit_price` (ставка до среза; без среза = `unit_price`) и `price_reasons`.
+- `ShopTransactionResponse` + `price_reasons`; `discount_percent` = чистый процент харизма + репутация (отрицательный
+  при наценке), у продажи 0. Метаданные проводки покупки получают `reputation_tier`, `reputation_pct`, продажи —
+  `reputation_tier`, `reputation_sell_pct`.
+- `QuestAvailableRead` (список у NPC) + `min_reputation_tier`, `locked_reason`.
+
+### Репутация за задание (`main._apply_quest_reputation`)
+`POST /locations/quests/{id}/complete`: регион квестодателя определяется до коммита обычными чтениями
+(`reputation_read.quest_reward_region`: локация NPC → иначе локация персонажа → регион); при `reputation_reward = 0`
+не определяется вовсе. **После** коммита (и после выдачи предметов) — `POST
+{CHARACTER_SERVICE_URL}/characters/internal/reputation/apply` с `X-Internal-Token`, тело `{character_id, region_id,
+action: "quest_complete", idempotency_key: "quest_reward:cq:{character_quest_id}", delta?}` (`delta` только если
+`reputation_reward` не NULL). Таймаут 5 с, 2 попытки (сеть / 5xx повторяется, 4xx — нет); провал — `logger.error`,
+завершение задания не падает. Ключ делает повтор безопасным.
+
+### Тесты
+`conftest.py` — автофикстура «репутация нейтральна» (маркер `real_reputation` включает настоящие чтения);
+`tests/reputation_sqlite.py` — SQLite-таблицы репутации для тестов.
 
 ## Известные проблемы
 

@@ -43,6 +43,9 @@ comment, untaxed, no sources) and GUILD_OP_TYPE_NAMES, plus PRICING_CASES for th
 lifted from locations-service into econ_core (ask_discount_floor, effective_shop_stock,
 shop_row_prices, merchant_buys_groups, shop_row_bid) at the end of this module.
 
+FEAT-197 (region reputation) appends PRICING_CASES for reputation_ask / reputation_discount_split /
+reputation_bid and the property grids REPUTATION_ASK_GRID / REPUTATION_BID_GRID (see there).
+
 Only econ_core is imported here, so this module is identical in every service.
 """
 
@@ -1455,4 +1458,83 @@ PRICING_CASES += [
     ("shop_row_bid", (True, None, None, ["food"], _MULTS, _BASES, "0.5"), 0),
     ("shop_row_bid", (True, _ORE, None, ["ore_metal"], _MULTS, {}, "0.5"), 1000),   # items.price > 0 wins
     ("shop_row_bid", (True, _ORE_FREE, None, ["ore_metal"], _MULTS, {}, "0.5"), 0),  # no base at all
+]
+
+# ---------------------------------------------------------------------------
+# FEAT-197 region reputation: reputation_ask / reputation_discount_split / reputation_bid
+# (same runner as above: getattr(econ_core, name)(*args) == expected), plus two property grids:
+#   * REPUTATION_ASK_GRID (ask, charisma_pct, reputation_pct): price = reputation_ask(...);
+#       price >= ceil(ask * 0.5) >= ask_discount_floor(ask) (bid cap and guild cap) and
+#       price >= market_bid(ask, "1", ask);  reputation_pct == 0 -> price == discounted_ask(ask, charisma_pct);
+#       reputation_pct < 0 -> price >= discounted_ask(ask, charisma_pct) (a markup never lowers the price);
+#       the price never rises as reputation_pct grows (rows of one (ask, charisma) in ascending pct).
+#   * REPUTATION_BID_GRID (bid, sell_pct): 0 <= reputation_bid(bid, pct) <= max(bid, 0);
+#       pct >= 0 -> reputation_bid == max(bid, 0); non-decreasing in pct for a fixed bid.
+# ---------------------------------------------------------------------------
+
+PRICING_CASES += [
+    # discount tier adds to charisma, the sum is clamped to 50 %
+    ("reputation_ask", (100, 0, 0), 100),
+    ("reputation_ask", (100, 10, 0), 90),
+    ("reputation_ask", (100, 0, 5), 95),
+    ("reputation_ask", (100, 10, 15), 75),
+    ("reputation_ask", (100, 45, 15), 50),
+    ("reputation_ask", (101, 45, 15), 51),
+    ("reputation_ask", (100, 0, 80), 50),                    # discount part clamped to 50
+    ("reputation_ask", (20, Decimal("16.25"), 5), 16),       # ceil(20 * 0.7875) = ceil(15.75)
+    # markup tier on top of the charisma-discounted price
+    ("reputation_ask", (100, 0, -10), 110),
+    ("reputation_ask", (100, 10, -10), 99),                  # ceil(90 * 1.1)
+    ("reputation_ask", (100, 10, -25), 113),                 # ceil(90 * 1.25) = ceil(112.5)
+    ("reputation_ask", (7, 0, -10), 8),                      # ceil(7.7)
+    ("reputation_ask", (1, 50, -10), 2),                     # ceil(1 * 1.1)
+    ("reputation_ask", (100, 0, -100), 200),
+    ("reputation_ask", (100, 0, -250), 200),                 # markup clamped to 100 %
+    # garbage reputation / charisma -> treated as 0
+    ("reputation_ask", (100, 10, None), 90),
+    ("reputation_ask", (100, 10, "NaN"), 90),
+    ("reputation_ask", (100, 10, "abc"), 90),
+    ("reputation_ask", (100, 10, True), 90),
+    ("reputation_ask", (100, None, 10), 90),
+    ("reputation_ask", (100, -20, 10), 90),                  # negative charisma -> 0
+    # (charisma_applied, reputation_applied) for the price reasons
+    ("reputation_discount_split", (10, 0), (Decimal(10), Decimal(0))),
+    ("reputation_discount_split", (10, 15), (Decimal(10), Decimal(15))),
+    ("reputation_discount_split", (45, 15), (Decimal(45), Decimal(5))),
+    ("reputation_discount_split", (50, 15), (Decimal(50), Decimal(0))),
+    ("reputation_discount_split", (80, 15), (Decimal(50), Decimal(0))),
+    ("reputation_discount_split", (10, -25), (Decimal(10), Decimal(-25))),
+    ("reputation_discount_split", (0, -300), (Decimal(0), Decimal(-100))),
+    ("reputation_discount_split", (None, None), (Decimal(0), Decimal(0))),
+    ("reputation_discount_split", (Decimal("23.25"), 15), (Decimal("23.25"), Decimal(15))),
+    # sell side: a low tier cuts the bid, a high tier never raises it
+    ("reputation_bid", (100, 0), 100),
+    ("reputation_bid", (100, -10), 90),
+    ("reputation_bid", (100, -25), 75),
+    ("reputation_bid", (19, -10), 17),                       # floor(17.1)
+    ("reputation_bid", (19, -25), 14),                       # floor(14.25)
+    ("reputation_bid", (1, -10), 0),                         # floor(0.9): the merchant pays nothing
+    ("reputation_bid", (100, 15), 100),                      # positive pct clamped to 0
+    ("reputation_bid", (100, -100), 0),
+    ("reputation_bid", (100, -250), 0),                      # clamped to -100
+    ("reputation_bid", (0, -10), 0),
+    ("reputation_bid", (-5, -10), 0),
+    ("reputation_bid", (None, -10), 0),
+    ("reputation_bid", (100, None), 100),
+    ("reputation_bid", (100, "NaN"), 100),
+    ("reputation_bid", (100, Decimal("-12.5")), 87),         # floor(87.5)
+]
+
+_REPUTATION_PCTS = ("-150", "-100", "-25", "-10", "-1", "0", "1", "5", "10", "15", "49", "50", "80")
+REPUTATION_ASK_GRID: List[Tuple[int, str, str]] = [
+    (ask, charisma, rep)
+    for ask in (1, 2, 3, 7, 10, 19, 20, 99, 100, 2500)
+    for charisma in ("0", "0.3", "10", "16.25", "23.25", "35", "49.975", "50", "70")
+    for rep in _REPUTATION_PCTS
+]
+
+REPUTATION_BID_GRID: List[Tuple[int, str]] = [
+    (bid, pct)
+    for bid in (-3, 0, 1, 2, 3, 7, 10, 19, 20, 99, 100, 1250)
+    for pct in ("-150", "-100", "-99.5", "-25", "-12.5", "-10", "-1", "0", "5", "25")
 ]

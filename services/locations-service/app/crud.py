@@ -19,6 +19,7 @@ import os
 from config import settings
 import econ_core
 import econ_ledger
+import reputation_read
 from econ_ledger import AccountRef, InsufficientFunds, Leg
 
 
@@ -4594,6 +4595,7 @@ class BidQuote(NamedTuple):
     row_id: Optional[int]
     item_base: int
     new_row_bid: int
+    base_unit_price: Optional[int] = None   # FEAT-197: the bid before the reputation cut (None = no cut)
 
 
 def _buys_groups(rows, items: Dict[int, econ_core.ItemMarket]) -> List[str]:
@@ -4625,8 +4627,12 @@ def quote_bid(market: MerchantMarket, item: Optional[econ_core.ItemMarket], row,
     return BidQuote(bid, None, base, econ_core.default_bid(base, market.bid_share))
 
 
-async def quote_bids(session: AsyncSession, market: MerchantMarket, item_ids) -> Dict[int, BidQuote]:
-    """{item_id: BidQuote} for the items this merchant buys now; refused items are absent."""
+async def quote_bids(session: AsyncSession, market: MerchantMarket, item_ids,
+                     sell_pct=0) -> Dict[int, BidQuote]:
+    """{item_id: BidQuote} for the items this merchant buys now; refused items are absent.
+
+    FEAT-197 A1: `sell_pct` (<= 0, the seller's reputation tier in the merchant's region) lowers each bid via
+    econ_core.reputation_bid; a bid cut to 0 means «does not buy» (the item is absent)."""
     ids = sorted({int(i) for i in item_ids})
     if not ids:
         return {}
@@ -4640,6 +4646,11 @@ async def quote_bids(session: AsyncSession, market: MerchantMarket, item_ids) ->
     for item_id in ids:
         quote = quote_bid(market, items.get(item_id), by_item.get(item_id), groups)
         if quote is not None:
+            cut = econ_core.reputation_bid(quote.unit_price, sell_pct)
+            if cut != quote.unit_price:
+                if cut < 1:
+                    continue
+                quote = quote._replace(unit_price=cut, base_unit_price=quote.unit_price)
             out[item_id] = quote
     return out
 
@@ -4655,14 +4666,19 @@ async def get_bag_quantities(session: AsyncSession, character_id: int) -> Dict[i
 async def get_sell_offers(session: AsyncSession, npc_id: int, character_id: int,
                           max_quantity: int) -> List[dict]:
     """GET /npcs/{npc_id}/shop/sell-offers: the character's bag items this merchant buys now and at
-    what bid. The merchant's cash is not disclosed (a broke merchant refuses on the sell itself)."""
-    bag = await get_bag_quantities(session, character_id)
-    if not bag:
-        return []
+    what bid. The merchant's cash is not disclosed (a broke merchant refuses on the sell itself).
+
+    FEAT-197: 409 for a character the region's merchants refuse (Вне закона); a low tier lowers the bids
+    (`base_unit_price` + `price_reasons` show the cut)."""
     market = await merchant_market(session, npc_id)
     if market.reason == econ_core.MERCHANT_REASON_DEAD:
         return []                        # a dead merchant's shop is closed
-    quotes = await quote_bids(session, market, bag.keys())
+    terms = await reputation_read.trade_terms(session, character_id, market.region_id)
+    reputation_read.require_trade(terms)
+    bag = await get_bag_quantities(session, character_id)
+    if not bag:
+        return []
+    quotes = await quote_bids(session, market, bag.keys(), terms.sell_pct)
     if not quotes:
         return []
     items = await get_item_markets(session, quotes.keys())
@@ -4675,6 +4691,8 @@ async def get_sell_offers(session: AsyncSession, npc_id: int, character_id: int,
             "item_image": item.image if item else None,
             "unit_price": quote.unit_price,
             "max_quantity": min(bag[item_id], max_quantity),
+            "base_unit_price": quote.base_unit_price or quote.unit_price,
+            "price_reasons": reputation_read.bid_reasons(terms) if quote.base_unit_price else [],
         })
     return out
 
@@ -5036,6 +5054,8 @@ async def create_quest(session: AsyncSession, data: dict) -> Quest:
         reward_exp=data.get("reward_exp", 0),
         reward_items=data.get("reward_items"),
         is_active=data.get("is_active", True),
+        reputation_reward=data.get("reputation_reward"),
+        min_reputation_tier=data.get("min_reputation_tier"),
     )
     session.add(quest)
     await session.flush()
@@ -5116,6 +5136,11 @@ async def update_quest(session: AsyncSession, quest_id: int, data: dict) -> Opti
         quest.reward_items = data["reward_items"]
     if "is_active" in data and data["is_active"] is not None:
         quest.is_active = data["is_active"]
+    # FEAT-197: nullable on purpose — an explicit null clears the reward override / the gate
+    if "reputation_reward" in data:
+        quest.reputation_reward = data["reputation_reward"]
+    if "min_reputation_tier" in data:
+        quest.min_reputation_tier = data["min_reputation_tier"]
 
     # Replace objectives if provided
     if "objectives" in data and data["objectives"] is not None:
@@ -5207,6 +5232,12 @@ async def get_available_quests_for_npc(
     result = await session.execute(stmt)
     all_quests = result.scalars().all()
 
+    # FEAT-197: gated quests stay in the list with `locked_reason` (NPC gate first, then the quest's own)
+    gates = None
+    if all_quests:
+        gates = await reputation_read.quest_gates(
+            session, character_id, npc_id, [q.min_reputation_tier for q in all_quests])
+
     available = []
     for q in all_quests:
         if q.id in active_quest_ids:
@@ -5229,6 +5260,8 @@ async def get_available_quests_for_npc(
                 for o in sorted(q.objectives, key=lambda x: x.sort_order)
             ],
             "player_status": status,
+            "min_reputation_tier": q.min_reputation_tier,
+            "locked_reason": gates.reason(q.min_reputation_tier) if status == 'available' else None,
         })
 
     return available
@@ -5253,6 +5286,12 @@ async def accept_quest(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] < quest.min_level:
         raise HTTPException(status_code=400, detail=f"Требуется уровень {quest.min_level}")
+
+    # FEAT-197: NPC tier gate and the quest's own gate, region of the quest giver (403)
+    gates = await reputation_read.quest_gates(session, character_id, quest.npc_id, [quest.min_reputation_tier])
+    locked = gates.reason(quest.min_reputation_tier)
+    if locked:
+        raise HTTPException(status_code=reputation_read.GATE_STATUS, detail=locked)
 
     # Check if already has this quest active
     existing = await session.execute(

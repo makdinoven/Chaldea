@@ -3743,6 +3743,21 @@ def list_teleport_options_for_npc(db: Session, source_npc_id: int):
     return options
 
 
+def teleport_lock_reasons(db: Session, character_id: int, source_npc_id: int, options: list):
+    """FEAT-197: fill ``locked_reason`` of every option (link gate) for the character and return the NPC-level
+    gate text (None = open). The region is the source NPC's region."""
+    import reputation_crud  # local: reputation_crud imports economy modules that import crud
+
+    source = db.query(Character).filter(Character.id == source_npc_id).first()
+    region_id = reputation_crud.location_region(db, source.current_location_id) if source else None
+    npc_locked = reputation_crud.npc_gate_failure(db, character_id, source_npc_id, region_id)
+    tiers = {link.id: link.min_reputation_tier for link in
+             db.query(TeleportLink).filter(TeleportLink.from_npc_id == source_npc_id).all()}
+    for opt in options:
+        opt["locked_reason"] = reputation_crud.gate_failure(db, character_id, region_id, tiers.get(opt["link_id"]))
+    return npc_locked
+
+
 def get_cooldown_seconds_remaining(character) -> int:
     if character.last_teleport_at is None:
         return 0
@@ -3799,6 +3814,14 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     target = db.query(Character).filter(Character.id == link.to_npc_id).first()
     if not target or (target.npc_role or "") != TELEPORT_ROLE or target.current_location_id is None:
         raise HTTPException(status_code=422, detail="Связь телепорта недействительна")
+
+    # FEAT-197: reputation gates in the source NPC's region (the NPC itself, then the link)
+    import reputation_crud  # local: avoids an import cycle through the economy modules
+    rep_region = reputation_crud.location_region(db, source.current_location_id)
+    rep_locked = (reputation_crud.npc_gate_failure(db, character.id, source.id, rep_region)
+                  or reputation_crud.gate_failure(db, character.id, rep_region, link.min_reputation_tier))
+    if rep_locked:
+        raise HTTPException(status_code=403, detail=rep_locked)
 
     cooldown = get_cooldown_seconds_remaining(character)
     if cooldown > 0:
@@ -3904,6 +3927,7 @@ def create_teleport_link(db: Session, data):
             from_npc_id=data.from_npc_id,
             to_npc_id=data.to_npc_id,
             cost_gold=data.cost_gold,
+            min_reputation_tier=getattr(data, "min_reputation_tier", None),
         )
         db.add(forward)
         db.flush()
@@ -3914,6 +3938,7 @@ def create_teleport_link(db: Session, data):
                 from_npc_id=data.to_npc_id,
                 to_npc_id=data.from_npc_id,
                 cost_gold=data.cost_gold,
+                min_reputation_tier=getattr(data, "min_reputation_tier", None),
             )
             db.add(reverse)
             db.flush()
@@ -3929,11 +3954,16 @@ def create_teleport_link(db: Session, data):
     return created
 
 
-def update_teleport_link_cost(db: Session, link_id: int, cost_gold: int):
+def update_teleport_link_cost(db: Session, link_id: int, cost_gold, *, min_reputation_tier=None,
+                              set_tier: bool = False):
+    """Update the fare (when not None) and, with ``set_tier``, the FEAT-197 reputation gate (None clears it)."""
     link = db.query(TeleportLink).filter(TeleportLink.id == link_id).first()
     if not link:
         raise HTTPException(status_code=404, detail="Связь телепорта не найдена")
-    link.cost_gold = cost_gold
+    if cost_gold is not None:
+        link.cost_gold = cost_gold
+    if set_tier:
+        link.min_reputation_tier = min_reputation_tier
     try:
         db.commit()
         db.refresh(link)

@@ -3,6 +3,7 @@ import axios, { AxiosError } from 'axios';
 import toast from 'react-hot-toast';
 import type { RootState } from '../store';
 import { getCurrencyForms } from '../../utils/currency';
+import { apiErrorMessage } from '../../api/errors';
 
 // --- Types ---
 
@@ -13,12 +14,16 @@ export interface TeleportOption {
   to_location_id: number;
   to_location_name: string;
   cost_gold: number;
+  /** FEAT-197: «Нужна репутация: X» when this link is closed for the active character */
+  locked_reason?: string | null;
 }
 
 export interface TeleportOptionsResponse {
   from_npc_id: number;
   cooldown_seconds_remaining: number;
   options: TeleportOption[];
+  /** FEAT-197: the teleport master himself refuses the active character (NPC reputation gate) */
+  locked_reason?: string | null;
 }
 
 export interface TeleportResult {
@@ -34,6 +39,8 @@ export interface TeleportLink {
   to_npc_id: number;
   cost_gold: number;
   created_at?: string;
+  /** FEAT-197: travelling along this link needs this tier in the source NPC's region (null = none) */
+  min_reputation_tier?: string | null;
 }
 
 export interface TeleportLinkCreatePayload {
@@ -41,10 +48,14 @@ export interface TeleportLinkCreatePayload {
   to_npc_id: number;
   cost_gold: number;
   bidirectional?: boolean;
+  /** FEAT-197: applied to the reverse link too */
+  min_reputation_tier?: string | null;
 }
 
 export interface TeleportLinkUpdatePayload {
-  cost_gold: number;
+  cost_gold?: number;
+  /** FEAT-197: sent → stored (null clears), omitted → unchanged */
+  min_reputation_tier?: string | null;
 }
 
 /**
@@ -70,6 +81,8 @@ interface BackendErrorDetail {
 
 export interface TeleportState {
   optionsByNpcId: Record<number, TeleportOption[]>;
+  /** FEAT-197: NPC-level reputation lock per teleport master (null — open) */
+  lockedReasonByNpcId: Record<number, string | null>;
   cooldownSecondsRemaining: number;
   loadingOptions: boolean;
   optionsError: string | null;
@@ -86,6 +99,7 @@ export interface TeleportState {
 
 const initialState: TeleportState = {
   optionsByNpcId: {},
+  lockedReasonByNpcId: {},
   cooldownSecondsRemaining: 0,
   loadingOptions: false,
   optionsError: null,
@@ -108,6 +122,10 @@ const mapExecuteError = (err: unknown): string => {
   const detailCode =
     typeof raw === 'string' ? raw : raw && typeof raw === 'object' ? raw.detail : undefined;
 
+  // FEAT-197: a reputation gate answers 403 with a Russian «Нужна репутация: X».
+  if (status === 403 && typeof raw === 'string' && raw.trim()) {
+    return raw;
+  }
   if (status === 402 || detailCode === 'insufficient_gold') {
     return `Недостаточно ${getCurrencyForms().genitive}`;
   }
@@ -140,8 +158,10 @@ export const fetchTeleportOptions = createAsyncThunk<
         `/characters/npcs/${npcId}/teleport-options`,
       );
       return { npcId, response: data };
-    } catch {
-      return thunkAPI.rejectWithValue('Не удалось загрузить направления телепорта');
+    } catch (err) {
+      return thunkAPI.rejectWithValue(
+        apiErrorMessage(err, 'Не удалось загрузить направления телепорта'),
+      );
     }
   },
 );
@@ -212,9 +232,10 @@ export const createTeleportLink = createAsyncThunk<
       }
       toast.success('Связь телепорта создана');
       return { links };
-    } catch {
-      toast.error('Не удалось создать связь телепорта');
-      return thunkAPI.rejectWithValue('Не удалось создать связь телепорта');
+    } catch (err) {
+      const message = apiErrorMessage(err, 'Не удалось создать связь телепорта');
+      toast.error(message);
+      return thunkAPI.rejectWithValue(message);
     }
   },
 );
@@ -233,9 +254,10 @@ export const updateTeleportLink = createAsyncThunk<
       );
       toast.success('Связь телепорта обновлена');
       return data;
-    } catch {
-      toast.error('Не удалось обновить связь телепорта');
-      return thunkAPI.rejectWithValue('Не удалось обновить связь телепорта');
+    } catch (err) {
+      const message = apiErrorMessage(err, 'Не удалось обновить связь телепорта');
+      toast.error(message);
+      return thunkAPI.rejectWithValue(message);
     }
   },
 );
@@ -284,6 +306,8 @@ const teleportSlice = createSlice({
       .addCase(fetchTeleportOptions.fulfilled, (state, action) => {
         state.loadingOptions = false;
         state.optionsByNpcId[action.payload.npcId] = action.payload.response.options;
+        state.lockedReasonByNpcId[action.payload.npcId] =
+          action.payload.response.locked_reason ?? null;
         state.cooldownSecondsRemaining =
           action.payload.response.cooldown_seconds_remaining;
       })
@@ -379,7 +403,11 @@ export const selectTeleportOptions = (npcId: number) =>
   (state: RootState): TeleportOption[] | undefined =>
     state.teleport.optionsByNpcId[npcId];
 
-export const selectTeleportCooldown = (state: RootState): number =>
+export const selectTeleportLockedReason = (npcId: number) =>
+  (state: RootState): string | null =>
+    state.teleport.lockedReasonByNpcId[npcId] ?? null;
+
+export const selectTeleportCooldown =(state: RootState): number =>
   state.teleport.cooldownSecondsRemaining;
 
 export const selectTeleportLoadingOptions = (state: RootState): boolean =>

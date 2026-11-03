@@ -20,6 +20,7 @@ import LogsTab from './LogsTab/LogsTab';
 import PostHistoryTab from './PostHistoryTab/PostHistoryTab';
 import TitlesTab from './TitlesTab/TitlesTab';
 import CraftTab from './CraftTab/CraftTab';
+import ReputationTab from './ReputationTab/ReputationTab';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import EmptyState from './shared/EmptyState';
 import LoadingState from './shared/LoadingState';
@@ -89,6 +90,12 @@ const ProfilePage = () => {
         return <LogsTab characterId={characterId} />;
       case 'posts':
         return <PostHistoryTab characterId={characterId} />;
+      case 'reputation':
+        return (
+          <ErrorBoundary>
+            <ReputationTab characterId={characterId} />
+          </ErrorBoundary>
+        );
       case 'titles':
         return <TitlesTab characterId={characterId} />;
       case 'craft':

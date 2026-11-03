@@ -310,6 +310,8 @@ export interface Plot {
   cells_total: number;
   map_x: number | null;
   map_y: number | null;
+  /** FEAT-197: buying here needs this reputation tier in the plot's region (null = none). */
+  min_reputation_tier?: string | null;
   house: null | {
     id: number;
     name: string;
@@ -671,6 +673,8 @@ export interface PlotInput {
   map_x: number | null;
   map_y: number | null;
   kind: PlotKind;
+  /** FEAT-197: the PUT is a full replace — always sent (null = no gate). */
+  min_reputation_tier: string | null;
   grid_w: number;
   grid_h: number;
   extension_price: number | null;

@@ -8,6 +8,8 @@ import asyncio
 import models, schemas, crud
 import locations_client
 import activity_lock
+import reputation_crud
+import reputation_notify
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -30,7 +32,7 @@ from auth_http import (
     UserRead,
 )
 from visibility import can_view_private, require_private_access
-from sqlalchemy import text
+from sqlalchemy import text, or_
 import logging
 
 # Universal subrace skill applied to all subraces (1-16)
@@ -2926,7 +2928,8 @@ def admin_list_npcs(
     try:
         query = db.query(models.Character).filter(
             models.Character.is_npc == True,
-            models.Character.npc_role != 'mob'
+            # NULL npc_role is a regular NPC (SQL `NULL != 'mob'` is NULL)
+            or_(models.Character.npc_role.is_(None), models.Character.npc_role != 'mob'),
         )
 
         if q:
@@ -2992,6 +2995,8 @@ async def admin_create_npc(
             is_npc=True,
             user_id=None,
             request_id=None,
+            reputation_min_tier=data.reputation_min_tier,
+            reputation_kill_points=data.reputation_kill_points,
         )
         db.add(new_npc)
         db.flush()
@@ -3076,6 +3081,8 @@ def admin_get_npc(
         "avatar": npc.avatar,
         "current_location_id": npc.current_location_id,
         "npc_status": npc.npc_status,
+        "reputation_min_tier": npc.reputation_min_tier,
+        "reputation_kill_points": npc.reputation_kill_points,
     }
 
 
@@ -3970,25 +3977,44 @@ def update_npc_status(
 
     FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
     отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
+
+    FEAT-197: 'dead' is a conditional alive -> dead transition (a repeated report is
+    a no-op, `killed` = false). Only on a real transition, and when the optional
+    `killer_character_ids` are given, every PLAYER among them gets the kill
+    reputation in the NPC's region (same transaction, idempotent per battle/killer).
     """
     npc = db.query(models.Character).filter(
         models.Character.id == character_id,
         models.Character.is_npc == True,
-        models.Character.npc_role != 'mob',
+        # NULL npc_role is a regular NPC (SQL `NULL != 'mob'` is NULL, so test it explicitly)
+        or_(models.Character.npc_role.is_(None), models.Character.npc_role != 'mob'),
     ).first()
     if not npc:
         raise HTTPException(status_code=404, detail="NPC не найден")
 
-    npc.npc_status = data.status
+    killed = False
+    tier_changes = []
     try:
+        if data.status == "dead":
+            killed = db.query(models.Character).filter(
+                models.Character.id == character_id,
+                models.Character.npc_status == "alive",
+            ).update({models.Character.npc_status: "dead"}, synchronize_session=False) == 1
+            if killed and data.killer_character_ids:
+                results = reputation_crud.apply_npc_kill(
+                    db, npc, battle_id=data.battle_id, killer_ids=data.killer_character_ids)
+                tier_changes = reputation_crud.tier_changes_of(results)
+        else:
+            npc.npc_status = data.status
         db.commit()
         db.refresh(npc)
-    except SQLAlchemyError as e:
+    except (SQLAlchemyError, reputation_crud.ReputationError) as e:
         db.rollback()
         logger.error(f"Ошибка при обновлении статуса NPC {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении статуса NPC")
 
-    return {"ok": True, "status": npc.npc_status}
+    reputation_notify.publish_tier_changes(tier_changes)
+    return {"ok": True, "status": npc.npc_status, "killed": killed}
 
 
 # ============================================================
@@ -4433,13 +4459,18 @@ def get_teleport_options(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """List teleport destinations for a teleport-master NPC."""
+    """List teleport destinations for a teleport-master NPC.
+
+    FEAT-197: `locked_reason` (NPC gate) and per-option `locked_reason` (link gate)
+    are computed for the player's active character («Нужна репутация: X»).
+    """
     options = crud.list_teleport_options_for_npc(db, npc_id)
     if options is None:
         raise HTTPException(status_code=404, detail="NPC не является Мастером Телепорта")
 
     # Cooldown belongs to the player's active character (if any)
     cooldown = 0
+    npc_locked = None
     row = db.execute(
         text("SELECT current_character FROM users WHERE id = :uid"),  # столбец в users называется current_character
         {"uid": current_user.id},
@@ -4448,11 +4479,13 @@ def get_teleport_options(
         active = db.query(models.Character).filter(models.Character.id == row[0]).first()
         if active is not None:
             cooldown = crud.get_cooldown_seconds_remaining(active)
+            npc_locked = crud.teleport_lock_reasons(db, active.id, npc_id, options)
 
     return schemas.TeleportOptionsResponse(
         from_npc_id=npc_id,
         cooldown_seconds_remaining=cooldown,
         options=[schemas.TeleportOption(**opt) for opt in options],
+        locked_reason=npc_locked,
     )
 
 
@@ -4503,6 +4536,7 @@ def admin_create_teleport_link(
                 "from_npc_id": row.from_npc_id,
                 "to_npc_id": row.to_npc_id,
                 "cost_gold": row.cost_gold,
+                "min_reputation_tier": row.min_reputation_tier,
             }
             for row in created
         ],
@@ -4516,9 +4550,13 @@ def admin_patch_teleport_link(
     db: Session = Depends(get_db),
     current_user=Depends(get_admin_user),
 ):
-    if data.cost_gold is None:
+    tier_set = "min_reputation_tier" in data.__fields_set__
+    if data.cost_gold is None and not tier_set:
         raise HTTPException(status_code=400, detail="Нет данных для обновления")
-    return crud.update_teleport_link_cost(db, link_id, data.cost_gold)
+    return crud.update_teleport_link_cost(
+        db, link_id, data.cost_gold,
+        min_reputation_tier=data.min_reputation_tier, set_tier=tier_set,
+    )
 
 
 @router.delete("/admin/teleport-links/{link_id}")
@@ -4574,7 +4612,9 @@ def set_travel_cooldown(
 # FEAT-181: economy API. Included BEFORE the main router so its static paths
 # (/characters/economy/..., /characters/admin/economy/...) win over /characters/{character_id}/... routes.
 from economy_api import router as economy_router  # noqa: E402
+from reputation_api import router as reputation_router  # noqa: E402
 app.include_router(economy_router)
+app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
 app.include_router(router)
 
 

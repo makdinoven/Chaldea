@@ -901,6 +901,72 @@ def discounted_ask(ask, discount_pct) -> int:
     return max(1, _ceil(_dec(ask) * (_ONE - pct / _HUNDRED)))
 
 
+# FEAT-197 region reputation: a tier's price_pct (> 0 discount, < 0 markup) and sell_pct (<= 0).
+MAX_REPUTATION_MARKUP_PCT = Decimal(100)        # the largest markup / bid cut a tier may carry, percent
+
+
+def _reputation_pct(value) -> Decimal:
+    """A tier percent as a finite Decimal; 0 for None / bool / garbage / NaN / Infinity."""
+    if value is None or isinstance(value, bool):
+        return Decimal(0)
+    try:
+        pct = _dec(value)
+    except (InvalidOperation, ValueError):
+        return Decimal(0)
+    return pct if pct.is_finite() else Decimal(0)
+
+
+def _clamped_charisma_pct(charisma_pct) -> Decimal:
+    return min(max(_reputation_pct(charisma_pct), Decimal(0)), MAX_CHARISMA_DISCOUNT * _HUNDRED)
+
+
+def _clamped_reputation_pct(reputation_pct) -> Decimal:
+    return min(max(_reputation_pct(reputation_pct), -MAX_REPUTATION_MARKUP_PCT), MAX_CHARISMA_DISCOUNT * _HUNDRED)
+
+
+def reputation_ask(ask, charisma_pct, reputation_pct) -> int:
+    """What the player pays per item with charisma and the region reputation tier (FEAT-197 D7).
+
+    A discount tier (reputation_pct > 0) adds to the charisma discount and the SUM is clamped to 50 %
+    (discounted_ask), so the price never drops below ceil(ask * 0.5) >= every bid / guild price.
+    A markup tier (reputation_pct < 0, down to -100 %) applies on top of the charisma-discounted price:
+    max(1, ceil(discounted_ask(ask, charisma) * (1 + markup / 100))) - it only ever raises the price.
+    reputation_pct = 0 is exactly discounted_ask(ask, charisma_pct).
+    """
+    rep = _clamped_reputation_pct(reputation_pct)
+    charisma = _clamped_charisma_pct(charisma_pct)
+    if rep >= 0:
+        return discounted_ask(ask, charisma + rep)
+    base = discounted_ask(ask, charisma)
+    return max(1, _ceil(_dec(base) * (_ONE - rep / _HUNDRED)))
+
+
+def reputation_discount_split(charisma_pct, reputation_pct) -> Tuple[Decimal, Decimal]:
+    """How reputation_ask's change splits into (charisma_applied, reputation_applied), percent, for the
+    shop's price reasons. Charisma is applied first (clamped 0..50); a discount tier gets what is left
+    of the 50 % ceiling (possibly 0); a markup tier is returned as is (negative, clamped to -100)."""
+    rep = _clamped_reputation_pct(reputation_pct)
+    charisma = _clamped_charisma_pct(charisma_pct)
+    if rep <= 0:
+        return charisma, rep
+    return charisma, min(charisma + rep, MAX_CHARISMA_DISCOUNT * _HUNDRED) - charisma
+
+
+def reputation_bid(bid, reputation_sell_pct) -> int:
+    """What a merchant pays the player per item with the region reputation tier (FEAT-197 A1).
+
+    floor(bid * (1 + pct / 100)) with pct clamped to -100..0: a low tier only ever LOWERS the bid,
+    a high tier never raises it (no arbitrage). Never above `bid`, never below 0 (0 = «does not buy»).
+    """
+    bid = int(bid or 0)
+    if bid <= 0:
+        return 0
+    pct = min(max(_reputation_pct(reputation_sell_pct), -MAX_REPUTATION_MARKUP_PCT), Decimal(0))
+    if pct == 0:
+        return bid
+    return min(bid, max(0, _floor(_dec(bid) * (_ONE + pct / _HUNDRED))))
+
+
 def units_per_item(base, group_base) -> float:
     """Abstract region units one concrete item is worth: base / group_base (value-based, 3.1 #3).
 

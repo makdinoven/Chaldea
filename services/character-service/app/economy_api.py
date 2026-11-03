@@ -47,6 +47,7 @@ import economy_mint_crud
 import locations_client
 import economy_merchants_crud
 import economy_sim_crud
+import reputation_notify
 import schemas
 from auth_http import UserRead, get_current_user_via_http, require_permission
 
@@ -794,8 +795,10 @@ def put_bank_flag(
     current_user: UserRead = Depends(require_permission("economy:settings")),
 ):
     """«Банк есть»: creates the row; the first switch-on with seed_capital takes the start capital once."""
+    extra = ({"loan_min_reputation_tier": body.loan_min_reputation_tier}
+             if "loan_min_reputation_tier" in body.__fields_set__ else {})     # FEAT-197: omitted = unchanged
     result = _run_write(db, lambda: economy_bank_crud.set_bank_flag(
-        db, region_id, is_enabled=body.is_enabled, seed=body.seed_capital, actor_user_id=current_user.id))
+        db, region_id, is_enabled=body.is_enabled, seed=body.seed_capital, actor_user_id=current_user.id, **extra))
     logger.info("bank flag: user=%s region=%s enabled=%s own_funds=%s", current_user.id, region_id,
                 body.is_enabled, result["own_funds"])
     return result
@@ -1070,6 +1073,7 @@ def _guild_commit(db: Session, npc_id: int, body: schemas.GuildHandInIn, user_id
         ctx = economy_guild_crud.guild_context(db, npc_id, character_id, user_id, write=True)
         result = economy_guild_crud.hand_in(db, ctx, body, xp_multiplier=multiplier)
         db.commit()
+        reputation_notify.publish_tier_changes(result.pop("reputation_tier_changes", None) or [])
     except economy_crud.EconomyApiError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)

@@ -11,6 +11,8 @@ import NpcStatsEditor from './NpcStatsEditor';
 import NpcEquipmentEditor from './NpcEquipmentEditor';
 import TeleportLinksPanel from './TeleportLinksPanel';
 import AdminPagination from '../Admin/AdminPagination/AdminPagination';
+import ReputationTierSelect from '../Admin/ReputationPage/ReputationTierSelect';
+import { roleKillWeight, useReputationRoleWeights } from '../Admin/ReputationPage/useReputationRefs';
 
 /* ── Types ── */
 
@@ -42,6 +44,10 @@ interface NpcFormData {
   height: string;
   current_location_id: number | null;
   currency_balance: number;
+  /** FEAT-197: NPC gate (tier code, null = none) */
+  reputation_min_tier: string | null;
+  /** FEAT-197: typed kill weight; '' = the role weight */
+  reputation_kill_points: string;
 }
 
 interface LocationOption {
@@ -78,7 +84,12 @@ const INITIAL_FORM: NpcFormData = {
   height: '170',
   current_location_id: null,
   currency_balance: 0,
+  reputation_min_tier: null,
+  reputation_kill_points: '',
 };
+
+const KILL_POINTS_LIMIT = 1000;
+const SIGNED_INT_RE = /^-?\d*$/;
 
 /* ── Component ── */
 
@@ -96,6 +107,7 @@ const AdminNpcsPage = () => {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<NpcFormData>(INITIAL_FORM);
+  const roleWeights = useReputationRoleWeights();
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<LocationOption[]>([]);
   const [locationSearchQuery, setLocationSearchQuery] = useState('');
@@ -201,6 +213,8 @@ const AdminNpcsPage = () => {
         height: npc.height || '170',
         current_location_id: npc.current_location_id ?? null,
         currency_balance: npc.currency_balance || 0,
+        reputation_min_tier: npc.reputation_min_tier ?? null,
+        reputation_kill_points: npc.reputation_kill_points == null ? '' : String(npc.reputation_kill_points),
       });
       setEditingId(id);
       setAvatarFile(null);
@@ -288,11 +302,18 @@ const AdminNpcsPage = () => {
       toast.error('Имя НПС обязательно');
       return;
     }
+    const killText = form.reputation_kill_points.trim();
+    const killPoints = killText === '' ? null : Number(killText);
+    if (killPoints !== null && (!Number.isInteger(killPoints) || Math.abs(killPoints) > KILL_POINTS_LIMIT)) {
+      toast.error(`Репутация за убийство — целое число от −${KILL_POINTS_LIMIT} до ${KILL_POINTS_LIMIT}`);
+      return;
+    }
     setSaving(true);
     try {
       let npcId = editingId;
       // Exclude avatar from payload — it's handled separately via photo-service
-      const { avatar: _avatar, ...payload } = form;
+      const { avatar: _avatar, reputation_kill_points: _killText, ...rest } = form;
+      const payload = { ...rest, reputation_kill_points: killPoints };
       if (editingId) {
         await axios.put(`${BASE_URL}/characters/admin/npcs/${editingId}`, payload);
         toast.success('НПС обновлён');
@@ -457,6 +478,31 @@ const AdminNpcsPage = () => {
                   <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
                 ))}
               </select>
+            </label>
+
+            {/* FEAT-197: reputation gate + kill weight */}
+            <ReputationTierSelect
+              value={form.reputation_min_tier}
+              onChange={(code) => setForm((prev) => ({ ...prev, reputation_min_tier: code }))}
+              hint="Ниже этой ступени НПС не разговаривает и не оказывает услуг"
+            />
+
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Репутация за убийство</span>
+              <input
+                inputMode="numeric"
+                value={form.reputation_kill_points}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (SIGNED_INT_RE.test(v)) setForm((prev) => ({ ...prev, reputation_kill_points: v }));
+                }}
+                placeholder={(() => {
+                  const w = roleKillWeight(roleWeights, form.npc_role);
+                  return w == null ? 'по умолчанию: вес роли' : `по умолчанию: ${w > 0 ? `+${w}` : w} (вес роли)`;
+                })()}
+                className="input-underline"
+              />
+              <span className="text-white/40 text-xs">Каждому победителю, в регионе НПС; пусто — вес роли</span>
             </label>
 
             {/* Class */}

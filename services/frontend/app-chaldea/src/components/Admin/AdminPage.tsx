@@ -44,6 +44,7 @@ const sections: AdminSection[] = [
   { label: 'Профессии', path: '/admin/professions', description: 'Управление профессиями и рангами', module: 'professions' },
   { label: 'Рецепты', path: '/admin/recipes', description: 'Управление рецептами крафта', module: 'professions' },
   { label: 'Экономика', path: '/admin/economy', description: 'Где лежат деньги мира: казны, журнал операций, эмиссия, название валюты', module: 'economy' },
+  { label: 'Репутация', path: '/admin/reputation', description: 'Ступени репутации регионов, влияние на торговлю, вес действий и убийства НПС', module: 'reputation' },
   { label: 'Батл Пасс', path: '/admin/battle-pass', description: 'Управление сезонами, наградами и заданиями', module: 'battlepass' },
   { label: 'Косметика', path: '/admin/cosmetics', description: 'Управление рамками и подложками', module: 'cosmetics' },
   { label: 'Подземелья', path: '/admin/dungeons', description: 'Управление подземельями: создание, комнаты, коридоры', module: 'dungeons' },

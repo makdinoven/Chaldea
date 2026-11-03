@@ -1097,10 +1097,20 @@ class NpcShopItemPublicRead(NpcShopItemCore):
     price_level: str = "normal"
     living: bool = False
 
+class PriceReason(BaseModel):
+    """FEAT-197: why a personal price differs from the shop price. `percent` is signed in the player's
+    favour: + discount (or nothing), − markup on a purchase / cut of the merchant's bid on a sale."""
+    source: Literal["charisma", "reputation"]
+    percent: float
+    label: str
+
 class NpcShopItemRead(NpcShopItemPublicRead):
     """The personal price list — `discounted_buy_price` is derived from the
-    character's `charisma` and is therefore a private number (FEAT-171)."""
+    character's `charisma` and region reputation and is therefore a private number
+    (FEAT-171). FEAT-197: it may be GREATER than `buy_price` (reputation markup);
+    `price_reasons` explains the difference."""
     discounted_buy_price: Optional[int] = None
+    price_reasons: List[PriceReason] = []
 
 class NpcShopItemAdminRead(NpcShopItemCore):
     """Admin shop editor row (FEAT-183): base prices + the merchant's current market prices.
@@ -1158,6 +1168,9 @@ class ShopSellOfferRead(BaseModel):
     item_image: Optional[str] = None
     unit_price: int
     max_quantity: int
+    # FEAT-197 A1: the merchant's bid before the reputation cut (= unit_price without one) + why
+    base_unit_price: Optional[int] = None
+    price_reasons: List[PriceReason] = []
 
 class ShopTransactionResponse(BaseModel):
     success: bool
@@ -1166,7 +1179,28 @@ class ShopTransactionResponse(BaseModel):
     item_name: Optional[str] = None
     quantity: int = 0
     total_price: int = 0
+    # net charisma + reputation percent of a purchase (negative with a markup); 0 on a sale
     discount_percent: float = 0
+    price_reasons: List[PriceReason] = []
+
+
+# -------------------------------
+#   FEAT-197 reputation gate fields
+# -------------------------------
+REPUTATION_REWARD_LIMIT = 1000
+
+
+def validate_tier_code(code: Optional[str]) -> Optional[str]:
+    """'' / None -> None (no gate); one of the 8 fixed tier codes -> itself; else a Russian ValueError."""
+    import reputation_core
+    if code is None:
+        return None
+    code = str(code).strip()
+    if not code:
+        return None
+    if code not in reputation_core.TIER_CODES:
+        raise ValueError("Неизвестная ступень репутации")
+    return code
 
 
 # -------------------------------
@@ -1202,6 +1236,10 @@ class QuestCreate(BaseModel):
     reward_items: Optional[List[dict]] = None  # [{item_id, quantity}]
     is_active: bool = True
     objectives: List[QuestObjectiveCreate] = []
+    reputation_reward: Optional[int] = Field(None, ge=-REPUTATION_REWARD_LIMIT, le=REPUTATION_REWARD_LIMIT)
+    min_reputation_tier: Optional[str] = None
+
+    _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(validate_tier_code)
 
 class QuestUpdate(BaseModel):
     title: Optional[str] = None
@@ -1213,6 +1251,10 @@ class QuestUpdate(BaseModel):
     reward_items: Optional[List[dict]] = None
     is_active: Optional[bool] = None
     objectives: Optional[List[QuestObjectiveCreate]] = None
+    reputation_reward: Optional[int] = Field(None, ge=-REPUTATION_REWARD_LIMIT, le=REPUTATION_REWARD_LIMIT)
+    min_reputation_tier: Optional[str] = None
+
+    _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(validate_tier_code)
 
 class QuestRead(BaseModel):
     id: int
@@ -1226,6 +1268,8 @@ class QuestRead(BaseModel):
     reward_items: Optional[List[dict]] = None
     is_active: bool = True
     created_at: Optional[datetime] = None
+    reputation_reward: Optional[int] = None
+    min_reputation_tier: Optional[str] = None
     objectives: List[QuestObjectiveRead] = []
 
     class Config:
@@ -1315,6 +1359,9 @@ class QuestAvailableRead(BaseModel):
     reward_items: Optional[List[dict]] = None
     objectives: List[QuestObjectiveRead] = []
     player_status: str = 'available'  # available, active, completed
+    min_reputation_tier: Optional[str] = None
+    # FEAT-197: «Нужна репутация: X» when the NPC or quest tier gate is not met (the quest cannot be taken)
+    locked_reason: Optional[str] = None
 
 
 # -------------------------------

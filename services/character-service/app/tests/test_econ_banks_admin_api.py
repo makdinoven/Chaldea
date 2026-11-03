@@ -286,7 +286,8 @@ def test_flag_off_creates_disabled_row_and_unknown_region_404(api, engine):
 ITEM_KEYS = {"region_id", "region_name", "country_name", "enabled", "simulated", "bankers", "own_funds", "vault",
              "deposits_sum", "vault_ok", "deposits_count", "term_count", "resident_deposits", "resident_loans",
              "reserve", "lendable", "loans_count", "loans_debt", "overdue_count", "rate_factor", "demand_rate_day",
-             "term_rates", "capital_seeded_at", "last_tick_at", "last_stats"}
+             "term_rates", "capital_seeded_at", "last_tick_at", "last_stats",
+             "loan_min_reputation_tier"}                                       # FEAT-197
 
 
 def test_list_detail_and_totals(api, engine):

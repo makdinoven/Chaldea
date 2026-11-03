@@ -4,6 +4,9 @@ import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
 import { useCurrency } from '../../hooks/useCurrency';
+import ReputationTierSelect from '../Admin/ReputationPage/ReputationTierSelect';
+import { DEFAULT_QUEST_REPUTATION } from '../../api/reputationAdmin';
+import { EntityPicker } from '../Admin/DungeonsPage/editor/pickers';
 
 /* ── Types ── */
 
@@ -30,6 +33,10 @@ interface QuestFormData {
   reward_items: QuestRewardItemForm[];
   objectives: QuestObjectiveForm[];
   is_active: boolean;
+  /** FEAT-197: typed text; '' = the default weight (action «Выполнено задание») */
+  reputation_reward: string;
+  /** FEAT-197: tier gate code, null = none */
+  min_reputation_tier: string | null;
 }
 
 interface QuestListItem {
@@ -49,12 +56,6 @@ interface GameItem {
   item_type: string;
 }
 
-interface LookupOption {
-  id: number;
-  name: string;
-  extra?: string;
-}
-
 interface QuestEditorProps {
   npcId: number;
   npcName: string;
@@ -71,7 +72,12 @@ const INITIAL_FORM: QuestFormData = {
   reward_items: [],
   objectives: [],
   is_active: true,
+  reputation_reward: '',
+  min_reputation_tier: null,
 };
+
+const REPUTATION_REWARD_LIMIT = 1000;
+const SIGNED_INT_RE = /^-?\d*$/;
 
 const QUEST_TYPES = [
   { value: 'standard', label: 'Обычный' },
@@ -98,6 +104,29 @@ const OBJECTIVE_TYPES = [
   { value: 'custom', label: 'Особое' },
 ];
 
+type TargetKind = 'mob' | 'npc' | 'location' | 'quest' | 'item';
+
+/** Which picker an objective type needs for its target (null = no target or a fixed list). */
+const targetKind = (objectiveType: string): TargetKind | null => {
+  switch (objectiveType) {
+    case 'kill_mob':
+      return 'mob';
+    case 'defeat_npc':
+    case 'talk_to':
+      return 'npc';
+    case 'visit_location':
+    case 'write_post_in_location':
+    case 'write_chars_in_location':
+      return 'location';
+    case 'complete_quest':
+      return 'quest';
+    case 'collect':
+      return 'item';
+    default:
+      return null;
+  }
+};
+
 /* ── Component ── */
 
 const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
@@ -116,13 +145,6 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   const [itemSearchResults, setItemSearchResults] = useState<GameItem[]>([]);
   const [searchingItems, setSearchingItems] = useState(false);
   const debouncedItemQuery = useDebounce(itemSearchQuery);
-
-  // Lookups for target_id dropdowns
-  const [mobTemplates, setMobTemplates] = useState<LookupOption[]>([]);
-  const [locations, setLocations] = useState<LookupOption[]>([]);
-  const [allQuests, setAllQuests] = useState<LookupOption[]>([]);
-  const [npcs, setNpcs] = useState<LookupOption[]>([]);
-  const [allItems, setAllItems] = useState<LookupOption[]>([]);
 
   const fetchQuests = useCallback(async () => {
     setLoadingQuests(true);
@@ -143,54 +165,6 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
     fetchQuests();
   }, [fetchQuests]);
 
-  // Load lookups for target_id dropdowns
-  useEffect(() => {
-    // Mob templates
-    axios.get(`${BASE_URL}/characters/admin/mob-templates`, { params: { page: 1, page_size: 500 } })
-      .then((res) => {
-        const items = res.data?.items ?? res.data ?? [];
-        setMobTemplates(items.map((m: { id: number; name: string; tier: string }) => ({
-          id: m.id, name: m.name, extra: m.tier,
-        })));
-      }).catch(() => {});
-
-    // Locations
-    axios.get(`${BASE_URL}/locations/locations/lookup`)
-      .then((res) => {
-        const items = Array.isArray(res.data) ? res.data : [];
-        setLocations(items.map((l: { id: number; name: string }) => ({
-          id: l.id, name: l.name,
-        })));
-      }).catch(() => {});
-
-    // All quests (for complete_quest objective)
-    axios.get(`${BASE_URL}/locations/admin/quests`)
-      .then((res) => {
-        const items = Array.isArray(res.data) ? res.data : (res.data?.items ?? []);
-        setAllQuests(items.map((q: { id: number; title: string }) => ({
-          id: q.id, name: q.title,
-        })));
-      }).catch(() => {});
-
-    // Items (for collect objective)
-    axios.get(`${BASE_URL}/inventory/admin/items`, { params: { limit: 1000 } })
-      .then((res) => {
-        const items = Array.isArray(res.data) ? res.data : (res.data?.items ?? []);
-        setAllItems(items.map((i: { id: number; name: string }) => ({
-          id: i.id, name: i.name,
-        })));
-      }).catch(() => {});
-
-    // NPCs (for defeat_npc / talk_to)
-    axios.get(`${BASE_URL}/characters/admin/npcs`, { params: { page: 1, per_page: 500 } })
-      .then((res) => {
-        const items = res.data?.items ?? res.data ?? [];
-        setNpcs(items.map((n: { id: number; name: string }) => ({
-          id: n.id, name: n.name,
-        })));
-      }).catch(() => {});
-  }, []);
-
   // Item search
   useEffect(() => {
     if (!debouncedItemQuery || debouncedItemQuery.length < 2) {
@@ -201,8 +175,8 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       setSearchingItems(true);
       try {
         const res = await axios.get<GameItem[]>(
-          `${BASE_URL}/inventory/admin/items`,
-          { params: { search: debouncedItemQuery, limit: 10 } },
+          `${BASE_URL}/inventory/items`,
+          { params: { q: debouncedItemQuery, page: 1, page_size: 10 } },
         );
         setItemSearchResults(res.data);
       } catch {
@@ -243,6 +217,8 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
           target_id: obj.target_id ?? null,
         })),
         is_active: q.is_active !== false,
+        reputation_reward: q.reputation_reward == null ? '' : String(q.reputation_reward),
+        min_reputation_tier: q.min_reputation_tier ?? null,
       });
       setEditingId(questId);
       setEditorOpen(true);
@@ -287,6 +263,13 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
 
   /* ── Objectives ── */
 
+  const setObjectiveTarget = (index: number, id: number | null) => {
+    setForm((prev) => ({
+      ...prev,
+      objectives: prev.objectives.map((obj, i) => (i === index ? { ...obj, target_id: id } : obj)),
+    }));
+  };
+
   const addObjective = () => {
     setForm((prev) => ({
       ...prev,
@@ -305,7 +288,12 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
     setForm((prev) => ({
       ...prev,
       objectives: prev.objectives.map((obj, i) =>
-        i === index ? { ...obj, [field]: value } : obj,
+        i !== index
+          ? obj
+          // a new type means a different kind of target: the old id would point at the wrong thing
+          : field === 'objective_type' && value !== obj.objective_type
+            ? { ...obj, objective_type: String(value), target_id: null }
+            : { ...obj, [field]: value },
       ),
     }));
   };
@@ -348,6 +336,15 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       toast.error('Название квеста обязательно');
       return;
     }
+    const reputationText = form.reputation_reward.trim();
+    const reputationReward = reputationText === '' ? null : Number(reputationText);
+    if (
+      reputationReward !== null &&
+      (!Number.isInteger(reputationReward) || Math.abs(reputationReward) > REPUTATION_REWARD_LIMIT)
+    ) {
+      toast.error(`Репутация за задание — целое число от −${REPUTATION_REWARD_LIMIT} до ${REPUTATION_REWARD_LIMIT}`);
+      return;
+    }
 
     const payload = {
       npc_id: npcId,
@@ -367,6 +364,8 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
         target_id: obj.target_id,
       })),
       is_active: form.is_active,
+      reputation_reward: reputationReward,
+      min_reputation_tier: form.min_reputation_tier,
     };
 
     setSaving(true);
@@ -517,6 +516,28 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Награда (опыт)</span>
               <input type="number" name="reward_exp" value={form.reward_exp} onChange={handleChange} min={0} className="input-underline" />
             </label>
+
+            {/* FEAT-197: reputation weight + tier gate */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Репутация за задание</span>
+              <input
+                inputMode="numeric"
+                value={form.reputation_reward}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (SIGNED_INT_RE.test(v)) setForm((prev) => ({ ...prev, reputation_reward: v }));
+                }}
+                placeholder={`по умолчанию: ${DEFAULT_QUEST_REPUTATION}`}
+                className="input-underline"
+              />
+              <span className="text-white/40 text-xs">В регионе квестодателя; пусто — вес по умолчанию</span>
+            </label>
+
+            <ReputationTierSelect
+              value={form.min_reputation_tier}
+              onChange={(code) => setForm((prev) => ({ ...prev, min_reputation_tier: code }))}
+              hint="Ниже этой ступени задание нельзя взять"
+            />
           </div>
 
           {/* Description */}
@@ -574,27 +595,12 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
                   ))}
                 </select>
 
-                {/* Target ID dropdown (contextual by type) */}
-                {obj.objective_type === 'kill_mob' && (
-                  <select
-                    value={obj.target_id ?? ''}
-                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
-                    className="input-underline !text-sm max-w-[200px]"
-                  >
-                    <option value="" className="bg-site-dark text-white">— Моб —</option>
-                    {mobTemplates.map((m) => (
-                      <option key={m.id} value={m.id} className="bg-site-dark text-white">
-                        {m.name}{m.extra ? ` (${m.extra})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
+                {/* Target (contextual by type): searched by name or id */}
                 {obj.objective_type === 'kill_mob_tier' && (
                   <select
                     value={obj.target_id ?? ''}
-                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
-                    className="input-underline !text-sm max-w-[160px]"
+                    onChange={(e) => setObjectiveTarget(idx, e.target.value ? Number(e.target.value) : null)}
+                    className="input-underline !text-sm sm:max-w-[160px]"
                   >
                     <option value="" className="bg-site-dark text-white">— Тир —</option>
                     <option value={1} className="bg-site-dark text-white">Обычный (normal)</option>
@@ -603,64 +609,15 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
                   </select>
                 )}
 
-                {(obj.objective_type === 'defeat_npc' || obj.objective_type === 'talk_to') && (
-                  <select
-                    value={obj.target_id ?? ''}
-                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
-                    className="input-underline !text-sm max-w-[200px]"
-                  >
-                    <option value="" className="bg-site-dark text-white">— НПС —</option>
-                    {npcs.map((n) => (
-                      <option key={n.id} value={n.id} className="bg-site-dark text-white">
-                        {n.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                {(obj.objective_type === 'visit_location' || obj.objective_type === 'write_post_in_location' || obj.objective_type === 'write_chars_in_location') && (
-                  <select
-                    value={obj.target_id ?? ''}
-                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
-                    className="input-underline !text-sm max-w-[200px]"
-                  >
-                    <option value="" className="bg-site-dark text-white">— Локация —</option>
-                    {locations.map((l) => (
-                      <option key={l.id} value={l.id} className="bg-site-dark text-white">
-                        {l.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                {obj.objective_type === 'complete_quest' && (
-                  <select
-                    value={obj.target_id ?? ''}
-                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
-                    className="input-underline !text-sm max-w-[200px]"
-                  >
-                    <option value="" className="bg-site-dark text-white">— Квест —</option>
-                    {allQuests.map((q) => (
-                      <option key={q.id} value={q.id} className="bg-site-dark text-white">
-                        {q.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                {obj.objective_type === 'collect' && (
-                  <select
-                    value={obj.target_id ?? ''}
-                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
-                    className="input-underline !text-sm max-w-[200px]"
-                  >
-                    <option value="" className="bg-site-dark text-white">— Предмет —</option>
-                    {allItems.map((item) => (
-                      <option key={item.id} value={item.id} className="bg-site-dark text-white">
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
+                {targetKind(obj.objective_type) && (
+                  <div className="w-full sm:w-[220px] sm:shrink-0 min-w-0">
+                    <EntityPicker
+                      key={obj.objective_type}
+                      kind={targetKind(obj.objective_type)!}
+                      value={obj.target_id}
+                      onChange={(id) => setObjectiveTarget(idx, id)}
+                    />
+                  </div>
                 )}
 
                 {/* Target count */}

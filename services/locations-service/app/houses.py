@@ -86,6 +86,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import crud
 import models
+import reputation_read
+import schemas
 from auth_http import UserRead, get_current_user_via_http, require_permission
 from database import get_db
 import math
@@ -277,8 +279,11 @@ class PlotIn(BaseModel):
     layers: List[PlotLayerIn]
     cells: List[PlotCellIn]
     rooms: List[PlotRoomIn] = []
+    # FEAT-197: tier code needed to buy / buy back the house; None = no gate
+    min_reputation_tier: Optional[str] = None
 
     _img = validator("image_url", allow_reuse=True)(_image)
+    _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(schemas.validate_tier_code)
 
     @validator("kind")
     def _kind(cls, v):
@@ -598,6 +603,7 @@ def _plot_out(plot: models.HousePlot, house: Optional[models.House], chars: Dict
         "cells_total": cells.get("total", 0),
         "map_x": plot.map_x,
         "map_y": plot.map_y,
+        "min_reputation_tier": plot.min_reputation_tier,
         "house": None if house is None else {
             "id": house.id,
             "name": house.name,
@@ -717,6 +723,14 @@ async def get_plot(plot_id: int, db: AsyncSession = Depends(get_db)):
     return out
 
 
+async def _require_plot_reputation(db: AsyncSession, character_id: int, plot: models.HousePlot) -> None:
+    """FEAT-197: the plot's tier gate in the plot's region (403 «Нужна репутация: X»). Pure reads."""
+    if not plot.min_reputation_tier:
+        return
+    region_id = plot.region_id or await _region_of_location(db, plot.location_id)
+    await reputation_read.require_tier(db, character_id, region_id, plot.min_reputation_tier)
+
+
 @router.post("/plots/{plot_id}/buy")
 async def buy_house(
     plot_id: int,
@@ -732,6 +746,7 @@ async def buy_house(
         raise HTTPException(400, "Дом покупают на месте — дойдите до его локации")
     await check_not_activity_locked(db, body.character_id)
     await check_not_in_battle(db, body.character_id, "Во время боя дом не купить")
+    await _require_plot_reputation(db, body.character_id, plot)
     standing = (await db.execute(select(models.House).where(models.House.plot_id == plot_id))).scalar_one_or_none()
     if standing is not None:
         await _settle_house(db, standing)  # an overdue house leaves the plot here
@@ -1792,6 +1807,7 @@ async def _save_plot(db: AsyncSession, plot: models.HousePlot, body: PlotIn) -> 
     plot.price, plot.map_x, plot.map_y = body.price, body.map_x, body.map_y
     plot.kind = body.kind
     plot.grid_w, plot.grid_h, plot.extension_price = body.grid_w, body.grid_h, body.extension_price
+    plot.min_reputation_tier = body.min_reputation_tier
     db.add(plot)
     await db.flush()
 
@@ -2288,6 +2304,7 @@ async def buy_listed_house(
         raise HTTPException(400, "Дом покупают на месте — дойдите до его локации")
     await check_not_activity_locked(db, body.character_id)
     await check_not_in_battle(db, body.character_id, "Во время боя дом не купить")
+    await _require_plot_reputation(db, body.character_id, plot)
     seller, price = house.owner_character_id, house.sale_price
     await _write_out_residents(db, house)
     house.owner_character_id = body.character_id

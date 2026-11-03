@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from sqlalchemy.orm import Session
 
 import econ_tick
+import reputation_decay
 
 logger = logging.getLogger("character-service.econ_scheduler")
 
@@ -58,9 +59,20 @@ def _default_factory() -> Callable[[], Session]:
     return database.SessionLocal
 
 
+def run_reputation_decay(factory: Callable[[], Session]) -> None:
+    """FEAT-197 §3.6: the hourly reputation decay pass (own throttle). Not economy: it runs even when the economy
+    tick is switched off in the DB, and its failure never blocks the tick."""
+    try:
+        reputation_decay.run_pass(factory)
+    except Exception:
+        logger.exception("reputation decay pass failed")
+
+
 def run_scheduled_once(session_factory: Optional[Callable[[], Session]] = None) -> Optional[econ_tick.RunSummary]:
-    """One scheduler iteration: respects the DB switch, then claims/runs the current slot (None = nothing done)."""
+    """One scheduler iteration: the reputation decay pass, then respects the DB switch and claims/runs the current
+    economy slot (None = no economy run)."""
     factory = session_factory or _default_factory()
+    run_reputation_decay(factory)
     session = factory()
     try:
         enabled = econ_tick.is_tick_enabled(session)

@@ -828,6 +828,8 @@ export interface EconBankAdminItem {
   capital_seeded_at: string | null;
   last_tick_at: string | null;
   last_stats: EconBankStats | null;
+  /** FEAT-197: loans need this reputation tier in the bank's region (null = none) */
+  loan_min_reputation_tier?: string | null;
 }
 
 export interface EconBanksTotals {
@@ -917,6 +919,8 @@ export interface EconBankFlagBody {
   is_enabled: boolean;
   /** first switch-on takes the start capital from the region treasury once */
   seed_capital?: boolean;
+  /** FEAT-197: sent → stored (null clears); omitted → unchanged */
+  loan_min_reputation_tier?: string | null;
 }
 
 export type EconBankCapitalDirection = 'in' | 'out';
@@ -1142,6 +1146,8 @@ export interface MintView {
   remaining: number;
   items: MintViewItem[];
   wallet: number;
+  /** FEAT-197: minting is refused with this text (NPC reputation gate) */
+  reputation_lock?: string | null;
 }
 
 export interface MintRequest {
@@ -1419,6 +1425,8 @@ export interface GuildView {
   refused: GuildRefused[];
   xp: GuildXpInfo;
   wallet: number;
+  /** FEAT-197: NPC reputation gate / «Вне закона» (then `working` is false too) */
+  reputation_lock?: string | null;
 }
 
 export interface GuildHandInRequest {

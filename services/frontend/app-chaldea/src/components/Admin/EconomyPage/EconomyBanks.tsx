@@ -28,6 +28,7 @@ import type {
 import { formatDateTime, formatDecimal, formatPercent } from './economyLabels';
 import { BigMoney, useBigMoney } from './CompactValue';
 import { COMPACT_MONEY_FROM } from '../../../utils/compactNumber';
+import BankLoanTierField from './BankLoanTierField';
 
 const COMMENT_MIN = 3;
 const COMMENT_MAX = 500;
@@ -367,10 +368,13 @@ interface BankDetailProps {
   format: Format;
   onCapital: (direction: EconBankCapitalDirection) => void;
   onWriteOff: (loan: EconBankAdminLoan) => void;
+  /** FEAT-197: the loan reputation tier was saved */
+  onTierSaved: () => void;
 }
 
-const BankDetail = ({ bank, detail, error, canSettings, format, onCapital, onWriteOff }: BankDetailProps) => (
+const BankDetail = ({ bank, detail, error, canSettings, format, onCapital, onWriteOff, onTierSaved }: BankDetailProps) => (
   <div className="flex flex-col gap-4">
+    <BankLoanTierField bank={bank} canEdit={canSettings} onSaved={onTierSaved} />
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-white/50">
       <span>
         Стартовый капитал:{' '}
@@ -841,6 +845,7 @@ const EconomyBanks = ({ canSettings, onMoneyChanged }: EconomyBanksProps) => {
     format,
     onCapital: (direction: EconBankCapitalDirection) => setCapital({ bank: b, direction }),
     onWriteOff: (l: EconBankAdminLoan) => setWriteOff(loanTarget(l, b)),
+    onTierSaved: refreshAll,
   });
 
   const totals = data?.totals;

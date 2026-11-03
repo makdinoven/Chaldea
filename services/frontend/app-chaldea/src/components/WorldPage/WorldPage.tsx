@@ -34,6 +34,7 @@ import GameTimeWidget from './GameTimeWidget';
 import InteractiveMap from './InteractiveMap/InteractiveMap';
 import RegionInteractiveMap from './RegionInteractiveMap/RegionInteractiveMap';
 import RegionEconomyCard from './RegionEconomyCard';
+import RegionReputationLine from './RegionReputationLine';
 import type { HouseMarker, MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
 import { plotsInRegion } from '../../api/houses';
 import { apiErrorMessage } from '../../api/errors';
@@ -679,6 +680,9 @@ const WorldPage = () => {
           </p>
         )}
 
+        {userCharacter?.id && (
+          <RegionReputationLine characterId={userCharacter.id} regionId={regionDetails.id} />
+        )}
         <RegionEconomyCard regionId={regionDetails.id} />
 
         <div className="space-y-4">
@@ -847,6 +851,9 @@ const WorldPage = () => {
                 <p className="text-white/60 text-sm text-center mb-4">
                   Рекомендуемый уровень: {regionDetails.recommended_level}
                 </p>
+              )}
+              {userCharacter?.id && (
+                <RegionReputationLine characterId={userCharacter.id} regionId={regionDetails.id} />
               )}
               <RegionEconomyCard regionId={regionDetails.id} />
               <RegionInteractiveMap

@@ -95,7 +95,7 @@ const MintModal = ({ npcId, npcName, npcAvatar, onClose }: MintModalProps) => {
   /** Pieces the mint will actually take now (the season limit may cut the request). */
   const accepted = selected ? Math.min(qty, selected.max_by_limit) : 0;
   const preview = selected ? accepted * selected.marks_per_item : 0;
-  const canMint = Boolean(view?.working && selected && accepted > 0 && !pending);
+  const canMint = Boolean(view?.working && !view.reputation_lock && selected && accepted > 0 && !pending);
 
   const changeRequest = () => {
     requestIdRef.current = null;
@@ -206,6 +206,12 @@ const MintModal = ({ npcId, npcName, npcAvatar, onClose }: MintModalProps) => {
             </div>
           </div>
 
+          {view.reputation_lock && (
+            <div role="alert" className="rounded-card border border-site-red/30 bg-site-red/[0.05] px-3 py-2 text-xs sm:text-sm text-site-red break-words">
+              {view.reputation_lock}
+            </div>
+          )}
+
           {!view.working && (
             <div className="rounded-card border border-white/15 bg-white/[0.03] px-3 py-2 text-xs sm:text-sm text-white/70">
               <span className="text-gold font-medium">{mintClosedText(view.closed_reason)}.</span> Руду сейчас не
@@ -292,7 +298,7 @@ const MintModal = ({ npcId, npcName, npcAvatar, onClose }: MintModalProps) => {
                     type="text"
                     inputMode="numeric"
                     value={quantity}
-                    disabled={pending || !view.working || max === 0}
+                    disabled={pending || !view.working || Boolean(view.reputation_lock) || max === 0}
                     onChange={(e) => changeQuantity(e.target.value)}
                     placeholder="0"
                     className="input-underline !text-sm w-full min-w-0"

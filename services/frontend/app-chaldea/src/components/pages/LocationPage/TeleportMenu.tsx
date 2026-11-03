@@ -9,6 +9,7 @@ import {
   selectTeleportOptionsError,
   selectTeleportExecuting,
   selectTeleportExecuteError,
+  selectTeleportLockedReason,
   type TeleportOption,
 } from '../../../redux/slices/teleportSlice';
 import { setCharacterAfterTeleport } from '../../../redux/slices/userSlice';
@@ -45,6 +46,7 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
   const optionsError = useAppSelector(selectTeleportOptionsError);
   const executing = useAppSelector(selectTeleportExecuting);
   const executeError = useAppSelector(selectTeleportExecuteError);
+  const npcLockedReason = useAppSelector(selectTeleportLockedReason(npcId));
   const cooldownSecondsRemaining = useAppSelector(
     (s) => s.teleport.cooldownSecondsRemaining,
   );
@@ -129,6 +131,10 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
           </div>
         )}
 
+        {npcLockedReason && !loading && (
+          <p role="alert" className="text-site-red text-sm text-center mb-3 break-words">{npcLockedReason}</p>
+        )}
+
         {optionsError && !loading && (
           <p className="text-site-red text-sm text-center mb-3">{optionsError}</p>
         )}
@@ -145,7 +151,9 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
 
         {!loading && options && options.length > 0 && (
           <div className="flex flex-col gap-2">
-            {options.map((opt) => (
+            {options.map((opt) => {
+              const lockReason = npcLockedReason || opt.locked_reason || null;
+              return (
               <div
                 key={opt.link_id}
                 className="
@@ -158,6 +166,9 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
                     {opt.to_location_name}
                   </span>
                   <span className="text-white/50 text-xs">{opt.to_npc_name}</span>
+                  {opt.locked_reason && (
+                    <span className="text-site-red text-xs mt-0.5 break-words">{opt.locked_reason}</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 justify-between sm:justify-end">
                   <span className="gold-text text-sm font-medium whitespace-nowrap">
@@ -165,7 +176,8 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
                   </span>
                   <button
                     onClick={() => setConfirming(opt)}
-                    disabled={executing || cooldownActive}
+                    disabled={executing || cooldownActive || !!lockReason}
+                    title={lockReason ?? undefined}
                     className="
                       px-3 py-1.5 rounded-card text-xs sm:text-sm font-medium uppercase
                       border border-gold/50 bg-gold/10 text-gold
@@ -178,7 +190,8 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </ModalShell>

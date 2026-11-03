@@ -78,11 +78,11 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | Сервис | Таблицы |
 |--------|---------|
 | user-service | `users`, `users_character`, `users_avatar_preview`, `users_avatar_character_preview` |
-| character-service | `characters`, `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds` |
+| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL) |
 | character-attributes-service | `character_attributes` |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
 | inventory-service | `items`, `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160), `quests` (+ `reputation_reward`, `min_reputation_tier` — FEAT-197), `house_plots` (+ `min_reputation_tier` — FEAT-197) |
 | notification-service | `notifications` |
 | battle-service | `battles` (+ `pause_reason`, `paused_by_admin`), `battle_participants` (+ `dropped_out_at` — читается ещё тремя сервисами как снятие блокировки боя), `battle_turns` |
 
@@ -165,6 +165,9 @@ locations-service ──> character-service (игроки в локации)
                   ──> character-attributes-service (стамина для перемещения, refund_stamina при cancel/battle-interrupt — FEAT-128)
                   ──> inventory-service (FEAT-128: gathering/award на finalize, free_slots_check на старте, gathering-skills на старте для расчёта бонусов)
 
+                  ──> character-service (FEAT-197: /characters/internal/reputation/apply —
+                      репутация за задание после коммита)
+
 inventory-service ──> character-attributes-service (модификаторы при экипировке)
 
 battle-service ──> locations-service (FEAT-128: /internal/cancel-gathering при pvp_attack — отменяет добычу victim перед созданием боя)
@@ -173,6 +176,8 @@ battle-service ──> character-attributes-service (боевые характе
                ──> character-service (профиль)
                ──> skills-service (данные навыков)
                ──> inventory-service (экипировка, предметы)
+               ──> character-service (FEAT-197: /characters/internal/npc-status/{id} с battle_id
+                      и killer_character_ids — смерть NPC и репутация за убийство)
 
 autobattle-service ──> battle-service (состояние боя, отправка действий)
 
@@ -269,6 +274,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
    задают спрос, налог, стабильность, покупательную способность и **норму богатства**; излишек денег сверх нормы
    облагается налогом с накоплений в казну (деньги не сжигаются), квота сезона и часть грантов страны идут регионам ниже
    нормы, доли медленно дрейфуют (мобильность). Игрок видит только слова и полоску без чисел.
+8. **Репутация в регионах** (FEAT-197, character-service — владелец, locations-service читает SQL-ом): 8 ступеней от
+   «Вне закона» до «Легенда края», источники — задания, сдача в гильдию, убийство NPC, ручные правки staff;
+   отголосок в регионы той же страны, забывание отрицательной репутации. Гейты на NPC, задания, участки, займы и
+   телепорты, скидки / наценки и срез скупки у торговцев, «Вне закона» — отказ в торговле. Игрок видит ступень и
+   полоску без чисел; права `reputation:*` (user-service `0033`).
 
 ### Character Progression
 

@@ -18,6 +18,11 @@ character-service/app/
 ├── crud.py               # CRUD и бизнес-логика
 ├── economy_api.py        # FEAT-181: роутер API экономики (публичная валюта + /admin/economy/*)
 ├── economy_crud.py       # FEAT-181: сводка, счета, журнал, эмиссия/корректировка, настройки
+├── reputation_core.py    # FEAT-197: чистая математика репутации (байтовая копия в locations-service)
+├── reputation_crud.py    # FEAT-197: apply_reputation, гейты, чтения игрока/админа, настройки
+├── reputation_api.py     # FEAT-197: роутер репутации (игрок / админ / internal)
+├── reputation_decay.py   # FEAT-197: почасовой проход забывания (из econ_scheduler)
+├── reputation_notify.py  # FEAT-197: уведомления о смене ступени (sync pika)
 ├── presets.py            # МЁРТВЫЙ КОД: реальный источник статов — колонка subraces.stat_preset
 ├── locations_client.py   # HTTP-клиент к locations-service (FEAT-154), всё graceful
 ├── config.py             # Настройки из env
@@ -133,6 +138,7 @@ PUT заменяет таблицу целиком (уровни подряд с
 - **titles** - титулы
 - **character_titles** - many-to-many персонаж<->титул
 - **level_thresholds** - таблица опыт->уровень
+- **character_reputation**, **reputation_log**, **reputation_settings**, **reputation_tiers**, **reputation_actions**, **reputation_npc_role_weights** — репутация в регионах (FEAT-197, миграция `038_reputation`), см. раздел «Region reputation» в конце
 
 ### Колонки, добавленные FEAT-154
 
@@ -323,7 +329,7 @@ PUT заменяет таблицу целиком (уровни подряд с
   **Все три graceful.** Клиент возвращает `None`, если сервис не смог ответить, и вызывающая сторона пропускает проверку. Недоступность locations-service никогда не блокирует подачу и не проваливает одобрение. Календарь здесь **не реализуется повторно** — игровой год всегда читается в рантайме, никаких захардкоженных годов в коде, валидации, фикстурах и сидах.
 
 ### RabbitMQ
-Консьюмер (`rabbitmq_consumer.py`) закомментирован и в `main.py` не импортируется — входящих сообщений сервис не читает. **Продюсер (`producer.py`) работает**: одобрение и отклонение заявки (и получение титула) публикуют уведомление игроку в очередь `general_notifications` с `category: "progress"`; одобрение дополнительно дублирует полезную нагрузку по инвентарю/навыкам/атрибутам (см. предупреждение в workflow выше).
+Консьюмер (`rabbitmq_consumer.py`) закомментирован и в `main.py` не импортируется — входящих сообщений сервис не читает. **Продюсер (`producer.py`) работает**: одобрение и отклонение заявки (и получение титула) публикуют уведомление игроку в очередь `general_notifications` с `category: "progress"`; одобрение дополнительно дублирует полезную нагрузку по инвентарю/навыкам/атрибутам (см. предупреждение в workflow выше). **FEAT-197:** `reputation_notify.py` (отдельное sync-соединение pika) публикует туда же смену ступени репутации, `category: "progress"` — см. «Region reputation».
 
 ## FEAT-125: mob_template_skills теперь по skill_id
 
@@ -1518,3 +1524,157 @@ d × `mob_rich_factor` зажиточных в богатые; d < 0 — вни�
 Пороги карточки: индекс = зажиточные × 0.5 + богатые; < 0.25 бедный, < 0.32 скромный, < 0.40 зажиточный, иначе
 богатый. Хвост «, много бедняков» при бедных ≥ 0.5 (если не «бедный»), иначе «, много богачей» при богатых ≥ 0.18 (если
 не «богатый»). Полоска: бедные / зажиточные few < 0.30 ≤ some < 0.50 ≤ many, богатые few < 0.08 ≤ some < 0.18 ≤ many.
+
+## Region reputation (FEAT-197, этап 1)
+
+Отношение жителей **региона** к персонажу игрока: число в диапазоне настроек (по умолчанию −1000…+1000), которое
+игрок видит только как **ступень и полоску** (без чисел). Владелец всех таблиц и единственный писатель —
+character-service (`reputation_crud.apply_reputation`); locations-service только читает таблицы SQL-ом
+(`reputation_read.py`) и пишет через internal-эндпоинт. У NPC и мобов репутации нет.
+
+Модули: `reputation_core.py` (чистая математика: ступень, ленивое забывание, отголосок, прогресс, вес убийства,
+валидация; **байтовая копия** в locations-service, группа в `scripts/check_econ_copies.sh`), `reputation_crud.py`,
+`reputation_api.py`, `reputation_decay.py`, `reputation_notify.py`. Цены — в `econ_core.py` (см. locations-service).
+
+### Таблицы (миграция `038_reputation`, без FK на `Regions`, без ENUM, перезапускаемая)
+- `character_reputation` — `(character_id, region_id)` UNIQUE `uq_char_rep`, `value` INT (материализованное,
+  зажатое значение), `decay_at` DATETIME NULL (якорь забывания; NULL при `value ≥ 0`), `updated_at`; индекс
+  `ix_char_rep_decay`. FK `characters` ON DELETE CASCADE. **Нет строки = 0 = «Скиталец».**
+- `reputation_log` — журнал: `action` (код действия или `decay`), `event_key` VARCHAR(191), `is_echo`,
+  `origin_region_id` (у отголоска), `requested_delta`, `applied_delta` (после зажима), `value_after`,
+  `tier_before/after` (коды), `reason` (только для staff), `actor_user_id` (NULL = система), `created_at`.
+  **`UNIQUE (event_key, region_id)`** — гарантия идемпотентности; индексы `(character_id, created_at)` и
+  `(character_id, region_id, action, created_at)` (дневной лимит). FK `characters` CASCADE.
+- `reputation_settings` — одна строка `id=1`: `min_value` −1000, `max_value` 1000, `echo_pct` 20, `decay_per_day`
+  **10** (решение A2), `decay_last_run_at` (троттлинг прохода), `updated_at`.
+- `reputation_tiers` — ровно 8 строк с **фиксированными кодами** (имя, порог, цены редактируются; добавлять и
+  удалять нельзя): `code` PK, `sort_order` UNIQUE, `name`, `min_value` (нижняя граница включительно; NULL только у
+  нижней), `price_pct` (+ скидка / − наценка на покупку, −100…50), `sell_pct` (срез скупки, −100…0), `trade_refused`.
+
+  | code | name | min_value | price_pct | sell_pct | trade_refused |
+  |---|---|---|---|---|---|
+  | outlaw | Вне закона | NULL (≤ −600) | 0 | 0 | 1 |
+  | outcast | Изгой | −599 | −25 | −25 | 0 |
+  | watched | На заметке | −299 | −10 | −10 | 0 |
+  | wanderer | Скиталец | −99 | 0 | 0 | 0 |
+  | familiar | Знакомое лицо | 100 | 0 | 0 | 0 |
+  | trusted | Свой человек | 300 | 5 | 0 | 0 |
+  | defender | Заступник | 600 | 10 | 0 | 0 |
+  | legend | Легенда края | 900 | 15 | 0 | 0 |
+- `reputation_actions` — `code` PK (`^[a-z][a-z0-9_]{2,39}$`), `name` (русский, виден игроку в журнале), `points`,
+  `daily_cap` (NULL = нет), `is_builtin`, `has_source`, `sort_order`. Встроенные (сид): `quest_complete` +10,
+  `guild_delivery` +2 (лимит 20/сутки/регион), `npc_kill` 0 (очки из весов ролей), `region_event_help` +5,
+  `caravan_attack` −100, `crime` −50, `admin_manual` 0. Автоматические источники есть только у первых трёх;
+  остальные — для ручных правок и будущих этапов.
+- `reputation_npc_role_weights` — `role` PK (`characters.npc_role`, `*` = любая другая / NULL), `points`. Сид: bandit
+  +20, mercenary −30, guard −300, ruler / king −1000, мирные роли (merchant, blacksmith, alchemist, bard, sage, priest,
+  healer, hunter, wanderer, auctioneer, banker, minter, guild, teleport_master, hero) и `*` — −150.
+- Колонки: `characters.reputation_min_tier` VARCHAR(20) (гейт NPC), `characters.reputation_kill_points` INT
+  (личный вес убийства NPC, перекрывает роль), `econ_banks.loan_min_reputation_tier`,
+  `teleport_links.min_reputation_tier`. Все поля-гейты хранят **код** ступени; NULL = без ограничения.
+- Откат: `downgrade()` удаляет ровно 4 колонки и 6 таблиц. Бэкфилла нет.
+
+### Правила (`reputation_core`)
+- Ступень значения v — ступень с наибольшим `sort_order`, у которой `min_value ≤ v`. Гейт `min_code` пройден, если
+  ранг ступени ≥ ранга `min_code`; неизвестный / пустой код = гейта нет. Текст отказа — **«Нужна репутация: {имя}»**.
+- **Забывание** только для отрицательных: эффективное значение `min(0, value + floor(decay_per_day × прошло_секунд /
+  86400))` от `decay_at`. Все читатели (гейты, цены, API) считают **эффективное** значение, поэтому результат точен,
+  даже если проход планировщика не работал. Материализация сдвигает `decay_at` ровно на `points / per_day` суток
+  (дробь не теряется).
+- **Отголосок:** изменение в регионе даёт `trunc(delta × echo_pct / 100)` во все **другие регионы той же страны**;
+  отголосок не повторяется и не идёт в дневные лимиты.
+- `progress` 0…1 — положение внутри полосы ступени (у крайних ступеней открытая граница = `min/max_value` настроек).
+
+### Запись: `reputation_crud.apply_reputation` (sync, транзакция вызывающего, без commit)
+`apply_reputation(db, *, character_id, region_id, action, idem_key, delta=None, reason=None, actor_user_id=None,
+echo=True, now=None) → ApplyResult {duplicate, skipped, changes[], tier_changes[]}`.
+1. Ключ пустой / длиннее 191 → 400 «Слишком длинный ключ события». Персонаж не найден → 404; NPC → `skipped='npc'`.
+2. Действие не найдено → 404; `delta` = переданное или `points` действия; 0 → `skipped='zero'`. Регион не найден → 404.
+3. Повтор `(event_key, регион-источник)` в журнале → `duplicate=True`, ничего не меняется (UNIQUE — жёсткая
+   гарантия: параллельный дубль даёт `IntegrityError`, роутеры отвечают как на дубль).
+4. Дневной лимит (только автоматические положительные, `actor_user_id is None`): остаток `daily_cap − Σ applied_delta
+   > 0 за UTC-сутки` (без отголосков); дельта урезается, ≤ 0 → `skipped='cap'`.
+5. Цели: регион + (при `echo` и ненулевом отголоске) остальные регионы страны. Недостающие строки создаются
+   (`INSERT … ON DUPLICATE KEY UPDATE`), затем все блокируются `FOR UPDATE` **по возрастанию `region_id`**.
+6. По каждой строке: материализация забывания → `clamp(value + d)` → `decay_at` (now при переходе в минус, NULL при
+   ≥ 0) → строка журнала → `TierChange` при смене ступени. Отголосок берёт **запрошенную** дельту источника.
+
+Гейт-хелперы: `gate_failure / require_tier(db, character_id, region_id, min_code)`, `npc_gate_failure /
+require_npc_tier(db, character_id, npc_id[, region_id])` (регион — локация NPC), `refused_tier` (ступень с
+`trade_refused`), `guild_lock_reason` (гейт NPC, затем «Вне закона»). Ошибка — `ReputationError` (подкласс
+`EconomyApiError`, 403).
+
+### Источники
+| Источник | Где | Ключ | Регион | Дельта |
+|---|---|---|---|---|
+| Задание | locations-service `POST /locations/quests/{id}/complete` → `POST /characters/internal/reputation/apply` после коммита | `quest_reward:cq:{character_quest_id}` | локация NPC-квестодателя (иначе персонажа) | `quests.reputation_reward`, NULL → +10 действия |
+| Гильдия | `economy_guild_crud.hand_in`, шаг 10b (та же транзакция) | `guild:{character_id}:{request_id}` (= ключ проводки) | регион гильдии | `guild_delivery` +2, лимит 20/сутки/регион; неизвестный регион → только WARNING, сдача проходит |
+| Убийство NPC | `PUT /characters/internal/npc-status/{id}` (battle-service) | `npc_kill:{npc_id}:{battle_id}:{killer_id}` | локация NPC в момент смерти | `reputation_kill_points` ?? вес роли ?? `*`; **полный вес каждому игроку** победившей стороны |
+| Ручная правка | `POST /characters/admin/reputation/characters/{id}/adjust` | `admin:{user_id}:{request_id}` | тело | `delta` (действие `admin_manual`) или очки `action_code`; отголосок по флагу `echo` (по умолчанию нет) |
+| Забывание | проход планировщика | `decay:{character_id}:{region_id}:{iso decay_at}` | строка | материализованные очки, без отголоска |
+
+### Убийство NPC: `PUT /characters/internal/npc-status/{character_id}` (изменён)
+`UpdateNpcStatusRequest {status: alive|dead, battle_id?: int, killer_character_ids?: List[int] (≤ 50)}` — новые поля
+необязательны (обратная совместимость). NPC ищется как `is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')`
+(раньше NPC с пустой ролью отсекался → 404). `dead` — **условный переход** `UPDATE … SET npc_status='dead' WHERE
+npc_status='alive'`; только при реальном переходе и непустых `killer_character_ids` вызывается
+`reputation_crud.apply_npc_kill` (та же транзакция): из списка берутся только `is_npc = 0`, сам NPC исключается; нет
+региона или вес 0 — ничего. `alive` (воскрешение админом) репутацию не трогает. Ответ: `{ok, status, killed}` —
+`killed=false` при повторном отчёте. Уведомления — после коммита. Без `battle_id` ключ строится от отметки времени
+(повтор такого вызова защищён только условным переходом).
+
+### Забывание: проход планировщика (`reputation_decay.run_pass`)
+Вызывается из `econ_scheduler.run_scheduled_once` **до** проверки `is_tick_enabled` (не экономика; ручной запуск
+тика его не вызывает). Троттлинг: условный `UPDATE reputation_settings SET decay_last_run_at = now WHERE … IS NULL
+OR ≤ now − 3600 с` — несколько процессов и рестарты не запускают проход дважды за час. Строки `value < 0 AND decay_at
+IS NOT NULL` пачками по 500 в порядке `(character_id, region_id)`, каждая пачка — своя транзакция; сбой пачки —
+откат и переход к следующей. Строка материализуется (с записью `decay` в журнал), только если сменилась ступень,
+значение дошло до 0 или накопилось ≥ 50 очков (`DECAY_MIN_POINTS`), — иначе журнал бы засорялся, а читатели всё
+равно видят эффективное значение. `decay_per_day = 0` — проход ничего не делает. Уведомления — после коммита каждой
+пачки. Смена `decay_per_day` в настройках сначала материализует все убывающие строки по **старой** ставке.
+
+### Уведомления (`reputation_notify.publish_tier_changes`)
+Только при смене ступени, только игроку (`characters.user_id`), очередь `general_notifications`, `category:
+"progress"`, best-effort (сбой RabbitMQ — WARNING). Тексты без чисел: вверх «Жители края «{регион}» теперь считают
+вас: {ступень}», вниз «Жители края «{регион}» стали относиться к вам хуже: теперь вы — {ступень}», забывание «Жители
+края «{регион}» понемногу забывают ваши проступки: теперь вы — {ступень}».
+
+### API игрока (префикс `/characters`; JWT + `visibility.require_private_access`: владелец или admin/moderator с `characters:read`)
+| Метод и путь | Ответ |
+|---|---|
+| `GET /{character_id}/reputation[?region_id=]` | `ReputationView {regions [{region_id, region_name, country_id, country_name, tier_code, tier_name, progress 0…1, trade_refused}], tiers [{code, name, sort_order}]}`. Без `region_id` — только регионы со строкой (посещённые), сортировка страна → регион; с `region_id` — ровно один (без строки — «Скиталец»), неизвестный регион 404. У NPC — пустой `regions`. **Чисел нет** |
+| `GET /{character_id}/reputation/history?region_id=&page=1&page_size=20` (≤ 50) | `{items [{created_at, region_id, region_name, direction up\|down, action_name, text, tier_after_name, tier_changed}], total}`; строки с `applied_delta = 0` скрыты; `text` — фраза сервера («Жители края «X» стали относиться к вам лучше/хуже», отголосок «До жителей края «X» дошли слухи о вас…», забывание «…понемногу забывают ваши проступки»); причина staff и числа не отдаются |
+
+### Админ-API (префикс `/characters/admin/reputation`, права из миграции user-service `0033`)
+| Метод и путь | Право | Описание |
+|---|---|---|
+| `GET /settings` | `reputation:read` | `{settings {min_value, max_value, echo_pct, decay_per_day}, tiers [{code, name, min_value, price_pct, sell_pct, trade_refused, sort_order}]}` |
+| `PUT /settings` | `reputation:settings` | то же тело, ровно 8 ступеней с фиксированными кодами и порядком; 400 с русским текстом: диапазон включает 0, отголосок 0…100, забывание 0…1000/сутки, пороги строго растут внутри диапазона, у нижней порога нет, `price_pct` −100…50, `sell_pct` −100…0, 0 попадает в «Скиталец»; гонка → 409 |
+| `GET /actions` | `reputation:read` | список действий |
+| `POST /actions` | `reputation:settings` | `{code, name 1…100, points −1000…1000, daily_cap ≥1 \| null, sort_order?}` → 201; занятый код → 409 «Действие с таким кодом уже есть» |
+| `PUT /actions/{code}` | `reputation:settings` | `{name, points, daily_cap, sort_order}`; 404 нет действия |
+| `DELETE /actions/{code}` | `reputation:settings` | 204; встроенное → 409 «Встроенное действие удалить нельзя» (строки журнала хранят код строкой) |
+| `GET` / `PUT /npc-roles` | `reputation:read` / `reputation:settings` | `[{role, points}]`; PUT заменяет весь набор (≤ 200), `*` обязателен (400), повтор роли 400 |
+| `GET /characters/{id}` | `reputation:read` | `[{region_id, region_name, country_id, country_name, value (эффективное), tier_code, tier_name, decaying, updated_at}]` |
+| `GET /characters/{id}/history?region_id=&page=&page_size=` | `reputation:read` | все строки журнала с дельтами, `event_key`, `is_echo`, регионом-источником, причиной, `actor_username` |
+| `POST /characters/{id}/adjust` | `reputation:manage` | `{region_id, delta?: −2000…2000 ≠ 0, action_code?, reason 3…500 (обрезается, обязательна), echo=false, request_id: UUID}` — ровно одно из `delta` / `action_code` (422); цель NPC → 400; действие без очков → 400 → `{changes [{region_id, is_echo, value_before, value_after, tier_before, tier_after}], duplicate}`; повтор `request_id` → `duplicate=true` |
+
+### Internal
+`POST /characters/internal/reputation/apply` (`X-Internal-Token`; nginx 403 снаружи) — `{character_id ≥1, region_id ≥1,
+action, idempotency_key ≤ 191, delta?: −2000…2000, reason? ≤ 500, echo: bool = true}` → `{applied, duplicate,
+skipped: npc|zero|cap|null}`; 404 неизвестные персонаж / регион / действие. Уведомления — после коммита. Вызывающий —
+locations-service (завершение задания).
+
+### Гейты в character-service (403 «Нужна репутация: X»; обхода для staff нет)
+| Гейт | Поле | Где |
+|---|---|---|
+| NPC | `characters.reputation_min_tier` | банкир — все POST (`banker_context(write=True)`), окно отдаёт `reputation_lock`; монетчик — POST, окно `reputation_lock`; гильдия — POST (`guild_context(write=True)`), окно `reputation_lock` и `working=false`; телепорт — `GET /characters/npcs/{id}/teleport-options` отдаёт `locked_reason` (уровень NPC) для активного персонажа, сам телепорт отказывает |
+| «Вне закона» | `reputation_tiers.trade_refused` | гильдия закрыта: «Гильдия не работает с теми, кто вне закона (репутация: {ступень})» (решение A4) |
+| Займ | `econ_banks.loan_min_reputation_tier` | `take_loan` и окно банкира (`loan_refusal`, `max_loan_now = 0`) |
+| Связь телепорта | `teleport_links.min_reputation_tier` | `options[].locked_reason` и отказ телепорта; регион — локация NPC-источника |
+
+Поля админки: `NpcCreate/NpcUpdate` и чтение NPC — `reputation_min_tier` (код или null), `reputation_kill_points`
+(−1000…1000 или null = вес роли); `PUT /characters/admin/economy/banks/{region_id}` — `loan_min_reputation_tier`
+(передано → сохраняется, null очищает, не передано → без изменений; есть в ответе списка банков); связи телепорта —
+`min_reputation_tier` в `TeleportLinkCreate` (ставится и обратной связи), `TeleportLinkUpdate` (передано →
+сохраняется) и `TeleportLinkRead`. Неизвестный код ступени → 422 «Неизвестная ступень репутации».

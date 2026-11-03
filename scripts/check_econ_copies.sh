@@ -66,9 +66,14 @@ check_group "stat_caps" \
     services/battle-service/app/stat_caps.py \
     services/dungeon-service/app/stat_caps.py
 
+# FEAT-197: region reputation maths (canonical: character-service)
+check_group "reputation_core" \
+    services/character-service/app/reputation_core.py \
+    services/locations-service/app/reputation_core.py
+
 if [ "$FAILED" -ne 0 ]; then
     echo "Shared copies are out of sync. Edit the canonical file" >&2
-    echo "(character-service for core/cases/sync ledger, locations-service" >&2
+    echo "(character-service for core/cases/sync ledger/reputation_core, locations-service" >&2
     echo "for the async ledger, character-attributes-service for stat_caps.py)" >&2
     echo "and copy it byte-for-byte to the others." >&2
     exit 1

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
+import { apiErrorMessage } from '../../../api/errors';
 import { useAppSelector } from '../../../redux/store';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
@@ -54,8 +55,9 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
       );
       setCurrentNode(res.data);
       setTimeout(() => setFadeIn(true), 50);
-    } catch {
-      toast.error('Не удалось начать диалог');
+    } catch (err) {
+      // FEAT-197: a reputation-gated NPC answers 403 «Нужна репутация: X» — shown as is.
+      toast.error(apiErrorMessage(err, 'Не удалось начать диалог'));
       onClose();
     } finally {
       setLoading(false);

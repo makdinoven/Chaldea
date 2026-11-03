@@ -97,6 +97,10 @@ class Character(Base):
     # он читает слепок, а не character-attributes-service.
     # NULL = персонаж создан до фичи, паспорт реконструирует пресет подрасы.
     starting_attributes = Column(JSON, nullable=True)
+    # FEAT-197 (NPC only): the minimum reputation tier code (reputation_core.TIER_CODES) a player needs in the
+    # NPC's region for ANY interaction; and the per-NPC kill weight overriding the role weight. NULL = none.
+    reputation_min_tier = Column(String(20), nullable=True)
+    reputation_kill_points = Column(Integer, nullable=True)
 
     # character_titles.character_id входит в составной первичный ключ, поэтому
     # ORM по умолчанию пытается занулить его при удалении персонажа и падает с
@@ -405,6 +409,8 @@ class TeleportLink(Base):
     to_npc_id = Column(Integer, ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
     cost_gold = Column(Integer, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+    # FEAT-197: minimum reputation tier in the source NPC's region (NULL = no gate)
+    min_reputation_tier = Column(String(20), nullable=True)
 
     __table_args__ = (
         UniqueConstraint('from_npc_id', 'to_npc_id', name='uq_tlink_pair'),
@@ -759,6 +765,7 @@ class EconBank(Base):
     last_stats = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    loan_min_reputation_tier = Column(String(20), nullable=True)   # FEAT-197: loans need this tier (NULL = none)
 
     __table_args__ = (
         CheckConstraint("resident_deposits >= 0 AND resident_loans >= 0", name="ck_econ_banks_res"),
@@ -1088,6 +1095,104 @@ class EconGuildXpDay(Base):
     character_id = Column(Integer, primary_key=True, autoincrement=False)
     day = Column(Date, primary_key=True)
     xp = Column(Integer, nullable=False, default=0, server_default="0")
+
+
+# --------------------------------------------------------------------------- FEAT-197 reputation (migration 038)
+# Writes go through reputation_crud.apply_reputation only (raw SQL row creation + locked ORM updates).
+
+class CharacterReputation(Base):
+    """Reputation value per (character, region); no row = 0. ``decay_at`` anchors the negative decay."""
+
+    __tablename__ = "character_reputation"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_char_rep_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=False)                 # Regions.id (no FK)
+    value = Column(Integer, nullable=False, default=0, server_default="0")
+    decay_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "region_id", name="uq_char_rep"),
+        Index("ix_char_rep_decay", "decay_at"),
+    )
+
+
+class ReputationLog(Base):
+    """One applied change (origin and echo rows share ``event_key``; UNIQUE(event_key, region_id))."""
+
+    __tablename__ = "reputation_log"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_rep_log_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=False)
+    action = Column(String(40), nullable=False)
+    event_key = Column(String(191), nullable=False)
+    is_echo = Column(Boolean, nullable=False, default=False, server_default="0")
+    origin_region_id = Column(Integer, nullable=True)
+    requested_delta = Column(Integer, nullable=False)
+    applied_delta = Column(Integer, nullable=False)
+    value_after = Column(Integer, nullable=False)
+    tier_before = Column(String(20), nullable=False)
+    tier_after = Column(String(20), nullable=False)
+    reason = Column(String(500), nullable=True)
+    actor_user_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("event_key", "region_id", name="uq_rep_log_event"),
+        Index("ix_rep_log_char", "character_id", "created_at"),
+        Index("ix_rep_log_cap", "character_id", "region_id", "action", "created_at"),
+    )
+
+
+class ReputationSettings(Base):
+    """Single row id=1."""
+
+    __tablename__ = "reputation_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    min_value = Column(Integer, nullable=False, default=-1000, server_default="-1000")
+    max_value = Column(Integer, nullable=False, default=1000, server_default="1000")
+    echo_pct = Column(Numeric(5, 2), nullable=False, default=20, server_default="20.00")
+    decay_per_day = Column(Numeric(8, 2), nullable=False, default=10, server_default="10.00")
+    decay_last_run_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class ReputationTier(Base):
+    """Exactly 8 rows with the fixed codes of reputation_core.TIER_CODES."""
+
+    __tablename__ = "reputation_tiers"
+
+    code = Column(String(20), primary_key=True)
+    sort_order = Column(Integer, nullable=False, unique=True)
+    name = Column(String(60), nullable=False)
+    min_value = Column(Integer, nullable=True)
+    price_pct = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    sell_pct = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    trade_refused = Column(Boolean, nullable=False, default=False, server_default="0")
+
+
+class ReputationAction(Base):
+    __tablename__ = "reputation_actions"
+
+    code = Column(String(40), primary_key=True)
+    name = Column(String(100), nullable=False)
+    points = Column(Integer, nullable=False, default=0, server_default="0")
+    daily_cap = Column(Integer, nullable=True)
+    is_builtin = Column(Boolean, nullable=False, default=False, server_default="0")
+    has_source = Column(Boolean, nullable=False, default=False, server_default="0")
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+
+
+class ReputationNpcRoleWeight(Base):
+    __tablename__ = "reputation_npc_role_weights"
+
+    role = Column(String(50), primary_key=True)
+    points = Column(Integer, nullable=False)
 
 
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the

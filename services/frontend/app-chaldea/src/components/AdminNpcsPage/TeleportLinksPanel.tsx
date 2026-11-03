@@ -16,6 +16,8 @@ import {
   type TeleportLink,
 } from '../../redux/slices/teleportSlice';
 import { useCurrency } from '../../hooks/useCurrency';
+import ReputationTierSelect from '../Admin/ReputationPage/ReputationTierSelect';
+import { useReputationTiers } from '../Admin/ReputationPage/useReputationRefs';
 
 interface TeleportMasterOption {
   id: number;
@@ -50,9 +52,13 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
   const [selectedTarget, setSelectedTarget] = useState<TeleportMasterOption | null>(null);
   const [costGold, setCostGold] = useState<number>(0);
   const [bidirectional, setBidirectional] = useState<boolean>(true);
+  const [minTier, setMinTier] = useState<string | null>(null);
+  const tierOptions = useReputationTiers();
+  const tierName = (code: string) => tierOptions.find((t) => t.code === code)?.name ?? code;
 
   const [editingLinkId, setEditingLinkId] = useState<number | null>(null);
   const [editingCost, setEditingCost] = useState<number>(0);
+  const [editingTier, setEditingTier] = useState<string | null>(null);
 
   // Cache: target NPC info for already-known links (for showing names)
   const [targetCache, setTargetCache] = useState<Record<number, TeleportMasterOption>>({});
@@ -159,6 +165,7 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
         to_npc_id: selectedTarget.id,
         cost_gold: Math.floor(costGold),
         bidirectional,
+        min_reputation_tier: minTier,
       }),
     );
     if (createTeleportLink.fulfilled.match(result)) {
@@ -166,19 +173,22 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
       setSearch('');
       setCostGold(0);
       setBidirectional(true);
+      setMinTier(null);
       // Re-fetch to ensure server-side state is reflected (esp. bidirectional)
       dispatch(fetchAdminTeleportLinks(npcId));
     }
-  }, [dispatch, npcId, selectedTarget, costGold, bidirectional]);
+  }, [dispatch, npcId, selectedTarget, costGold, bidirectional, minTier]);
 
   const startEdit = (link: TeleportLink) => {
     setEditingLinkId(link.id);
     setEditingCost(link.cost_gold);
+    setEditingTier(link.min_reputation_tier ?? null);
   };
 
   const cancelEdit = () => {
     setEditingLinkId(null);
     setEditingCost(0);
+    setEditingTier(null);
   };
 
   const saveEdit = async (link: TeleportLink) => {
@@ -187,7 +197,10 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
       return;
     }
     const result = await dispatch(
-      updateTeleportLink({ id: link.id, payload: { cost_gold: Math.floor(editingCost) } }),
+      updateTeleportLink({
+        id: link.id,
+        payload: { cost_gold: Math.floor(editingCost), min_reputation_tier: editingTier },
+      }),
     );
     if (updateTeleportLink.fulfilled.match(result)) {
       cancelEdit();
@@ -271,6 +284,14 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
               onChange={(e) => setCostGold(Number(e.target.value))}
             />
           </label>
+
+          <ReputationTierSelect
+            value={minTier}
+            onChange={setMinTier}
+            label="Мин. репутация"
+            labelClassName="text-white/50 text-xs"
+            hint="В регионе этого мастера; ставится и на обратную связь"
+          />
         </div>
 
         <label className="flex items-center gap-2 text-white/80 text-sm">
@@ -323,6 +344,21 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
                     {target?.location_name && (
                       <div className="text-white/50 text-xs truncate">
                         {target.location_name}
+                      </div>
+                    )}
+                    {!isEditing && link.min_reputation_tier && (
+                      <div className="text-gold/80 text-xs truncate">
+                        Нужна репутация: {tierName(link.min_reputation_tier)}
+                      </div>
+                    )}
+                    {isEditing && (
+                      <div className="mt-2 sm:max-w-xs">
+                        <ReputationTierSelect
+                          value={editingTier}
+                          onChange={setEditingTier}
+                          label="Мин. репутация"
+                          labelClassName="text-white/50 text-xs"
+                        />
                       </div>
                     )}
                   </div>

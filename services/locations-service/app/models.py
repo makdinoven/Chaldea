@@ -497,6 +497,9 @@ class Quest(Base):
     reward_items = Column(JSON, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default=text("1"))
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # FEAT-197: reputation for completing (NULL = the action default, +10) and the tier needed to take it
+    reputation_reward = Column(Integer, nullable=True)
+    min_reputation_tier = Column(String(20), nullable=True)
 
     objectives = relationship("QuestObjective", back_populates="quest", cascade="all, delete-orphan")
 
@@ -1079,6 +1082,8 @@ class HousePlot(Base):
     map_x = Column(Float, nullable=True)
     map_y = Column(Float, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # FEAT-197: reputation tier needed to buy (or buy back) the house on this plot; NULL = no gate
+    min_reputation_tier = Column(String(20), nullable=True)
 
     __table_args__ = (
         Index('ix_house_plots_location', 'location_id'),

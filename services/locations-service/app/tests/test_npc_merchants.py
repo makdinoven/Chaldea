@@ -654,7 +654,9 @@ class TestSellOffersHttp:
         rich = http.as_user(OWNER_U).get(url).json()
         assert broke == rich
         assert [(o["item_id"], o["unit_price"], o["max_quantity"]) for o in rich] == [(7, 60, 999), (8, 7, 2)]
-        assert all(set(o) == {"item_id", "item_name", "item_image", "unit_price", "max_quantity"} for o in rich)
+        # FEAT-197 A1 added base_unit_price / price_reasons (the reputation bid cut) — still no cash field
+        assert all(set(o) == {"item_id", "item_name", "item_image", "unit_price", "max_quantity",
+                              "base_unit_price", "price_reasons"} for o in rich)
 
     async def test_legacy_offers_only_rows_with_a_buy_price(self, http, shop_db):
         await self._bag(shop_db, [(ITEM, 1), (OTHER_FOOD, 2)])

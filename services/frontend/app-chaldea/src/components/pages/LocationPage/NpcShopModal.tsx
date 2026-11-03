@@ -13,6 +13,7 @@ import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import ConfirmationModal from '../../ui/ConfirmationModal';
 import { getClientPrefs } from '../../../utils/clientPrefs';
 import { useCurrency } from '../../../hooks/useCurrency';
+import type { PriceReason } from '../../../api/reputation';
 
 /* ── Types ── */
 
@@ -36,6 +37,8 @@ interface ShopItem {
   market?: boolean;
   price_level?: PriceLevel;
   living?: boolean;
+  /* FEAT-197: why the personal price differs (charisma / region reputation). */
+  price_reasons?: PriceReason[];
 }
 
 type PriceLevel = 'low' | 'normal' | 'high';
@@ -47,6 +50,9 @@ interface SellOffer {
   item_image: string | null;
   unit_price: number;
   max_quantity: number;
+  /* FEAT-197: the bid before the reputation cut + why it differs. */
+  base_unit_price?: number | null;
+  price_reasons?: PriceReason[];
 }
 
 interface ShopTransactionResponse {
@@ -57,6 +63,7 @@ interface ShopTransactionResponse {
   quantity: number;
   total_price: number;
   discount_percent: number;
+  price_reasons?: PriceReason[];
 }
 
 interface NpcShopModalProps {
@@ -67,6 +74,8 @@ interface NpcShopModalProps {
 }
 
 type ShopTab = 'buy' | 'sell';
+
+const REFUSAL_FALLBACK = 'Торговец отказывается иметь с вами дело';
 
 /** Server-side bound of one buy/sell request (schemas.SHOP_MAX_QUANTITY). */
 const MAX_DEAL_QUANTITY = 999;
@@ -98,6 +107,63 @@ const getEffectivePrice = (si: ShopItem): number =>
 
 const hasDiscount = (si: ShopItem): boolean =>
   si.discounted_buy_price != null && si.discounted_buy_price < si.buy_price;
+
+/** FEAT-197: a reputation markup makes the personal price higher than the shop price. */
+const hasMarkup = (si: ShopItem): boolean =>
+  si.discounted_buy_price != null && si.discounted_buy_price > si.buy_price;
+
+/** Start of the «Вне закона» refusal (locations-service `reputation_read.MSG_TRADE_REFUSED`). */
+const TRADE_REFUSAL_PREFIX = 'Торговцы этого края отказываются';
+
+const errorStatus = (err: unknown): number | undefined =>
+  axios.isAxiosError(err) ? err.response?.status : undefined;
+
+/** The merchant will not deal with this character at all (reputation gate / outlaw / closed shop). */
+const isShopRefusal = (err: unknown): boolean => {
+  const status = errorStatus(err);
+  return status === 403 || status === 409;
+};
+
+/** Same, for a deal: the till-is-short 409 is NOT a refusal of the character. */
+const isDealRefusal = (err: unknown): boolean => {
+  const status = errorStatus(err);
+  if (status === 403) return true;
+  if (status !== 409 || !axios.isAxiosError(err)) return false;
+  const detail: unknown = err.response?.data?.detail;
+  return typeof detail === 'string' && detail.startsWith(TRADE_REFUSAL_PREFIX);
+};
+
+const formatPercent = (value: number): string => {
+  const abs = Math.abs(value);
+  return `${Number.isInteger(abs) ? abs : abs.toFixed(1)}%`;
+};
+
+/** First non-empty reason list of the rows (the reasons are the same for every row of one merchant). */
+const pickReasons = (rows: { price_reasons?: PriceReason[] }[]): PriceReason[] =>
+  rows.find((r) => r.price_reasons && r.price_reasons.length > 0)?.price_reasons ?? [];
+
+/** Discount — green, markup / bid cut — red; the label comes from the server in Russian. */
+const PriceReasonChips = ({ reasons }: { reasons: PriceReason[] }) => {
+  const shown = reasons.filter((r) => r.percent !== 0);
+  if (shown.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {shown.map((r) => (
+        <span
+          key={`${r.source}-${r.label}`}
+          className={`border rounded-card px-2 py-0.5 text-[10px] sm:text-xs font-medium ${
+            r.percent > 0
+              ? 'bg-green-900/40 border-green-500/30 text-green-400'
+              : 'bg-site-red/10 border-site-red/30 text-site-red'
+          }`}
+        >
+          {r.label}: {r.percent > 0 ? '−' : '+'}
+          {formatPercent(r.percent)}
+        </span>
+      ))}
+    </div>
+  );
+};
 
 const PRICE_LEVEL_BADGE: Record<PriceLevel, { label: string; className: string }> = {
   low: { label: 'дешевле обычного', className: 'text-green-400 border-green-500/30 bg-green-900/20' },
@@ -136,6 +202,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
   const [quantities, setQuantities] = useState<Record<number, number>>({});
   const [sellQuantities, setSellQuantities] = useState<Record<number, number>>({});
   const [processing, setProcessing] = useState(false);
+  /* FEAT-197: the merchant refuses this character (reputation gate, «Вне закона», closed shop). */
+  const [refusal, setRefusal] = useState<string | null>(null);
 
   const fetchShop = useCallback(async () => {
     setLoading(true);
@@ -144,8 +212,10 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
       if (characterId) params.character_id = characterId;
       const res = await axios.get<ShopItem[]>(`${BASE_URL}/locations/npcs/${npcId}/shop`, { params });
       setShopItems(res.data.filter((i) => i.is_active));
-    } catch {
-      toast.error('Не удалось загрузить товары магазина');
+      setRefusal(null);
+    } catch (err) {
+      if (isShopRefusal(err)) setRefusal(errorText(err, REFUSAL_FALLBACK));
+      else toast.error(errorText(err, 'Не удалось загрузить товары магазина'));
     } finally {
       setLoading(false);
     }
@@ -161,7 +231,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
       );
       setSellOffers(res.data);
     } catch (err) {
-      toast.error(errorText(err, 'Не удалось узнать, что купит торговец'));
+      if (isShopRefusal(err)) setRefusal(errorText(err, REFUSAL_FALLBACK));
+      else toast.error(errorText(err, 'Не удалось узнать, что купит торговец'));
     } finally {
       setOffersLoading(false);
     }
@@ -225,7 +296,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
       }
       refreshAfterDeal();
     } catch (err) {
-      toast.error(errorText(err, 'Не удалось купить предмет'));
+      if (isDealRefusal(err)) setRefusal(errorText(err, REFUSAL_FALLBACK));
+      else toast.error(errorText(err, 'Не удалось купить предмет'));
       // Stock or price may have moved under us: show the fresh state.
       fetchShop();
     } finally {
@@ -259,7 +331,9 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
       }
       refreshAfterDeal();
     } catch (err) {
-      if (axios.isAxiosError(err) && err.response?.status === 409) {
+      if (isDealRefusal(err)) {
+        setRefusal(errorText(err, REFUSAL_FALLBACK));
+      } else if (axios.isAxiosError(err) && err.response?.status === 409) {
         // The merchant's till is short: the refusal is the merchant's own words.
         toast.error(`${npcName}: «${errorText(err, 'У меня сейчас нет на это денег')}»`);
       } else {
@@ -275,12 +349,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
   // Bag rows give the sell tab its type/rarity frame; offers themselves only carry name and image.
   const inventoryByItemId = new Map(inventory.map((inv) => [inv.item_id, inv]));
 
-  // Compute discount percent from first item that has a discount
-  const discountPercent = (() => {
-    const discounted = shopItems.find(hasDiscount);
-    if (!discounted || !discounted.discounted_buy_price) return 0;
-    return Math.round((1 - discounted.discounted_buy_price / discounted.buy_price) * 100);
-  })();
+  // FEAT-197: why the prices differ — the same reasons apply to every row of the tab.
+  const tabReasons = tab === 'buy' ? pickReasons(shopItems) : pickReasons(sellOffers);
 
   const balance = character?.currency_balance ?? 0;
 
@@ -304,15 +374,10 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
         </div>
       }
     >
-      {/* Subtitle + balance + discount */}
+      {/* Subtitle + balance */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <span className="text-white/50 text-xs uppercase tracking-wide">Торговля</span>
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {discountPercent > 0 && (
-            <span className="bg-green-900/40 border border-green-500/30 text-green-400 text-[10px] sm:text-xs font-medium px-2 py-1 rounded-card whitespace-nowrap">
-              Скидка: {discountPercent}%
-            </span>
-          )}
           <div className="flex items-center gap-1.5 bg-black/30 rounded-card px-3 py-1.5">
             <img src={goldCoinsIcon} alt="" className="w-5 h-5" />
             <span className="text-gold font-medium text-sm sm:text-base">{balance.toLocaleString()}</span>
@@ -320,6 +385,16 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
         </div>
       </div>
 
+      {refusal ? (
+        /* FEAT-197: the merchant does not deal with this character — his words are the whole window. */
+        <div role="alert" className="flex flex-col items-center gap-3 py-10 px-2 text-center">
+          <p className="text-site-red text-sm sm:text-base leading-relaxed max-w-md break-words">{refusal}</p>
+          <button type="button" onClick={onClose} className="btn-line">
+            Уйти
+          </button>
+        </div>
+      ) : (
+      <>
       {/* Tabs */}
       <div className="flex border-b border-white/10 mb-4">
         <button
@@ -350,6 +425,12 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
         </button>
       </div>
 
+      {tabReasons.length > 0 && (
+        <div className="mb-3">
+          <PriceReasonChips reasons={tabReasons} />
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
@@ -371,6 +452,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
               const canAfford = totalPrice <= balance;
               const icon = getItemIcon(si.item_type, si.item_image);
               const itemHasDiscount = hasDiscount(si);
+              const itemHasMarkup = hasMarkup(si);
               const basePrice = si.base_buy_price;
               const showBase = !!si.market && basePrice != null && basePrice !== si.buy_price;
               const badge = si.market && si.price_level ? PRICE_LEVEL_BADGE[si.price_level] : null;
@@ -402,6 +484,13 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                         <>
                           <span className="text-white/40 text-xs line-through">{si.buy_price.toLocaleString()}</span>
                           <span className="text-green-400 text-xs font-medium">{unitPrice.toLocaleString()}</span>
+                        </>
+                      ) : itemHasMarkup ? (
+                        <>
+                          <span className="text-white/40 text-xs line-through">{si.buy_price.toLocaleString()}</span>
+                          <span className="text-site-red text-xs font-medium" title="Наценка за репутацию">
+                            {unitPrice.toLocaleString()}
+                          </span>
                         </>
                       ) : (
                         <span className="text-gold text-xs">{si.buy_price.toLocaleString()}</span>
@@ -495,6 +584,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
               const name = offer.item_name ?? inv?.item.name ?? `Предмет #${offer.item_id}`;
               const icon = getItemIcon(inv?.item.item_type ?? null, offer.item_image ?? inv?.item.image ?? null);
               const rarity = inv ? shownRarity(inv.item.item_type, inv.item.item_rarity) : null;
+              const bidCut = offer.base_unit_price != null && offer.base_unit_price > offer.unit_price;
 
               return (
                 <div
@@ -514,9 +604,20 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                   <div className="flex flex-col flex-1 min-w-0 gap-1">
                     <span className="text-white text-sm font-medium truncate">{name}</span>
 
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 flex-wrap">
                       <img src={goldCoinsIcon} alt="" className="w-4 h-4" />
-                      <span className="text-gold text-xs">{offer.unit_price.toLocaleString()} / шт.</span>
+                      {bidCut ? (
+                        <>
+                          <span className="text-white/40 text-xs line-through">
+                            {(offer.base_unit_price ?? 0).toLocaleString()}
+                          </span>
+                          <span className="text-site-red text-xs font-medium" title="Торговец платит меньше из-за репутации">
+                            {offer.unit_price.toLocaleString()} / шт.
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-gold text-xs">{offer.unit_price.toLocaleString()} / шт.</span>
+                      )}
                     </div>
 
                     <span className="text-white/40 text-[10px]">
@@ -562,6 +663,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
             })}
           </div>
         )
+      )}
+      </>
       )}
 
       <ConfirmationModal

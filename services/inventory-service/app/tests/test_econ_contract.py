@@ -208,6 +208,41 @@ def test_merchant_bid_never_beats_the_cheapest_ask():
         assert 2 * bid <= ask, (base_ask, base_bid, mult)
 
 
+# --------------------------------------------------------------------------------------------- FEAT-197 reputation
+
+def test_reputation_ask_never_undercuts_bids_and_markup_only_raises():
+    last = {}
+    for ask, charisma, rep in cc.REPUTATION_ASK_GRID:
+        price = econ_core.reputation_ask(ask, charisma, rep)
+        base = econ_core.discounted_ask(ask, charisma)
+        case = (ask, charisma, rep)
+        assert 2 * price >= ask, case                                  # >= ceil(ask * 0.5)
+        assert price >= econ_core.ask_discount_floor(ask), case        # guild cap
+        assert price >= econ_core.market_bid(ask, "1", ask), case      # best possible bid
+        if float(rep) == 0:
+            assert price == base, case
+        if float(rep) < 0:
+            assert price >= base, case
+        prev = last.get((ask, charisma))
+        if prev is not None:
+            assert price <= prev, case                                 # higher tier never costs more
+        last[(ask, charisma)] = price
+
+
+def test_reputation_bid_never_exceeds_the_bid():
+    last = {}
+    for bid, pct in cc.REPUTATION_BID_GRID:
+        got = econ_core.reputation_bid(bid, pct)
+        case = (bid, pct)
+        assert 0 <= got <= max(bid, 0), case
+        if float(pct) >= 0:
+            assert got == max(bid, 0), case
+        prev = last.get(bid)
+        if prev is not None:
+            assert got >= prev, case                                   # higher tier never pays less
+        last[bid] = got
+
+
 @pytest.fixture()
 def merchant_db():
     """FEAT-183 merchant SQL smoke world (its own SQLite, see econ_contract_cases)."""
