@@ -42,6 +42,8 @@ EQUIPMENT_ONLY_RARITY_ERROR = (
     "Мифическая, божественная и демоническая редкость доступны только для снаряжения"
 )
 FOOD_ITEM_TYPE = "consumable"
+# FEAT-199: only a head item can be a mask (it takes the helmet slot)
+MASK_ITEM_TYPE = "head"
 
 
 def _enum_value(value):
@@ -585,6 +587,8 @@ class ItemBase(BaseModel):
     is_food: bool = False
     # FEAT-178: a cloak worn as a camp backpack (capacity by rarity)
     is_backpack: bool = False
+    # FEAT-199: a head item worn as a mask (hides the face during crimes)
+    is_mask: bool = False
 
     # FEAT-180: furniture for a house room; only the bonus of its room type applies
     furniture_room_type: Optional[str] = None
@@ -879,6 +883,8 @@ class ItemCreate(ItemBase):
 
         if values.get("is_backpack") and item_type != "cloak":
             raise ValueError("Походным рюкзаком может быть только плащ")
+        if values.get("is_mask") and item_type != MASK_ITEM_TYPE:
+            raise ValueError("Маской может быть только предмет для головы")
         if values.get("is_food"):
             if item_type != FOOD_ITEM_TYPE:
                 raise ValueError("Едой может быть только расходуемый предмет")

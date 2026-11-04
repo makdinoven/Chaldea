@@ -80,7 +80,7 @@ class TestTrade:
         r = lock_client.post("/inventory/trade/propose",
                              json={"initiator_character_id": 1, "target_character_id": 2})
         assert r.status_code == 409
-        assert r.json()["detail"].startswith("Целевой персонаж без сознания до")
+        assert r.json()["detail"].startswith("Целевой персонаж без сознания — осталось")
 
     def test_propose_allowed_after_knockout_expired(self, lock_client, db_session):
         _lock(db_session, 2, unconscious=datetime.utcnow() - timedelta(minutes=1))

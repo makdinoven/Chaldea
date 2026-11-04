@@ -202,6 +202,44 @@ class TestShopView:
         assert "discounted_buy_price" not in dumped and "price_reasons" not in dumped
         assert dumped["buy_price"] == 100
 
+    # FEAT-200 (fix 3): the personal price list sits behind the NPC's own reputation gate, like buy / sell
+    async def test_npc_tier_gate_is_403_on_the_personal_view(self, rdb):
+        await _npc_tier(rdb, "trusted")
+        await _rep(rdb, FAMILIAR)
+        with pytest.raises(HTTPException) as exc:
+            await _personal_shop(rdb)
+        assert (exc.value.status_code, exc.value.detail) == (403, "Нужна репутация: Свой человек")
+        await rdb.execute(text("UPDATE character_reputation SET value = :v"), {"v": TRUSTED})
+        await rdb.commit()
+        (row,) = await _personal_shop(rdb)                                      # tier met -> the list
+        assert row.discounted_buy_price == 95
+
+    async def test_npc_tier_gate_comes_before_the_shop_read(self, rdb):
+        await rdb.execute(text("DELETE FROM npc_shop_items"))
+        await rdb.commit()
+        await _npc_tier(rdb, "legend")
+        with pytest.raises(HTTPException) as exc:
+            await _personal_shop(rdb)
+        assert (exc.value.status_code, exc.value.detail) == (403, "Нужна репутация: Легенда края")
+
+    async def test_npc_tier_gate_uses_the_npcs_region(self, rdb):
+        await _npc_tier(rdb, "trusted")
+        await _rep(rdb, LEGEND, region=REGION_B)                                # standing elsewhere does not count
+        with pytest.raises(HTTPException) as exc:
+            await _personal_shop(rdb)
+        assert exc.value.status_code == 403
+
+    async def test_public_view_ignores_the_npc_tier_gate(self, rdb):
+        await _npc_tier(rdb, "legend")
+        rows = await main.get_npc_shop(npc_id=NPC_REGION, character_id=None, session=rdb, current_user=None)
+        assert len(rows) == 1 and "discounted_buy_price" not in rows[0].dict()
+
+    @pytest.mark.parametrize("code", [None, "", "bogus"])
+    async def test_no_or_unknown_npc_code_keeps_the_personal_view_open(self, rdb, code):
+        await _npc_tier(rdb, code)
+        (row,) = await _personal_shop(rdb)
+        assert row.discounted_buy_price == 100
+
     async def test_merchant_without_a_region_ignores_reputation(self, rdb):
         await _set_row(rdb, npc=NPC_NOWHERE)
         await _rep(rdb, OUTLAW)                                                 # region 10 only

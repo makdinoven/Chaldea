@@ -10,6 +10,11 @@ import locations_client
 import activity_lock
 import reputation_crud
 import reputation_notify
+import law_core
+import law_crud
+import law_notify
+import shadow_crud
+import renown_crud
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -698,6 +703,24 @@ def _require_balance_permission(user) -> None:
     route's own permission (403 otherwise)."""
     if ECONOMY_ADJUST_PERMISSION not in (getattr(user, "permissions", None) or []):
         raise HTTPException(status_code=403, detail="Недостаточно прав для изменения баланса")
+
+
+@router.get("/admin/{character_id:int}", response_model=schemas.AdminCharacterListItem)
+def admin_get_character(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("characters:read")),
+):
+    """FEAT-200: one player character in the admin list shape (the admin card by a direct link).
+    NPCs / mobs are excluded like in /admin/list -> 404. The `:int` converter keeps literal
+    /admin/<section> paths (list, npcs, law, ...) from being shadowed."""
+    character = db.query(models.Character).filter(
+        models.Character.id == character_id,
+        models.Character.is_npc == False,
+    ).first()
+    if character is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    return character
 
 
 @router.put("/admin/{character_id}")
@@ -2342,15 +2365,32 @@ def update_location(
     new_location_id = payload.get("new_location_id")
     if new_location_id is None:
         raise HTTPException(status_code=400, detail="Поле 'new_location_id' обязательно для передачи")
+    # FEAT-198: optional "move" | "quick_move" (the encounter snapshot); anything else counts as a move.
+    source = payload.get("source")
+    if source not in law_core.MOVE_SOURCES:
+        source = law_core.SOURCE_MOVE
 
-    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    # FEAT-198: the row is locked so a second tab / quick move cannot slip past a jail term or a pending
+    # guard encounter, and the encounter is created in the same commit as the new location.
+    character = db.query(models.Character).filter(models.Character.id == character_id).with_for_update().first()
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
+    lock = activity_lock.lock_for_character(character)
+    if lock["reason"] in (activity_lock.REASON_JAIL, activity_lock.REASON_LAW_ENCOUNTER):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=activity_lock.lock_message(lock))
 
-    if character.current_location_id is None or str(character.current_location_id) != str(new_location_id):
+    from_location_id = character.current_location_id
+    moving = from_location_id is None or str(from_location_id) != str(new_location_id)
+    if moving:
         character.house_room_id = None  # FEAT-180 stage 7: leaving the location leaves any house
     character.current_location_id = new_location_id
+    encounter = None
     try:
+        if moving:
+            encounter = law_crud.evaluate_entry(
+                db, character, int(new_location_id), source,
+                from_location_id=int(from_location_id) if from_location_id is not None else None)
         db.commit()
     except Exception as e:
         db.rollback()
@@ -2358,10 +2398,22 @@ def update_location(
         raise HTTPException(status_code=500, detail="Ошибка при обновлении локации")
     db.refresh(character)
 
+    encounter_out = None
+    if encounter is not None:
+        # The move and the encounter are committed: a read failure here must not report the move as failed
+        # (the lock reason in /users/me still opens the guard window).
+        try:
+            encounter_out = law_crud.encounter_out(db, encounter)
+            law_notify.publish([law_crud.encounter_notice(db, encounter)])
+        except Exception:
+            db.rollback()
+            logger.exception("law encounter %s: response/notification failed", encounter.id)
+
     return {
         "detail": "Текущая локация персонажа обновлена",
         "character_id": character.id,
-        "current_location_id": character.current_location_id
+        "current_location_id": character.current_location_id,
+        "law_encounter": encounter_out,
     }
 
 
@@ -2627,6 +2679,10 @@ def get_character_public(
     """
     try:
         data = crud.get_character_public(db, character_id)
+        if data:
+            # FEAT-199: fame is public (a tier name only, never the number)
+            fame_tier = renown_crud.fame_tier_of(db, character_id)
+            data["fame_tier_code"], data["fame_tier_name"] = fame_tier.code, fame_tier.name
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при получении персонажа {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении персонажа.")
@@ -3110,6 +3166,7 @@ async def admin_update_npc(
     old_role = npc.npc_role
     old_level = npc.level
     old_class_id = npc.id_class
+    old_status = npc.npc_status
 
     # FEAT-181 C6: gold is not an ORM field here — a changed value needs economy:adjust and
     # becomes an admin_adjust posting in the same commit.
@@ -3123,6 +3180,9 @@ async def admin_update_npc(
 
     for field, value in update_data.items():
         setattr(npc, field, value)
+
+    if update_data.get("npc_status") == "alive" and old_status == "dead":
+        _restore_revived_npc(db, npc.id)  # FEAT-200 (fix 1): an admin revival restores health too
 
     # FEAT-123: when an NPC stops being a teleport master, purge its teleport links
     role_changed_away_from_teleport = (
@@ -3244,12 +3304,16 @@ async def admin_delete_npc(
 
 @router.get("/npcs/by_location", response_model=List[schemas.NpcInLocation])
 def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
-    """Returns list of NPCs at a given location (excludes mobs)."""
+    """Returns list of NPCs at a given location (excludes mobs, dead NPCs and knocked-out guards)."""
+    now = datetime.utcnow()
     npcs = db.query(models.Character).filter(
         models.Character.current_location_id == location_id,
         models.Character.is_npc == True,
-        models.Character.npc_role != 'mob',
+        # NULL npc_role is a regular NPC (SQL `NULL != 'mob'` is NULL, so test it explicitly)
+        or_(models.Character.npc_role.is_(None), models.Character.npc_role != 'mob'),
         models.Character.npc_status != 'dead',
+        # FEAT-198: a guard knocked out after a lost fight is away until it recovers
+        or_(models.Character.unconscious_until.is_(None), models.Character.unconscious_until <= now),
     ).all()
 
     result = []
@@ -3963,6 +4027,16 @@ def update_mob_status(
 # Internal: NPC status update (used by battle-service)
 # ============================================================
 
+def _restore_revived_npc(db: Session, npc_id: int) -> None:
+    """FEAT-200 (fix 1): a revived NPC comes back at full health / resources, otherwise an attack on it
+    starts a battle whose target is already down. Best effort: the revival itself must not fail on it
+    (battle-service also refuses a battle against an NPC with no health)."""
+    try:
+        law_crud.heal_guard(db, npc_id)  # generic "current = max" for every resource, not guard-specific
+    except SQLAlchemyError as e:
+        logger.warning(f"Не удалось восстановить здоровье NPC {npc_id} при оживлении: {e}")
+
+
 @router.put("/internal/npc-status/{character_id}")
 def update_npc_status(
     character_id: int,
@@ -3993,28 +4067,46 @@ def update_npc_status(
         raise HTTPException(status_code=404, detail="NPC не найден")
 
     killed = False
-    tier_changes = []
+    knocked_out_until = None
+    outcome = None
     try:
         if data.status == "dead":
-            killed = db.query(models.Character).filter(
-                models.Character.id == character_id,
-                models.Character.npc_status == "alive",
-            ).update({models.Character.npc_status: "dead"}, synchronize_session=False) == 1
+            if (npc.npc_role or "") == law_core.GUARD_ROLE:
+                # FEAT-198 (user decision 3, §3.14 A2): a guard is never killed — a knock-out instead; the
+                # reputation and the crime apply on that transition exactly like a kill.
+                knocked_out_until = law_crud.knock_out_guard(db, npc.id, battle_id=data.battle_id)
+                killed = knocked_out_until is not None
+            else:
+                killed = db.query(models.Character).filter(
+                    models.Character.id == character_id,
+                    models.Character.npc_status == "alive",
+                ).update({models.Character.npc_status: "dead"}, synchronize_session=False) == 1
             if killed and data.killer_character_ids:
-                results = reputation_crud.apply_npc_kill(
+                # FEAT-199: one orchestrator — the witness roll sits BEFORE both the kill reputation and the
+                # crime (FEAT-197/198); unseen / masked kills are deferred (same transaction, same keys)
+                outcome = shadow_crud.npc_kill_consequences(
                     db, npc, battle_id=data.battle_id, killer_ids=data.killer_character_ids)
-                tier_changes = reputation_crud.tier_changes_of(results)
         else:
             npc.npc_status = data.status
+            if data.status == "alive":
+                # FEAT-198: reviving also ends a guard's knock-out, so the NPC is visible / on duty at once
+                npc.unconscious_until = None
+                _restore_revived_npc(db, npc.id)
         db.commit()
         db.refresh(npc)
-    except (SQLAlchemyError, reputation_crud.ReputationError) as e:
+    except (SQLAlchemyError, reputation_crud.ReputationError, law_crud.LawError) as e:
         db.rollback()
         logger.error(f"Ошибка при обновлении статуса NPC {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении статуса NPC")
 
-    reputation_notify.publish_tier_changes(tier_changes)
-    return {"ok": True, "status": npc.npc_status, "killed": killed}
+    if outcome is not None:
+        outcome.publish()
+    return {
+        "ok": True,
+        "status": npc.npc_status,
+        "killed": killed,
+        "knocked_out_until": knocked_out_until.isoformat() if knocked_out_until else None,
+    }
 
 
 # ============================================================
@@ -4503,6 +4595,12 @@ def post_teleport(
         source_npc_id=npc_id,
         link_id=body.link_id,
     )
+    if result.get("law_encounter_id"):         # FEAT-198: stopped by the guards on arrival (already committed)
+        try:
+            encounter = law_crud.get_encounter(db, result["law_encounter_id"])
+            law_notify.publish([law_crud.encounter_notice(db, encounter)])
+        except Exception:
+            logger.exception("law encounter notification after teleport failed")
     return schemas.TeleportResult(**result)
 
 
@@ -4613,8 +4711,12 @@ def set_travel_cooldown(
 # (/characters/economy/..., /characters/admin/economy/...) win over /characters/{character_id}/... routes.
 from economy_api import router as economy_router  # noqa: E402
 from reputation_api import router as reputation_router  # noqa: E402
+from law_api import router as law_router  # noqa: E402
+from shadow_api import router as shadow_router  # noqa: E402
 app.include_router(economy_router)
 app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
+app.include_router(law_router)          # FEAT-198; before the main router (static /law/..., /admin/law/... paths)
+app.include_router(shadow_router)       # FEAT-199; before the main router (static /renown/..., /admin/shadow/... paths)
 app.include_router(router)
 
 

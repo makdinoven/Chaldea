@@ -81,6 +81,9 @@ class Items(Base):
     is_food = Column(Boolean, nullable=False, default=False, server_default="0")
     # FEAT-178: a cloak worn as a camp backpack (capacity by rarity, see backpack.py)
     is_backpack = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-199: a head item worn as a mask — witnesses of a crime see "an unknown
+    # in a mask" (read by character-service via SQL). Only on item_type='head'.
+    is_mask = Column(Boolean, nullable=False, default=False, server_default="0")
     # FEAT-180: furniture (item_type='furniture') stands in a house room of this
     # type (hall/bedroom/storage/workshop) and adds its bonus there. VARCHAR, not
     # ENUM, so a new room type does not lock `items`.

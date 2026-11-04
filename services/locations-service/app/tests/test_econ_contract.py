@@ -331,3 +331,17 @@ def test_guild_op_types():
     assert not (econ_core.GUILD_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
     assert not (econ_core.GUILD_OP_TYPES & econ_core.BANK_OP_TYPES)
     assert not (econ_core.GUILD_OP_TYPES & econ_core.CARAVAN_OP_TYPES)
+
+
+# --------------------------------------------------------------------------------------------- FEAT-198 law
+
+def test_law_op_types():
+    assert frozenset(cc.LAW_OP_TYPE_NAMES) == econ_core.LAW_OP_TYPES
+    assert econ_core.OP_LAW_FINE == "law_fine"
+    assert econ_core.OP_LAW_BAIL == "law_bail"
+    assert econ_core.LAW_OP_TYPES <= econ_core.OP_TYPES
+    assert not (econ_core.LAW_OP_TYPES & econ_core.SOURCE_OP_TYPES)
+    assert not (econ_core.LAW_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
+    for group in (econ_core.BANK_OP_TYPES, econ_core.MINT_OP_TYPES, econ_core.CARAVAN_OP_TYPES,
+                  econ_core.GUILD_OP_TYPES):
+        assert not (econ_core.LAW_OP_TYPES & group)

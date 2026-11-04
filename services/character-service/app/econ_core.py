@@ -154,6 +154,10 @@ CARAVAN_OP_TYPES = frozenset({OP_CARAVAN_DISPATCH, OP_CARAVAN_DELIVERY, OP_CARAV
 # FEAT-193: a player fills a region's guild order: purse (+ region treasury for food) -> character (untaxed)
 OP_GUILD_ORDER = "guild_order"
 GUILD_OP_TYPES = frozenset({OP_GUILD_ORDER})
+# FEAT-198: law - a fine paid to the guards and a bail paid for a prisoner: character -> region treasury (taxed)
+OP_LAW_FINE = "law_fine"
+OP_LAW_BAIL = "law_bail"
+LAW_OP_TYPES = frozenset({OP_LAW_FINE, OP_LAW_BAIL})
 
 BANK_OP_TYPES = frozenset({
     OP_BANK_DEPOSIT, OP_BANK_WITHDRAW, OP_BANK_TRANSFER, OP_BANK_TICK, OP_BANK_CAPITAL,
@@ -168,7 +172,7 @@ OP_TYPES = frozenset({
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
     OP_REGION_EVENT,
-}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES | GUILD_OP_TYPES
+}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES | GUILD_OP_TYPES | LAW_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
 SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST}) | MINT_OP_TYPES

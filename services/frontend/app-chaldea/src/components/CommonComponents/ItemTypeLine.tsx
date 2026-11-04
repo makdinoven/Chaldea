@@ -22,6 +22,7 @@ interface ItemTypeLineProps {
     armor_subclass?: string | null;
     is_food?: boolean;
     is_backpack?: boolean;
+    is_mask?: boolean;
     furniture_room_type?: string | null;
   };
 }
@@ -46,7 +47,9 @@ const ItemTypeLine = ({ item }: ItemTypeLineProps) => {
         ? 'Еда'
         : item.item_type === 'cloak' && item.is_backpack
           ? 'Походный рюкзак'
-          : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
+          : item.item_type === 'head' && item.is_mask
+            ? 'Маска'
+            : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
     segments.push({ text: typeLabel, className: 'text-white/80' });
     if (item.item_type === 'furniture' && isFurnitureGroup(item.furniture_room_type)) {
       segments.push({ text: FURNITURE_GROUP_LABEL[item.furniture_room_type], className: 'text-white' });

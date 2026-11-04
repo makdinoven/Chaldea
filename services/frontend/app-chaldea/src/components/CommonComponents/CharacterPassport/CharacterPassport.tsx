@@ -358,6 +358,7 @@ const CharacterPassport = ({
               <Field label="Вес" value={data.weight ?? undefined} />
               <Field label="Дата регистрации" value={formatRegisteredAt(data.registeredAt)} />
               <Field label="В Скитальцах с" value={formatTenure(data, currentGameYear)} />
+              {data.fameTierName && !data.isNpc ? <Field label="Слава" value={data.fameTierName} /> : null}
               {showRecruitmentRecord ? (
                 <Field label="Первое назначение" value={data.startLocation?.name} />
               ) : null}

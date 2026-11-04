@@ -66,6 +66,10 @@ def _create_world_hierarchy(target, connection, **kw):
         return
     for ddl in _HIERARCHY_DDL:
         connection.exec_driver_sql(ddl)
+    # FEAT-198: Regions.jail_location_id (locations-service migration 055) is read by the law module.
+    columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(Regions)").fetchall()}
+    if "jail_location_id" not in columns:
+        connection.exec_driver_sql("ALTER TABLE Regions ADD COLUMN jail_location_id INTEGER NULL")
 
 
 @event.listens_for(models.Base.metadata, "after_drop")
@@ -218,4 +222,17 @@ REAL_NOTIFY_LEVEL_CHANGED = _crud.notify_level_changed
 def stub_notify_level_changed(monkeypatch):
     stub = MagicMock(return_value=True)
     monkeypatch.setattr(_crud, "notify_level_changed", stub)
+    return stub
+
+
+# ---------------------------------------------------------------------------
+# FEAT-198: keep the law notifications off the dev RabbitMQ
+# ---------------------------------------------------------------------------
+import law_notify as _law_notify  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def stub_law_notify_send(monkeypatch):
+    stub = MagicMock(name="law_notify._send")
+    monkeypatch.setattr(_law_notify, "_send", stub)
     return stub

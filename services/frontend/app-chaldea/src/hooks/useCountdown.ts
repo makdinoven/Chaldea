@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { parseServerDate } from '../utils/serverDate';
+import { formatRemaining } from '../utils/formatRemaining';
 
 /**
  * Countdown hook that counts down to a target timestamp.
@@ -48,3 +50,50 @@ const useCountdown = (targetTimestamp: number | null) => {
 };
 
 export default useCountdown;
+
+/* ── FEAT-198 (A8): live countdown to a server timestamp ─────────────────── */
+
+export interface CountdownTo {
+  /** Seconds left (0 when done or no target). */
+  remaining: number;
+  /** «2 д 05:13:20» / «05:13:20» / «13:20». */
+  formatted: string;
+  /** «осталось …». */
+  text: string;
+  /** True when there is a target and it has passed. */
+  isDone: boolean;
+}
+
+/**
+ * Ticks every second until `target` (a `Date` or a naive-UTC server string,
+ * parsed with `parseServerDate`). `onDone` fires once when the target passes
+ * while mounted (e.g. to refresh `/users/me`).
+ */
+export const useCountdownTo = (
+  target: Date | string | null | undefined,
+  onDone?: () => void,
+): CountdownTo => {
+  const targetMs =
+    target instanceof Date ? target.getTime() : parseServerDate(target ?? null)?.getTime() ?? null;
+  const [now, setNow] = useState(() => Date.now());
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (targetMs === null || targetMs <= Date.now()) return;
+    const timer = setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= targetMs) {
+        clearInterval(timer);
+        onDoneRef.current?.();
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [targetMs]);
+
+  const remaining = targetMs === null ? 0 : Math.max(0, Math.ceil((targetMs - now) / 1000));
+  const formatted = formatRemaining(remaining);
+  return { remaining, formatted, text: `осталось ${formatted}`, isDone: targetMs !== null && remaining <= 0 };
+};

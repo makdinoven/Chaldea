@@ -11,6 +11,7 @@ import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 import BankDepositsTab from './BankDepositsTab';
 import BankLoanTab from './BankLoanTab';
 import BankTransfersTab from './BankTransfersTab';
+import BankBailTab from './BankBailTab';
 import { bankErrorText, newRequestId, regionLabel } from './bankFormat';
 import { DebtorBadge, type BankRun } from './BankParts';
 
@@ -21,12 +22,14 @@ interface BankModalProps {
   onClose: () => void;
 }
 
-type BankTab = 'deposits' | 'loan' | 'transfers';
+type BankTab = 'deposits' | 'loan' | 'transfers' | 'bail';
 
 const TABS: { key: BankTab; label: string }[] = [
   { key: 'deposits', label: 'Вклады' },
   { key: 'loan', label: 'Займ' },
   { key: 'transfers', label: 'Переводы' },
+  // FEAT-198: bail for any prisoner, from any banker
+  { key: 'bail', label: 'Залог' },
 ];
 
 /** FEAT-184 — the regional bank at a banker NPC (deposits, loan, transfers). */
@@ -174,6 +177,18 @@ const BankModal = ({ npcId, npcName, npcAvatar, onClose }: BankModalProps) => {
           )}
           {characterId && tab === 'transfers' && (
             <BankTransfersTab view={view} characterId={characterId} npcId={npcId} pending={actionsBlocked} run={run} />
+          )}
+          {characterId && tab === 'bail' && (
+            <BankBailTab
+              characterId={characterId}
+              npcId={npcId}
+              pending={actionsBlocked}
+              wallet={view.wallet}
+              onPaid={() => {
+                void load();
+                dispatch(fetchProfile(characterId));
+              }}
+            />
           )}
         </div>
       )}

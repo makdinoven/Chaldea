@@ -60,11 +60,12 @@ check_group "econ_ledger (async)" \
     services/locations-service/app/econ_ledger.py \
     services/dungeon-service/app/econ_ledger.py
 
-# FEAT-195: stat soft/hard caps (canonical: character-attributes-service)
+# FEAT-195: stat soft/hard caps (canonical: character-attributes-service; FEAT-199 adds character-service)
 check_group "stat_caps" \
     services/character-attributes-service/app/stat_caps.py \
     services/battle-service/app/stat_caps.py \
-    services/dungeon-service/app/stat_caps.py
+    services/dungeon-service/app/stat_caps.py \
+    services/character-service/app/stat_caps.py
 
 # FEAT-197: region reputation maths (canonical: character-service)
 check_group "reputation_core" \

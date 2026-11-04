@@ -3876,6 +3876,14 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     character.last_teleport_at = datetime.utcnow()
     db.flush()
 
+    # FEAT-198 (user decision 4): the teleport master counts as entering — guards there stop a wanted / outlaw
+    # character, in the same commit as the arrival.
+    import law_crud  # local: law_crud imports this module lazily itself
+    encounter = None
+    if previous_location_id is None or int(previous_location_id) != int(target.current_location_id):
+        encounter = law_crud.evaluate_entry(db, character, int(target.current_location_id), "teleport",
+                                            from_location_id=previous_location_id)
+
     location_name = _get_location_name(db, character.current_location_id)
 
     db.commit()
@@ -3898,11 +3906,20 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
             character.id, previous_location_id,
         )
 
+    encounter_out = None
+    if encounter is not None:
+        try:
+            encounter_out = law_crud.encounter_out(db, encounter)
+        except Exception:  # committed already: the lock reason in /users/me still opens the guard window
+            logger.exception("law encounter %s: teleport response failed", encounter.id)
+
     return {
         "new_location_id": character.current_location_id,
         "new_location_name": location_name,
         "currency_balance": character.currency_balance,
         "last_teleport_at": character.last_teleport_at,
+        "law_encounter": encounter_out,
+        "law_encounter_id": int(encounter.id) if encounter is not None else None,  # not in TeleportResult
     }
 
 
@@ -4103,8 +4120,12 @@ def apply_admin_move(
     event_type: str = "admin_teleport",
     description: Optional[str] = None,
     house_room_id: Optional[int] = None,
+    commit: bool = True,
 ):
     """Write the move itself — location, cooldown and audit row — in ONE commit.
+
+    FEAT-198: with commit=False the writes are only flushed, so a caller (the forced move to jail, the move back
+    after a successful flee) can add its own writes to the same transaction and commit them together.
 
     FEAT-180 stage 6b: a home teleport scroll moves the same way, logged with
     `event_type="home_teleport"`, its own description and no admin fields.
@@ -4152,6 +4173,9 @@ def apply_admin_move(
         metadata_=metadata,
     ))
 
+    if not commit:
+        db.flush()
+        return character
     db.commit()
     db.refresh(character)
     return character

@@ -771,6 +771,7 @@ def hand_in(db: Session, ctx: GuildContext, body, *, xp_multiplier: float = 1.0,
         "xp_capped": bool(xp.capped),
         "wallet": posted.balances.get(ctx.character_id, _wallet(db, ctx.character_id)),
         "reputation_tier_changes": rep.tier_changes,     # popped by the router, published after the commit
+        "fame_changes": rep.fame_changes,                # FEAT-199: popped by the router, published after the commit
     }
 
 

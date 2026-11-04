@@ -183,6 +183,10 @@ class CharacterPublicStrangerResponse(BaseModel):
     granted_kit: Optional[Dict[str, Any]] = None
     granted_kit_is_snapshot: bool = False
 
+    # FEAT-199: публичная слава — только название ступени, без числа
+    fame_tier_code: str = "nameless"
+    fame_tier_name: str = "Безвестный"
+
 
 class CharacterPublicResponse(CharacterPublicStrangerResponse):
     """Полный паспорт: то же плюс приватные стартовые характеристики.
@@ -1118,6 +1122,7 @@ class ActivityLockResponse(BaseModel):
     reason: Optional[str] = None
     until: Optional[str] = None
     dungeon_session_id: Optional[int] = None
+    law_encounter_id: Optional[int] = None      # FEAT-198: reason "law_encounter"
 
 
 class DungeonLockRequest(BaseModel):
@@ -1386,18 +1391,29 @@ class UpdateActiveMobStatusRequest(BaseModel):
         return v
 
 
+NPC_KILLER_IDS_MAX = 200  # FEAT-200: cap of the kill-reputation recipients per NPC death
+
+
 class UpdateNpcStatusRequest(BaseModel):
     status: str
     # FEAT-197 (optional, backward compatible): the battle and every character of the winning team; only real
     # players among them get the kill reputation, only on an alive -> dead transition.
     battle_id: Optional[int] = None
-    killer_character_ids: Optional[List[int]] = Field(None, max_items=50)
+    killer_character_ids: Optional[List[int]] = None
 
     @validator("status")
     def validate_status(cls, v):
         if v not in ("alive", "dead"):
             raise ValueError("Статус NPC должен быть alive или dead")
         return v
+
+    @validator("killer_character_ids")
+    def cap_killer_ids(cls, v):
+        # FEAT-200 (fix 7): never 422 on a big winning team (the NPC must die regardless) — dedupe, keep the
+        # first NPC_KILLER_IDS_MAX ids
+        if v is None:
+            return v
+        return list(dict.fromkeys(v))[:NPC_KILLER_IDS_MAX]
 
 
 # ========== Bestiary Schemas ==========
@@ -1565,6 +1581,8 @@ class TeleportResult(BaseModel):
     new_location_name: Optional[str] = None
     currency_balance: int
     last_teleport_at: datetime
+    # FEAT-198: the guard encounter created on arrival (LawEncounterOut shape), else None
+    law_encounter: Optional[dict] = None
 
 
 class PublicPostHistoryItem(BaseModel):
@@ -3634,3 +3652,530 @@ class ReputationApplyOut(BaseModel):
     applied: bool
     duplicate: bool
     skipped: Optional[str]                       # npc | zero | cap
+
+
+# ===========================================================================
+# FEAT-198 law — wanted, guards, jail (contract §3.6; app/law_api.py)
+# ===========================================================================
+
+LAW_PAGE_MAX = 50
+LAW_QUERY_MAX = 50
+LAW_REASON_MIN = 3
+LAW_REASON_MAX = 500
+LAW_CHOICES = ("fine", "surrender", "flee", "fight")
+
+
+def _law_reason(v):
+    if not isinstance(v, str):
+        raise ValueError("Причина обязательна")
+    v = v.strip()
+    if len(v) < LAW_REASON_MIN:
+        raise ValueError(f"Причина — не короче {LAW_REASON_MIN} символов")
+    if len(v) > LAW_REASON_MAX:
+        raise ValueError(f"Причина — не длиннее {LAW_REASON_MAX} символов")
+    return v
+
+
+class LawEncounterOut(BaseModel):
+    """Player view of a guard encounter (no raw wanted number)."""
+    id: int
+    region_id: int
+    region_name: Optional[str]
+    location_id: int
+    guard_name: Optional[str]
+    guard_avatar: Optional[str]
+    is_outlaw: bool
+    has_jail: bool
+    level_name: Optional[str]
+    fine: int
+    jail_hours: int
+    options: List[str]
+    flee_chance_pct: Optional[float]
+    status: str
+    battle_id: Optional[int]
+    expires_at: datetime
+
+
+class LawEncounterStaffOut(LawEncounterOut):
+    character_id: int
+    guard_npc_id: Optional[int]
+    level_code: str
+    wanted_value: int
+    source: str
+    from_location_id: Optional[int]
+    flee_used: bool
+    created_at: datetime
+    fight_started_at: Optional[datetime]
+    resolved_at: Optional[datetime]
+
+
+class LawJailOut(BaseModel):
+    id: int
+    region_id: int
+    region_name: Optional[str]
+    location_id: int
+    location_name: Optional[str]
+    until: datetime
+    bail_price: int
+    can_escape_at: Optional[datetime]           # None = may try now
+    escape_chance_pct: float
+    escape_attempts: int
+
+
+class LawJailStaffOut(LawJailOut):
+    status: str
+    level_code: str
+    encounter_id: Optional[int]
+    started_at: datetime
+
+
+class LawWantedOut(BaseModel):
+    region_id: int
+    region_name: Optional[str]
+    level_code: str
+    level_name: str
+    fine: int
+    jail_hours: int
+    decaying: bool
+
+
+class LawStateOut(BaseModel):
+    wanted: List[LawWantedOut]
+    encounter: Optional[LawEncounterOut]
+    jail: Optional[LawJailOut]
+
+
+class LawEncounterWrap(BaseModel):
+    encounter: Optional[LawEncounterOut]
+
+
+class LawJailWrap(BaseModel):
+    jail: Optional[LawJailOut]
+
+
+class LawChoiceIn(BaseModel):
+    choice: str
+    request_id: _UUID
+
+    @validator("choice")
+    def _choice(cls, v):
+        if v not in LAW_CHOICES:
+            raise ValueError("Неизвестный вариант")
+        return v
+
+
+class LawChoiceOut(BaseModel):
+    result: str                                  # fined | jailed | fled | fight | flee_failed_blocked | guard_gone
+    message: str
+    battle_id: Optional[int] = None
+    jail: Optional[LawJailOut] = None
+    encounter: Optional[LawEncounterOut] = None
+
+
+class LawRequestIn(BaseModel):
+    request_id: _UUID
+
+
+class LawEscapeOut(BaseModel):
+    success: bool
+    message: str
+    jail: Optional[LawJailOut] = None
+
+
+class LawSelfBailOut(BaseModel):
+    message: str
+    jail: Optional[LawJailOut] = None
+
+
+class LawPrisonerOut(BaseModel):
+    character_id: int
+    name: str
+    avatar: Optional[str]
+    region_name: Optional[str]
+    location_name: Optional[str]
+    until: datetime
+    bail_price: int
+
+
+class LawPrisonersPage(BaseModel):
+    items: List[LawPrisonerOut]
+    total: int
+
+
+class LawBailIn(BaseModel):
+    payer_character_id: int = Field(..., ge=1)
+    banker_npc_id: int = Field(..., ge=1)
+    prisoner_character_id: int = Field(..., ge=1)
+    request_id: _UUID
+
+
+class LawBailOut(BaseModel):
+    message: str
+    paid: int
+
+
+class LawSettingsFields(BaseModel):
+    max_wanted: int
+    decay_per_day: float
+    heavy_wanted: int
+    outlaw_min_level: str = Field(..., max_length=20)
+    encounter_timeout_hours: int
+    guard_ko_hours: int
+    flee_base_pct: float
+    flee_per_point_pct: float
+    flee_min_pct: float
+    flee_max_pct: float
+    escape_base_pct: float
+    escape_per_point_pct: float
+    escape_min_pct: float
+    escape_max_pct: float
+    escape_cooldown_hours: int
+    escape_fail_extend_pct: float
+    max_remaining_jail_hours: int
+    bail_multiplier: float
+
+
+class LawLevelOut(BaseModel):
+    code: str
+    sort_order: int
+    name: str
+    min_value: int
+    fine: int
+    jail_hours: int
+
+
+class LawLevelIn(BaseModel):
+    code: str = Field(..., max_length=20)
+    sort_order: Optional[int] = None            # fixed per code; ignored on input
+    name: str = Field(..., max_length=60)
+    min_value: int
+    fine: int
+    jail_hours: int
+
+
+class LawSettingsOut(BaseModel):
+    settings: LawSettingsFields
+    levels: List[LawLevelOut]
+
+
+class LawSettingsBody(BaseModel):
+    settings: LawSettingsFields
+    levels: List[LawLevelIn] = Field(..., max_items=10)
+
+
+class LawAdminWantedOut(BaseModel):
+    region_id: int
+    region_name: Optional[str]
+    value: int
+    level_code: Optional[str]
+    level_name: Optional[str]
+
+
+class LawCrimeOut(BaseModel):
+    id: int
+    crime_type: str
+    region_id: int
+    region_name: Optional[str]
+    location_id: Optional[int]
+    victim_character_id: Optional[int]
+    battle_id: Optional[int]
+    wanted_points: int
+    wanted_applied: int
+    status: str
+    created_at: datetime
+    # FEAT-199 (staff only)
+    masked: bool = False
+    witness_chance_pct: Optional[float] = None
+    witness_roll_pct: Optional[float] = None
+    reputation_delta: Optional[int] = None
+    wanted_floor: Optional[int] = None
+    reveal_attempts: int = 0
+    next_roll_at: Optional[datetime] = None
+    reveal_until: Optional[datetime] = None
+    revealed_at: Optional[datetime] = None
+
+
+class LawLogOut(BaseModel):
+    id: int
+    created_at: datetime
+    action: str
+    region_id: Optional[int]
+    region_name: Optional[str]
+    wanted_before: Optional[int]
+    wanted_after: Optional[int]
+    amount: Optional[int]
+    chance_pct: Optional[float]
+    roll_pct: Optional[float]
+    ref_id: Optional[int]
+    reason: Optional[str]
+    actor_user_id: Optional[int]
+    actor_username: Optional[str]
+
+
+class RenownAdminOut(BaseModel):
+    fame: int
+    fame_tier_name: str
+    infamy: int
+    infamy_tier_name: str
+
+
+class RenownLogOut(BaseModel):
+    id: int
+    created_at: datetime
+    scale: str
+    source: str
+    delta: int
+    value_after: int
+    tier_before: str
+    tier_after: str
+    ref_id: Optional[int]
+    reason: Optional[str]
+    actor_user_id: Optional[int]
+
+
+class LawAdminCharacterOut(BaseModel):
+    wanted: List[LawAdminWantedOut]
+    encounter: Optional[LawEncounterStaffOut]
+    jail: Optional[LawJailStaffOut]
+    crimes: List[LawCrimeOut]
+    log: List[LawLogOut]
+    renown: Optional[RenownAdminOut] = None          # FEAT-199
+    renown_log: List[RenownLogOut] = []
+
+
+class LawStaffReleaseIn(BaseModel):
+    reason: str
+    request_id: _UUID
+
+    _reason = validator("reason", pre=True, allow_reuse=True)(_law_reason)
+
+
+class LawStaffClearIn(BaseModel):
+    region_id: Optional[int] = Field(None, ge=1)  # None = every region
+    reason: str
+    request_id: _UUID
+
+    _reason = validator("reason", pre=True, allow_reuse=True)(_law_reason)
+
+
+class LawStaffReleaseOut(BaseModel):
+    message: str
+    released: bool
+    cancelled: bool
+    duplicate: bool
+
+
+class LawStaffClearOut(BaseModel):
+    message: str
+    cleared_region_ids: List[int]
+    duplicate: bool
+
+
+class LawBattleResultIn(BaseModel):
+    battle_id: int = Field(..., ge=1)
+    law_encounter_id: int = Field(..., ge=1)
+    winner_team: Optional[int] = None
+    aborted: bool = False
+
+
+class LawBattleResultOut(BaseModel):
+    ok: bool
+    status: str
+    duplicate: bool
+
+
+# =====================================================================================================================
+# FEAT-199 the shadow: witnesses, hidden crimes, region suspicion, fame / infamy
+# =====================================================================================================================
+
+SHADOW_CRIME_STATUSES = ("open", "unwitnessed", "masked", "closed", "reported", "all")
+RENOWN_SCALES = ("fame", "infamy")
+RENOWN_ADJUST_MAX = 10_000
+FAME_POINTS_MAX = 1000
+SHADOW_PAGE_MAX = 50
+
+
+class RenownFameOut(BaseModel):
+    tier_code: str
+    tier_name: str
+    progress: float
+    next_tier_name: Optional[str]
+
+
+class RenownRumorsOut(BaseModel):
+    tier_code: str
+    tier_name: str
+
+
+class RenownPlayerOut(BaseModel):
+    fame: RenownFameOut
+    rumors: RenownRumorsOut
+
+
+class FameTierPublicOut(BaseModel):
+    code: str
+    name: str
+    sort_order: int
+
+
+class ShadowSettingsFields(BaseModel):
+    witness_enabled: bool
+    witness_base_safe_pct: float
+    witness_base_farm_pct: float
+    witness_base_dangerous_pct: float
+    witness_base_dungeon_pct: float
+    witness_base_default_pct: float
+    witness_stealth_per_point_pct: float
+    witness_agent_pct: float
+    witness_assassin_pct: float
+    witness_trickster_pct: float
+    witness_mask_pct: float
+    witness_group_per_extra_pct: float
+    witness_min_pct: float
+    witness_max_pct: float
+    reveal_days: int
+    reveal_base_pct: float
+    reveal_per_suspicion_pct: float
+    reveal_mask_factor_pct: float
+    reveal_min_pct: float
+    reveal_max_pct: float
+    suspicion_max: int
+    suspicion_unwitnessed: int
+    suspicion_masked: int
+    suspicion_decay_per_day: float
+    suspicion_uneasy_at: int
+    suspicion_alarmed_at: int
+    suspicion_fear_at: int
+    infamy_ratio: float
+    infamy_min_gain: int
+    fame_quest_default: int
+    fame_rep_ratio: float
+    fame_guild_ratio: float
+
+
+class FameTierAdmin(BaseModel):
+    code: str = Field(..., max_length=20)
+    sort_order: Optional[int] = None            # fixed per code; ignored on input
+    name: str = Field(..., max_length=60)
+    min_value: int
+    witness_pct: float = 0
+
+
+class InfamyTierAdmin(BaseModel):
+    code: str = Field(..., max_length=20)
+    sort_order: Optional[int] = None
+    name: str = Field(..., max_length=60)
+    min_value: int
+
+
+class ShadowSettingsOut(BaseModel):
+    settings: ShadowSettingsFields
+    fame_tiers: List[FameTierAdmin]
+    infamy_tiers: List[InfamyTierAdmin]
+
+
+class ShadowSettingsBody(BaseModel):
+    settings: ShadowSettingsFields
+    fame_tiers: List[FameTierAdmin] = Field(..., max_items=10)
+    infamy_tiers: List[InfamyTierAdmin] = Field(..., max_items=10)
+
+
+class ShadowCrimeOut(BaseModel):
+    id: int
+    character_id: int
+    character_name: Optional[str]
+    crime_type: str
+    region_id: int
+    region_name: Optional[str]
+    location_id: Optional[int]
+    location_name: Optional[str]
+    victim_id: Optional[int]
+    victim_name: Optional[str]
+    status: str
+    masked: bool
+    witness_chance_pct: Optional[float]
+    witness_roll_pct: Optional[float]
+    reputation_delta: Optional[int]
+    wanted_points: int
+    wanted_floor: Optional[int]
+    reveal_attempts: int
+    next_roll_at: Optional[datetime]
+    reveal_until: Optional[datetime]
+    created_at: datetime
+    resolved_at: Optional[datetime]
+    revealed_at: Optional[datetime]
+
+
+class ShadowCrimesPage(BaseModel):
+    items: List[ShadowCrimeOut]
+    total: int
+
+
+class ShadowStaffIn(BaseModel):
+    reason: str
+    request_id: _UUID
+
+    _reason = validator("reason", pre=True, allow_reuse=True)(_law_reason)
+
+
+class ShadowCrimeActionOut(BaseModel):
+    message: str
+    crime: ShadowCrimeOut
+
+
+class RegionSuspicionOut(BaseModel):
+    region_id: int
+    region_name: Optional[str]
+    value: int
+    code: str
+    label: str
+
+
+class RenownAdjustIn(BaseModel):
+    scale: str
+    delta: int = Field(..., ge=-RENOWN_ADJUST_MAX, le=RENOWN_ADJUST_MAX)
+    reason: str
+    request_id: _UUID
+
+    _reason = validator("reason", pre=True, allow_reuse=True)(_law_reason)
+
+    @validator("scale")
+    def _scale(cls, v):
+        if v not in RENOWN_SCALES:
+            raise ValueError("Шкала: fame или infamy")
+        return v
+
+    @validator("delta")
+    def _delta(cls, v):
+        if v == 0:
+            raise ValueError("Изменение не может быть нулевым")
+        return v
+
+
+class RenownAdjustOut(BaseModel):
+    scale: str
+    value_before: int
+    value_after: int
+    tier_before: str
+    tier_after: str
+    duplicate: bool
+
+
+class FameApplyIn(BaseModel):
+    character_id: int = Field(..., ge=1)
+    source: str
+    idempotency_key: str = Field(..., min_length=1, max_length=191)
+    points: Optional[int] = Field(None, ge=0, le=FAME_POINTS_MAX)
+    ref_id: Optional[int] = None
+
+    @validator("source")
+    def _source(cls, v):
+        if v != "quest":
+            raise ValueError("Неизвестный источник славы")
+        return v
+
+
+class FameApplyOut(BaseModel):
+    applied: bool
+    duplicate: bool
+    tier_changed: bool

@@ -268,6 +268,7 @@ export const fromCharacterPublic = (
     background: text(character.background),
 
     isNpc: character.is_npc,
+    fameTierName: character.is_npc ? null : text(character.fame_tier_name),
   };
 };
 

@@ -76,15 +76,17 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
     try {
       const res = await axios.post<DialogueNode>(
         `${BASE_URL}/locations/npcs/${npcId}/dialogue/${currentNode.id}/choose`,
-        { option_id: option.id },
+        // FEAT-198: with the character the server checks ownership + the activity lock (jail, guards).
+        characterId ? { option_id: option.id, character_id: characterId } : { option_id: option.id },
       );
       setTimeout(() => {
         setCurrentNode(res.data);
         setFadeIn(true);
         setChoosing(false);
       }, 200);
-    } catch {
-      toast.error('Ошибка при выборе ответа');
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : null;
+      toast.error(typeof detail === 'string' && detail ? detail : 'Ошибка при выборе ответа');
       setFadeIn(true);
       setChoosing(false);
     }

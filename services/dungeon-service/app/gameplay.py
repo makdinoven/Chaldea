@@ -1006,8 +1006,10 @@ def _lock_refusal(profile: dict, reason: str) -> str:
         until = lock.get("until")
         if until:
             try:
-                t = datetime.fromisoformat(until) + timedelta(hours=3)
-                return f"Персонаж без сознания до {t.strftime('%H:%M')} МСК"
+                left_min = max(1, int((datetime.fromisoformat(until) - datetime.utcnow()).total_seconds() + 59) // 60)
+                hours, mins = divmod(left_min, 60)
+                left = f"{hours} ч {mins} мин" if hours and mins else (f"{hours} ч" if hours else f"{mins} мин")
+                return f"Персонаж без сознания — осталось {left}"
             except ValueError:
                 pass
         return "Персонаж без сознания"

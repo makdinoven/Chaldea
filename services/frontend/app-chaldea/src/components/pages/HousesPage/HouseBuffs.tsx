@@ -1,6 +1,7 @@
 import { Flame, LibraryBig, Trophy } from 'lucide-react';
 import { HOUSE_BUFF_KIND_LABEL, percentText, type HouseBuff } from '../../../api/houses';
 import { parseServerDate } from '../../../utils/serverDate';
+import RemainingText from '../../CommonComponents/RemainingText';
 
 /*
   FEAT-180 stage 6b — the acting character's running house blessings (library,
@@ -14,14 +15,26 @@ export const formatDayTime = (iso: string | null | undefined): string => {
   return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 
-/** «Библиотека: +3 % ко всему опыту до 29.10 02:37». */
+/** «Библиотека: +3 % ко всему опыту» (the time left is rendered live by `HouseBuffText`). */
 export const buffText = (buff: HouseBuff): string => {
-  const until = formatDayTime(buff.expires_at);
   const what = HOUSE_BUFF_KIND_LABEL[buff.kind] ?? buff.kind;
   const head = buff.source === 'library' ? 'Библиотека' : 'Святилище';
   const value = buff.kind === 'character_xp' ? `+${percentText(buff.value)} % ко всему опыту` : `${what} +${percentText(buff.value)} %`;
-  return `${head}: ${value}${until ? ` до ${until}` : ''}`;
+  return `${head}: ${value}`;
 };
+
+/** FEAT-198 (A8): «Библиотека: +3 % ко всему опыту — осталось 1 д 02:13:10», ticking live. */
+export const HouseBuffText = ({ buff }: { buff: HouseBuff }) => (
+  <>
+    {buffText(buff)}
+    {buff.expires_at && (
+      <>
+        {' — '}
+        <RemainingText until={buff.expires_at} doneText="заканчивается" />
+      </>
+    )}
+  </>
+);
 
 const CHIP = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] leading-tight max-w-full';
 
@@ -42,7 +55,7 @@ const HouseBuffChips = ({ buffs, trophyBonus = 0, className = '' }: HouseBuffChi
         return (
           <span key={`${b.source}-${b.kind}`} className={`${CHIP} border-gold-dark/50 text-gold-light bg-gold/[0.06]`}>
             <Icon size={12} className="shrink-0" />
-            <span className="break-words">{buffText(b)}</span>
+            <span className="break-words"><HouseBuffText buff={b} /></span>
           </span>
         );
       })}

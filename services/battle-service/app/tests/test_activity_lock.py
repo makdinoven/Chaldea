@@ -201,7 +201,7 @@ class TestRefusals:
         c = _client(_db(locks={1: (None, SOON)}, extra=_chars), USER)
         r = c.post("/battles/pvp/attack", json={"attacker_character_id": 1, "victim_character_id": 2})
         assert r.status_code == 409
-        assert r.json()["detail"].startswith("Персонаж без сознания до")
+        assert r.json()["detail"].startswith("Персонаж без сознания — осталось")
 
     def test_pvp_invite_target_locked(self):
         c = _client(_db(locks={2: (3, None)}, extra=_chars), USER)

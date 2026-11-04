@@ -95,6 +95,13 @@ export interface CharacterPublic {
    * FEAT-171: absent together with `starting_attributes` for a stranger.
    */
   starting_attributes_is_snapshot?: boolean;
+
+  /**
+   * FEAT-199: public fame — the tier only, never a number («Безвестный» without a record).
+   * Optional so an older backend still type-checks.
+   */
+  fame_tier_code?: string;
+  fame_tier_name?: string;
 }
 
 /**

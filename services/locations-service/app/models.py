@@ -59,6 +59,9 @@ class Region(Base):
     image_url = Column(String(255), nullable=True)
     entrance_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
     leader_id = Column(BigInteger, nullable=True)
+    # FEAT-198: the region's jail (admin-assigned, must belong to this region); NULL = no jail
+    jail_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"),
+                              nullable=True, index=True)
     # Manual override of the recommended level range; NULL bound = computed from locations
     recommended_level_min = Column(Integer, nullable=True)
     recommended_level_max = Column(Integer, nullable=True)
@@ -500,6 +503,10 @@ class Quest(Base):
     # FEAT-197: reputation for completing (NULL = the action default, +10) and the tier needed to take it
     reputation_reward = Column(Integer, nullable=True)
     min_reputation_tier = Column(String(20), nullable=True)
+    # FEAT-199: fame tier needed to take it (NULL = no gate) and fame for completing
+    # (NULL = character-service default `shadow_settings.fame_quest_default`; 0 = none)
+    min_fame_tier = Column(String(20), nullable=True)
+    fame_reward = Column(Integer, nullable=True)
 
     objectives = relationship("QuestObjective", back_populates="quest", cascade="all, delete-orphan")
 

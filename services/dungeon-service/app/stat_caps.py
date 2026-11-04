@@ -1,8 +1,8 @@
 """FEAT-195: soft/hard caps on character stats (diminishing returns).
 
 CANONICAL FILE: services/character-attributes-service/app/stat_caps.py
-Byte-identical copies live in battle-service and dungeon-service
-(checked by scripts/check_econ_copies.sh). Edit the canonical file and copy
+Byte-identical copies live in battle-service, dungeon-service and
+character-service (checked by scripts/check_econ_copies.sh). Edit the canonical file and copy
 it byte-for-byte. The charisma discount in econ_core.py has its own Decimal
 implementation of the same piecewise function; the frontend mirror is
 src/utils/statCaps.ts.

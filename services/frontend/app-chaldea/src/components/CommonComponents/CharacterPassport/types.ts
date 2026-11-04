@@ -179,6 +179,12 @@ export interface PassportData {
 
   /** `GET /characters/{id}/public` also serves NPCs (N13). */
   isNpc?: boolean | null;
+
+  /**
+   * FEAT-199: public fame tier name. Only the character endpoint carries it;
+   * the row is not drawn when absent (wizard, request, list card) or for an NPC.
+   */
+  fameTierName?: string | null;
 }
 
 // ── Adapter inputs ──────────────────────────────────────────────────────────

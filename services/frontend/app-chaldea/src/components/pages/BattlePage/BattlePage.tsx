@@ -6,7 +6,8 @@ import axios from "axios";
 
 import toast from "react-hot-toast";
 import { useBodyBackground } from "../../../hooks/useBodyBackground";
-import { useAppSelector } from "../../../redux/store";
+import { useAppDispatch, useAppSelector } from "../../../redux/store";
+import { getMe } from "../../../redux/slices/userSlice";
 import {
   BASE_URL_AUTOBATTLES,
   BASE_URL_BATTLES,
@@ -179,6 +180,7 @@ const BattlePage = () => {
     battleId: string;
   }>();
   const character = useAppSelector((state) => state.user.character);
+  const dispatch = useAppDispatch();
 
   // Detect spectate mode from URL
   const isSpectateMode = location.pathname.endsWith("/spectate");
@@ -230,7 +232,19 @@ const BattlePage = () => {
   // character's run in progress, otherwise to the location.
   const navigateAfterBattle = useCallback(() => {
     const charId = character?.id;
-    const goToLocation = () => navigate(`/location/${locationId}`);
+    // FEAT-198: the character may not be where the battle was (a lost guard
+    // fight sends them to jail, a won one may have moved nothing) — go to the
+    // character's CURRENT location from a fresh /users/me, the battle's as a fallback.
+    const goToLocation = () => {
+      dispatch(getMe())
+        .then((action) => {
+          const here = getMe.fulfilled.match(action)
+            ? action.payload.character?.current_location?.id
+            : null;
+          navigate(`/location/${here ?? locationId}`);
+        })
+        .catch(() => navigate(`/location/${locationId}`));
+    };
     try {
       const raw = sessionStorage.getItem(DUNGEON_BATTLE_RETURN_KEY);
       const ret = raw ? (JSON.parse(raw) as { battleId?: number; sessionId?: number }) : null;
@@ -255,7 +269,7 @@ const BattlePage = () => {
         }
       })
       .catch(goToLocation);
-  }, [character?.id, locationId, battleId, navigate]);
+  }, [character?.id, locationId, battleId, navigate, dispatch]);
   const battleResultSetRef = useRef(false);
 
   // Pause state

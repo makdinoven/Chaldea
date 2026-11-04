@@ -12,7 +12,8 @@ import {
   selectTeleportLockedReason,
   type TeleportOption,
 } from '../../../redux/slices/teleportSlice';
-import { setCharacterAfterTeleport } from '../../../redux/slices/userSlice';
+import toast from 'react-hot-toast';
+import { getMe, setCharacterAfterTeleport } from '../../../redux/slices/userSlice';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import { useCurrency } from '../../../hooks/useCurrency';
 
@@ -88,6 +89,12 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
       setConfirming(null);
       setOpen(false);
       navigate(`/location/${result.new_location_id}`);
+      // FEAT-198: a teleport is an entry — the guards may stop the character;
+      // the refreshed activity lock opens GuardEncounterModal.
+      if (result.law_encounter) {
+        toast('Стража остановила вас!', { icon: '🛡️' });
+        dispatch(getMe());
+      }
     }
   };
 

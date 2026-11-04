@@ -231,7 +231,7 @@ character-service, inventory-service и (в async-варианте) skills-servi
 
 ## Убывающая отдача статов (FEAT-195)
 
-`app/stat_caps.py` (каноническая копия; байт-в-байт копии в battle-service и dungeon-service,
+`app/stat_caps.py` (каноническая копия; байт-в-байт копии в battle-service, dungeon-service и character-service (FEAT-199),
 сверяет `scripts/check_econ_copies.sh`): `eff(x) = x` до 100, `100 + (x−100)·0.5` до 200,
 `150 + (x−200)·0.25` выше (250 → 162.5, 530 → 232.5; отрицательные — линейно). Число стата
 в профиле не меняется — режется только то, во что оно превращается. Кап берётся от **суммы**

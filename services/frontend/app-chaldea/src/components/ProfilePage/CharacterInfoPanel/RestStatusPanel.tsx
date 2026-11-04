@@ -12,7 +12,7 @@ import { RARITY_TEXT_COLORS } from '../../../constants/items';
 import { PERCENTAGE_STATS, STAT_LABELS } from '../constants';
 import { getHouseBuffs, percentText, type HouseBuffs } from '../../../api/houses';
 import { apiErrorMessage } from '../../../api/errors';
-import { buffText } from '../../pages/HousesPage/HouseBuffs';
+import { HouseBuffText } from '../../pages/HousesPage/HouseBuffs';
 import { parseServerDate } from '../../../utils/serverDate';
 
 /** Local countdown tick for the satiety timer */
@@ -204,7 +204,7 @@ const RestStatusPanel = () => {
               return (
                 <li key={`${b.source}-${b.kind}`} className="flex items-start gap-1.5 text-white">
                   <Icon size={12} className="mt-0.5 shrink-0 text-gold" aria-hidden="true" />
-                  <span className="break-words min-w-0">{buffText(b)}</span>
+                  <span className="break-words min-w-0"><HouseBuffText buff={b} /></span>
                 </li>
               );
             })}

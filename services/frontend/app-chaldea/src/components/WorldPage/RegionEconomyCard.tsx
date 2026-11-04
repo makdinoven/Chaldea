@@ -7,6 +7,7 @@ import type {
   RegionCardData,
   RegionCardEvent,
   RegionCardGuildWant,
+  RegionCardSuspicion,
   RegionGroupLevel,
   RegionGroupTrend,
 } from '../../api/regionEconomy';
@@ -186,6 +187,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   const [card, setCard] = useState<RegionCardData | null>(null);
   const [hasBank, setHasBank] = useState(false);
   const [hasMint, setHasMint] = useState(false);
+  const [suspicion, setSuspicion] = useState<RegionCardSuspicion | null>(null);
   const { forms } = useCurrency();
   const [failed, setFailed] = useState(false);
 
@@ -194,6 +196,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
     setCard(null);
     setHasBank(false);
     setHasMint(false);
+    setSuspicion(null);
     setFailed(false);
     fetchRegionEconomyCard(regionId)
       .then((data) => {
@@ -201,6 +204,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
         setCard(data.participating ? data : null);
         setHasBank(data.has_bank === true);
         setHasMint(data.has_mint === true);
+        setSuspicion(data.suspicion ?? null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -228,6 +232,18 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
     </p>
   );
 
+  // FEAT-199: region suspicion — a muted warning in words, in both card shapes.
+  const suspicionLine = suspicion && (
+    <p
+      className={`text-xs text-center mt-2 break-words ${
+        suspicion.code === 'uneasy' ? 'text-gold/80' : 'text-site-red/80'
+      }`}
+    >
+      <span aria-hidden="true">👁 </span>
+      {suspicion.label}
+    </p>
+  );
+
   // Only the participating branch carries orders (3.9); a hidden card always sends an empty list.
   const guildLine = card && card.guild_wants && card.guild_wants.length > 0 && (
     <p className="text-xs text-center text-white/60 mt-2 break-words">
@@ -237,8 +253,9 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
   );
 
   if (!card) {
-    return bankLine || mintLine ? (
+    return bankLine || mintLine || suspicionLine ? (
       <section aria-label="Учреждения региона" className="mx-auto mb-4 w-full max-w-3xl px-1 sm:px-0">
+        {suspicionLine}
         {bankLine}
         {mintLine}
       </section>
@@ -261,6 +278,7 @@ const RegionEconomyCard = ({ regionId }: RegionEconomyCardProps) => {
         ))}
       </ul>
       {card.classes && <RegionClassBar classes={card.classes} />}
+      {suspicionLine}
 
       {card.groups.length > 0 && (
         <div className="mt-3 pt-3 border-t border-gold/15">

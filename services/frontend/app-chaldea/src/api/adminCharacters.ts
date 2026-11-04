@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   AdminCharacterListParams,
+  AdminCharacterListItem,
   AdminCharacterListResponse,
   AdminCharacterUpdate,
   AdminCharacterUpdateResponse,
@@ -41,6 +42,26 @@ export const fetchAdminCharacterList = async (
     { params: cleanParams },
   );
   return data;
+};
+
+/**
+ * Load one player character (admin list shape) by id, for a direct link to
+ * `/admin/characters/:id` — `GET /characters/admin/{id}` (FEAT-200).
+ * Returns null when the id is unknown or belongs to an NPC/mob (404: the admin
+ * section only holds player characters). Other network/HTTP errors are thrown.
+ */
+export const fetchAdminCharacterById = async (
+  characterId: number,
+): Promise<AdminCharacterListItem | null> => {
+  try {
+    const { data } = await axios.get<AdminCharacterListItem>(
+      `/characters/admin/${characterId}`,
+    );
+    return data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
 };
 
 export const updateAdminCharacter = async (

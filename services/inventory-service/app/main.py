@@ -423,6 +423,9 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
         db_item.is_elite_trophy = False
     if schemas._enum_value(db_item.item_type) != "scroll":
         db_item.is_home_teleport = False
+    # FEAT-199: only a head item is a mask (an update that omits the flag may change the type).
+    if schemas._enum_value(db_item.item_type) != schemas.MASK_ITEM_TYPE:
+        db_item.is_mask = False
     db.flush()
     # FEAT-168: replace-all, but only for the lists the client actually sent —
     # a payload that omits them leaves the existing rows untouched.

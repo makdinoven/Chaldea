@@ -3,8 +3,9 @@ import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
+import { fetchAdminCharacterById } from '../../../api/adminCharacters';
+import { apiErrorMessage } from '../../../api/errors';
 import {
-  fetchAdminCharacters,
   selectAdminCharacters,
   selectSelectedCharacter,
   setSelectedCharacter,
@@ -39,29 +40,44 @@ const AdminCharacterDetailPage = () => {
   const visibleTabs = TABS.filter((t) => t.key !== 'reputation' || canReadReputation);
   const charId = Number(characterId);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   // Load character data
   useEffect(() => {
-    if (!charId) return;
+    setLoadError(null);
+    if (!charId) {
+      setLoadError('Некорректный номер персонажа');
+      return;
+    }
 
-    // Try to find in already loaded list
+    let cancelled = false;
+
+    // Opened from the list: the row is already loaded.
     const found = characters.find((c) => c.id === charId);
     if (found) {
       dispatch(setSelectedCharacter(found));
     } else {
-      // Fetch the list to get the character
-      dispatch(fetchAdminCharacters()).then((result) => {
-        if (fetchAdminCharacters.fulfilled.match(result)) {
-          const char = result.payload.items.find((c) => c.id === charId);
+      // Direct link / page reload: load the character by id.
+      fetchAdminCharacterById(charId)
+        .then((char) => {
+          if (cancelled) return;
           if (char) {
             dispatch(setSelectedCharacter(char));
           } else {
+            setLoadError('Персонаж не найден');
             toast.error('Персонаж не найден');
           }
-        }
-      });
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          const message = apiErrorMessage(error, 'Не удалось загрузить персонажа');
+          setLoadError(message);
+          toast.error(message);
+        });
     }
 
     return () => {
+      cancelled = true;
       dispatch(clearDetail());
     };
   }, [charId, dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -75,9 +91,13 @@ const AdminCharacterDetailPage = () => {
         >
           &larr; Назад к списку
         </Link>
-        <div className="flex justify-center items-center py-12">
-          <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-        </div>
+        {loadError ? (
+          <p className="text-site-red text-center py-12">{loadError}</p>
+        ) : (
+          <div className="flex justify-center items-center py-12">
+            <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          </div>
+        )}
       </div>
     );
   }

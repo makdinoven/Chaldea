@@ -280,13 +280,21 @@ class TestDialogueChooseHasNoOwnershipCheckByDesign:
             "route"
         )
 
-    def test_the_request_schema_carries_no_character_id(self):
+    def test_the_request_schema_character_id_is_optional_and_owned(self):
+        """FEAT-198: an OPTIONAL character_id (backwards compatible) closes the activity-lock gap.
+        When sent, the route verifies ownership and the lock — pinned here and in the source."""
+        import inspect
         import schemas
 
-        assert set(schemas.DialogueChooseRequest.__fields__) == {"option_id"}, (
-            "DialogueChooseRequest gained a field — if it is a character_id, "
-            "this route now needs an ownership check (see the class docstring)"
+        fields = schemas.DialogueChooseRequest.__fields__
+        assert set(fields) == {"option_id", "character_id"}, (
+            "DialogueChooseRequest gained a field — if it is a character id, "
+            "this route needs an ownership check (see the class docstring)"
         )
+        assert fields["character_id"].required is False
+        src = inspect.getsource(main.choose_dialogue_option)
+        assert "verify_character_ownership(session, body.character_id" in src
+        assert "check_not_activity_locked(session, body.character_id)" in src
 
 
 # ══════════════════════════════════════════════════════════════════════════════

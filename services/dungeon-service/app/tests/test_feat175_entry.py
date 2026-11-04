@@ -89,7 +89,7 @@ async def test_unconscious_character_cannot_enter(db_session, world):
     with pytest.raises(HTTPException) as exc:
         await enter_solo(db_session, d)
     assert exc.value.status_code == 409
-    assert exc.value.detail.startswith("Персонаж без сознания до")
+    assert exc.value.detail.startswith("Персонаж без сознания — осталось")
     assert await _session_count(db_session) == 0
 
 

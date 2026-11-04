@@ -31,6 +31,14 @@ interface RegionCardHidden {
   caravans?: RegionCardCaravans;
   /** FEAT-193: always empty for a hidden region */
   guild_wants?: RegionCardGuildWant[];
+  /** FEAT-199: region suspicion in words (null = calm) — sent in both shapes */
+  suspicion?: RegionCardSuspicion | null;
+}
+
+/** FEAT-199 (3.7): «В крае неспокойно» etc. — a text state only, never the number. */
+export interface RegionCardSuspicion {
+  code: string;
+  label: string;
 }
 
 /** FEAT-194 (3.11): coarse word per class — the page turns it into a bar width, no shares leave the API. */
@@ -73,6 +81,8 @@ export interface RegionCardData {
   guild_wants?: RegionCardGuildWant[];
   /** FEAT-194: social classes in words (absent / null when classes are off or the region has no shares) */
   classes?: RegionCardClasses | null;
+  /** FEAT-199: region suspicion in words (null = calm) */
+  suspicion?: RegionCardSuspicion | null;
 }
 
 /** FEAT-193 (3.9): a goods group the guild of the region is looking for — words only, no units or money. */

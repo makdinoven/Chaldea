@@ -47,6 +47,7 @@ import economy_mint_crud
 import locations_client
 import economy_merchants_crud
 import economy_sim_crud
+import renown_crud
 import reputation_notify
 import schemas
 from auth_http import UserRead, get_current_user_via_http, require_permission
@@ -1074,6 +1075,7 @@ def _guild_commit(db: Session, npc_id: int, body: schemas.GuildHandInIn, user_id
         result = economy_guild_crud.hand_in(db, ctx, body, xp_multiplier=multiplier)
         db.commit()
         reputation_notify.publish_tier_changes(result.pop("reputation_tier_changes", None) or [])
+        renown_crud.publish_fame_changes(result.pop("fame_changes", None) or [])
     except economy_crud.EconomyApiError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)

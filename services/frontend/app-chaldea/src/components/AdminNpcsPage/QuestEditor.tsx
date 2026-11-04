@@ -6,6 +6,8 @@ import useDebounce from '../../hooks/useDebounce';
 import { useCurrency } from '../../hooks/useCurrency';
 import ReputationTierSelect from '../Admin/ReputationPage/ReputationTierSelect';
 import { DEFAULT_QUEST_REPUTATION } from '../../api/reputationAdmin';
+import { QUEST_FAME_REWARD_DEFAULT, QUEST_FAME_REWARD_MAX } from '../../api/shadowAdmin';
+import { useFameTierOptions } from '../Admin/ReputationPage/useShadowRefs';
 import { EntityPicker } from '../Admin/DungeonsPage/editor/pickers';
 
 /* ── Types ── */
@@ -37,6 +39,10 @@ interface QuestFormData {
   reputation_reward: string;
   /** FEAT-197: tier gate code, null = none */
   min_reputation_tier: string | null;
+  /** FEAT-199: typed text; '' = the default fame (shadow settings «за задание по умолчанию») */
+  fame_reward: string;
+  /** FEAT-199: fame tier gate code, null = none */
+  min_fame_tier: string | null;
 }
 
 interface QuestListItem {
@@ -74,7 +80,11 @@ const INITIAL_FORM: QuestFormData = {
   is_active: true,
   reputation_reward: '',
   min_reputation_tier: null,
+  fame_reward: '',
+  min_fame_tier: null,
 };
+
+const UNSIGNED_INT_RE = /^\d*$/;
 
 const REPUTATION_REWARD_LIMIT = 1000;
 const SIGNED_INT_RE = /^-?\d*$/;
@@ -131,6 +141,7 @@ const targetKind = (objectiveType: string): TargetKind | null => {
 
 const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   const { forms } = useCurrency();
+  const fameTiers = useFameTierOptions();
   const [quests, setQuests] = useState<QuestListItem[]>([]);
   const [loadingQuests, setLoadingQuests] = useState(true);
 
@@ -219,6 +230,8 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
         is_active: q.is_active !== false,
         reputation_reward: q.reputation_reward == null ? '' : String(q.reputation_reward),
         min_reputation_tier: q.min_reputation_tier ?? null,
+        fame_reward: q.fame_reward == null ? '' : String(q.fame_reward),
+        min_fame_tier: q.min_fame_tier ?? null,
       });
       setEditingId(questId);
       setEditorOpen(true);
@@ -345,6 +358,12 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       toast.error(`Репутация за задание — целое число от −${REPUTATION_REWARD_LIMIT} до ${REPUTATION_REWARD_LIMIT}`);
       return;
     }
+    const fameText = form.fame_reward.trim();
+    const fameReward = fameText === '' ? null : Number(fameText);
+    if (fameReward !== null && (!Number.isInteger(fameReward) || fameReward < 0 || fameReward > QUEST_FAME_REWARD_MAX)) {
+      toast.error(`Слава за задание — целое число от 0 до ${QUEST_FAME_REWARD_MAX}`);
+      return;
+    }
 
     const payload = {
       npc_id: npcId,
@@ -366,6 +385,8 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       is_active: form.is_active,
       reputation_reward: reputationReward,
       min_reputation_tier: form.min_reputation_tier,
+      fame_reward: fameReward,
+      min_fame_tier: form.min_fame_tier,
     };
 
     setSaving(true);
@@ -538,6 +559,43 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
               onChange={(code) => setForm((prev) => ({ ...prev, min_reputation_tier: code }))}
               hint="Ниже этой ступени задание нельзя взять"
             />
+
+            {/* FEAT-199: fame reward + fame tier gate */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Слава за задание</span>
+              <input
+                inputMode="numeric"
+                value={form.fame_reward}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (UNSIGNED_INT_RE.test(v)) setForm((prev) => ({ ...prev, fame_reward: v }));
+                }}
+                placeholder={`по умолчанию: ${QUEST_FAME_REWARD_DEFAULT}`}
+                className="input-underline"
+              />
+              <span className="text-white/40 text-xs">Пусто — значение по умолчанию; 0 — без славы</span>
+            </label>
+
+            <label className="flex flex-col gap-1 min-w-0">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Мин. слава</span>
+              <select
+                value={form.min_fame_tier ?? ''}
+                onChange={(e) => {
+                  const code = e.target.value === '' ? null : e.target.value;
+                  setForm((prev) => ({ ...prev, min_fame_tier: code }));
+                }}
+                className="input-underline w-full"
+              >
+                <option value="" className="bg-site-dark text-white">Без ограничения</option>
+                {fameTiers.map((t) => (
+                  <option key={t.code} value={t.code} className="bg-site-dark text-white">{t.name}</option>
+                ))}
+                {form.min_fame_tier && !fameTiers.some((t) => t.code === form.min_fame_tier) && (
+                  <option value={form.min_fame_tier} className="bg-site-dark text-white">{form.min_fame_tier}</option>
+                )}
+              </select>
+              <span className="text-white/40 text-xs">Ниже этой ступени славы задание нельзя взять</span>
+            </label>
           </div>
 
           {/* Description */}

@@ -15,8 +15,11 @@ import reputation_crud
 from main import app
 from tests.reputation_world import (  # noqa: F401  (rep_world is a fixture)
     ALPHA, BANDIT, BETA, GAMMA, GUARD, MERCHANT, NO_ROLE, NOWHERE, OVERRIDE, R_DUNY, R_HOLMY, R_OST, R_PASHNI,
-    SCRIBE, USER_ALPHA, USER_BETA, exec_, log_rows, q, rep_world, sent_payloads, value, values,
+    SCRIBE, USER_ALPHA, USER_BETA, exec_, force_witnessed, log_rows, q, rep_world, sent_payloads, value, values,
 )
+
+# FEAT-199: these FEAT-197 tests assume immediate application -> every kill is witnessed
+pytestmark = pytest.mark.usefixtures("force_witnessed")
 
 TOKEN = "test-internal-token"
 HEADERS = {"X-Internal-Token": TOKEN}
@@ -53,7 +56,7 @@ def npc_status(f, npc_id):
 def test_merchant_kill_hits_every_player_on_the_winning_side(api, rep_world):
     resp = kill(api, MERCHANT, killers=[ALPHA, BETA, BANDIT, MERCHANT])
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"ok": True, "status": "dead", "killed": True}
+    assert resp.json() == {"ok": True, "status": "dead", "killed": True, "knocked_out_until": None}
     assert npc_status(rep_world, MERCHANT) == "dead"
     for cid in (ALPHA, BETA):                                  # full weight each, no split
         assert values(rep_world, cid) == {R_OST: -150, R_PASHNI: -30, R_HOLMY: -30}
@@ -112,8 +115,9 @@ def test_role_weights_from_the_table_and_positive_override(api, rep_world):
     assert value(rep_world, ALPHA, R_OST) == -77
     kill(api, GUARD, killers=[BETA])
     assert value(rep_world, BETA, R_OST) == -10
-    exec_(rep_world, "UPDATE characters SET reputation_kill_points = 40, npc_status = 'alive' WHERE id = :i",
-          i=GUARD)
+    # FEAT-198: a guard is knocked out, not killed — bring it back from the knock-out
+    exec_(rep_world, "UPDATE characters SET reputation_kill_points = 40, npc_status = 'alive', "
+          "unconscious_until = NULL WHERE id = :i", i=GUARD)
     kill(api, GUARD, killers=[GAMMA], battle_id=99)
     assert value(rep_world, GAMMA, R_OST) == 40                # positive override allowed (user decision)
 
@@ -165,7 +169,7 @@ def test_tier_change_from_a_kill_is_published_to_each_player(api, rep_world):
 def test_auth_and_validation(api, rep_world):
     assert kill(api, MERCHANT, killers=[ALPHA], headers={}).status_code == 401
     assert kill(api, MERCHANT, killers=[ALPHA], headers={"X-Internal-Token": "x"}).status_code == 401
-    assert kill(api, MERCHANT, killers=list(range(1, 60))).status_code == 422       # max 50 ids
+    # FEAT-200: a long killer list is no longer a 422 (capped to 200 ids) — covered by the FEAT-200 tests
     assert kill(api, MERCHANT, killers=["1; DROP TABLE characters"]).status_code == 422
     assert kill(api, MERCHANT, status="in_battle").status_code == 422
     assert kill(api, ALPHA, killers=[BETA]).status_code == 404                     # a player is not an NPC
@@ -177,7 +181,8 @@ def test_reputation_failure_rolls_back_the_death(api, rep_world, monkeypatch):
     def boom(*_a, **_k):
         raise reputation_crud.ReputationError(404, "Регион не найден")
 
-    monkeypatch.setattr(reputation_crud, "apply_npc_kill", boom)
+    # FEAT-199: a merchant kill is a crime -> the orchestrator applies reputation per killer via apply_reputation
+    monkeypatch.setattr(reputation_crud, "apply_reputation", boom)
     resp = kill(api, MERCHANT, killers=[ALPHA])
     assert resp.status_code == 500
     assert npc_status(rep_world, MERCHANT) == "alive"           # same transaction: nothing half-applied

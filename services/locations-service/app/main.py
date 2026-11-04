@@ -181,6 +181,76 @@ async def check_not_activity_locked(db: AsyncSession, character_id: int):
     await activity_lock.check_not_activity_locked(db, character_id)
 
 
+async def check_not_locked_for_post(db: AsyncSession, character_id: int, location_id: int) -> bool:
+    """FEAT-198 §3.6: like check_not_activity_locked, but a jailed character may still write posts
+    in the location they are in (= the jail). Any other lock reason, or a jailed character posting
+    elsewhere / moving, gets the usual 409. Returns True when the jail exception was applied."""
+    lock = await activity_lock.get_activity_lock(db, character_id)
+    if lock.get("reason") == activity_lock.REASON_JAIL:
+        row = (await db.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": character_id},
+        )).fetchone()
+        if row is not None and row[0] is not None and int(row[0]) == int(location_id):
+            return True
+    message = activity_lock.lock_message(lock)
+    if message:
+        raise HTTPException(status_code=activity_lock.LOCK_STATUS_CODE, detail=message)
+    return False
+
+
+LOCATION_UPDATE_REFUSED = "Перемещение сейчас невозможно"
+
+
+def _law_encounter_from(resp) -> Optional[dict]:
+    """FEAT-198: the guard encounter character-service created while moving the character
+    (`law_encounter` in the update_location response), or None."""
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    if isinstance(data, dict) and isinstance(data.get("law_encounter"), dict):
+        return data["law_encounter"]
+    return None
+
+
+async def _update_character_location(character_id: int, destination_location_id: int,
+                                     source: str) -> Optional[dict]:
+    """PUT /characters/internal/{id}/update_location (FEAT-162 §3.4: internal, X-Internal-Token).
+
+    FEAT-198: passes `source` ("move" | "quick_move") so character-service can evaluate the guard
+    encounter; a 409 (jailed / stopped by the guards) is returned to the player as 409 with its
+    detail; any other failure stays a 500. Returns the `law_encounter` from the response, or None."""
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/update_location"
+        update_resp = await client.put(
+            update_url,
+            json={"new_location_id": destination_location_id, "source": source},
+            headers=_internal_token_headers(),
+        )
+    if update_resp.status_code == 409:
+        detail = None
+        try:
+            body = update_resp.json()
+            detail = body.get("detail") if isinstance(body, dict) else None
+        except Exception:
+            detail = None
+        raise HTTPException(status_code=409,
+                            detail=detail if isinstance(detail, str) and detail else LOCATION_UPDATE_REFUSED)
+    if update_resp.status_code != 200:
+        raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
+    return _law_encounter_from(update_resp)
+
+
+def _post_response(new_post, law_encounter: Optional[dict] = None):
+    """PostResponse of a move / quick move + the FEAT-198 guard encounter (additive field)."""
+    if law_encounter is None:
+        return new_post
+    data = schemas.PostResponse.from_orm(new_post).dict()
+    data["law_encounter"] = law_encounter
+    return data
+
+
 async def check_not_in_battle(db: AsyncSession, character_id: int, message: str = "Действие заблокировано во время боя"):
     """Raise 400 if character is in an active battle (shared DB query)."""
     result = await db.execute(
@@ -866,7 +936,8 @@ async def create_new_post(
     current_user=Depends(get_current_user_via_http),
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
-    await check_not_activity_locked(session, post_data.character_id)
+    # FEAT-198: a jailed character may post in the location they are in (the jail).
+    await check_not_locked_for_post(session, post_data.character_id, post_data.location_id)
     await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
     await check_not_gathering(session, post_data.character_id, "Вы не можете писать посты во время добычи")
 
@@ -1254,7 +1325,8 @@ async def move_and_post(
     """
     # 0. Проверяем, что персонаж принадлежит текущему пользователю
     await verify_character_ownership(session, movement.character_id, current_user.id)
-    await check_not_activity_locked(session, movement.character_id)
+    # FEAT-198: a jailed character may only post where they are (the jail); no move.
+    jail_post = await check_not_locked_for_post(session, movement.character_id, destination_location_id)
     await check_not_in_battle(session, movement.character_id, "Вы не можете покинуть локацию во время боя")
     await check_not_gathering(session, movement.character_id, "Вы не можете покинуть локацию во время добычи")
 
@@ -1378,15 +1450,13 @@ async def move_and_post(
 
     # 6. Обновляем текущую локацию персонажа через Character‑service
     # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{movement.character_id}/update_location"
-        update_resp = await client.put(
-            update_url,
-            json={"new_location_id": destination_location_id},
-            headers=_internal_token_headers(),
+    # FEAT-198: a post in the jail is not a move — character-service would refuse it (409, jailed),
+    # so update_location is skipped; otherwise a guard encounter may come back with the move.
+    law_encounter = None
+    if not jail_post:
+        law_encounter = await _update_character_location(
+            movement.character_id, destination_location_id, "move",
         )
-        if update_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
 
     # 6.5. Устанавливаем кулдаун перемещения (energy_cost минут)
     if movement_cost > 0:
@@ -1520,7 +1590,7 @@ async def move_and_post(
         "write_chars_in_location", move_char_count, destination_location_id,
     )
 
-    return new_post
+    return _post_response(new_post, law_encounter)
 
 
 @router.post("/{destination_location_id}/quick_move", response_model=schemas.PostResponse)
@@ -1638,15 +1708,10 @@ async def quick_move(
 
     # 6. Обновляем текущую локацию персонажа
     # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{body.character_id}/update_location"
-        update_resp = await client.put(
-            update_url,
-            json={"new_location_id": destination_location_id},
-            headers=_internal_token_headers(),
-        )
-        if update_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
+    # FEAT-198: 409 (jailed / stopped by the guards) is passed through; a guard encounter may come back.
+    law_encounter = await _update_character_location(
+        body.character_id, destination_location_id, "quick_move",
+    )
 
     # 6.1. Fire-and-forget: a pre-battle party is location-bound, so quick-moving
     # away leaves the party (the leader leaving disbands it).
@@ -1748,7 +1813,7 @@ async def quick_move(
             "visit_location", 1, destination_location_id,
         )
 
-    return new_post
+    return _post_response(new_post, law_encounter)
 
 
 @router.post("/posts/as-npc", response_model=schemas.PostResponse)
@@ -2587,7 +2652,13 @@ async def choose_dialogue_option(
     navigation; it grants nothing (quests are accepted through the separate
     `POST /quests/{id}/accept`). Requiring a character id here would be a
     breaking contract change for no extra protection.
+
+    FEAT-198: an optional `character_id` closes the activity-lock gap (jail, guard encounter,
+    dungeon, ...) — when sent, ownership is verified and a locked character gets 409.
     """
+    if body.character_id is not None:
+        await verify_character_ownership(session, body.character_id, current_user.id)
+        await check_not_activity_locked(session, body.character_id)
     # Verify the option belongs to this node
     node = await crud.get_dialogue_node(session, node_id)
     if not node:
@@ -2818,6 +2889,8 @@ async def get_npc_shop(
     """
     if character_id is not None:
         await visibility.require_private_access(session, character_id, current_user)
+        # FEAT-200 (fix 3): the personal price list sits behind the NPC's reputation gate, like buy / sell (403)
+        await reputation_read.require_npc_tier(session, character_id, npc_id)
 
     items = await crud.get_npc_shop_items_player(session, npc_id)
 
@@ -3342,8 +3415,56 @@ async def _apply_quest_reputation(character_id: int, region_id: int, character_q
                            attempt, character_quest_id, resp.status_code)
         except httpx.HTTPError as exc:
             logger.warning("Quest reputation attempt %s failed for cq %s: %s", attempt, character_quest_id, exc)
+        except Exception:  # FEAT-200 (fix 9): the quest is already committed — never turn this into a 500
+            logger.exception("Quest reputation failed unexpectedly for cq %s", character_quest_id)
+            return False
     logger.error("Quest reputation NOT applied for character %s (cq %s, region %s) after %s attempts",
                  character_id, character_quest_id, region_id, QUEST_REPUTATION_ATTEMPTS)
+    return False
+
+
+QUEST_FAME_ATTEMPTS = 2             # FEAT-199 §3.7: one retry
+QUEST_FAME_SOURCE = "quest"
+
+
+async def _apply_quest_fame(character_id: int, character_quest_id: int, points: Optional[int]) -> bool:
+    """FEAT-199 §3.7: POST /characters/internal/fame/apply for a completed quest.
+
+    Called AFTER the completion commit, independent of the quest giver's region. The idempotency key
+    `fame:quest:cq:{id}` makes the retry (and any later replay) safe. `points` None = character-service's
+    default (`fame_quest_default`). Network errors / 5xx are retried once; a failure is logged and never
+    fails the completion. True when character-service answered 200.
+    """
+    payload = {
+        "character_id": int(character_id),
+        "source": QUEST_FAME_SOURCE,
+        "idempotency_key": f"fame:quest:cq:{character_quest_id}",
+        "points": int(points) if points is not None else None,
+        "ref_id": int(character_quest_id),
+    }
+    for attempt in range(1, QUEST_FAME_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{settings.CHARACTER_SERVICE_URL}/characters/internal/fame/apply",
+                    json=payload,
+                    headers=_internal_token_headers(),
+                )
+            if resp.status_code == 200:
+                return True
+            if resp.status_code < 500:
+                logger.error("Quest fame refused for character %s (cq %s): status %s",
+                             character_id, character_quest_id, resp.status_code)
+                return False
+            logger.warning("Quest fame attempt %s failed for cq %s: status %s",
+                           attempt, character_quest_id, resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("Quest fame attempt %s failed for cq %s: %s", attempt, character_quest_id, exc)
+        except Exception:  # FEAT-200 (fix 9): the quest is already committed — never turn this into a 500
+            logger.exception("Quest fame failed unexpectedly for cq %s", character_quest_id)
+            return False
+    logger.error("Quest fame NOT applied for character %s (cq %s) after %s attempts",
+                 character_id, character_quest_id, QUEST_FAME_ATTEMPTS)
     return False
 
 
@@ -3464,6 +3585,10 @@ async def complete_quest(
     # FEAT-197: reputation in the quest giver's region (after the commit; never fails the completion)
     if rep_region_id:
         await _apply_quest_reputation(body.character_id, rep_region_id, cq_id, rep_delta)
+
+    # FEAT-199: fame for the quest (after the commit, any region; 0 = none, NULL = the default)
+    if quest.fame_reward != 0:
+        await _apply_quest_fame(body.character_id, cq_id, quest.fame_reward)
 
     # Track cumulative stats: quests_completed + gold earned from quest
     quest_increments = {"quests_completed": 1}

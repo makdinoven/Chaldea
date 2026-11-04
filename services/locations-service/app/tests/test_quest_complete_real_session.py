@@ -333,8 +333,10 @@ class TestXpOnlyQuest:
         assert result["reward_currency"] == 0
         assert result["new_balance"] is None
         assert await _read_quest_status(session) == "completed"
-        # The reward item really was requested from inventory-service.
-        assert ctx.client.post.await_count == 1
+        # The reward item really was requested from inventory-service
+        # (FEAT-199: the quest-fame call to character-service is a separate POST).
+        inventory_posts = [c for c in ctx.client.post.await_args_list if "/inventory/" in str(c.args[0])]
+        assert len(inventory_posts) == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════

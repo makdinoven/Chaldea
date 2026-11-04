@@ -31,6 +31,8 @@ export interface TeleportResult {
   new_location_name?: string | null;
   currency_balance: number;
   last_teleport_at: string; // ISO
+  /** FEAT-198: the guards met the character on arrival (LawEncounterOut shape) */
+  law_encounter?: Record<string, unknown> | null;
 }
 
 export interface TeleportLink {

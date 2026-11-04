@@ -20,7 +20,7 @@ import { getMe } from '../../../redux/slices/userSlice';
 import { parseServerDate } from '../../../utils/serverDate';
 import { InfoTooltip } from '../../CommonComponents/InfoTooltip';
 import { formatLeft, formatLeftShort, useTimeLeft } from './building';
-import { buffText, formatDayTime } from './HouseBuffs';
+import { HouseBuffText, formatDayTime } from './HouseBuffs';
 import { blockReason, type ActorProps, type FeatureRoom } from './RoomFeatures';
 import RoomAction from './RoomAction';
 
@@ -119,7 +119,7 @@ export const LibraryControl = ({ room, acting, houseLocationId, frozen, onChange
     <span className="flex flex-col gap-1">
       <span>{how}</span>
       {capLine && <span className="text-gold-light">{capLine}</span>}
-      {blessing && <span className="text-gold-light">Сейчас: {buffText(blessing)}</span>}
+      {blessing && <span className="text-gold-light">Сейчас: <HouseBuffText buff={blessing} /></span>}
     </span>
   );
   if (!character) return null;
@@ -185,7 +185,7 @@ export const ShrineControl = ({ room, acting, houseLocationId, frozen, onChanged
     <span className="flex flex-col gap-1">
       <span>{SHRINE_BLESSING_HINT[kind]} +{percentText(value)} % на {HOUSE_BUFF_HOURS} ч.</span>
       <span>Молиться можно раз в {SHRINE_COOLDOWN_HOURS} ч; новая молитва заменяет прежнее благословение святилища.</span>
-      {blessing && <span className="text-gold-light">Сейчас: {buffText(blessing)}</span>}
+      {blessing && <span className="text-gold-light">Сейчас: <HouseBuffText buff={blessing} /></span>}
     </span>
   );
   return (

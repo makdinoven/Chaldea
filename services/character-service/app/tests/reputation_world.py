@@ -45,9 +45,32 @@ PEOPLE = [  # id, name, user, npc, role, status, location, kill override
 ]
 
 
+# FEAT-199: the foreign tables the witness roll reads by raw SQL (attributes / battles / inventory / skills).
+# Readers fail loudly, so every world that can kill an NPC must have them (memory: «фикстура не той схемы»).
+SHADOW_DDL = (
+    "CREATE TABLE IF NOT EXISTS character_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "character_id INTEGER NOT NULL, agility INTEGER DEFAULT 0, luck INTEGER DEFAULT 0, "
+    "current_health INTEGER DEFAULT 100, max_health INTEGER DEFAULT 100, current_mana INTEGER DEFAULT 50, "
+    "max_mana INTEGER DEFAULT 50, current_energy INTEGER DEFAULT 50, max_energy INTEGER DEFAULT 50, "
+    "current_stamina INTEGER DEFAULT 50, max_stamina INTEGER DEFAULT 50)",
+    "CREATE TABLE IF NOT EXISTS battles (id INTEGER PRIMARY KEY, status VARCHAR(20), law_encounter_id INTEGER NULL)",
+    "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name VARCHAR(100), item_type VARCHAR(30), "
+    "is_mask INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS equipment_slots (id INTEGER PRIMARY KEY AUTOINCREMENT, character_id INTEGER, "
+    "slot_type VARCHAR(30), item_id INTEGER NULL)",
+    "CREATE TABLE IF NOT EXISTS tree_nodes (id INTEGER PRIMARY KEY, node_type VARCHAR(30), subclass_key VARCHAR(40))",
+    "CREATE TABLE IF NOT EXISTS character_tree_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "character_id INTEGER, node_id INTEGER)",
+)
+
+
 def build(factory):
     db = factory()
     try:
+        for ddl in SHADOW_DDL:
+            db.execute(text(ddl))
+        # FEAT-199: Locations.marker_type (locations-service; not in the portable hierarchy DDL)
+        db.execute(text("ALTER TABLE Locations ADD COLUMN marker_type VARCHAR(16) NOT NULL DEFAULT 'safe'"))
         db.execute(text("INSERT INTO Countries (id, name) VALUES (1, 'Мидденгерд'), (2, 'Пустошь')"))
         db.execute(text("INSERT INTO Regions (id, name, country_id) VALUES (10, 'Ост', 1), (11, 'Пашни', 1), "
                         "(12, 'Холмы', 1), (20, 'Дюны', 2)"))
@@ -79,6 +102,21 @@ def rep_world(monkeypatch):
     factory.engine = eng
     yield factory
     eng.dispose()
+
+
+class _ZeroRng:
+    """``random()`` = 0.0: the witness roll 0.00 is below any chance (min 5 %) -> always witnessed."""
+
+    def random(self):
+        return 0.0
+
+
+@pytest.fixture
+def force_witnessed(monkeypatch):
+    """FEAT-199: FEAT-197/198 kill tests assume immediate reputation + wanted -> force «witnessed» through the
+    ``law_crud.rng`` seam (the witness readers still run against the world's tables)."""
+    import law_crud
+    monkeypatch.setattr(law_crud, "rng", lambda: _ZeroRng())
 
 
 # --------------------------------------------------------------------------------------------- helpers

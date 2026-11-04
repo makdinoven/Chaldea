@@ -75,6 +75,11 @@ class Battle(Base):
     dungeon_session_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, index=True
     )
+    # FEAT-198: set for guard battles (character-service law encounter id);
+    # the outcome is reported to POST /characters/internal/law/battle-result.
+    law_encounter_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
 
     participants = relationship(
         "BattleParticipant",

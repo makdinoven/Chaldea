@@ -37,6 +37,7 @@ import useActivityLock from '../../../hooks/useActivityLock';
 import GatheringLockBanner from '../../CommonComponents/GatheringLockBanner';
 import GatheringSection from './GatheringSection/GatheringSection';
 import HousesSection from './HousesSection';
+import RemainingText from '../../CommonComponents/RemainingText';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -476,12 +477,22 @@ const LocationPage = () => {
   const handleSubmitPost = useCallback(
     async (content: string, gates: { action_type: string; targets: number[] }[] = []) => {
       try {
-        await axios.post(`${BASE_URL}/locations/${locationId}/move_and_post`, {
-          character_id: character?.id,
-          location_id: locationId,
-          content,
-          gates,
-        });
+        const { data } = await axios.post<{ law_encounter?: unknown }>(
+          `${BASE_URL}/locations/${locationId}/move_and_post`,
+          {
+            character_id: character?.id,
+            location_id: locationId,
+            content,
+            gates,
+          },
+        );
+        // FEAT-198: the guards met the character on arrival — the refreshed
+        // activity lock opens GuardEncounterModal (ActivityLockBanner).
+        const stopped = Boolean(data?.law_encounter);
+        if (stopped) {
+          toast('Стража остановила вас!', { icon: '🛡️' });
+          dispatch(getMe());
+        }
         // If character moved to this location, update Redux state + refresh cooldown
         if (character?.current_location?.id !== Number(locationId) && location) {
           dispatch(setCharacterLocation({ id: location.id, name: location.name }));
@@ -489,7 +500,7 @@ const LocationPage = () => {
           if (neighborEntry?.energy_cost) {
             setCooldownRemaining(neighborEntry.energy_cost * 60);
           }
-          dispatch(getMe());
+          if (!stopped) dispatch(getMe());
         }
         toast.success('Пост отправлен');
         await fetchLocationData();
@@ -569,16 +580,19 @@ const LocationPage = () => {
     if (!window.confirm(`Быстрое перемещение в "${location.name}" стоит ${cost} выносливости. Продолжить?`)) return;
     setQuickMoving(true);
     try {
-      await axios.post(`${BASE_URL}/locations/${location.id}/quick_move`, {
-        character_id: character.id,
-      });
+      const { data } = await axios.post<{ law_encounter?: unknown }>(
+        `${BASE_URL}/locations/${location.id}/quick_move`,
+        { character_id: character.id },
+      );
       dispatch(setCharacterLocation({ id: location.id, name: location.name }));
       // Set cooldown immediately so timer appears without waiting for getMe()
       if (neighborEntry?.energy_cost) {
         setCooldownRemaining(neighborEntry.energy_cost * 60);
       }
+      // FEAT-198: a guard encounter on arrival comes with the refreshed activity lock.
       dispatch(getMe());
       toast.success(`Вы переместились в ${location.name}`);
+      if (data?.law_encounter) toast('Стража остановила вас!', { icon: '🛡️' });
       await fetchLocationData();
     } catch (err) {
       const message =
@@ -592,6 +606,10 @@ const LocationPage = () => {
   }, [character?.id, location, dispatch, fetchLocationData]);
 
   const isCharacterHere = character?.current_location?.id === location?.id;
+  // FEAT-198: a prisoner may still write posts in the jail location itself
+  // (the server allows exactly this; everything else stays locked).
+  const jailPostingAllowed =
+    activityLock.reason === 'jail' && isCharacterHere && !inBattle && !isGathering;
 
   // Neighbor links are bidirectional with the same energy_cost.
   // If the character's current location appears in this location's neighbor list,
@@ -902,13 +920,31 @@ const LocationPage = () => {
                   </span>
                 </div>
               </div>
-            ) : activityLock.locked ? (
+            ) : activityLock.locked && !jailPostingAllowed ? (
               <div className="bg-site-bg backdrop-blur-sm rounded-card border border-rarity-epic/30 flex items-center gap-3.5 p-4 sm:px-5">
                 <span className="w-11 h-11 shrink-0 flex items-center justify-center rounded-[11px] bg-rarity-epic/15 border border-rarity-epic/35 text-xl" aria-hidden>
-                  {activityLock.reason === 'dungeon' ? '🏰' : activityLock.reason === 'asleep' ? '💤' : activityLock.reason === 'reading' ? '📖' : '💫'}
+                  {activityLock.reason === 'dungeon'
+                    ? '🏰'
+                    : activityLock.reason === 'asleep'
+                      ? '💤'
+                      : activityLock.reason === 'reading'
+                        ? '📖'
+                        : activityLock.reason === 'jail'
+                          ? '⛓️'
+                          : activityLock.reason === 'law_encounter'
+                            ? '🛡️'
+                            : '💫'}
                 </span>
                 <div className="flex flex-col gap-0.5 min-w-0">
-                  <span className="text-white text-sm font-medium">{activityLock.message}</span>
+                  <span className="text-white text-sm font-medium">
+                    {activityLock.message}
+                    {activityLock.until && (
+                      <>
+                        {' — '}
+                        <RemainingText until={activityLock.until} />
+                      </>
+                    )}
+                  </span>
                   <span className="text-white/55 text-xs">
                     {activityLock.reason === 'dungeon'
                       ? 'Написание постов будет доступно после выхода из подземелья.'
@@ -916,7 +952,11 @@ const LocationPage = () => {
                         ? 'Написание постов будет доступно, когда персонаж проснётся.'
                         : activityLock.reason === 'reading'
                           ? 'Написание постов будет доступно, когда персонаж закончит чтение.'
-                          : 'Написание постов будет доступно, когда персонаж очнётся.'}
+                          : activityLock.reason === 'jail'
+                            ? 'Из тюрьмы можно писать посты только в самой тюремной локации.'
+                            : activityLock.reason === 'law_encounter'
+                              ? 'Сначала ответьте страже.'
+                              : 'Написание постов будет доступно, когда персонаж очнётся.'}
                   </span>
                 </div>
               </div>
@@ -928,7 +968,10 @@ const LocationPage = () => {
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
                   gateOptions={gateOptions}
-                  disabled={actionsLocked || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
+                  disabled={
+                    (actionsLocked && !jailPostingAllowed) ||
+                    (!isCharacterHere && !isNeighborLocation && !userIsStaff)
+                  }
                   isStaff={userIsStaff}
                   npcs={location.npcs ?? []}
                   locationName={location.name}

@@ -75,8 +75,18 @@ def test_compute_lock_priorities():
 
 def test_messages():
     assert activity_lock.lock_message({"locked": True, "reason": "dungeon"}) == "Персонаж находится в подземелье"
-    msg = activity_lock.lock_message({"locked": True, "reason": "unconscious", "until": "2026-10-22T20:30:00"})
-    assert msg == "Персонаж без сознания до 23:30 МСК"
+    until = (datetime.utcnow() + timedelta(hours=2, minutes=5)).isoformat()
+    msg = activity_lock.lock_message({"locked": True, "reason": "unconscious", "until": until})
+    assert msg == "Персонаж без сознания — осталось 2 ч 5 мин"
+    jail_until = (datetime.utcnow() + timedelta(days=3, hours=4, seconds=30)).isoformat()
+    assert activity_lock.lock_message({"locked": True, "reason": "jail", "until": jail_until})         == "Персонаж в тюрьме — осталось 3 д 4 ч"
+
+
+def test_format_remaining_never_shows_zero():
+    now = datetime(2026, 11, 4, 12, 0, 0)
+    assert activity_lock.format_remaining(now + timedelta(seconds=5), now) == "1 мин"
+    assert activity_lock.format_remaining(now + timedelta(minutes=59, seconds=10), now) == "1 ч"
+    assert activity_lock.format_remaining(now + timedelta(days=7), now) == "7 д"
     assert activity_lock.lock_message({"locked": False}) is None
 
 
@@ -87,7 +97,8 @@ def test_get_activity_lock_endpoint(client, db_session):
     assert client.get(f"/characters/internal/{c.id}/activity-lock").status_code == 401
     r = client.get(f"/characters/internal/{c.id}/activity-lock", headers=H)
     assert r.status_code == 200
-    assert r.json() == {"locked": False, "reason": None, "until": None, "dungeon_session_id": None}
+    assert r.json() == {"locked": False, "reason": None, "until": None, "dungeon_session_id": None,
+                        "law_encounter_id": None}  # FEAT-198: additive key
     assert client.get("/characters/internal/999999/activity-lock", headers=H).status_code == 404
 
 
@@ -99,7 +110,7 @@ def test_set_lock_all_or_nothing(client, db_session):
                     json={"character_ids": [a.id, b.id], "session_id": 5}, headers=H)
     assert r.status_code == 409
     assert r.json()["detail"]["character_id"] == b.id
-    assert r.json()["detail"]["message"].startswith("Б без сознания до")
+    assert r.json()["detail"]["message"].startswith("Б без сознания — осталось")
     db_session.expire_all()
     assert db_session.get(models.Character, a.id).dungeon_session_id is None, "nothing written"
 
@@ -162,7 +173,7 @@ def test_profile_and_short_info_expose_lock(client, db_session):
         r = client.get(f"/characters/{a.id}/profile")
     assert r.status_code == 200, r.text
     assert r.json()["activity_lock"] == {"locked": True, "reason": "dungeon", "until": None,
-                                        "dungeon_session_id": 3}
+                                        "dungeon_session_id": 3, "law_encounter_id": None}
     r = client.get(f"/characters/internal/{a.id}/short_info", headers=H)
     assert r.json()["activity_lock"]["reason"] == "dungeon"
 

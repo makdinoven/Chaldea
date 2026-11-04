@@ -7,13 +7,19 @@ import { hasPermission } from '../../../utils/permissions';
 import ReputationSettingsTab from './ReputationSettingsTab';
 import ReputationActionsTab from './ReputationActionsTab';
 import ReputationRolesTab from './ReputationRolesTab';
+import LawSettingsTab from './LawSettingsTab';
+import ShadowSettingsTab from './ShadowSettingsTab';
+import UnresolvedCrimesTab from './UnresolvedCrimesTab';
 
-type ReputationTab = 'settings' | 'actions' | 'roles';
+type ReputationTab = 'settings' | 'actions' | 'roles' | 'law' | 'shadow' | 'crimes';
 
 const TABS: { key: ReputationTab; label: string }[] = [
   { key: 'settings', label: 'Ступени и общие' },
   { key: 'actions', label: 'Действия' },
   { key: 'roles', label: 'Роли НПС' },
+  { key: 'law', label: 'Закон' },
+  { key: 'shadow', label: 'Тень и слава' },
+  { key: 'crimes', label: 'Нераскрытые дела' },
 ];
 
 /**
@@ -21,7 +27,9 @@ const TABS: { key: ReputationTab; label: string }[] = [
  * editing needs `reputation:settings` (admin). Per-character edits live in the character card.
  */
 const ReputationPage = () => {
-  const canEdit = hasPermission(useAppSelector(selectPermissions), 'reputation:settings');
+  const permissions = useAppSelector(selectPermissions);
+  const canEdit = hasPermission(permissions, 'reputation:settings');
+  const canManage = hasPermission(permissions, 'reputation:manage');
   const [tab, setTab] = useState<ReputationTab>('settings');
 
   return (
@@ -34,7 +42,7 @@ const ReputationPage = () => {
         <h1 className="gold-text text-2xl sm:text-3xl font-semibold uppercase tracking-[0.06em]">Репутация</h1>
         <p className="text-white/60 text-sm max-w-2xl">
           Репутация персонажа в каждом регионе: ступени и их влияние на торговлю, вес действий, вес убийства НПС по
-          ролям. Править репутацию конкретного персонажа — во вкладке «Репутация» его карточки в разделе «Персонажи».
+          ролям, закон (розыск, стража, тюрьма), тень (свидетели, нераскрытые дела, подозрение краёв) и слава. Править репутацию конкретного персонажа — во вкладке «Репутация» его карточки в разделе «Персонажи».
         </p>
       </div>
 
@@ -56,6 +64,9 @@ const ReputationPage = () => {
       {tab === 'settings' && <ReputationSettingsTab canEdit={canEdit} />}
       {tab === 'actions' && <ReputationActionsTab canEdit={canEdit} />}
       {tab === 'roles' && <ReputationRolesTab canEdit={canEdit} />}
+      {tab === 'law' && <LawSettingsTab canEdit={canEdit} />}
+      {tab === 'shadow' && <ShadowSettingsTab canEdit={canEdit} />}
+      {tab === 'crimes' && <UnresolvedCrimesTab canManage={canManage} />}
     </div>
   );
 };

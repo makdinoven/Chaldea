@@ -243,6 +243,39 @@ class TestAdminListCharacters:
 
 
 # ===========================================================================
+# GET /characters/admin/{character_id} (FEAT-200)
+# ===========================================================================
+
+class TestAdminGetCharacter:
+
+    def test_get_returns_list_row_shape(self, admin_client, db_session):
+        _seed_request(db_session, 1)
+        _seed_character(db_session, char_id=7, request_id=1, name="Player", level=5)
+        resp = admin_client.get("/characters/admin/7")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == 7 and data["name"] == "Player" and data["level"] == 5
+        listed = admin_client.get("/characters/admin/list").json()["items"][0]
+        assert data == listed
+
+    def test_get_unknown_and_npc_are_404(self, admin_client, db_session):
+        _seed_character(db_session, char_id=2, request_id=None, user_id=None,
+                        name="Кузнец", is_npc=True, npc_role="merchant")
+        for cid in (2, 999):
+            resp = admin_client.get(f"/characters/admin/{cid}")
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Персонаж не найден"
+
+    def test_get_forbidden_without_permission(self, non_admin_client, db_session):
+        _seed_request(db_session, 1)
+        _seed_character(db_session, char_id=1, request_id=1)
+        assert non_admin_client.get("/characters/admin/1").status_code == 403
+
+    def test_literal_admin_paths_are_not_shadowed(self, admin_client, db_session):
+        assert admin_client.get("/characters/admin/list").status_code == 200
+
+
+# ===========================================================================
 # PUT /characters/admin/{character_id}
 # ===========================================================================
 

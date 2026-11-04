@@ -20,11 +20,13 @@ async def create_battle(
     battle_type: models.BattleType = models.BattleType.pve,
     location_id: int = None,
     dungeon_session_id: int = None,
+    law_encounter_id: int = None,
 ) -> tuple[models.Battle, list[models.BattleParticipant]]:
 
     battle = models.Battle(
         battle_type=battle_type, location_id=location_id,
         dungeon_session_id=dungeon_session_id,
+        law_encounter_id=law_encounter_id,  # FEAT-198: guard battles only
     )
     db.add(battle)
     await db.flush()

@@ -113,6 +113,10 @@ export const validateHouseFlags = (item: Record<string, unknown>): string | null
   return null;
 };
 
+export const MASK_HINT =
+  "Носится в слоте головы как обычный шлем. Персонаж в маске, совершивший преступление при свидетелях, остаётся " +
+  "неузнанным: стража видит лишь «неизвестного в маске», а дело может раскрыться позже.";
+
 export const BACKPACK_HINT =
   "Носится в слоте плаща. В подземелье из своих вещей доступно только содержимое рюкзака (расходники). " +
   "Вместимость по редкости: обычный 4, редкий 6, эпический 8, легендарный и выше 10 слотов.";
@@ -468,6 +472,7 @@ export const buildItemPayload = (item: Record<string, unknown>): Record<string, 
 
   payload.is_food = rules.food && Boolean(item.is_food);
   payload.is_backpack = type === "cloak" && Boolean(item.is_backpack);
+  payload.is_mask = type === "head" && Boolean(item.is_mask);
 
   payload.identify_level = rules.identify ? numOrNull(item.identify_level) : null;
 

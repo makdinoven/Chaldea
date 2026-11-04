@@ -59,15 +59,15 @@ class TestComputeLock:
 
     def test_dungeon(self):
         lock = activity_lock.compute_lock(42, None)
-        assert lock == {"locked": True, "reason": "dungeon", "until": None, "dungeon_session_id": 42}
+        assert lock == {"locked": True, "reason": "dungeon", "until": None, "dungeon_session_id": 42,
+                        "law_encounter_id": None}
         assert activity_lock.lock_message(lock) == "Персонаж находится в подземелье"
 
     def test_unconscious_future(self):
         until = datetime.utcnow() + timedelta(minutes=30)
         lock = activity_lock.compute_lock(None, until)
         assert lock["reason"] == "unconscious"
-        assert activity_lock.lock_message(lock).startswith("Персонаж без сознания до ")
-        assert activity_lock.lock_message(lock).endswith(" МСК")
+        assert activity_lock.lock_message(lock).startswith("Персонаж без сознания — осталось ")
 
     def test_unconscious_past_is_free(self):
         lock = activity_lock.compute_lock(None, datetime.utcnow() - timedelta(seconds=1))
@@ -77,9 +77,10 @@ class TestComputeLock:
         until = (datetime.utcnow() + timedelta(hours=1)).isoformat(sep=" ")
         assert activity_lock.compute_lock(None, until)["reason"] == "unconscious"
 
-    def test_message_uses_msk(self):
-        lock = {"locked": True, "reason": "unconscious", "until": "2026-10-22T10:05:00"}
-        assert activity_lock.lock_message(lock) == "Персонаж без сознания до 13:05 МСК"
+    def test_message_shows_time_left(self):
+        until = (datetime.utcnow() + timedelta(hours=1, minutes=5)).isoformat()
+        lock = {"locked": True, "reason": "unconscious", "until": until}
+        assert activity_lock.lock_message(lock) == "Персонаж без сознания — осталось 1 ч 5 мин"
 
 
 @pytest.mark.asyncio
@@ -124,7 +125,7 @@ ENDPOINTS = [
         ({"dungeon_session_id": 11}, "Персонаж находится в подземелье"),
         (
             {"unconscious_until": datetime.utcnow() + timedelta(hours=1)},
-            "Персонаж без сознания до",
+            "Персонаж без сознания — осталось",
         ),
     ],
 )

@@ -9,24 +9,39 @@ import { parseServerDate } from '../utils/serverDate';
  * - `dungeon` — the character is inside a dungeon run;
  * - `unconscious` — knocked out after a wipe until `until` (naive UTC);
  * - `asleep` — FEAT-180: sleeping in a house bedroom until woken;
- * - `reading` — FEAT-180 stage 6b: reading in a house library until stopped.
+ * - `reading` — FEAT-180 stage 6b: reading in a house library until stopped;
+ * - `jail` — FEAT-198: serving a jail term until `until` (naive UTC);
+ * - `law_encounter` — FEAT-198: stopped by the guards, a choice is pending
+ *   (`law_encounter_id`).
+ * Time limits are shown as a live countdown (A8): `message` is the static head,
+ * `until` feeds `<RemainingText>` / `useCountdownTo`.
  * While locked the backend refuses outside-world actions with 409.
  */
-export type ActivityLockReason = 'dungeon' | 'unconscious' | 'asleep' | 'reading';
+export type ActivityLockReason =
+  | 'dungeon'
+  | 'unconscious'
+  | 'asleep'
+  | 'reading'
+  | 'jail'
+  | 'law_encounter';
 
 export interface ActivityLockData {
   locked: boolean;
   reason: ActivityLockReason | null;
   until: string | null;
   dungeon_session_id: number | null;
+  /** FEAT-198: set for reason `law_encounter` */
+  law_encounter_id?: number | null;
 }
 
 export interface ActivityLockState {
   locked: boolean;
   reason: ActivityLockReason | null;
-  /** End of unconsciousness (local Date), null otherwise. */
+  /** End of unconsciousness / of the jail term (local Date), null otherwise. */
   until: Date | null;
   dungeonSessionId: number | null;
+  /** FEAT-198: the pending guard encounter (reason `law_encounter`). */
+  lawEncounterId: number | null;
   /** Short Russian explanation, null when not locked. */
   message: string | null;
 }
@@ -36,12 +51,12 @@ const NOT_LOCKED: ActivityLockState = {
   reason: null,
   until: null,
   dungeonSessionId: null,
+  lawEncounterId: null,
   message: null,
 };
 
-/** "HH:MM" in the player's own timezone. */
-export const formatLocalTime = (date: Date): string =>
-  date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+/** Reasons whose `until` ends the lock by itself (lazy on the server). */
+const TIMED_REASONS: ReadonlySet<string> = new Set(['unconscious', 'jail']);
 
 const readLock = (raw: unknown): ActivityLockData | null => {
   if (!raw || typeof raw !== 'object') return null;
@@ -54,10 +69,10 @@ const useActivityLock = (): ActivityLockState => {
   const lock = readLock(raw);
   const [now, setNow] = useState(() => Date.now());
 
-  const untilDate = lock?.reason === 'unconscious' ? parseServerDate(lock.until) : null;
+  const untilDate = lock?.reason && TIMED_REASONS.has(lock.reason) ? parseServerDate(lock.until) : null;
   const untilMs = untilDate ? untilDate.getTime() : null;
 
-  // Re-evaluate when the knock-out ends and refresh the profile, so the lock
+  // Re-evaluate when the knock-out / jail term ends and refresh the profile, so the lock
   // disappears without a page reload.
   useEffect(() => {
     if (untilMs === null) return;
@@ -72,6 +87,29 @@ const useActivityLock = (): ActivityLockState => {
 
   if (!lock || !lock.locked) return NOT_LOCKED;
 
+  if (lock.reason === 'jail') {
+    if (untilMs !== null && untilMs <= now) return NOT_LOCKED;
+    return {
+      locked: true,
+      reason: 'jail',
+      until: untilDate,
+      dungeonSessionId: null,
+      lawEncounterId: null,
+      message: 'Персонаж в тюрьме',
+    };
+  }
+
+  if (lock.reason === 'law_encounter') {
+    return {
+      locked: true,
+      reason: 'law_encounter',
+      until: null,
+      dungeonSessionId: null,
+      lawEncounterId: lock.law_encounter_id ?? null,
+      message: 'Персонаж остановлен стражей',
+    };
+  }
+
   if (lock.reason === 'unconscious') {
     if (untilMs !== null && untilMs <= now) return NOT_LOCKED;
     return {
@@ -79,9 +117,8 @@ const useActivityLock = (): ActivityLockState => {
       reason: 'unconscious',
       until: untilDate,
       dungeonSessionId: null,
-      message: untilDate
-        ? `Персонаж без сознания до ${formatLocalTime(untilDate)}`
-        : 'Персонаж без сознания',
+      lawEncounterId: null,
+      message: 'Персонаж без сознания',
     };
   }
 
@@ -91,6 +128,7 @@ const useActivityLock = (): ActivityLockState => {
       reason: 'asleep',
       until: null,
       dungeonSessionId: null,
+      lawEncounterId: null,
       message: 'Персонаж спит',
     };
   }
@@ -101,6 +139,7 @@ const useActivityLock = (): ActivityLockState => {
       reason: 'reading',
       until: null,
       dungeonSessionId: null,
+      lawEncounterId: null,
       message: 'Персонаж читает',
     };
   }
@@ -110,6 +149,7 @@ const useActivityLock = (): ActivityLockState => {
     reason: 'dungeon',
     until: null,
     dungeonSessionId: lock.dungeon_session_id ?? null,
+    lawEncounterId: null,
     message: 'Персонаж находится в подземелье',
   };
 };

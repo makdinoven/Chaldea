@@ -350,6 +350,24 @@ class TestQuestCompletion:
         assert {c["json"]["idempotency_key"] for c in rep.calls} == {f"quest_reward:cq:{cq}"}   # same key
         assert await _one(qdb, "SELECT status FROM character_quests WHERE id = :i", i=cq) == "completed"
 
+    @pytest.mark.parametrize("error", [RuntimeError("boom"), ValueError("bad json"), KeyError("x")])
+    async def test_unexpected_error_never_fails_the_completion(self, qdb, error):
+        """FEAT-200 (fix 9): any exception after the commit is logged, not retried, and never a 500."""
+        cq = await _active_quest(qdb)
+        rep = _Rep(qdb, (error,))
+        with patch.object(main, "logger") as log:
+            out = await _complete(qdb, rep)
+        assert out["success"] is True and out["new_balance"] == 310
+        assert len(rep.calls) == 1                                               # no retry
+        assert await _one(qdb, "SELECT status FROM character_quests WHERE id = :i", i=cq) == "completed"
+        log.exception.assert_called_once()
+
+    async def test_helper_returns_false_on_an_unexpected_error(self, qdb):
+        rep = _Rep(qdb, (RuntimeError("boom"),))
+        with _patched(rep), patch.object(main, "logger") as log:
+            assert await main._apply_quest_reputation(Q_CHAR, REGION_B, 7, None) is False
+        assert "unexpectedly" in log.exception.call_args.args[0]
+
     async def test_helper_returns_whether_it_was_applied(self, qdb):
         rep = _Rep(qdb, (503, 503))
         with _patched(rep):

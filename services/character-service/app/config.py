@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ATTRIBUTES_SERVICE_URL: str = "http://character-attributes-service:8002/attributes/"
     USER_SERVICE_URL: str = "http://user-service:8000"
     LOCATIONS_SERVICE_URL: str = "http://locations-service:8006"
+    BATTLE_SERVICE_URL: str = "http://battle-service:8010"  # FEAT-198 guard battles
     RABBITMQ_URL: str = "amqp://guest:guest@rabbitmq:5672/"
     # Максимальное число персонажей на аккаунт (правило 31, D13).
     # 0 или отрицательное значение = ограничения нет (значение по умолчанию).

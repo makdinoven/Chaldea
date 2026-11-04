@@ -93,6 +93,8 @@ class _FakeQuest:
         # FEAT-197 Quest columns (the complete route reads them for the reputation call)
         self.npc_id = None
         self.reputation_reward = None
+        # FEAT-199: 0 = no fame call (keeps these tests about XP only)
+        self.fame_reward = 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════

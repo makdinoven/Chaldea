@@ -20,6 +20,7 @@ locations-service/app/
 ├── crud.py        # Бизнес-логика
 ├── reputation_core.py # FEAT-197: байтовая копия чистой математики репутации (канон — character-service)
 ├── reputation_read.py # FEAT-197: чтение репутации SQL-ом, гейты, цены у торговцев (без HTTP)
+├── fame_read.py       # FEAT-199: чтение славы SQL-ом (character_renown + renown_tiers), порог «Мин. слава»
 ├── config.py      # Настройки
 └── database.py    # Async SQLAlchemy
 ```
@@ -346,7 +347,7 @@ D7 намеренно **не** проверяет владельца: строк
 | POST | `/locations/{id}/move_and_post` | Перемещение + создание поста |
 | GET | `/locations/admin/moderation/gate-requests` | Очередь заявок на ретро-гейты (`moderation:read`, FEAT-159 — см. «Редактирование поста») |
 | PUT | `/locations/admin/moderation/gate-requests/{id}/review` | Одобрить / отклонить заявку (`moderation:review`, FEAT-159) |
-| POST | `/locations/npcs/{npc_id}/dialogue/{node_id}/choose` | Выбор реплики в диалоге НПС. FEAT-169: добавлен `Depends(get_current_user_via_http)` — **только JWT, проверки владения намеренно нет**: в теле (`DialogueChooseRequest = {option_id}`) вообще нет `character_id`, а обработчик только ходит по дереву диалога и ничего не выдаёт (квест берётся отдельным `POST /locations/quests/{id}/accept`). Добавлять `character_id` ради проверки владения — ломать контракт и править фронт без выигрыша в защите |
+| POST | `/locations/npcs/{npc_id}/dialogue/{node_id}/choose` | Выбор реплики в диалоге НПС. FEAT-169: добавлен `Depends(get_current_user_via_http)` — **только JWT, проверки владения намеренно нет**: в теле (`DialogueChooseRequest = {option_id}`) вообще нет `character_id`, а обработчик только ходит по дереву диалога и ничего не выдаёт (квест берётся отдельным `POST /locations/quests/{id}/accept`). Добавлять `character_id` ради проверки владения — ломать контракт и править фронт без выигрыша в защите. **FEAT-198:** в теле появилось **необязательное** `character_id` (обратно совместимо): если передано — проверяется владение и блокировка активности (тюрьма, встреча со стражей, подземелье и т.д. → 409); без него поведение прежнее |
 
 ### Персональные чтения по `character_id` (FEAT-171, фикс по ревью)
 
@@ -456,7 +457,7 @@ Country -> Region -> District -> Location
 ## Таблицы БД
 
 - **Countries** - id, name, description, leader_id, map_image_url
-- **Regions** - id, name, country_id (FK), description, map_image_url, image_url, entrance_location_id, x, y
+- **Regions** - id, name, country_id (FK), description, map_image_url, image_url, entrance_location_id, jail_location_id (FEAT-198, FK `Locations.id` ON DELETE SET NULL, NULL = у края нет тюрьмы), x, y
 - **Districts** - id, name, region_id (FK CASCADE), description, image_url, entrance_location_id, recommended_level, x, y
 - **Locations** - id, name, district_id (FK CASCADE), type (location/subdistrict), image_url, recommended_level, quick_travel_marker, parent_id (FK self CASCADE), description, **is_starting** BOOLEAN NOT NULL DEFAULT 0 (+ индекс `ix_locations_is_starting`), **starting_blurb** TEXT NULL (FEAT-154)
 - **origin_countries** (FEAT-154) - id, name (UNIQUE), summary, skitaltsy_attitude, emblem_url, map_image_url, archive_slug, is_active (мягкое удаление), sort_order; индекс `ix_origin_countries_active_sort (is_active, sort_order)`. `archive_slug` — **мягкая** ссылка на `archive_articles.slug` без FK: статьи это контент и могут переименовываться, «висячий» slug деградирует до «нет ссылки на лор», а не до ошибки
@@ -486,7 +487,7 @@ Country -> Region -> District -> Location
   - `updated_at` проставляется явно в `crud` (`datetime.now(timezone.utc)`), без MySQL `ON UPDATE` — чтобы порядок вытеснения был детерминированным и тестируемым.
   - **Вытеснение:** после каждой вставки `evict_drafts` оставляет персонажу 10 самых свежих строк по `updated_at`, остальные удаляет. Вытеснить может и живой черновик другой локации — это корректно: он по определению самый давно не трогавшийся из десяти.
   - Удаление локации уносит её черновики каскадом; удаление персонажа — через D7 (FK на `characters` в этом сервисе нет ни у одной таблицы).
-- **quests** (FEAT-197, миграция `054_reputation_gates`) — добавлены `reputation_reward` INT NULL и `min_reputation_tier` VARCHAR(20) NULL; **house_plots** — `min_reputation_tier` VARCHAR(20) NULL (см. «Региональная репутация»)
+- **quests** (FEAT-197, миграция `054_reputation_gates`) — добавлены `reputation_reward` INT NULL и `min_reputation_tier` VARCHAR(20) NULL; FEAT-199 (миграция `056_quest_fame`) — `min_fame_tier` VARCHAR(20) NULL и `fame_reward` INT NULL (см. «Слава»); **house_plots** — `min_reputation_tier` VARCHAR(20) NULL (см. «Региональная репутация»)
 - **npc_shop_items** - id, npc_id (cross-service, без FK), item_id (без FK), buy_price, sell_price, stock (NULL = без ограничений), is_active, created_at, **restock_target**, **origin** (admin/player), **updated_at**; `UNIQUE (npc_id, item_id)` (FEAT-183, миграция 053 — см. «Торговцы НПС»)
 - **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood/ingredient; ingredient — FEAT-165, миграция 043), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
 - **gathering_sessions** (FEAT-128) - id, node_id (FK gathering_nodes CASCADE), character_id, tool_inventory_item_id (nullable, no FK), tool_item_id, tool_durability_at_start, started_at, complete_at, effective_speed/double/stamina_bonus_pct (snapshot), stamina_paid, base_quantity, skill_slug, status enum(active/completed/cancelled/interrupted_by_battle/inventory_full), finished_at, result_quantity, xp_awarded, rank_up_to
@@ -502,6 +503,12 @@ Country -> Region -> District -> Location
 6. HTTP -> character-service: обновить current_location
 7. HTTP -> attributes-service: списать стамину
 
+**FEAT-198:** в шаге 6 в `update_location` передаётся `source: "move"` (`quick_move` — `"quick_move"`). 409 от
+character-service (персонаж в тюрьме или остановлен стражей) возвращается игроку как **409 с тем же `detail`**
+(раньше любой не-200 → 500); прочие сбои по-прежнему 500. Если при входе персонажа остановила стража, ответ
+(`PostResponse`) содержит `law_encounter` (объект `LawEncounterOut` из character-service, иначе null). Пост
+заключённого в собственной локации (тюрьме) — не перемещение: шаг 6 пропускается (см. «Закон»).
+
 ⚠️ Шаг 5 **коммитит пост до** шагов 6 и 7. Если они упадут (два пути с 500), пост уже записан, а персонаж остался в старой локации с несписанной стаминой — см. «Известные проблемы».
 
 ## Коммуникация
@@ -514,12 +521,13 @@ Country -> Region -> District -> Location
 - `rabbitmq_publisher` → очередь `general_notifications` («зовёт вас на локацию», новый пост в избранной локации), всегда `category: "world"` (настройки уведомлений notification-service).
 
 ### HTTP (исходящие)
-- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/internal/{id}/short_info` (+ `X-Internal-Token`, для имени/аватара активных gatherers в client/details и в очереди модерации постов; **FEAT-171:** публичный `short_info` теряет `currency_balance` и может стать тоньше, поэтому сервис-к-сервису читает внутренний двойник; ошибка глотается в WARNING — лог называет URL двойника)
+- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`; FEAT-198: тело `{new_location_id, source}`, 409 пробрасывается игроку, из ответа берётся `law_encounter`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/internal/{id}/short_info` (+ `X-Internal-Token`, для имени/аватара активных gatherers в client/details и в очереди модерации постов; **FEAT-171:** публичный `short_info` теряет `currency_balance` и может стать тоньше, поэтому сервис-к-сервису читает внутренний двойник; ошибка глотается в WARNING — лог называет URL двойника)
 - `character-attributes-service:8002` -> GET `/attributes/internal/{id}` (+ `X-Internal-Token`, **FEAT-171:** игровой `/attributes/{id}` уходит под гейт владельца; четыре вызывающих — `main` перемещение/быстрое перемещение/`_fetch_charisma` и `crud._read_current_stamina`), POST `/attributes/{id}/consume_stamina` (+ `X-Internal-Token`), POST `/attributes/{id}/refund_stamina` (+ `X-Internal-Token`, FEAT-128: 50% возврат при cancel/battle-interrupt), PUT `/attributes/{id}/passive_experience` (+ `X-Internal-Token`, опыт за пост), POST `/attributes/cumulative_stats/increment` (+ `X-Internal-Token`, FEAT-167 задача #17 — посты, перемещение, лавка NPC, квесты; все семь мест идут через один хелпер `main._track_cumulative_stats`, он же и ставит заголовок)
 - `inventory-service:8004` -> POST `/inventory/internal/characters/{cid}/items` (+ `X-Internal-Token`, FEAT-167: лут локации, покупка у NPC, награда за квест — раньше был открытый `/inventory/{cid}/items` с проброшенным токеном игрока), POST `/inventory/internal/characters/{cid}/free_slots_check` (+ `X-Internal-Token` с FEAT-169; preflight на старте — падает **закрыто**: без заголовка игроку сказали бы «сумка полна»), POST `/inventory/internal/characters/{cid}/gathering/award` (+ `X-Internal-Token` с FEAT-169; атомарный award на finalize: ресурс + XP + ранг + прочность инструмента — вызов best-effort, потеря заголовка молча съела бы награду), GET `/inventory/characters/{cid}/gathering-skills` (ранговые бонусы для расчёта effective_*), GET `/inventory/internal/characters/{cid}/xp-multiplier` (+ `X-Internal-Token`, FEAT-168 #6: книга опыта за отыгрыш и за задания)
 - `party-service:8014` -> POST `/party/internal/xp-bonus` (+ `X-Internal-Token` с FEAT-169; отрядный бонус за пост, `crud.award_post_xp_and_log`), GET `/party/internal/active-members` (+ `X-Internal-Token` с FEAT-169; `crud._party_active_member_ids` — состав отряда на локации). Оба вызова best-effort и логируются на WARNING: без заголовка отрядные механики отказали бы молча
 - `battle-service:8010` -> POST `/battles/internal/party/leave-on-move` (+ `X-Internal-Token` с FEAT-170; три места: обычное перемещение, быстрое перемещение и `POST /locations/internal/character-left-location`). Предбоевой отряд привязан к локации, уход из неё выводит персонажа из отряда (уход лидера распускает отряд). Все три вызова best-effort (два `except: pass`, третий пишет WARNING и ставит `party_pruned=False`) — потеря заголовка молча оставила бы «призрака» в отряде
 - `character-service:8005` -> POST `/characters/internal/reputation/apply` (+ `X-Internal-Token`, FEAT-197) — репутация за выполненное задание после коммита, 2 попытки, ключ `quest_reward:cq:{id}`; провал только логируется (см. «Региональная репутация»)
+- `character-service:8005` -> POST `/characters/internal/fame/apply` (+ `X-Internal-Token`, FEAT-199) — слава за выполненное задание после коммита, 2 попытки, ключ `fame:quest:cq:{id}`; провал только логируется (см. «Слава»)
 - `battle-pass-service:8012` -> POST `/battle-pass/internal/track-event` (+ `X-Internal-Token` с FEAT-170; два места: обычное и быстрое перемещение, событие `location_visit`). Fire-and-forget под `except: pass` — без заголовка прогресс боевого пропуска встал бы молча
 
 ### Книги опыта (FEAT-168 #6)
@@ -710,7 +718,7 @@ inventory → коммит (снимок чтения закрыт, через H
 ### Гейты (403 «Нужна репутация: {ступень}»; регион — регион NPC / участка; обхода для staff нет)
 | Гейт | Где |
 |---|---|
-| NPC (`characters.reputation_min_tier`) | `GET /locations/npcs/{id}/dialogue?character_id=` (после пост-намерения), `_require_npc_gate` → `POST .../shop/buy` и `.../shop/sell`, `GET .../shop/sell-offers`, список заданий (`locked_reason`) и `POST /locations/quests/{id}/accept`. Личная витрина `GET .../shop?character_id=` гейтом NPC **не** закрыта (там — только отказ «Вне закона») |
+| NPC (`characters.reputation_min_tier`) | `GET /locations/npcs/{id}/dialogue?character_id=` (после пост-намерения), `_require_npc_gate` → `POST .../shop/buy` и `.../shop/sell`, `GET .../shop/sell-offers`, список заданий (`locked_reason`) и `POST /locations/quests/{id}/accept`. Личная витрина `GET .../shop?character_id=` (FEAT-200: тоже закрыта гейтом NPC, 403; публичная витрина без `character_id` — нет) |
 | Задание (`quests.min_reputation_tier`) | `GET /locations/npcs/{npc_id}/quests`: доступное, но закрытое задание остаётся в списке с `locked_reason` (сначала гейт NPC, затем задания; у взятых / выполненных — null); `accept` → 403. **Завершение не гейтится** — падение ступени посреди задания работу не отменяет |
 | Участок (`house_plots.min_reputation_tier`) | `POST /locations/houses/plots/{plot_id}/buy` и перекупка `POST /locations/houses/{house_id}/buy`; регион — `house_plots.region_id`, иначе регион локации участка |
 
@@ -748,7 +756,33 @@ inventory → коммит (снимок чтения закрыт, через H
 {CHARACTER_SERVICE_URL}/characters/internal/reputation/apply` с `X-Internal-Token`, тело `{character_id, region_id,
 action: "quest_complete", idempotency_key: "quest_reward:cq:{character_quest_id}", delta?}` (`delta` только если
 `reputation_reward` не NULL). Таймаут 5 с, 2 попытки (сеть / 5xx повторяется, 4xx — нет); провал — `logger.error`,
-завершение задания не падает. Ключ делает повтор безопасным.
+завершение задания не падает. Ключ делает повтор безопасным. FEAT-200: любое другое исключение тоже ловится
+(`logger.exception`, без повтора) — задание уже закоммичено, 500 не отдаётся.
+
+## Слава (FEAT-199, миграция 056)
+
+Слава и дурная слава целиком принадлежат character-service (миграция `040_shadow_renown`, раздел «Shadow» в
+`docs/services/character-service.md`). locations-service **только читает** `character_renown.fame` и
+`renown_tiers` (`scale='fame'`) сырым параметризованным SQL (`app/fame_read.py`) и начисляет славу за задание через
+internal-эндпоинт.
+
+- **Миграция `056_quest_fame`** (revises `055_region_jail_location`): `quests.min_fame_tier` VARCHAR(20) NULL (код
+  ступени славы, NULL = без порога) и `quests.fame_reward` INT NULL (NULL = `shadow_settings.fame_quest_default` в
+  character-service, по умолчанию 5; 0 = славы нет). Откат удаляет обе колонки.
+- **Схемы:** `QuestCreate` / `QuestUpdate` / `QuestRead` + `min_fame_tier` (пустое → None; иначе один из 5
+  фиксированных кодов `fame_read.FAME_TIER_CODES` = `nameless, familiar, known, famous, legend`, иначе 422) и
+  `fame_reward` 0…1000. В `PUT` переданный null очищает поле. `QuestAvailableRead` + `min_fame_tier`.
+- **Порог:** `GET /locations/npcs/{npc_id}/quests` — задание, не проходящее порог славы, остаётся в списке с
+  `locked_reason` «Нужна слава: {ступень}» (причина репутации важнее, если не проходят обе); `POST
+  /locations/quests/{id}/accept` → 403 с тем же текстом (проверяется после гейта репутации). Завершение не гейтится.
+  Слава читается **только** если у какого-то задания списка задан `min_fame_tier`; пустая `renown_tiers` → сид-лестница
+  (0 / 50 / 200 / 600 / 1500). Слава не убывает, поэтому сохранённое значение и есть эффективное.
+- **Слава за задание** (`main._apply_quest_fame`): после коммита завершения, рядом с репутацией и независимо от
+  региона; при `fame_reward = 0` не вызывается. `POST {CHARACTER_SERVICE_URL}/characters/internal/fame/apply` с
+  `X-Internal-Token`, тело `{character_id, source: "quest", idempotency_key: "fame:quest:cq:{character_quest_id}",
+  points: fame_reward | null, ref_id: character_quest_id}`. Таймаут 5 с, 2 попытки (сеть / 5xx повторяется, 4xx —
+  нет); провал — `logger.error`, завершение задания не падает (FEAT-200: прочие исключения — `logger.exception`,
+без повтора).
 
 ### Тесты
 `conftest.py` — автофикстура «репутация нейтральна» (маркер `real_reputation` включает настоящие чтения);
@@ -762,7 +796,7 @@ action: "quest_complete", idempotency_key: "quest_reward:cq:{character_quest_id}
 4. **Молчаливые ошибки** - character-service failures возвращают пустые данные без warning
 5. **CORS allow-all** в production
 6. **`posts.content` — `TEXT`** (`app/models.py:165`), то есть 64 КБ. Кириллица в `utf8mb4` стоит 2 байта на символ плюс разметка TipTap — длинный ролевой пост может молча обрезаться. `post_drafts.content` сделан `MEDIUMTEXT` именно поэтому, `posts` оставлен как был (FEAT-156, вне области)
-7. **`move_and_post` коммитит пост до обновления локации и списания стамины** (`app/main.py:1213` против `:1241` и `:1256`) — при 500 на любом из этих шагов пост остаётся, а переход не состоялся. Предсуществующее, тот же порядок в `quick_move` (`:1470` / `:1477`)
+7. **`move_and_post` коммитит пост до обновления локации и списания стамины** — при сбое на любом из этих шагов пост остаётся, а переход не состоялся. Предсуществующее, тот же порядок в `quick_move`. FEAT-198 добавил ещё один такой случай: второе перемещение из другой вкладки, отклонённое character-service (409, встреча со стражей), оставляет созданный пост (косметика)
 
 ## Точные контуры кликабельных зон (041)
 
@@ -791,10 +825,14 @@ action: "quest_complete", idempotency_key: "quest_reward:cq:{character_quest_id}
 `check_not_activity_locked` (`main.py`, через `app/activity_lock.py`) вызывается в: создании поста
 (`POST /locations/posts/`), `move_and_post`, `quick_move`, `tag-player` (отправитель), выбросе и
 подборе лута, покупке/продаже у NPC, принятии и сдаче квестов, старте сбора ресурсов
-(`crud.start_gathering`). Отмена сбора, отказ от квеста, черновики и лайки остаются доступными.
+(`crud.start_gathering`), FEAT-198 — выборе реплики диалога NPC (если передан `character_id`). Отмена сбора,
+отказ от квеста, черновики и лайки остаются доступными. **FEAT-198:** создание поста и `move_and_post` вызывают
+вариант `check_not_locked_for_post` — причина `jail` пропускается, только если пост пишется в **текущей** локации
+персонажа (тюрьме); любая другая причина или другая локация → 409 как раньше.
 
 Формулировки отказа одинаковы во всех сервисах (`activity_lock.lock_message`):
-«Персонаж находится в подземелье» / «Персонаж без сознания до HH:MM МСК» (для второго
+«Персонаж находится в подземелье» / «Персонаж без сознания — осталось 2 ч 10 мин» / FEAT-198 «Персонаж в
+тюрьме — осталось 2 д 5 ч» / «Персонаж остановлен стражей — сначала нужно решить, как поступить» (для второго
 участника — «Цель …», «Целевой персонаж …», «Другой участник обмена …»). Код ответа — **409**.
 Колонки `characters.dungeon_session_id` / `characters.unconscious_until` пишет только
 character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
@@ -1132,3 +1170,29 @@ null (комната не раскрывается). Считает character-se
 Тесты: `tests/test_houses.py` (74: прежние тесты входят в комнату через `/go` или напрямую в таблице; новые —
 вход/переход/выход, кто куда входит, функции только в своей комнате, присутствие только в локации дома, спящий
 не ходит, фасад для посторонних и модератор, выставление при сносе и выписке).
+
+## Закон: тюрьма края (FEAT-198, миграция 055)
+
+Состояние закона (розыск, встречи со стражей, сроки) целиком принадлежит character-service (миграция `039_law`,
+подробности — `docs/services/character-service.md`, раздел «Law»). locations-service владеет только колонкой
+тюрьмы и видит закон через блокировку активности (`app/activity_lock.py`, причины `jail` и `law_encounter`).
+
+- **Миграция `055_region_jail_location`** (revises `054_reputation_gates`): `Regions.jail_location_id` BIGINT NULL,
+  FK `Locations.id` ON DELETE SET NULL, индекс `ix_regions_jail_location_id`; бэкфилла нет; откат удаляет FK,
+  индекс и колонку. NULL = у края нет тюрьмы (стража только штрафует или дерётся).
+- **Схемы:** `RegionBase`, `RegionUpdate`, `RegionUpdateResponse`, `RegionRead` + `jail_location_id`; поле есть в
+  деталях региона и в данных админ-панели. При `PUT` региона непустое значение проверяется
+  (`crud.validate_region_jail_location`): локация существует и через район/родителей относится **к этому**
+  региону (`econ_ledger.resolve_location`), иначе 400 «Локация тюрьмы должна находиться в этом крае». Право — прежнее
+  (`locations:update`).
+- **Посты в тюрьме:** `POST /locations/posts/` и `move_and_post` вызывают `check_not_locked_for_post` — заключённый
+  может писать только в своей текущей локации; `move_and_post` в ту же локацию тогда не вызывает
+  `update_location` (это не перемещение). Перемещение, `quick_move` и посты в другие локации → 409 «Персонаж в
+  тюрьме — осталось …». Встреча со стражей блокирует посты целиком.
+- **Перемещение:** `move_and_post` / `quick_move` передают `source` в `PUT /characters/internal/{id}/update_location`,
+  пробрасывают его 409 (тюрьма / встреча) с текстом и добавляют в ответ `law_encounter` (`PostResponse.law_encounter:
+  Optional[dict]`, аддитивно).
+- **Диалог NPC:** `POST /locations/npcs/{npc_id}/dialogue/{node_id}/choose` принимает необязательный `character_id`
+  (владение + блокировка → 409).
+- Блокировка: SELECT читает `jailed_until, law_encounter_id`; если колонок ещё нет (039 не применена) — повтор старым
+  запросом с WARNING.

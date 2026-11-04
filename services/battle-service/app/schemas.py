@@ -20,6 +20,13 @@ class DungeonBattleCreate(BaseModel):
     players: List[PlayerIn]
 
 
+class GuardBattleCreate(BaseModel):
+    """FEAT-198: internal create used by character-service only (law encounter fight)."""
+    law_encounter_id: int
+    character_id: int
+    guard_npc_id: int
+
+
 class BattleCreate(BaseModel):
     players: List[PlayerIn]
     battle_type: Optional[str] = None

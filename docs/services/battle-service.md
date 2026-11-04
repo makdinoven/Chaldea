@@ -34,7 +34,7 @@ battle-service/app/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/battles/` | Создать бой (список участников с командами) |
+| POST | `/battles/` | Создать бой (список участников с командами). FEAT-198: NPC-участник, который мёртв (`npc_status='dead'`) или оглушён (`unconscious_until > now`, например стражник после поражения) или без здоровья (`current_health <= 0`, FEAT-200), → 409 «Этот персонаж сейчас недоступен для боя» |
 | GET | `/battles/{battle_id}/state` | Текущее состояние боя + снапшот |
 | POST | `/battles/{battle_id}/action` | Выполнить ход (атака/защита/поддержка + предмет) |
 | GET | `/battles/battles/{battle_id}/logs` | Логи всех ходов. **FEAT-171 (фикс по ревью #2):** требует JWT + `battle_visibility.require_battle_log_access` |
@@ -46,7 +46,7 @@ battle-service/app/
 ## Хранение данных
 
 ### MySQL (постоянное)
-- **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, timestamps
+- **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, `dungeon_session_id` (FEAT-175), `law_encounter_id` (FEAT-198, миграция `009_battle_law_encounter`), timestamps
 - **battle_participants** - battle_id, character_id, team, `dropped_out_at`, `joined_at` (FEAT-164, миграция `007_participant_joined_at`; ставится при создании боя и при одобрении заявки на вступление, NULL у старых строк)
 - **battle_turns** - battle_id, actor_id, turn_number, attack/defense/support_rank_id, item_id, deadline
 
@@ -308,6 +308,7 @@ battle-service/app/
 | inventory:8004 | POST `/inventory/internal/update-durability` | Запись прочности после боя. **FEAT-169:** обязателен `X-Internal-Token`; вызов best-effort — без заголовка прочность молча перестала бы сохраняться |
 | character:8005 | POST `/characters/{id}/add_rewards` | Опыт и золото победителям PvE. **FEAT-169:** роут стал internal-only, обязателен `X-Internal-Token` (`main._internal_token_headers()`); ошибка только логируется |
 | character:8005 | PUT `/characters/internal/npc-status/{id}` | Смерть побеждённого NPC (не моба) в `_finalize_battle`, `X-Internal-Token`. **FEAT-197:** тело `{status: "dead", battle_id, killer_character_ids}` — `killer_character_ids` = отсортированные уникальные `character_id` **всех** участников победившей команды (живых и павших). character-service оставляет из них только игроков (`is_npc = 0`), начисляет каждому полный вес репутации за убийство в регионе NPC и делает это только при реальном переходе `alive → dead` (ключ `npc_kill:{npc}:{battle_id}:{killer}`), так что повторный отчёт ничего не добавляет; ответ `{ok, status, killed}`. Выборка NPC — `is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')`. Ошибка только логируется |
+| character:8005 | POST `/characters/internal/law/battle-result` | **FEAT-198:** итог боя со стражей (`_notify_law_battle_end`, только бои с `law_encounter_id`), `{battle_id, law_encounter_id, winner_team, aborted}`, `X-Internal-Token`, фоновая задача, 3 попытки при 5xx/сети. У стражника npc-status даёт нокаут вместо смерти — это решает character-service |
 | party:8014 | POST `/party/internal/xp-bonus` | Отрядный бонус опыта за бой. **FEAT-169:** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
 | party:8014 | GET `/party/internal/active-members` | Состав отряда в локации (групповой PvE/PvP). **FEAT-169:** весь префикс `/party/internal/` закрыт токеном, заголовок обязателен на всех трёх вызовах (`main.py`) |
 | character-attributes:8002 | POST `/attributes/cumulative_stats/increment` | Кумулятивная статистика по итогам боя (`_track_cumulative_stats`). **FEAT-167 задача #17: роут стал internal-only** — обязателен `X-Internal-Token` (`main._internal_token_headers()`, читает env в момент вызова). Вызов fire-and-forget: ошибка логируется и глотается, поэтому потеря заголовка молча остановила бы учёт побед, убийств и разблокировку перков — покрыто тестами в `tests/test_cumulative_stats.py` |
@@ -652,18 +653,48 @@ FEAT-171 объявила приватным.
   `POST /dungeons/internal/battle-callback` `{battle_id, session_id, winner_team, defeated_characters, aborted}`
   (фоновая задача, 3 попытки при 5xx/сетевой ошибке; промах подстрахован опросом).
 * `GET /battles/internal/{id}/result` (X-Internal-Token) — итог после истечения Redis-состояния:
-  `{status, winner_team, aborted, dungeon_session_id}` (победитель — по `battle_history`).
+  `{battle_id, status, winner_team, aborted, dungeon_session_id, law_encounter_id}` (победитель — по
+  `battle_history`; `law_encounter_id` — FEAT-198, аддитивно).
 * `_ensure_not_activity_locked` отказывает (409) во всех путях создания боя, PvP-вызовах/нападениях,
   лобби, заявках на вступление и их одобрении; заблокированные соотрядцы тихо исключаются из
   групповых атак (`_filter_available`, party mob/pack attack).
 
 Формулировки отказа одинаковы во всех сервисах (`activity_lock.lock_message`):
-«Персонаж находится в подземелье» / «Персонаж без сознания до HH:MM МСК» (для второго
+«Персонаж находится в подземелье» / «Персонаж без сознания — осталось 2 ч 10 мин» / FEAT-198 «Персонаж в
+тюрьме — осталось 2 д 5 ч» / «Персонаж остановлен стражей — сначала нужно решить, как поступить» (для второго
 участника — «Цель …», «Целевой персонаж …», «Другой участник обмена …»). Код ответа — **409**.
 Колонки `characters.dungeon_session_id` / `characters.unconscious_until` пишет только
 character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
 сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
 «не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.
+
+## Бой со стражей (FEAT-198)
+
+Закон (розыск, встречи, тюрьма) принадлежит character-service (см. `docs/services/character-service.md`, «Law»).
+battle-service только проводит бой и сообщает итог.
+
+* **Миграция `009_battle_law_encounter`:** `battles.law_encounter_id` INT NULL + индекс
+  `ix_battles_law_encounter_id`. Ставится только у боёв со стражей.
+* **`POST /battles/internal/guard`** (X-Internal-Token) `{law_encounter_id, character_id, guard_npc_id}` → 201
+  `BattleCreated`. Игрок — команда 1: не в бою (409 «Персонаж уже в бою») и держит блокировку `law_encounter`
+  **именно с этим id** — единственное исключение из блокировки (как у подземелья); любая другая блокировка → 409 с
+  её текстом, иначе 409 «Персонажа не останавливала эта стража». Стражник — команда 2: NPC с `npc_role='guard'`
+  (иначе 409 «Стражник не найден»), не мёртв и не оглушён (409 «Стражник сейчас недоступен для боя»), в той же
+  локации, что игрок (409 «Стражник находится в другой локации»), не в бою (409 «Стражник сейчас занят — попробуйте
+  чуть позже»), без блокировки активности. Создаётся через `_assemble_battle(..., "pvp_attack", location_id,
+  law_encounter_id=...)` — тот же тип, что «Нападение», поэтому ENUM не менялся; стражник регистрируется в
+  автобое как обычный NPC.
+* **Колбэк:** `_finalize_battle` после цикла смерти NPC (нокаут стражника, репутация и розыск уже применены через
+  `PUT /characters/internal/npc-status/{id}`) вызывает `_notify_law_battle_end`, `_force_finish_battle` — с
+  `aborted=True`. Для боя без метки — no-op. Фоновая задача шлёт `POST /characters/internal/law/battle-result`
+  `{battle_id, law_encounter_id, winner_team, aborted}` с `X-Internal-Token`, до 3 попыток при 5xx/сетевой ошибке
+  (4xx не повторяется, только WARNING). Промах страхует проход закона character-service, который опрашивает
+  `GET /battles/internal/{id}/result`.
+* **«Нападение» на недоступного NPC:** `create_battle_endpoint` проверяет каждого NPC-участника
+  (`_ensure_npc_available`) — мёртвый, оглушённый или (FEAT-200) с `character_attributes.current_health <= 0` →
+  409 «Этот персонаж сейчас недоступен для боя» (нет строки атрибутов — пропускается).
+* `app/activity_lock.py` (async-копия) знает причины `jail` и `law_encounter`; SELECT читает `jailed_until,
+  law_encounter_id` с откатом на старый запрос, если колонок ещё нет.
 
 ## FEAT-188: пассивки подклассов
 

@@ -255,6 +255,18 @@ FEAT-171 §3.4 D9).
 
 **Удалено:** извлечение эссенций (`extract-info`, `extract-essence`), трансмутация (`transmute-info`, `transmute`), переплавка украшений (`smelt-info`, `smelt`). Старые предметы (кристаллы, трансмутированные ресурсы, «Ювелирный лом», эссенции стихий) не тронуты — подкатегория «Прочее», админ удалит сам.
 
+## Маска (FEAT-199, миграция 034)
+
+- **Миграция `034_item_mask`** (revises `033_auction_listing_region`): `items.is_mask` BOOLEAN NOT NULL DEFAULT 0
+  (по образцу `028_camp_backpack`, **без изменения ENUM `item_type`**); откат удаляет колонку.
+- Модель `Items.is_mask`, поле `is_mask: bool = False` в `ItemBase` (создание / чтение / правка, рядом с
+  `is_backpack`). Root-валидатор: `is_mask` только у `item_type = 'head'` (`schemas.MASK_ITEM_TYPE`), иначе 422
+  «Маской может быть только предмет для головы». `PUT` предмета, сменивший тип с `head`, сбрасывает флаг.
+- Логика экипировки не меняется — маска это обычный шлем. Флаг читает **character-service** напрямую SQL-ом
+  (`equipment_slots` ⨝ `items.is_mask = 1`) в момент преступления: надетая маска снижает шанс свидетелей и делает
+  замеченного персонажа «неизвестным в маске» (см. `docs/services/character-service.md`, раздел «Shadow»). Без
+  колонки (миграция ещё не применена) character-service пишет WARNING и считает, что маски нет.
+
 ## Походный рюкзак (FEAT-178, миграция 028)
 
 Плащ с `items.is_backpack = true`, надетый в слот `cloak` (`backpack.py`). Вместимость в стопках по редкости:
@@ -529,13 +541,23 @@ FEAT-168: `use_item` был единственным «использовать 
 
 `check_not_activity_locked` (`main.py`, через `app/activity_lock.py`): обмен (`trade/propose`,
 `trade/{id}/items`, `trade/{id}/confirm` — проверяются обе стороны) и ремёсла (`crafting/{cid}/craft`,
-`sharpen`, `refine`, `insert-gem`, `extract-gem`). Инвентарь, экипировка, аукцион, изучение
-рецептов, опознание и ремонт остаются доступными.
+`sharpen`, `refine`, `insert-gem`, `extract-gem`). **FEAT-198:** то же для записывающих операций аукциона —
+`check_not_activity_locked(db, data.character_id)` в `crud.deposit_to_auction_storage`,
+`create_auction_listing`, `place_bid`, `execute_buyout`, `claim_from_storage` (любая причина блокировки → 409,
+в том числе тюрьма и встреча со стражей). Инвентарь, экипировка, чтение аукциона, изучение рецептов, опознание и
+ремонт остаются доступными. Свиток возвращения домой проверяет блокировку, поэтому при ожидающей встрече со стражей
+и в тюрьме он тоже недоступен.
 
 Формулировки отказа одинаковы во всех сервисах (`activity_lock.lock_message`):
-«Персонаж находится в подземелье» / «Персонаж без сознания до HH:MM МСК» (для второго
+«Персонаж находится в подземелье» / «Персонаж без сознания — осталось 2 ч 10 мин» / FEAT-198 «Персонаж в
+тюрьме — осталось 2 д 5 ч» / «Персонаж остановлен стражей — сначала нужно решить, как поступить» (для второго
 участника — «Цель …», «Целевой персонаж …», «Другой участник обмена …»). Код ответа — **409**.
 Колонки `characters.dungeon_session_id` / `characters.unconscious_until` пишет только
 character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
 сервисов с таблицами-зеркалами `characters` conftest по умолчанию подменяет чтение на
 «не заблокирован»; настоящий запрос проверяют тесты с маркером `real_activity_lock`.
+
+FEAT-198: sync-копия `app/activity_lock.py` знает причины `jail` и `law_encounter` (приоритет jail >
+law_encounter > unconscious > dungeon > asleep > reading); SELECT читает `jailed_until, law_encounter_id` и при
+ошибке «unknown column» (миграция character-service `039_law` ещё не применена) повторяет старый запрос. Операции
+`law_fine` / `law_bail` добавлены в копию `econ_core.py` (байтовая копия, сервис их не проводит).

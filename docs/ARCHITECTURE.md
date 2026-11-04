@@ -78,13 +78,13 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | Сервис | Таблицы |
 |--------|---------|
 | user-service | `users`, `users_character`, `users_avatar_preview`, `users_avatar_character_preview` |
-| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL) |
+| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL), закон FEAT-198 (миграция `039_law`): `character_wanted`, `law_settings`, `law_levels`, `law_crimes`, `law_encounters`, `law_jail_terms`, `law_log` + `characters.jailed_until`, `jail_region_id`, `law_encounter_id` (две из них читаются остальными сервисами как блокировка активности), тень FEAT-199 (миграция `040_shadow_renown`): `shadow_settings`, `region_suspicion`, `character_renown`, `renown_tiers`, `renown_log` + колонки снимка в `law_crimes` (`character_renown` / `renown_tiers` читает locations-service SQL-ом) |
 | character-attributes-service | `character_attributes` |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
-| inventory-service | `items`, `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160), `quests` (+ `reputation_reward`, `min_reputation_tier` — FEAT-197), `house_plots` (+ `min_reputation_tier` — FEAT-197) |
+| inventory-service | `items` (+ `is_mask` — FEAT-199, читается character-service SQL-ом), `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160), `quests` (+ `reputation_reward`, `min_reputation_tier` — FEAT-197), `house_plots` (+ `min_reputation_tier` — FEAT-197), `Regions.jail_location_id` (FEAT-198, тюрьма края), `quests` + `min_fame_tier`, `fame_reward` (FEAT-199) |
 | notification-service | `notifications` |
-| battle-service | `battles` (+ `pause_reason`, `paused_by_admin`), `battle_participants` (+ `dropped_out_at` — читается ещё тремя сервисами как снятие блокировки боя), `battle_turns` |
+| battle-service | `battles` (+ `pause_reason`, `paused_by_admin`, `dungeon_session_id`, `law_encounter_id` — FEAT-198), `battle_participants` (+ `dropped_out_at` — читается ещё тремя сервисами как снятие блокировки боя), `battle_turns` |
 
 **MongoDB** (`mydatabase`):
 - `battle_logs` - логи ходов боёв
@@ -160,6 +160,10 @@ character-service ──> inventory-service (создание инвентаря
                       delete_character;
                       все ссылки graceful — недоступность сервиса не блокирует заявку
                       и не отменяет удаление персонажа)
+                  ──> battle-service (FEAT-198: POST /battles/internal/guard — бой со стражей;
+                      проход закона опрашивает GET /battles/internal/{id}/result)
+                  ──> locations-service (FEAT-198: _prepare_move при переводе в тюрьму и
+                      возврате после бегства — отмена добычи, намерений, группы)
 
 locations-service ──> character-service (игроки в локации)
                   ──> character-attributes-service (стамина для перемещения, refund_stamina при cancel/battle-interrupt — FEAT-128)
@@ -167,6 +171,11 @@ locations-service ──> character-service (игроки в локации)
 
                   ──> character-service (FEAT-197: /characters/internal/reputation/apply —
                       репутация за задание после коммита)
+                  ──> character-service (FEAT-199: /characters/internal/fame/apply —
+                      слава за задание после коммита)
+                  ──> character-service (FEAT-198: update_location получает source; его 409
+                      «в тюрьме / остановлен стражей» пробрасывается игроку, из ответа —
+                      law_encounter)
 
 inventory-service ──> character-attributes-service (модификаторы при экипировке)
 
@@ -177,7 +186,11 @@ battle-service ──> character-attributes-service (боевые характе
                ──> skills-service (данные навыков)
                ──> inventory-service (экипировка, предметы)
                ──> character-service (FEAT-197: /characters/internal/npc-status/{id} с battle_id
-                      и killer_character_ids — смерть NPC и репутация за убийство)
+                      и killer_character_ids — смерть NPC и репутация за убийство;
+                      FEAT-198: стражник не умирает, а оглушается, + преступление/розыск;
+                      FEAT-199: контракт тот же, внутри — бросок свидетелей)
+               ──> character-service (FEAT-198: /characters/internal/law/battle-result — итог
+                      боя со стражей после цикла смерти NPC; aborted при принудительном завершении)
 
 autobattle-service ──> battle-service (состояние боя, отправка действий)
 
@@ -279,6 +292,52 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
    отголосок в регионы той же страны, забывание отрицательной репутации. Гейты на NPC, задания, участки, займы и
    телепорты, скидки / наценки и срез скупки у торговцев, «Вне закона» — отказ в торговле. Игрок видит ступень и
    полоску без чисел; права `reputation:*` (user-service `0033`).
+9. **Закон: розыск, стража, тюрьма** (FEAT-198, этап 2а; всё состояние — в character-service, остальные сервисы
+   видят его только как блокировку активности `jail` / `law_encounter`). Убийство мирного NPC — преступление:
+   розыск в крае (5 ступеней, линейный ленивый спад). Розыскиваемого или «вне закона» персонажа, вошедшего в локацию
+   с живым стражником (перемещение, быстрое перемещение, Мастер Телепорта), стража останавливает в той же транзакции,
+   что и вход: штраф в казну края, сдача (тюрьма края `Regions.jail_location_id`), бегство (возврат назад), бой
+   (internal-бой battle-service с колбэком). Без ответа 24 ч — авторазрешение. Стражники не погибают — оглушаются
+   на 6 ч. В тюрьме можно только писать посты в своей локации; выход — срок, побег (шанс, перерыв, продление) или
+   залог у банкира. Деньги — операции книги `law_fine` / `law_bail`. Админка — права `reputation:*`.
+
+   Поток перемещения:
+   ```
+   Игрок → locations: move_and_post / quick_move → character: PUT update_location {new_location_id, source}
+            TX: строка FOR UPDATE; тюрьма/встреча → 409; смена локации; evaluate_entry →
+                law_encounters + characters.law_encounter_id → COMMIT → уведомление law_encounter
+          ← пост + law_encounter → окно стражи
+   Бой:   choice=fight → character: стражник лечится, встреча fighting → battle: POST /internal/guard
+          конец боя → npc-status (нокаут, −300, розыск) → POST /characters/internal/law/battle-result
+          проигрыш → _prepare_move (locations) → TX: перенос в тюрьму, jailed_until, розыск 0, срок
+          (страховка — проход закона опрашивает /battles/internal/{id}/result)
+   ```
+10. **Тень: свидетели, маски, подозрение, слава** (FEAT-199, этап 2б; всё в character-service). Убийство мирного
+    NPC (и нокаут стражника через «Нападение») сначала проходит **один бросок свидетелей на группу**: база по
+    `Locations.marker_type` минус скрытность (эффективные ловкость + удача через `stat_caps`), подклассы Агент /
+    Ассасин / Фокусник, маска (`items.is_mask` на шлеме), плюс узнаваемость славы и прибавка за размер группы.
+    Замечено без маски — репутация и розыск сразу (как в 2а); незамечено / в маске — отложенное дело в `law_crimes`
+    (снимок с теми же ключами), подозрение края растёт, проход закона раз в сутки бросает раскрытие (шанс растёт с
+    подозрением), через 3 дня дело закрывается. Бой встречи со стражей и выключатель — всегда «замечено». Слава
+    (публичная ступень; задания, положительная репутация) и дурная слава (скрытая; каждое преступление). Порог
+    «Мин. слава» у заданий (locations-service). Игрок видит только слова, без чисел; админка — права `reputation:*`.
+
+    ```
+    Убийство: battle → PUT npc-status → character TX: переход alive→dead → shadow_crud.npc_kill_consequences
+               ├─ не преступление → apply_reputation (+ слава)
+               ├─ замечено без маски / принудительно → apply_reputation + register_crime(reported) + дурная слава
+               └─ незамечено / в маске → register_crime(unwitnessed|masked, снимок) + дурная слава + подозрение края
+              COMMIT → уведомления (ступень, розыск, law_unseen / law_masked, fame_tier)
+    Раскрытие: econ_scheduler → law_pass._reveal_crimes (next_roll_at ≤ now) → TX: бросок →
+               reveal_crime (условный UPDATE → apply_reputation по сохранённому ключу + apply_crime_wanted)
+               или +1 сутки / закрыто после reveal_until → COMMIT → law_revealed
+    Задание:   locations complete_quest COMMIT → POST /characters/internal/fame/apply {fame:quest:cq:N}
+    ```
+
+    **Общие байтовые копии кода** (сверяет `scripts/check_econ_copies.sh`): `econ_core.py` и
+    `tests/econ_contract_cases.py` (character, inventory, locations, dungeon), `econ_ledger.py` sync (character,
+    inventory) и async (locations, dungeon), `stat_caps.py` (канон character-attributes-service + battle, dungeon и с
+    FEAT-199 character-service), `reputation_core.py` (character + locations). `shadow_core.py` копий не имеет.
 
 ### Character Progression
 

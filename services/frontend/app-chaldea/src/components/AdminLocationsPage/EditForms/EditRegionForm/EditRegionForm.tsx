@@ -15,6 +15,17 @@ import LocationSearch from '../../../CommonComponents/LocationSearch/LocationSea
 import type { AppDispatch } from '../../../../redux/store';
 import RecommendedLevelFields from '../RecommendedLevelFields';
 import { parseLevelRange } from '../../../../api/recommendedLevel';
+import { EntityPicker } from '../../../Admin/DungeonsPage/editor/pickers';
+
+/** The rejected thunk payload is `response.data` ({detail}) or a message string — show it in Russian. */
+const saveErrorMessage = (err: unknown): string => {
+  const detail = (err as { detail?: unknown } | null)?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail) && typeof (detail[0] as { msg?: unknown })?.msg === 'string') {
+    return (detail[0] as { msg: string }).msg;
+  }
+  return 'Ошибка при сохранении региона';
+};
 
 interface RegionFormData {
   name: string;
@@ -81,6 +92,8 @@ const EditRegionForm = ({
 
   const [levelMin, setLevelMin] = useState('');
   const [levelMax, setLevelMax] = useState('');
+  // FEAT-198: the region's jail (a location of this region; null = no jail)
+  const [jailLocationId, setJailLocationId] = useState<number | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [selectedMap, setSelectedMap] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -107,6 +120,7 @@ const EditRegionForm = ({
         type: (currentRegion.type as string) || 'region',
         status: (currentRegion.status as string) || 'active',
       });
+      setJailLocationId((currentRegion.jail_location_id as number | null | undefined) ?? null);
       setImagePreview((currentRegion.image_url as string) || null);
       setMapPreview((currentRegion.map_image_url as string) || null);
     }
@@ -175,6 +189,7 @@ const EditRegionForm = ({
     if (regionId !== 'new') {
       regionData.recommended_level_min = levels.min;
       regionData.recommended_level_max = levels.max;
+      regionData.jail_location_id = jailLocationId;
     }
 
     setIsUploading(true);
@@ -200,7 +215,7 @@ const EditRegionForm = ({
       toast.success(regionId === 'new' ? 'Регион создан' : 'Регион обновлён');
       onSuccess?.();
     } catch (err) {
-      toast.error('Ошибка при сохранении региона');
+      toast.error(saveErrorMessage(err));
       console.error('Error saving region:', err);
     } finally {
       setIsUploading(false);
@@ -255,6 +270,21 @@ const EditRegionForm = ({
               onChange={handleChange}
               locations={allLocations}
             />
+          </div>
+
+          <div className="mb-4">
+            <label className="block mb-2 text-[#8ab3d5] font-medium">ТЮРЬМА КРАЯ:</label>
+            {regionId !== 'new' ? (
+              <div className="flex flex-col gap-1 min-w-0">
+                <EntityPicker kind="location" value={jailLocationId} onChange={setJailLocationId} />
+                <span className="text-white/40 text-xs">
+                  Локация этого края, куда стража отправляет задержанных. Пусто — тюрьмы нет (сдаться нельзя, только
+                  штраф, бегство или бой).
+                </span>
+              </div>
+            ) : (
+              <span className="text-white/40 text-xs">Тюрьму можно назначить после создания региона.</span>
+            )}
           </div>
 
           <div className="mb-4">

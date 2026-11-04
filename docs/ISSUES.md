@@ -388,10 +388,29 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ## MEDIUM
 
 
+### ~~Баг: «Нападение» на воскрешённого NPC с нулевым здоровьем создаёт бой, который нельзя закончить~~ — DONE (FEAT-200)
+**Исправлено:** воскрешение (internal `npc-status` → `alive` и админское `npc_status: dead → alive`) поднимает
+здоровье/ресурсы до максимума; battle-service отказывает (409) в бою с NPC, у которого `current_health <= 0`.
+**Сервис:** character-service (`update_npc_status`, `status='alive'`) + battle-service (`create_battle_endpoint`)
+Админ (или internal `npc-status`) возвращает убитому NPC статус `alive`, но `character_attributes.current_health`
+остаётся 0. «Нападение» на такого NPC создаёт бой, где цель уже повержена: любое действие игрока отвечает
+400 «Цель уже повержена» / «Нет живых целей», а 3D-экран сразу показывает «Вы выиграли» — бой висит до
+таймаута хода или принудительного завершения. Найдено на ревью FEAT-198 (торговец «Петя», #33, локально).
+Стражей это не касается: FEAT-198 лечит их при выходе из нокаута и перед боем.
+**Решение:** при `status='alive'` восстанавливать здоровье (current = max), и/или отказывать в бою с NPC при
+`current_health <= 0`.
+
+### ~~Баг: карточка персонажа в админке по прямой ссылке — «Персонаж не найден»~~ DONE (FEAT-200, 2026-11-04)
+**Сервис:** frontend (`Admin/CharactersPage/AdminCharacterDetailPage.tsx`, ~L52)
+Страница ищет персонажа в первой странице списка (`fetchAdminCharacters()`, page 1, 20 шт.), а не по id —
+открыть `/admin/characters/763` напрямую (или обновить вкладку) нельзя, только из поиска в списке.
+**Решение:** загрузить персонажа по id отдельным запросом. Найдено на ревью FEAT-198 (LOW по влиянию).
+Исправлено: `fetchAdminCharacterById` (`api/adminCharacters.ts`) — имя через `GET /characters/{id}/short_info`, затем точный id в `GET /characters/admin/list?q=имя` (с перебором страниц). Ошибка загрузки показывается на странице.
+
 ### ~~Баг: NPC без роли (`npc_role IS NULL`) невозможно убить через «Нападение»~~ DONE (FEAT-197, 2026-11-03)
 ~~`update_npc_status` фильтровал `npc_role != 'mob'` (NULL отсекался) → 404.~~ Исправлено: `or_(npc_role IS NULL, npc_role != 'mob')`; тест `test_reputation_npc_kill.py::test_null_role_npc_can_be_killed_through_the_endpoint`.
 Админ-список NPC (`GET /characters/admin/npcs`) исправлен так же (поиск НПС в редакторе квестов).
-**Остаток (LOW):** тот же фильтр `npc_role != 'mob'` в `/npcs/by_location` — NPC с пустой ролью не видны в локации. Не трогали, чтобы не менять видимость NPC в локациях без решения.
+~~**Остаток (LOW):** тот же фильтр `npc_role != 'mob'` в `/npcs/by_location` — NPC с пустой ролью не видны в локации.~~ DONE (FEAT-198, 2026-11-04): `GET /characters/npcs/by_location` фильтрует `npc_role IS NULL OR npc_role != 'mob'` (и заодно скрывает оглушённых NPC).
 
 ### ~~Продажа НПС: предмет снимается до зачисления золота (FEAT-181, остаточный риск)~~ DONE (FEAT-183 B4, 2026-10-29)
 **Сервис:** locations-service (`app/main.py`, `sell_to_npc`)
@@ -865,7 +884,7 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 
 ## LOW
 
-### Баг: «Нападение» на NPC с нулевым здоровьем создаёт бой, который никогда не завершается
+### ~~Баг: «Нападение» на NPC с нулевым здоровьем создаёт бой, который никогда не завершается~~ DONE (FEAT-200, 2026-11-04, дубль записи выше: бой против NPC с `current_health <= 0` теперь 409, оживление поднимает HP)
 **Сервис:** battle-service (+ character-attributes-service: данные NPC)
 **Файл:** `services/battle-service/app/main.py` (`POST /battles/` для `pvp_attack`, `_finalize_battle`)
 **Обнаружено:** FEAT-197 (Reviewer, Review #1, 2026-11-04)
@@ -875,7 +894,7 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 (финализация не вызывается, NPC не умирает). Нужно либо не давать начать бой с целью без HP (или поднимать HP при
 `npc_status → alive`), либо финализировать бой, если сторона повержена на старте. Не связано с FEAT-197.
 
-### Баг: прямая ссылка на админ-карточку персонажа открывается пустой
+### ~~Баг: прямая ссылка на админ-карточку персонажа открывается пустой~~ DONE (FEAT-200, 2026-11-04, дубль записи выше)
 **Сервис:** frontend
 **Файл:** `src/components/Admin/CharactersPage/AdminCharacterDetailPage.tsx` (эффект загрузки)
 **Обнаружено:** FEAT-197 (Reviewer, Review #1, 2026-11-04)

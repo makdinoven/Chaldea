@@ -230,6 +230,7 @@ class RegionBase(BaseModel):
     map_image_url: str
     image_url: str
     entrance_location_id: Optional[int] = None
+    jail_location_id: Optional[int] = None  # FEAT-198
     leader_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -250,6 +251,7 @@ class RegionUpdate(RecommendedLevelOverride):
     description: Optional[str] = None
     country_id: Optional[int] = None
     entrance_location_id: Optional[int] = None
+    jail_location_id: Optional[int] = None  # FEAT-198: must belong to this region; null = no jail
     leader_id: Optional[int] = None
     x: Optional[int] = None
     y: Optional[int] = None
@@ -264,6 +266,7 @@ class RegionUpdateResponse(BaseModel):
     map_image_url: Optional[str] = None
     image_url: Optional[str] = None
     entrance_location_id: Optional[int] = None
+    jail_location_id: Optional[int] = None  # FEAT-198
     leader_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -279,6 +282,7 @@ class RegionRead(BaseModel):
     description: str
     country_id: int
     entrance_location_id: Optional[int] = None
+    jail_location_id: Optional[int] = None  # FEAT-198
     leader_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -371,6 +375,8 @@ class PostResponse(BaseModel):
     location_id: int
     content: str
     created_at: datetime
+    # FEAT-198: the guard encounter created by this move (move_and_post / quick_move only)
+    law_encounter: Optional[dict] = None
 
     class Config:
         orm_mode = True
@@ -1032,6 +1038,8 @@ class DialogueNodeResponse(BaseModel):
 
 class DialogueChooseRequest(BaseModel):
     option_id: int
+    # FEAT-198: optional (backwards compatible); when sent, ownership + activity lock are checked
+    character_id: Optional[int] = None
 
 
 # -------------------------------
@@ -1203,6 +1211,23 @@ def validate_tier_code(code: Optional[str]) -> Optional[str]:
     return code
 
 
+# FEAT-199: fame for completing a quest (NULL = the default, 0 = none)
+FAME_REWARD_LIMIT = 1000
+
+
+def validate_fame_tier_code(code: Optional[str]) -> Optional[str]:
+    """'' / None -> None (no gate); one of the 5 fixed fame codes -> itself; else a Russian ValueError."""
+    import fame_read
+    if code is None:
+        return None
+    code = str(code).strip()
+    if not code:
+        return None
+    if code not in fame_read.FAME_TIER_CODES:
+        raise ValueError("Неизвестная ступень славы")
+    return code
+
+
 # -------------------------------
 #   QUEST SCHEMAS (Admin)
 # -------------------------------
@@ -1238,8 +1263,11 @@ class QuestCreate(BaseModel):
     objectives: List[QuestObjectiveCreate] = []
     reputation_reward: Optional[int] = Field(None, ge=-REPUTATION_REWARD_LIMIT, le=REPUTATION_REWARD_LIMIT)
     min_reputation_tier: Optional[str] = None
+    min_fame_tier: Optional[str] = None
+    fame_reward: Optional[int] = Field(None, ge=0, le=FAME_REWARD_LIMIT)
 
     _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(validate_tier_code)
+    _fame_tier = validator("min_fame_tier", pre=True, allow_reuse=True)(validate_fame_tier_code)
 
 class QuestUpdate(BaseModel):
     title: Optional[str] = None
@@ -1253,8 +1281,11 @@ class QuestUpdate(BaseModel):
     objectives: Optional[List[QuestObjectiveCreate]] = None
     reputation_reward: Optional[int] = Field(None, ge=-REPUTATION_REWARD_LIMIT, le=REPUTATION_REWARD_LIMIT)
     min_reputation_tier: Optional[str] = None
+    min_fame_tier: Optional[str] = None
+    fame_reward: Optional[int] = Field(None, ge=0, le=FAME_REWARD_LIMIT)
 
     _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(validate_tier_code)
+    _fame_tier = validator("min_fame_tier", pre=True, allow_reuse=True)(validate_fame_tier_code)
 
 class QuestRead(BaseModel):
     id: int
@@ -1270,6 +1301,8 @@ class QuestRead(BaseModel):
     created_at: Optional[datetime] = None
     reputation_reward: Optional[int] = None
     min_reputation_tier: Optional[str] = None
+    min_fame_tier: Optional[str] = None
+    fame_reward: Optional[int] = None
     objectives: List[QuestObjectiveRead] = []
 
     class Config:
@@ -1360,7 +1393,9 @@ class QuestAvailableRead(BaseModel):
     objectives: List[QuestObjectiveRead] = []
     player_status: str = 'available'  # available, active, completed
     min_reputation_tier: Optional[str] = None
+    min_fame_tier: Optional[str] = None
     # FEAT-197: «Нужна репутация: X» when the NPC or quest tier gate is not met (the quest cannot be taken)
+    # FEAT-199: «Нужна слава: X» when the fame gate is not met (the reputation reason takes precedence)
     locked_reason: Optional[str] = None
 
 

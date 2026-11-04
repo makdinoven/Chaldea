@@ -8,6 +8,7 @@ import random
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, and_, or_, func
 from sqlalchemy.exc import IntegrityError
+import activity_lock
 import econ_ledger
 import house_workshop
 import models
@@ -2871,6 +2872,8 @@ def deposit_to_auction_storage(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+    # FEAT-198: a jailed / guard-stopped / dungeon / unconscious character cannot trade at the auction
+    activity_lock.check_not_activity_locked(db, data.character_id)
 
     # 2. Check battle status
     if is_character_in_battle(db, data.character_id):
@@ -2983,6 +2986,8 @@ def create_auction_listing(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+    # FEAT-198: a jailed / guard-stopped / dungeon / unconscious character cannot trade at the auction
+    activity_lock.check_not_activity_locked(db, data.character_id)
 
     # 2. Check battle status
     if is_character_in_battle(db, data.character_id):
@@ -3091,6 +3096,8 @@ def place_bid(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+    # FEAT-198: a jailed / guard-stopped / dungeon / unconscious character cannot trade at the auction
+    activity_lock.check_not_activity_locked(db, data.character_id)
 
     # 2. Check battle status
     if is_character_in_battle(db, data.character_id):
@@ -3242,6 +3249,8 @@ def execute_buyout(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+    # FEAT-198: a jailed / guard-stopped / dungeon / unconscious character cannot trade at the auction
+    activity_lock.check_not_activity_locked(db, data.character_id)
 
     # 2. Check battle status
     if is_character_in_battle(db, data.character_id):
@@ -3613,6 +3622,8 @@ def claim_from_storage(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+    # FEAT-198: a jailed / guard-stopped / dungeon / unconscious character cannot trade at the auction
+    activity_lock.check_not_activity_locked(db, data.character_id)
 
     # 2. Check NPC auctioneer at location
     auctioneer = check_auctioneer_at_character_location(db, data.character_id)

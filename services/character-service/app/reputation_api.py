@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import database
+import renown_crud
 import reputation_crud
 import reputation_notify
 import schemas
@@ -198,6 +199,7 @@ def post_internal_apply(body: schemas.ReputationApplyIn, db: Session = Depends(g
     except IntegrityError:
         return {"applied": False, "duplicate": True, "skipped": None}
     reputation_notify.publish_tier_changes(result.tier_changes)
+    renown_crud.publish_fame_changes(result.fame_changes)          # FEAT-199
     return {"applied": result.applied, "duplicate": result.duplicate, "skipped": result.skipped}
 
 

@@ -18,6 +18,7 @@ import { useAppSelector } from '../../../../redux/store';
 import { selectPermissions } from '../../../../redux/slices/userSlice';
 import { hasPermission } from '../../../../utils/permissions';
 import { tierIndex } from '../../ReputationPage/useReputationRefs';
+import LawPanel from './LawPanel';
 
 interface ReputationTabProps {
   characterId: number;
@@ -59,7 +60,7 @@ const signed = (n: number): string => (n > 0 ? `+${n}` : String(n));
 
 const deltaClass = (n: number): string => (n > 0 ? 'text-green-400' : n < 0 ? 'text-site-red' : 'text-white/60');
 
-/** Admin character card «Репутация» (FEAT-197): numbers per region, manual edit with a reason, full journal. */
+/** Admin character card «Репутация» (FEAT-197): numbers per region, manual edit with a reason, full journal; FEAT-198 law panel. */
 const ReputationTab = ({ characterId }: ReputationTabProps) => {
   const canManage = hasPermission(useAppSelector(selectPermissions), 'reputation:manage');
 
@@ -435,6 +436,9 @@ const ReputationTab = ({ characterId }: ReputationTabProps) => {
           </div>
         )}
       </section>
+
+      {/* FEAT-198 law: wanted, guard encounter, jail, staff decisions */}
+      <LawPanel characterId={characterId} canManage={canManage} />
     </motion.div>
   );
 };

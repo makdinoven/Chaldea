@@ -926,6 +926,61 @@ CASES += [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# FEAT-198 law: a fine paid to the guards and a bail paid for a prisoner, character -> region
+# treasury of the encounter / jail region, taxed (10 % to the country, like the teleport fare)
+# ---------------------------------------------------------------------------
+
+# a runner checks == LAW_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES,
+# COMMENT_REQUIRED_OP_TYPES and the other fixed groups
+LAW_OP_TYPE_NAMES: Tuple[str, ...] = ("law_fine", "law_bail")
+
+CASES += [
+    # fine -> region treasury, 10 % tax to the country; one fine per encounter key
+    ContractCase(
+        name="law_fine_to_region_treasury_taxed_once_per_encounter",
+        steps=[_fund((C1, 1000)),
+               Step("law_fine", [Leg(C1, R10, 400)], {"location_id": 1000, "idempotency_key": "law_fine:12"}),
+               Step("law_fine", [Leg(C1, R10, 400)], {"location_id": 1000, "idempotency_key": "law_fine:12"},
+                    error="DuplicateOperation")],
+        expected_characters={1: 600},
+        # tax = floor(400 * 0.1) = 40
+        expected_accounts={("region_treasury", 10): 360, ("country_treasury", 1): 40},
+        expected_operations=2, expected_postings=3, expected_tax_legs=1,
+    ),
+    # not enough gold -> nothing moves; the forced fine takes what there is (A3)
+    ContractCase(
+        name="law_fine_insufficient_then_forced_partial_fine",
+        steps=[_fund((C1, 100)),
+               Step("law_fine", [Leg(C1, R10, 150)], {"idempotency_key": "law_fine:13"},
+                    error="InsufficientFunds"),
+               Step("law_fine", [Leg(C1, R10, 100)], {"idempotency_key": "law_fine_forced:13"})],
+        expected_characters={1: 0},
+        expected_accounts={("region_treasury", 10): 90, ("country_treasury", 1): 10},
+        expected_operations=2, expected_postings=3, expected_tax_legs=1,
+    ),
+    # bail by another character -> the jail region treasury; a second payer of the same term is refused
+    ContractCase(
+        name="law_bail_once_per_term_any_payer",
+        steps=[_fund((C2, 500), (C3, 500)),
+               Step("law_bail", [Leg(C2, R20, 300)], {"location_id": 1001, "idempotency_key": "law_bail:7"}),
+               Step("law_bail", [Leg(C3, R20, 300)], {"location_id": 1001, "idempotency_key": "law_bail:7"},
+                    error="DuplicateOperation")],
+        expected_characters={2: 200, 3: 500},
+        expected_accounts={("region_treasury", 20): 270, ("country_treasury", 2): 30},
+        expected_operations=2, expected_postings=4, expected_tax_legs=1,
+    ),
+    # law ops may never touch the money sources
+    ContractCase(
+        name="law_ops_never_touch_sources",
+        steps=[_fund((C1, 50)),
+               Step("law_fine", [Leg(EMISSION, R10, 5)], error="EconomyError"),
+               Step("law_bail", [Leg(C1, ADJUSTMENT, 5)], error="EconomyError")],
+        expected_characters={1: 50},
+        expected_operations=1, expected_postings=1,
+    ),
+]
+
 # location_id -> (region_id, country_id)
 RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] = [
     (1000, (10, 1)),      # via district

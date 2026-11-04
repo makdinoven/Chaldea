@@ -11,6 +11,7 @@ Lock order: ``character_reputation`` rows of ONE character, ascending ``region_i
 locks them after the ledger posting), so no cycle with the economy lock order is possible.
 """
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -22,8 +23,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import econ_ledger
+import law_core
 import models
+import renown_crud
 import reputation_core as rc
+import shadow_core as sc
 from economy_crud import EconomyApiError
 
 logger = logging.getLogger("character-service.reputation")
@@ -286,6 +290,7 @@ class ApplyResult:
     skipped: Optional[str] = None
     changes: List[RegionChange] = field(default_factory=list)
     tier_changes: List[TierChange] = field(default_factory=list)
+    fame_changes: list = field(default_factory=list)            # FEAT-199: renown_crud.RenownChange
 
     @property
     def applied(self) -> bool:
@@ -447,7 +452,36 @@ def apply_reputation(db: Session, *, character_id: int, region_id: int, action: 
                 character_id, user_id, rid, info.name if info else None, before.code, before.name, after.code,
                 after.name, rc.DIRECTION_UP if after.sort_order > before.sort_order else rc.DIRECTION_DOWN))
     db.flush()
+
+    # 8. FEAT-199 fame hook: an automatic (not staff) positive change of the ORIGIN region feeds fame
+    origin_applied = sum(c.applied_delta for c in result.changes if not c.is_echo)
+    if actor_user_id is None and origin_applied > 0:
+        gain = sc.fame_from_reputation(act.code, origin_applied, renown_crud.load_shadow_settings(db))
+        if gain > 0:
+            fame = renown_crud.add_fame(db, character_id=character_id, points=gain, source=sc.SOURCE_REPUTATION,
+                                        event_key=fame_rep_key(idem_key), now=now)
+            if fame.change is not None:
+                result.fame_changes.append(fame.change)
     return result
+
+
+FAME_REP_PREFIX = "fame:rep:"
+
+
+def fame_rep_key(idem_key: str) -> str:
+    """FEAT-200 (fix 8): fame event key of a reputation change. A plain prefix while it fits the column; a
+    longer one is hashed (sha1 of the whole reputation key) instead of truncated, so two distinct long keys
+    with a common head never collapse into one fame event."""
+    key = f"{FAME_REP_PREFIX}{idem_key}"
+    if len(key) <= MAX_EVENT_KEY:
+        return key
+    return f"{FAME_REP_PREFIX}sha1:{hashlib.sha1(idem_key.encode('utf-8')).hexdigest()}"
+
+
+def npc_kill_points(db: Session, npc: "models.Character") -> int:
+    """Kill weight of an NPC exactly as the kill reputation resolves it (override ?? role weight ?? '*').
+    FEAT-198 derives the crime weight from it (law_core.crime_weight)."""
+    return rc.kill_points(npc.reputation_kill_points, npc.npc_role, load_role_weights(db))
 
 
 def apply_npc_kill(db: Session, npc: "models.Character", *, battle_id: Optional[int],
@@ -461,26 +495,55 @@ def apply_npc_kill(db: Session, npc: "models.Character", *, battle_id: Optional[
     region_id = location_region(db, npc.current_location_id)
     if not region_id:
         return []
-    points = rc.kill_points(npc.reputation_kill_points, npc.npc_role, load_role_weights(db))
+    points = npc_kill_points(db, npc)
     if points == 0:
         return []
     ph, params = _in("k", ids)
     players = [int(r[0]) for r in db.execute(text(
         f"SELECT id FROM characters WHERE id IN ({ph}) AND is_npc = 0 ORDER BY id"), params).fetchall()]
-    stamp = str(int(battle_id)) if battle_id else f"t{now.strftime('%Y%m%d%H%M%S')}"
-    reason = f"Убит NPC «{npc.name}» (#{npc.id})" + (f" в бою #{battle_id}" if battle_id else "")
-    results = []
-    for killer_id in players:
-        results.append(apply_reputation(
-            db, character_id=killer_id, region_id=region_id, action=rc.ACTION_NPC_KILL,
-            idem_key=f"npc_kill:{npc.id}:{stamp}:{killer_id}", delta=points, reason=reason, now=now))
-    return results
+    stamp = kill_stamp(battle_id, now)
+    return [apply_npc_kill_for(db, npc, killer_id, region_id, points, stamp, battle_id=battle_id, now=now)
+            for killer_id in players]
+
+
+def kill_stamp(battle_id: Optional[int], now: datetime) -> str:
+    """The event stamp of a kill: the battle id, or the time when there is no battle."""
+    return str(int(battle_id)) if battle_id else f"t{now.strftime('%Y%m%d%H%M%S')}"
+
+
+def npc_kill_key(npc_id: int, stamp: str, killer_id: int) -> str:
+    return f"npc_kill:{int(npc_id)}:{stamp}:{int(killer_id)}"
+
+
+def npc_kill_reason(npc: "models.Character", battle_id: Optional[int]) -> str:
+    # FEAT-200 (fix 4): a guard is knocked out, never killed (FEAT-198) — the journal says so
+    if (getattr(npc, "npc_role", None) or "") == law_core.GUARD_ROLE:
+        head = f"Повержен стражник «{npc.name}» (#{npc.id})"
+    else:
+        head = f"Убит NPC «{npc.name}» (#{npc.id})"
+    return head + (f" в бою #{battle_id}" if battle_id else "")
+
+
+def apply_npc_kill_for(db: Session, npc: "models.Character", killer_id: int, region_id: int, points: int,
+                       stamp: str, *, battle_id: Optional[int], now: datetime) -> ApplyResult:
+    """The kill reputation of ONE player (FEAT-199: also used by the witnessed path of ``shadow_crud``)."""
+    return apply_reputation(db, character_id=killer_id, region_id=region_id, action=rc.ACTION_NPC_KILL,
+                            idem_key=npc_kill_key(npc.id, stamp, killer_id), delta=points,
+                            reason=npc_kill_reason(npc, battle_id), now=now)
 
 
 def tier_changes_of(results: Iterable[ApplyResult]) -> List[TierChange]:
     out: List[TierChange] = []
     for r in results:
         out.extend(r.tier_changes)
+    return out
+
+
+def fame_changes_of(results: Iterable[ApplyResult]) -> list:
+    """FEAT-199: the fame tier changes of the results (publish with ``renown_crud.publish_fame_changes``)."""
+    out: list = []
+    for r in results:
+        out.extend(getattr(r, "fame_changes", None) or ())
     return out
 
 

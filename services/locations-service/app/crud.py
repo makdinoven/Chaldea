@@ -20,6 +20,7 @@ from config import settings
 import econ_core
 import econ_ledger
 import reputation_read
+import fame_read
 from econ_ledger import AccountRef, InsufficientFunds, Leg
 
 
@@ -520,6 +521,17 @@ async def create_new_region(session: AsyncSession, data) -> Region:
     await session.refresh(new_region)
     return new_region
 
+REGION_JAIL_WRONG_REGION = "Локация тюрьмы должна находиться в этом крае"
+
+
+async def validate_region_jail_location(session: AsyncSession, region_id: int, location_id: int) -> None:
+    """FEAT-198 §3.6: 400 unless the location exists and resolves (district -> region, parents
+    included) to `region_id` — the same resolution the economy and reputation use."""
+    resolved_region, _country = await econ_ledger.resolve_location(session, int(location_id))
+    if resolved_region is None or int(resolved_region) != int(region_id):
+        raise HTTPException(status_code=400, detail=REGION_JAIL_WRONG_REGION)
+
+
 async def update_region(session: AsyncSession, region_id: int, data) -> Region:
     result = await session.execute(
         select(Region).where(Region.id == region_id)
@@ -527,8 +539,12 @@ async def update_region(session: AsyncSession, region_id: int, data) -> Region:
     db_region = result.scalars().first()
     if not db_region:
         raise HTTPException(status_code=404, detail="Регион не найден")
+    changes = data.dict(exclude_unset=True)
+    # FEAT-198: the jail must be a location of THIS region (null = the region has no jail)
+    if changes.get("jail_location_id") is not None:
+        await validate_region_jail_location(session, region_id, changes["jail_location_id"])
     # Обновляем только те поля, которые пришли в запросе
-    for field, value in data.dict(exclude_unset=True).items():
+    for field, value in changes.items():
         setattr(db_region, field, value)
 
     try:
@@ -767,6 +783,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "map_image_url": region.map_image_url,
         # Возвращаем объект локации вместо простого id
         "entrance_location": entrance_location,
+        "jail_location_id": getattr(region, "jail_location_id", None),  # FEAT-198
         "leader_id": region.leader_id,
         "x": region.x,
         "y": region.y,
@@ -2071,6 +2088,7 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
             "description": region.description,
             "country_id": region.country_id,
             "entrance_location_id": region.entrance_location_id,
+            "jail_location_id": getattr(region, "jail_location_id", None),  # FEAT-198
             "leader_id": region.leader_id,
             "x": region.x,
             "y": region.y,
@@ -5056,6 +5074,8 @@ async def create_quest(session: AsyncSession, data: dict) -> Quest:
         is_active=data.get("is_active", True),
         reputation_reward=data.get("reputation_reward"),
         min_reputation_tier=data.get("min_reputation_tier"),
+        min_fame_tier=data.get("min_fame_tier"),
+        fame_reward=data.get("fame_reward"),
     )
     session.add(quest)
     await session.flush()
@@ -5141,6 +5161,11 @@ async def update_quest(session: AsyncSession, quest_id: int, data: dict) -> Opti
         quest.reputation_reward = data["reputation_reward"]
     if "min_reputation_tier" in data:
         quest.min_reputation_tier = data["min_reputation_tier"]
+    # FEAT-199: same nullable semantics (null clears the fame gate / the fame override)
+    if "min_fame_tier" in data:
+        quest.min_fame_tier = data["min_fame_tier"]
+    if "fame_reward" in data:
+        quest.fame_reward = data["fame_reward"]
 
     # Replace objectives if provided
     if "objectives" in data and data["objectives"] is not None:
@@ -5237,6 +5262,8 @@ async def get_available_quests_for_npc(
     if all_quests:
         gates = await reputation_read.quest_gates(
             session, character_id, npc_id, [q.min_reputation_tier for q in all_quests])
+    # FEAT-199: fame gate — read only when some quest of the list has one
+    fame_gates = await fame_read.quest_fame_gates(session, character_id, [q.min_fame_tier for q in all_quests])
 
     available = []
     for q in all_quests:
@@ -5261,7 +5288,10 @@ async def get_available_quests_for_npc(
             ],
             "player_status": status,
             "min_reputation_tier": q.min_reputation_tier,
-            "locked_reason": gates.reason(q.min_reputation_tier) if status == 'available' else None,
+            "min_fame_tier": q.min_fame_tier,
+            "locked_reason": (
+                gates.reason(q.min_reputation_tier) or fame_gates.reason(q.min_fame_tier)
+            ) if status == 'available' else None,
         })
 
     return available
@@ -5290,6 +5320,10 @@ async def accept_quest(
     # FEAT-197: NPC tier gate and the quest's own gate, region of the quest giver (403)
     gates = await reputation_read.quest_gates(session, character_id, quest.npc_id, [quest.min_reputation_tier])
     locked = gates.reason(quest.min_reputation_tier)
+    if not locked:
+        # FEAT-199: the quest's fame gate (403, same as the reputation gate)
+        fame_gates = await fame_read.quest_fame_gates(session, character_id, [quest.min_fame_tier])
+        locked = fame_gates.reason(quest.min_fame_tier)
     if locked:
         raise HTTPException(status_code=reputation_read.GATE_STATUS, detail=locked)
 

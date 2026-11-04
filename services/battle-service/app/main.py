@@ -11,7 +11,7 @@ from sqlalchemy import text, select
 
 from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle, get_active_battle_for_character
 from schemas import (
-    BattleCreated, BattleCreate, DungeonBattleCreate, ActionResponse, ActionRequest, LogResponse,
+    BattleCreated, BattleCreate, DungeonBattleCreate, GuardBattleCreate, ActionResponse, ActionRequest, LogResponse,
     BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
     PackAttack, PartyPackAttack,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
@@ -905,20 +905,50 @@ async def _ensure_not_activity_locked(
     raise HTTPException(409, activity_lock.lock_message(lock, subject=subject))
 
 
+NPC_UNAVAILABLE = "Этот персонаж сейчас недоступен для боя"
+
+
+async def _ensure_npc_available(db, character_id: int) -> None:
+    """FEAT-198 §3.6: 409 when the participant is an NPC that is dead or knocked out
+    (`unconscious_until` in the future). Players and unknown ids pass (checked elsewhere)."""
+    row = (await db.execute(
+        text("SELECT is_npc, npc_status, unconscious_until FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )).fetchone()
+    if not row or row[0] not in (1, True):
+        return
+    npc_status = row[1] if len(row) > 1 else None
+    unconscious_until = row[2] if len(row) > 2 else None
+    if npc_status == "dead" or _is_ko(unconscious_until):
+        raise HTTPException(409, NPC_UNAVAILABLE)
+    # FEAT-200 (fix 1): an NPC with no health left (e.g. revived without a heal) is not a valid target —
+    # a battle against it would end on the first hit. No attributes row = no data, let it pass.
+    hp_row = (await db.execute(
+        text("SELECT current_health FROM character_attributes WHERE character_id = :cid"),
+        {"cid": character_id},
+    )).fetchone()
+    hp = hp_row[0] if hp_row else None
+    if isinstance(hp, (int, float)) and not isinstance(hp, bool) and hp <= 0:
+        raise HTTPException(409, NPC_UNAVAILABLE)
+
+
 async def _is_activity_locked(db, character_id: int) -> bool:
     return (await activity_lock.get_activity_lock(db, character_id))["locked"]
 
 
-async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dungeon_session_id=None):
+async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dungeon_session_id=None,
+                          law_encounter_id=None):
     """Create the Battle + participants, init Redis state, register NPCs.
 
     Shared by the public create endpoint and the party-start flow. Validation
     (ownership, location, team sizes) is the caller's responsibility.
     Returns (battle_obj, participant_objs, first_actor_pid, deadline).
     """
+    # FEAT-198: the guard-battle tag is passed only when set (older call shapes stay unchanged).
+    tag = {"law_encounter_id": law_encounter_id} if law_encounter_id is not None else {}
     battle_obj, participant_objs = await create_battle(
         db, player_ids, teams, battle_type=battle_type, location_id=location_id,
-        dungeon_session_id=dungeon_session_id,
+        dungeon_session_id=dungeon_session_id, **tag,
     )
 
     first_actor_pid = participant_objs[0].id
@@ -1029,6 +1059,9 @@ async def create_battle_endpoint(
         existing_battle = await get_active_battle_for_character(db, cid)
         if existing_battle:
             raise HTTPException(400, "Персонаж уже в бою")
+    # FEAT-198: a dead or knocked-out NPC (e.g. a guard KO'd for 6 h) cannot be fought.
+    for cid in player_ids:
+        await _ensure_npc_available(db, cid)
     # FEAT-175: no battles outside the dungeon flow for locked characters
     # (dungeon battles go through POST /battles/internal/dungeon).
     for cid in player_ids:
@@ -1112,6 +1145,8 @@ async def _validate_location_mob(db, mob_character_id: int, location_id: int):
         raise HTTPException(400, "Это не моб")
     if row[0] != location_id:
         raise HTTPException(400, "Моб находится в другой локации")
+    # FEAT-198: a dead or knocked-out NPC (e.g. a defeated guard) is not a target.
+    await _ensure_npc_available(db, mob_character_id)
 
 
 @router.post("/mob-attack", response_model=BattleCreated, status_code=201)
@@ -1201,6 +1236,7 @@ async def party_mob_attack(
         raise HTTPException(400, "Групповая атака доступна только по мобам")
     if mob_row[0] != loc:
         raise HTTPException(400, "Моб находится в другой локации")
+    await _ensure_npc_available(db, req.mob_character_id)  # FEAT-198: no dead / knocked-out targets
 
     # Exclude squadmates who are busy — actively gathering (FEAT-144 Ф3) or
     # already in a battle. The fight proceeds with whoever is free; a gatherer
@@ -1636,6 +1672,140 @@ async def internal_create_dungeon_battle(
     )
 
 
+GUARD_ROLE = "guard"
+GUARD_BATTLE_TYPE = "pvp_attack"   # FEAT-198 L6: the «Нападение» type, so no battle_type ENUM change
+PLAYER_TEAM = 1
+GUARD_TEAM = 2
+GUARD_NOT_FOUND = "Стражник не найден"
+GUARD_UNAVAILABLE = "Стражник сейчас недоступен для боя"
+GUARD_BUSY = "Стражник сейчас занят — попробуйте чуть позже"
+GUARD_ELSEWHERE = "Стражник находится в другой локации"
+NOT_THIS_ENCOUNTER = "Персонажа не останавливала эта стража"
+
+
+def _is_ko(unconscious_until) -> bool:
+    until = activity_lock._as_naive_utc(unconscious_until)
+    return until is not None and until > datetime.utcnow()
+
+
+@router.post(
+    "/internal/guard",
+    response_model=BattleCreated,
+    status_code=201,
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_create_guard_battle(
+    body: GuardBattleCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-198 §3.6: a law-encounter fight (character-service only).
+
+    Team 1 = the player, who must hold the `law_encounter` activity lock with exactly this
+    encounter id (that is the lock exemption, like the dungeon one) and be free of battles.
+    Team 2 = the guard: an NPC with role `guard`, alive, not knocked out, not in a battle, at
+    the player's location. The battle is a `pvp_attack` tagged with `law_encounter_id`, so its
+    end is reported to character-service (`_notify_law_battle_end`).
+    """
+    cid = body.character_id
+    if await get_active_battle_for_character(db, cid):
+        raise HTTPException(409, "Персонаж уже в бою")
+    lock = await activity_lock.get_activity_lock(db, cid)
+    if not (
+        lock["reason"] == activity_lock.REASON_LAW_ENCOUNTER
+        and lock.get("law_encounter_id") == body.law_encounter_id
+    ):
+        message = NOT_THIS_ENCOUNTER
+        if lock["locked"] and lock["reason"] != activity_lock.REASON_LAW_ENCOUNTER:
+            message = activity_lock.lock_message(lock)  # jailed / dungeon / ... win over the exemption
+        raise HTTPException(409, message)
+
+    player_row = (await db.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid"),
+        {"cid": cid},
+    )).fetchone()
+    if not player_row:
+        raise HTTPException(404, "Персонаж не найден")
+    location_id = player_row[0]
+
+    guard_row = (await db.execute(
+        text(
+            "SELECT is_npc, npc_role, npc_status, unconscious_until, current_location_id "
+            "FROM characters WHERE id = :gid"
+        ),
+        {"gid": body.guard_npc_id},
+    )).fetchone()
+    if not guard_row or not guard_row[0] or guard_row[1] != GUARD_ROLE:
+        raise HTTPException(409, GUARD_NOT_FOUND)
+    if guard_row[2] == "dead" or _is_ko(guard_row[3]):
+        raise HTTPException(409, GUARD_UNAVAILABLE)
+    if location_id is None or guard_row[4] != location_id:
+        raise HTTPException(409, GUARD_ELSEWHERE)
+    if await get_active_battle_for_character(db, body.guard_npc_id):
+        raise HTTPException(409, GUARD_BUSY)
+    if await _is_activity_locked(db, body.guard_npc_id):
+        raise HTTPException(409, GUARD_UNAVAILABLE)
+
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, [cid, body.guard_npc_id], [PLAYER_TEAM, GUARD_TEAM], GUARD_BATTLE_TYPE, location_id,
+        law_encounter_id=body.law_encounter_id,
+    )
+    return BattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+    )
+
+
+async def _get_law_encounter_id(db, battle_id: int):
+    row = (await db.execute(
+        text("SELECT law_encounter_id FROM battles WHERE id = :bid"),
+        {"bid": battle_id},
+    )).fetchone()
+    value = row[0] if row else None
+    return value if isinstance(value, int) else None
+
+
+async def _post_law_callback(payload: dict) -> None:
+    """Fire-and-forget POST to character-service with 3 retries. A miss is not fatal: the law
+    scheduler pass polls GET /battles/internal/{id}/result for `fighting` encounters."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/law/battle-result"
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=payload, headers=_internal_token_headers())
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Law callback for battle %s answered %s: %s",
+                        payload.get("battle_id"), resp.status_code, resp.text[:200],
+                    )
+                return
+        except httpx.RequestError as e:
+            logger.warning("Law callback for battle %s failed: %s", payload.get("battle_id"), e)
+        await asyncio.sleep(1 + attempt * 2)
+    logger.error("Law callback for battle %s gave up after retries", payload.get("battle_id"))
+
+
+async def _notify_law_battle_end(db, battle_id: int, winner_team, aborted: bool = False) -> None:
+    """FEAT-198: if this is a guard battle, report the outcome to character-service.
+    No-op for every battle without the `law_encounter_id` tag."""
+    try:
+        encounter_id = await _get_law_encounter_id(db, battle_id)
+    except Exception as e:  # never break the battle ending over the callback
+        logger.error("Law callback lookup failed for battle %s: %s", battle_id, e)
+        return
+    if encounter_id is None:
+        return
+    payload = {
+        "battle_id": battle_id,
+        "law_encounter_id": encounter_id,
+        "winner_team": winner_team,
+        "aborted": aborted,
+    }
+    asyncio.create_task(_post_law_callback(payload))
+
+
 async def _get_dungeon_session_id(db, battle_id: int):
     row = (await db.execute(
         text("SELECT dungeon_session_id FROM battles WHERE id = :bid"),
@@ -1717,10 +1887,13 @@ async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_
             result_val = result.value if hasattr(result, "value") else result
             if result_val == "victory":
                 winner_team = team
+    law_encounter_id = getattr(battle, "law_encounter_id", None)
+    law_encounter_id = law_encounter_id if isinstance(law_encounter_id, int) else None
     return {
         "battle_id": battle_id,
         "status": status,
         "dungeon_session_id": battle.dungeon_session_id,
+        "law_encounter_id": law_encounter_id,  # FEAT-198 (additive)
         "winner_team": winner_team,
         # Finished without history = force-finished (admin / abandonment).
         "aborted": status in ("finished", "forfeit") and not has_history,
@@ -2584,6 +2757,10 @@ async def _finalize_battle(
                             )
                 except Exception as e:
                     logger.error(f"NPC death: ошибка проверки NPC {defeated_char_id}: {e}")
+
+    # FEAT-198: a guard battle reports its outcome to character-service AFTER the NPC-death loop
+    # (the guard KO, reputation and wanted have already been applied through npc-status).
+    await _notify_law_battle_end(db_session, battle_id, winner_team)
 
     # Save battle history to MySQL
     try:
@@ -5475,6 +5652,8 @@ async def _force_finish_battle(
 
     # FEAT-175: an aborted dungeon battle must not leave the run stuck.
     await _notify_dungeon_battle_end(db, battle_id, None, state, aborted=True)
+    # FEAT-198: an aborted guard battle sends the encounter back to the player's choice.
+    await _notify_law_battle_end(db, battle_id, None, aborted=True)
 
     logger.info("Battle %s force-finished (reason=%s)", battle_id, reason)
 

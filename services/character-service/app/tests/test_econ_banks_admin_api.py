@@ -445,7 +445,8 @@ def test_region_card_has_bank_in_both_shapes(api, engine):
     client = TestClient(app)
     hidden = client.get("/characters/economy/regions/40/card").json()
     assert hidden == {"region_id": 40, "participating": False, "has_bank": True, "has_mint": False,
-                      "events": [], "caravans": {"incoming": [], "outgoing": []}, "guild_wants": []}
+                      "events": [], "caravans": {"incoming": [], "outgoing": []}, "guild_wants": [],
+                      "suspicion": None}
     assert client.get("/characters/economy/regions/30/card").json()["has_bank"] is False
     assert client.get("/characters/economy/regions/0/card").json()["has_bank"] is False
 

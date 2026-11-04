@@ -970,7 +970,7 @@ def test_summary_population_purses(world, engine):
 CARD_KEYS = {"region_id", "participating", "updated_at", "food", "treasury", "stability", "prosperity",
              "price_level", "shortages", "surpluses", "phrases", "groups", "has_bank",
              "events", "has_mint", "caravans", "guild_wants",
-             "classes"}  # FEAT-184 has_bank, FEAT-187 events, FEAT-191 has_mint, FEAT-192, FEAT-193, FEAT-194 classes
+             "classes", "suspicion"}  # FEAT-199 suspicion; FEAT-184 has_bank, FEAT-187 events, FEAT-191 has_mint, FEAT-192, FEAT-193, FEAT-194 classes
 
 
 def _numbers(value, path=""):
@@ -1022,7 +1022,7 @@ def test_card_participating_false(world):
         assert resp.status_code == 200
         assert resp.json() == {"region_id": region_id, "participating": False, "has_bank": False,
                                "has_mint": False, "events": [], "caravans": {"incoming": [], "outgoing": []},
-                               "guild_wants": []}
+                               "guild_wants": [], "suspicion": None}
     assert client.get("/characters/economy/regions/abc/card").status_code == 422
 
 

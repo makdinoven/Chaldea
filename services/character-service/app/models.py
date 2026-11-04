@@ -101,6 +101,12 @@ class Character(Base):
     # NPC's region for ANY interaction; and the per-NPC kill weight overriding the role weight. NULL = none.
     reputation_min_tier = Column(String(20), nullable=True)
     reputation_kill_points = Column(Integer, nullable=True)
+    # FEAT-198 law (see law_crud.py / activity_lock.py): in jail while `jailed_until` is in the future (lazy, like
+    # `unconscious_until`); `law_encounter_id` is set while the guards wait for the player's choice. On a guard NPC
+    # `unconscious_until` is its knock-out after a lost fight (guards never die).
+    jailed_until = Column(DateTime, nullable=True, default=None)
+    jail_region_id = Column(Integer, nullable=True, default=None)
+    law_encounter_id = Column(Integer, nullable=True, default=None)
 
     # character_titles.character_id входит в составной первичный ключ, поэтому
     # ORM по умолчанию пытается занулить его при удалении персонажа и падает с
@@ -1193,6 +1199,303 @@ class ReputationNpcRoleWeight(Base):
 
     role = Column(String(50), primary_key=True)
     points = Column(Integer, nullable=False)
+
+
+# --------------------------------------------------------------------------- FEAT-198 law (migration 039)
+# Writes go through law_crud only. No FK to Regions / Locations (owned by locations-service).
+
+class CharacterWanted(Base):
+    """Wanted value per (character, region); no row = 0. ``decay_at`` anchors the linear decay (NULL at 0)."""
+
+    __tablename__ = "character_wanted"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_char_wanted_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=False)
+    value = Column(Integer, nullable=False, default=0, server_default="0")
+    decay_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "region_id", name="uq_char_wanted"),
+        Index("ix_char_wanted_region", "region_id"),
+    )
+
+
+class LawSettings(Base):
+    """Single row id=1."""
+
+    __tablename__ = "law_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    max_wanted = Column(Integer, nullable=False, default=1000, server_default="1000")
+    decay_per_day = Column(Numeric(8, 2), nullable=False, default=50, server_default="50.00")
+    heavy_wanted = Column(Integer, nullable=False, default=600, server_default="600")
+    outlaw_min_level = Column(String(20), nullable=False, default="criminal", server_default="criminal")
+    encounter_timeout_hours = Column(Integer, nullable=False, default=24, server_default="24")
+    guard_ko_hours = Column(Integer, nullable=False, default=6, server_default="6")
+    flee_base_pct = Column(Numeric(5, 2), nullable=False, default=20, server_default="20.00")
+    flee_per_point_pct = Column(Numeric(6, 3), nullable=False, default=0.25, server_default="0.250")
+    flee_min_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
+    flee_max_pct = Column(Numeric(5, 2), nullable=False, default=85, server_default="85.00")
+    escape_base_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
+    escape_per_point_pct = Column(Numeric(6, 3), nullable=False, default=0.15, server_default="0.150")
+    escape_min_pct = Column(Numeric(5, 2), nullable=False, default=2, server_default="2.00")
+    escape_max_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
+    escape_cooldown_hours = Column(Integer, nullable=False, default=6, server_default="6")
+    escape_fail_extend_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
+    max_remaining_jail_hours = Column(Integer, nullable=False, default=168, server_default="168")
+    bail_multiplier = Column(Numeric(5, 2), nullable=False, default=2, server_default="2.00")
+    pass_last_run_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class LawLevel(Base):
+    """Exactly 5 rows with the fixed codes of law_core.LEVEL_CODES."""
+
+    __tablename__ = "law_levels"
+
+    code = Column(String(20), primary_key=True)
+    sort_order = Column(Integer, nullable=False, unique=True)
+    name = Column(String(60), nullable=False)
+    min_value = Column(Integer, nullable=False)
+    fine = Column(Integer, nullable=False)
+    jail_hours = Column(Integer, nullable=False)
+
+
+class LawCrime(Base):
+    """A crime event (stage 2b inserts a witness step between ``reported`` and the wanted change)."""
+
+    __tablename__ = "law_crimes"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    event_key = Column(String(191), nullable=False)
+    crime_type = Column(String(30), nullable=False)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_law_crime_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=False)
+    location_id = Column(Integer, nullable=True)
+    victim_character_id = Column(Integer, nullable=True)
+    battle_id = Column(Integer, nullable=True)
+    wanted_points = Column(Integer, nullable=False)
+    wanted_applied = Column(Integer, nullable=False, default=0, server_default="0")
+    status = Column(String(20), nullable=False)             # reported | unwitnessed | masked | closed (FEAT-199)
+    created_at = Column(DateTime, nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+    # FEAT-199 (migration 040): the snapshot a deferred (unwitnessed / masked) crime applies on reveal
+    reputation_delta = Column(Integer, nullable=True)
+    reputation_key = Column(String(191), nullable=True)     # EXACT apply_reputation idem key
+    reputation_reason = Column(String(255), nullable=True)
+    wanted_floor = Column(Integer, nullable=True)
+    masked = Column(Boolean, nullable=False, default=False, server_default="0")
+    witness_chance_pct = Column(Numeric(5, 2), nullable=True)
+    witness_roll_pct = Column(Numeric(5, 2), nullable=True)
+    reveal_until = Column(DateTime, nullable=True)
+    next_roll_at = Column(DateTime, nullable=True)
+    reveal_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    revealed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_law_crime_key"),
+        Index("ix_law_crime_char", "character_id", "created_at"),
+        Index("ix_law_crime_status", "status"),
+        Index("ix_law_crime_reveal", "status", "next_roll_at"),
+    )
+
+
+class LawEncounter(Base):
+    __tablename__ = "law_encounters"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_law_enc_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=False)
+    location_id = Column(Integer, nullable=False)
+    from_location_id = Column(Integer, nullable=True)       # where the character came from (a flee goes back there)
+    guard_npc_id = Column(Integer, nullable=True)
+    is_outlaw = Column(Boolean, nullable=False)
+    has_jail = Column(Boolean, nullable=False)
+    level_code = Column(String(20), nullable=False)
+    wanted_value = Column(Integer, nullable=False)
+    fine = Column(Integer, nullable=False)
+    jail_hours = Column(Integer, nullable=False)
+    flee_used = Column(Boolean, nullable=False, default=False, server_default="0")
+    status = Column(String(20), nullable=False)
+    battle_id = Column(Integer, nullable=True)
+    source = Column(String(20), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    fight_started_at = Column(DateTime, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    cooldown_until = Column(DateTime, nullable=True)        # after a successful flee: no new stop here until then
+
+    __table_args__ = (
+        Index("ix_law_enc_char", "character_id", "created_at"),
+        Index("ix_law_enc_status", "status", "expires_at"),
+        Index("ix_law_enc_battle", "battle_id"),
+        Index("ix_law_enc_cooldown", "character_id", "location_id", "cooldown_until"),
+    )
+
+
+class LawJailTerm(Base):
+    __tablename__ = "law_jail_terms"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_law_jail_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=False)
+    location_id = Column(Integer, nullable=False)
+    encounter_id = Column(Integer, nullable=True)
+    level_code = Column(String(20), nullable=False)
+    fine_base = Column(Integer, nullable=False)
+    bail_price = Column(Integer, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    until = Column(DateTime, nullable=False)
+    status = Column(String(20), nullable=False)
+    escape_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_escape_at = Column(DateTime, nullable=True)
+    bailed_by_character_id = Column(Integer, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    notified = Column(Boolean, nullable=False, default=False, server_default="0")
+
+    __table_args__ = (
+        Index("ix_law_jail_char", "character_id", "status"),
+        Index("ix_law_jail_status", "status", "until"),
+    )
+
+
+class LawLog(Base):
+    __tablename__ = "law_log"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    event_key = Column(String(191), nullable=False)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_law_log_character", ondelete="CASCADE"),
+                          nullable=False)
+    region_id = Column(Integer, nullable=True)
+    action = Column(String(30), nullable=False)
+    wanted_before = Column(Integer, nullable=True)
+    wanted_after = Column(Integer, nullable=True)
+    amount = Column(Integer, nullable=True)
+    chance_pct = Column(Numeric(5, 2), nullable=True)
+    roll_pct = Column(Numeric(5, 2), nullable=True)
+    ref_id = Column(Integer, nullable=True)
+    reason = Column(String(500), nullable=True)
+    actor_user_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_law_log_key"),
+        Index("ix_law_log_char", "character_id", "created_at"),
+    )
+
+
+# --------------------------------------------------------------------------- FEAT-199 shadow / renown (migration 040)
+# Writes go through shadow_crud / renown_crud only.
+
+class ShadowSettings(Base):
+    """Single row id=1 (witness / reveal / suspicion / infamy / fame weights)."""
+
+    __tablename__ = "shadow_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    witness_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    witness_base_safe_pct = Column(Numeric(5, 2), nullable=False, default=70, server_default="70.00")
+    witness_base_farm_pct = Column(Numeric(5, 2), nullable=False, default=45, server_default="45.00")
+    witness_base_dangerous_pct = Column(Numeric(5, 2), nullable=False, default=25, server_default="25.00")
+    witness_base_dungeon_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
+    witness_base_default_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
+    witness_stealth_per_point_pct = Column(Numeric(6, 3), nullable=False, default=0.1, server_default="0.100")
+    witness_agent_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
+    witness_assassin_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
+    witness_trickster_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
+    witness_mask_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
+    witness_group_per_extra_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
+    witness_min_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
+    witness_max_pct = Column(Numeric(5, 2), nullable=False, default=95, server_default="95.00")
+    reveal_days = Column(Integer, nullable=False, default=3, server_default="3")
+    reveal_base_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
+    reveal_per_suspicion_pct = Column(Numeric(6, 3), nullable=False, default=0.4, server_default="0.400")
+    reveal_mask_factor_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
+    reveal_min_pct = Column(Numeric(5, 2), nullable=False, default=1, server_default="1.00")
+    reveal_max_pct = Column(Numeric(5, 2), nullable=False, default=90, server_default="90.00")
+    suspicion_max = Column(Integer, nullable=False, default=100, server_default="100")
+    suspicion_unwitnessed = Column(Integer, nullable=False, default=10, server_default="10")
+    suspicion_masked = Column(Integer, nullable=False, default=20, server_default="20")
+    suspicion_decay_per_day = Column(Numeric(8, 2), nullable=False, default=5, server_default="5.00")
+    suspicion_uneasy_at = Column(Integer, nullable=False, default=20, server_default="20")
+    suspicion_alarmed_at = Column(Integer, nullable=False, default=50, server_default="50")
+    suspicion_fear_at = Column(Integer, nullable=False, default=80, server_default="80")
+    infamy_ratio = Column(Numeric(6, 3), nullable=False, default=1, server_default="1.000")
+    infamy_min_gain = Column(Integer, nullable=False, default=10, server_default="10")
+    fame_quest_default = Column(Integer, nullable=False, default=5, server_default="5")
+    fame_rep_ratio = Column(Numeric(6, 3), nullable=False, default=0.5, server_default="0.500")
+    fame_guild_ratio = Column(Numeric(6, 3), nullable=False, default=0, server_default="0.000")
+    updated_at = Column(DateTime, nullable=False)
+
+
+class RegionSuspicion(Base):
+    """Suspicion per region (Regions.id, no FK); lazy linear decay from ``decay_at`` (NULL at 0)."""
+
+    __tablename__ = "region_suspicion"
+
+    region_id = Column(Integer, primary_key=True, autoincrement=False)
+    value = Column(Integer, nullable=False, default=0, server_default="0")
+    decay_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class CharacterRenown(Base):
+    """Fame (public as a tier) and infamy (owner + staff) of a character; no row = 0 / 0."""
+
+    __tablename__ = "character_renown"
+
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_char_renown_character", ondelete="CASCADE"),
+                          primary_key=True, autoincrement=False)
+    fame = Column(Integer, nullable=False, default=0, server_default="0")
+    infamy = Column(Integer, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False)
+
+
+class RenownTier(Base):
+    """Exactly 5 rows per scale with the fixed codes of shadow_core.FAME_CODES / INFAMY_CODES."""
+
+    __tablename__ = "renown_tiers"
+
+    scale = Column(String(10), primary_key=True)
+    code = Column(String(20), primary_key=True)
+    sort_order = Column(Integer, nullable=False)
+    name = Column(String(60), nullable=False)
+    min_value = Column(Integer, nullable=False)
+    witness_pct = Column(Numeric(5, 2), nullable=False, default=0, server_default="0.00")
+
+    __table_args__ = (
+        UniqueConstraint("scale", "sort_order", name="uq_renown_tier_order"),
+    )
+
+
+class RenownLog(Base):
+    __tablename__ = "renown_log"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    event_key = Column(String(191), nullable=False)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_renown_log_character", ondelete="CASCADE"),
+                          nullable=False)
+    scale = Column(String(10), nullable=False)
+    source = Column(String(30), nullable=False)
+    delta = Column(Integer, nullable=False)
+    value_after = Column(Integer, nullable=False)
+    tier_before = Column(String(20), nullable=False)
+    tier_after = Column(String(20), nullable=False)
+    ref_id = Column(BigInteger, nullable=True)
+    reason = Column(String(500), nullable=True)
+    actor_user_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_renown_log_key"),
+        Index("ix_renown_log_char", "character_id", "created_at"),
+    )
 
 
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
