@@ -387,6 +387,11 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## MEDIUM
 
+### ~~Баг: подтипы яда «Снижение характеристик» и «Снижение защит» в бою ничего не делают~~ DONE (2026-11-05)
+**Сервисы:** battle-service, autobattle-service, frontend (редактор навыков)
+**Было:** яд с этими подтипами накладывался, но `aggregate_modifiers` клал силу в ключи `stat_reduction` / `defense_reduction`, которые формулы не читают.
+**Исправлено:** `buffs._expand_poison_subtype` — «Снижение характеристик» работает как «Проклятие» (−сила, ловкость, интеллект, живучесть на величину яда, с производными), «Снижение защит» — как «Обледенение» (−все сопротивления на величину яда, %). Знак силы не важен. Оба подтипа снимаются очищением «ослабление характеристик» (stat_down); зеркало в `autobattle-service/app/strategy.py`. Тесты: `test_dodge_and_freshness.py::TestComplexModifiers`, `test_strategy_items.py`.
+
 ### ~~Баг: прокачка статов принимает отрицательные значения — очки можно перекладывать между статами~~ DONE (FEAT-201, 2026-11-04: `Field(0, ge=0)` на всех полях, тест `test_upgrade_negative_points.py`)
 **Сервис:** character-attributes-service
 **Файлы:** `services/character-attributes-service/app/schemas.py` (`StatsUpgradeRequest`), `app/main.py` (`upgrade_attributes`)

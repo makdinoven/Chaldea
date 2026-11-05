@@ -38,6 +38,7 @@ _REAL_decrement = buffs.decrement_durations
 _REAL_apply = buffs.apply_new_effects
 _REAL_tick = buffs.tick_periodic_effects
 _REAL_aggregate = buffs.aggregate_modifiers
+_REAL_is_stat_down = buffs._is_stat_down
 _REAL_control = buffs.evaluate_control
 _REAL_limit = buffs.first_cycle_limit_skills
 
@@ -210,6 +211,28 @@ class TestComplexModifiers:
         mods = _REAL_aggregate([_eff("Curse", "curse", 5)])
         for a in ("strength", "agility", "intelligence", "endurance"):
             assert mods[a] == -5
+
+    def test_stat_reduction_poison_debuffs_primary_attrs(self):
+        mods = _REAL_aggregate([_eff("Poison", "stat_reduction", 6)])
+        for a in ("strength", "agility", "intelligence", "endurance"):
+            assert mods[a] == -6
+        # Derived stats follow, as with Curse: agility → dodge.
+        assert mods["dodge"] < 0
+
+    def test_defense_reduction_poison_reduces_all_resist(self):
+        mods = _REAL_aggregate([_eff("Poison", "defense_reduction", -12)])
+        assert mods["percent_resist_all"] == -12
+
+    def test_periodic_and_paralysis_poison_are_not_modifiers(self):
+        assert _REAL_aggregate([_eff("Poison", "periodic_damage", 20)]) == {}
+        assert _REAL_aggregate([_eff("Poison", "paralysis", 1)]) == {}
+
+    def test_weakening_poisons_are_stat_down_for_cleanse(self):
+        # Other test files mock buffs.aggregate_modifiers; pin the real one.
+        with patch.object(buffs, "aggregate_modifiers", _REAL_aggregate):
+            assert _REAL_is_stat_down(_eff("Poison", "stat_reduction", 5))
+            assert _REAL_is_stat_down(_eff("Poison", "defense_reduction", 5))
+            assert not _REAL_is_stat_down(_eff("Poison", "periodic_damage", 5))
 
     def test_magnitude_sign_ignored_for_directional_effects(self):
         # Whether the author entered +20 or −20, ArmorBreak always reduces resist.

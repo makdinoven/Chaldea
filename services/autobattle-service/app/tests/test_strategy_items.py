@@ -251,6 +251,19 @@ class TestCleanseItems:
         ])
         assert _pick([self._antidote(selector="stat_down")], actor=actor) is None
 
+    def test_stat_down_selector_matches_a_weakening_poison(self):
+        for subtype in ("stat_reduction", "defense_reduction"):
+            actor = _actor(pid=1, active_effects=[
+                {"name": "Poison", "attribute": subtype, "magnitude": 5, "owner_id": 2},
+            ])
+            assert _pick([self._antidote(selector="stat_down")], actor=actor) == 10
+
+    def test_stat_down_selector_ignores_a_periodic_poison(self):
+        actor = _actor(pid=1, active_effects=[
+            {"name": "Poison", "attribute": "periodic_damage", "magnitude": 5, "owner_id": 2},
+        ])
+        assert _pick([self._antidote(selector="stat_down")], actor=actor) is None
+
     def test_stat_down_selector_matches_a_negative_magnitude(self):
         actor = _actor(pid=1, active_effects=[
             {"name": "Слабость", "attribute": "strength", "magnitude": -4, "owner_id": 1},

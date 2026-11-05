@@ -52,6 +52,7 @@ _PERIODIC_DAMAGE_NAMES = {"bleeding", "burn"}
 # поэтому их знак не зависит от magnitude
 _COMPLEX_NEGATIVE_NAMES = {"armorbreak", "freeze", "electrify", "daze", "wet", "curse"}
 _COMPLEX_POSITIVE_NAMES = {"holy"}
+_POISON_STAT_DOWN_SUBTYPES = {"stat_reduction", "defense_reduction"}
 _PARTIAL_CONTROL_NAMES = {"knockdown", "windburn"}
 _SKILL_TYPES           = {"attack", "defense", "support"}
 
@@ -92,6 +93,9 @@ def _is_stat_down(eff: dict) -> bool:
     name = _lower(eff.get("name"))
     if name in _COMPLEX_NEGATIVE_NAMES:
         return True
+    if name == "poison":
+        # Only the weakening subtypes are stat-downs (buffs._expand_poison_subtype).
+        return _lower(eff.get("attribute")) in _POISON_STAT_DOWN_SUBTYPES
     if name in _COMPLEX_POSITIVE_NAMES:
         return False
     return _as_float(eff.get("magnitude")) < 0

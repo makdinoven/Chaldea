@@ -461,6 +461,23 @@ def _expand_complex_effect(name: str, magnitude: float) -> Dict[str, float] | No
     return None
 
 
+# Poison subtypes that weaken the target instead of ticking or stunning.
+POISON_STAT_REDUCTION = "stat_reduction"      # like Curse: −4 primary attributes
+POISON_DEFENSE_REDUCTION = "defense_reduction"  # like Freeze: −all resistances
+
+
+def _expand_poison_subtype(subtype, magnitude: float) -> Dict[str, float] | None:
+    """Modifier contributions of a Poison by its subtype, or None for the
+    subtypes that are not modifiers (periodic_damage, paralysis)."""
+    s = (subtype or "").strip().lower()
+    m = abs(magnitude or 0)
+    if s == POISON_STAT_REDUCTION:
+        return {a: -m for a in _PRIMARY_ATTRS}
+    if s == POISON_DEFENSE_REDUCTION:
+        return {"percent_resist_all": -m}
+    return None
+
+
 # Derived stats per EFFECTIVE point of a primary attribute — mirrors
 # character-attributes-service `PRIMARY_DERIVED_EFFECTS` (constants.py there:
 # STAT_BONUS_PER_POINT = 0.1, ENDURANCE_RES_EFFECTS_MULTIPLIER = 0.2). A battle
@@ -504,6 +521,13 @@ def aggregate_modifiers(
             dodge_down = abs(eff.get("secondary_magnitude") or 0)
             if dodge_down:
                 summary["dodge"] = summary.get("dodge", 0.0) - dodge_down
+            continue
+        if name == "poison":
+            # The subtype rides in `attribute`. Periodic damage ticks elsewhere and
+            # paralysis is control; only the two weakening subtypes move stats.
+            expanded = _expand_poison_subtype(eff.get("attribute"), eff.get("magnitude", 0))
+            for key, delta in (expanded or {}).items():
+                summary[key] = summary.get(key, 0.0) + delta
             continue
         expanded = _expand_complex_effect(eff.get("name", ""), eff.get("magnitude", 0))
         if expanded is not None:

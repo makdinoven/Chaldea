@@ -207,8 +207,8 @@ export const PRIMARY_ATTR_OPTIONS: SelectOption[] = [
 
 export const POISON_SUBTYPE_OPTIONS: SelectOption[] = [
   { label: "Периодический урон", value: "periodic_damage" },
-  { label: "Снижение характеристик", value: "stat_reduction" },
-  { label: "Снижение защит", value: "defense_reduction" },
+  { label: "Снижение характеристик (сила, ловкость, интеллект, живучесть)", value: "stat_reduction" },
+  { label: "Снижение защит (все сопротивления, %)", value: "defense_reduction" },
   { label: "Паралич", value: "paralysis" },
 ];
 
