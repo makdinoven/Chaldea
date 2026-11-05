@@ -27,6 +27,8 @@ import law_facility
 import law_notify
 import models
 import patrol_core as pc
+import reputation_core as rc
+import reputation_crud
 
 logger = logging.getLogger("character-service.patrol")
 
@@ -179,11 +181,32 @@ def _zone_target(db: Session, patrol: "models.GuardPatrol", current: Optional[in
     return target, {}
 
 
+_SQL_PRESENT = "SELECT c.id FROM characters c WHERE c.is_npc = 0 AND c.current_location_id = :l"
+# Only a player wanted in the region (stored value > 0) or with a negative reputation there can be stopped:
+# both decay towards zero, so the stored row is a superset of the effective one.
+_SQL_SUSPECTS = (
+    " AND (EXISTS (SELECT 1 FROM character_wanted w WHERE w.character_id = c.id AND w.region_id = :r AND w.value > 0)"
+    " OR EXISTS (SELECT 1 FROM character_reputation p WHERE p.character_id = c.id AND p.region_id = :r"
+    " AND p.value < 0))")
+
+
+def _sweep_candidates(db: Session, location_id: int) -> List[int]:
+    """Present players worth the full (locking) arrival check. Prefilters out everyone who cannot be stopped,
+    instead of locking and re-reading every player in a busy hub."""
+    region_id = reputation_crud.location_region(db, location_id)
+    if not region_id:
+        return []                               # no region = no law here (law_crud._check exits the same way)
+    params = {"l": int(location_id), "r": int(region_id), "n": PATROL_SWEEP_LIMIT}
+    sql = _SQL_PRESENT
+    # A neutral standing (no reputation row) is never «outlaw» unless an admin moved the tiers so; then no prefilter.
+    if rc.tier_for(0, reputation_crud.load_tiers(db)).code != rc.OUTLAW_TIER:
+        sql += _SQL_SUSPECTS
+    return [int(r[0]) for r in db.execute(text(sql + " ORDER BY c.id LIMIT :n"), params).fetchall()]
+
+
 def _sweep(db: Session, npc_id: int, location_id: int, now: datetime, outcome: StepOutcome) -> None:
     """Txn B_i: every present player gets the arrival check in his own transaction (offline players included)."""
-    ids = [int(r[0]) for r in db.execute(text(
-        "SELECT id FROM characters WHERE is_npc = 0 AND current_location_id = :l ORDER BY id LIMIT :n"),
-        {"l": int(location_id), "n": PATROL_SWEEP_LIMIT}).fetchall()]
+    ids = _sweep_candidates(db, location_id)
     db.rollback()
     for character_id in ids:
         try:

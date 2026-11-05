@@ -21,7 +21,7 @@ import reputation_core
 import reputation_read
 import visibility
 import activity_lock
-from database import get_db
+from database import get_db, async_session
 from fastapi.middleware.cors import CORSMiddleware
 from auth_http import (
     get_admin_user, get_strict_admin_user, get_current_user_via_http,
@@ -103,11 +103,18 @@ async def _auto_progress_quest(
     target_id: int | None = None,
     meta: dict | None = None,
 ):
-    """Fire-and-forget: update quest objectives matching the event."""
+    """Fire-and-forget: update quest objectives matching the event.
+
+    Runs in its OWN session. Callers hand over the request session, but as a background task it runs after
+    `get_db` has closed that session: the reads re-opened a connection that nobody closed, leaving it `Sleep`
+    with an open InnoDB transaction (metadata lock) whenever no quest progressed and nothing was committed.
+    `session` is kept in the signature for the callers and is not used.
+    """
     try:
-        await crud.auto_progress_quests(
-            session, character_id, event_type, increment, target_id, meta,
-        )
+        async with async_session() as own_session:
+            await crud.auto_progress_quests(
+                own_session, character_id, event_type, increment, target_id, meta,
+            )
     except Exception as e:
         logger.warning(f"Quest auto-progress error for char {character_id}, event {event_type}: {e}")
 

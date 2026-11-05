@@ -1034,8 +1034,20 @@ def test_several_players_each_get_a_check(pw, stub_law_notify_send):
     set_wanted(pw, BETA, R_OST, 150)
     route_patrol_into_south(pw)
     out = step(pw)
-    assert (out.checked, out.encounters) == (3, 2)                              # Gamma is not wanted
+    assert (out.checked, out.encounters) == (2, 2)              # Gamma is not wanted: prefiltered, never locked
     assert {p["target_value"] for p in law_payloads(stub_law_notify_send)} == {USER_ALPHA, USER_BETA}
+
+
+def test_sweep_prefilters_by_wanted_and_negative_reputation(pw):
+    for cid in (ALPHA, BETA, GAMMA):
+        put_at(pw, cid, L_S)
+    set_wanted(pw, ALPHA, R_OST, 150)
+    set_value(pw, BETA, R_OST, -5)
+    db = pw()
+    try:
+        assert patrol_crud._sweep_candidates(db, L_S) == [ALPHA, BETA]       # Gamma: clean, skipped
+    finally:
+        db.close()
 
 
 def test_sweep_cap(pw, monkeypatch):

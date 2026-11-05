@@ -263,6 +263,10 @@ const GuardPatrolPanel = ({ npcId }: GuardPatrolPanelProps) => {
       const r = await stepGuardPatrol(npcId);
       // Names of the from / to points: the route / zone lists of the fresh patrol, or the current location.
       const names = new Map<number, string>();
+      // The from-point is where the guard stood before the step (a district zone lists no names of its own).
+      if (patrol?.current_location_id && patrol.current_location_name) {
+        names.set(patrol.current_location_id, patrol.current_location_name);
+      }
       [...r.patrol.route, ...r.patrol.zone_locations].forEach((pt) => pt.name && names.set(pt.location_id, pt.name));
       if (r.patrol.current_location_id && r.patrol.current_location_name) {
         names.set(r.patrol.current_location_id, r.patrol.current_location_name);
