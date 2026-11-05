@@ -249,6 +249,11 @@ const UnresolvedCrimesTab = ({ canManage }: UnresolvedCrimesTabProps) => {
                   <Info name="Свидетели">
                     шанс {pct(c.witness_chance_pct)}
                     {c.witness_roll_pct != null && `, бросок ${pct(c.witness_roll_pct)}`}
+                    {c.stealth_reduction_pct != null && c.stealth_reduction_pct > 0 && (
+                      <span className="block text-white/50 text-xs">
+                        Скрытность снизила шанс на {pct(c.stealth_reduction_pct)}
+                      </span>
+                    )}
                   </Info>
                   <Info name="Последствия">
                     репутация {c.reputation_delta ?? '—'} · розыск +{c.wanted_points}

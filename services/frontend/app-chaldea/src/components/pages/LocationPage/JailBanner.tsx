@@ -6,6 +6,9 @@
  * self-bail with its price (confirmation) and an escape attempt with the chance
  * and the cooldown countdown. When the term ends the profile is refreshed.
  * Posting stays possible in the jail location itself (LocationPage).
+ * FEAT-202: the title names the facility («Тюрьма страны «X»» / «Отделение
+ * стражи края «Y»»); the country prison has no bail and lets the inmate walk
+ * between the locations of the prison district.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -57,6 +60,13 @@ const JailBanner = ({ characterId, until }: JailBannerProps) => {
   const termEnd = jail ? parseServerDate(jail.until) : until;
   const escapeAt = jail?.can_escape_at ? parseServerDate(jail.can_escape_at) : null;
   const escapeReady = !escapeAt || escapeAt.getTime() <= Date.now();
+  const isCountry = jail?.facility === 'country';
+  const bailPrice = jail && jail.bail_available ? jail.bail_price : null;
+  const title = jail?.facility_name
+    ? jail.facility_name
+    : jail?.region_name
+      ? `Отделение стражи края «${jail.region_name}»`
+      : 'Персонаж в заключении';
 
   const run = async (call: () => Promise<{ message: string; jail: LawJailOut | null }>, fallback: string,
     success?: (message: string) => void) => {
@@ -107,9 +117,9 @@ const JailBanner = ({ characterId, until }: JailBannerProps) => {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-lg leading-none shrink-0" aria-hidden>⛓️</span>
         <div className="flex flex-col min-w-0 flex-1">
-          <span className="text-white text-sm font-medium">
-            Персонаж в тюрьме
-            {jail?.region_name ? ` края «${jail.region_name}»` : ''}
+          <span className="text-white text-sm font-medium break-words">
+            {title}
+            {isCountry && jail?.district_name ? ` · район «${jail.district_name}»` : ''}
             {termEnd && (
               <>
                 {' — '}
@@ -119,10 +129,12 @@ const JailBanner = ({ characterId, until }: JailBannerProps) => {
             )}
           </span>
           <span className="text-white/50 text-xs break-words">
-            Перемещаться, торговать, сражаться и брать задания нельзя. Писать посты можно в самой тюрьме
+            {isCountry
+              ? 'Торговать, сражаться и брать задания нельзя. Можно перемещаться между локациями тюрьмы и писать там посты'
+              : 'Перемещаться, торговать, сражаться и брать задания нельзя. Писать посты можно в самой тюрьме'}
             {jail?.location_name ? (
               <>
-                {' — '}
+                {isCountry ? '; камера — ' : ' — '}
                 <Link to={`/location/${jail.location_id}`} className="site-link">
                   «{jail.location_name}»
                 </Link>
@@ -144,14 +156,20 @@ const JailBanner = ({ characterId, until }: JailBannerProps) => {
 
       {jail && (
         <div className="flex flex-col sm:flex-row gap-2">
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => setConfirmBail(true)}
-            className="btn-blue w-full sm:w-auto !text-xs sm:!text-sm !py-1.5 !px-4 disabled:opacity-50"
-          >
-            Внести залог · {jail.bail_price.toLocaleString('ru-RU')} золота
-          </button>
+          {bailPrice !== null ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => setConfirmBail(true)}
+              className="btn-blue w-full sm:w-auto !text-xs sm:!text-sm !py-1.5 !px-4 disabled:opacity-50"
+            >
+              Внести залог · {bailPrice.toLocaleString('ru-RU')} золота
+            </button>
+          ) : (
+            <span className="self-center text-white/45 text-xs sm:text-sm">
+              Залога нет — из тюрьмы страны нельзя выйти под залог
+            </span>
+          )}
           <button
             type="button"
             disabled={pending || !escapeReady}
@@ -172,15 +190,17 @@ const JailBanner = ({ characterId, until }: JailBannerProps) => {
       {jail && (
         <p className="text-white/40 text-[11px] leading-snug">
           Провал побега продлевает срок наполовину от оставшегося; удачный побег делает розыск тяжёлым.
-          За вас может заплатить залог любой персонаж у банкира.
+          {isCountry
+            ? ' Из тюрьмы страны бежать труднее, а пробовать можно реже.'
+            : ' За вас может заплатить залог любой персонаж у банкира.'}
         </p>
       )}
       {lastMessage && <p className="text-white/70 text-xs break-words">{lastMessage}</p>}
 
-      {confirmBail && jail && (
+      {confirmBail && bailPrice !== null && (
         <ConfirmDialog
           title="Внести залог?"
-          message={`С вас спишут ${jail.bail_price.toLocaleString('ru-RU')} золота в казну края, и вы выйдете на свободу.`}
+          message={`С вас спишут ${bailPrice.toLocaleString('ru-RU')} золота в казну края, и вы выйдете на свободу.`}
           confirmLabel="Внести залог"
           onConfirm={() => void doBail()}
           onCancel={() => setConfirmBail(false)}

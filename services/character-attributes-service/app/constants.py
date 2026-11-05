@@ -68,7 +68,11 @@ PRIMARY_DERIVED_EFFECTS = {
         "res_effects": LUCK_RES_EFFECTS_MULTIPLIER,
     },
 }
-PRIMARY_ATTRIBUTE_KEYS = ("strength", "agility", "intelligence", "endurance", "charisma", "luck")
+# FEAT-201: stealth, like charisma, has no stored derived field (it only lowers
+# the chance a crime is witnessed; computed in character-service).
+PRIMARY_ATTRIBUTE_KEYS = (
+    "strength", "agility", "intelligence", "endurance", "charisma", "luck", "stealth",
+)
 
 # Resource stat -> (base max, multiplier): max_R = BASE_R + floor(m_R * eff(R))
 RESOURCE_STATS = {

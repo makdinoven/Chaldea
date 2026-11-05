@@ -38,6 +38,7 @@ class CharacterAttributes(Base):
     intelligence = Column(Integer, default=0)  # Интеллект
     luck = Column(Integer, default=0)  # Везучесть
     charisma = Column(Integer, default=0)  # Харизма
+    stealth = Column(Integer, default=0, nullable=False)  # Скрытность (FEAT-201)
 
 
     # Боевые характеристики

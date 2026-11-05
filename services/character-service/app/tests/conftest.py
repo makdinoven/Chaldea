@@ -70,6 +70,16 @@ def _create_world_hierarchy(target, connection, **kw):
     columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(Regions)").fetchall()}
     if "jail_location_id" not in columns:
         connection.exec_driver_sql("ALTER TABLE Regions ADD COLUMN jail_location_id INTEGER NULL")
+    # FEAT-202: the country prison (locations-service migration 057 + the existing district / location columns
+    # the prison subtree query reads).
+    for table, column, ddl in (("Countries", "prison_district_id", "INTEGER NULL"),
+                               ("Districts", "parent_district_id", "INTEGER NULL"),
+                               ("Districts", "entrance_location_id", "INTEGER NULL"),
+                               ("Districts", "sort_order", "INTEGER NOT NULL DEFAULT 0"),
+                               ("Locations", "sort_order", "INTEGER NOT NULL DEFAULT 0")):
+        existing = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()}
+        if column not in existing:
+            connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 @event.listens_for(models.Base.metadata, "after_drop")

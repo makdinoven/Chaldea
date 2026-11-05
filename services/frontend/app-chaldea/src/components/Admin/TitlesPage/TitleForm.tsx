@@ -59,6 +59,7 @@ const ATTRIBUTE_STAT_OPTIONS: { value: string; label: string }[] = [
   { value: "endurance", label: "Выносливость" },
   { value: "charisma", label: "Харизма" },
   { value: "luck", label: "Удача" },
+  { value: "stealth", label: "Скрытность" },
   { value: "damage", label: "Урон" },
   { value: "dodge", label: "Уклонение" },
   { value: "critical_hit_chance", label: "Шанс крита" },

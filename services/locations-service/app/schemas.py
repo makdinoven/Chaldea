@@ -56,6 +56,8 @@ class CountryUpdate(RecommendedLevelOverride):
     x: Optional[float] = None
     y: Optional[float] = None
     is_hidden: Optional[bool] = None
+    # FEAT-202: the country prison district (validated in crud.update_country); explicit null clears it
+    prison_district_id: Optional[int] = None
 
 class CountryRead(BaseModel):
     id: int
@@ -70,6 +72,7 @@ class CountryRead(BaseModel):
     is_hidden: bool = False
     recommended_level_min: Optional[int] = None
     recommended_level_max: Optional[int] = None
+    prison_district_id: Optional[int] = None
 
     @validator('is_hidden', pre=True, always=True)
     def _default_is_hidden(cls, v):
@@ -377,6 +380,8 @@ class PostResponse(BaseModel):
     created_at: datetime
     # FEAT-198: the guard encounter created by this move (move_and_post / quick_move only)
     law_encounter: Optional[dict] = None
+    # FEAT-203: the guards did not notice the character on arrival (True only; absent / None otherwise)
+    law_slipped: Optional[bool] = None
 
     class Config:
         orm_mode = True
@@ -468,6 +473,17 @@ class LocationLookup(BaseModel):
 class DistrictLookup(BaseModel):
     id: int
     name: str
+
+
+class CountryDistrictRead(BaseModel):
+    """FEAT-202: a district of a country for the prison select of the country edit form."""
+    id: int
+    name: str
+    region_id: int
+    region_name: str
+    parent_district_id: Optional[int] = None
+    location_count: int
+    entrance_location_id: Optional[int] = None
 
 
 # -------------------------------
@@ -648,6 +664,8 @@ class NpcInLocation(BaseModel):
     class_name: Optional[str] = None
     race_name: Optional[str] = None
     npc_role: Optional[str] = None
+    # FEAT-204: a patrolling guard's departure bucket ('soon' | 'short' | 'long' | None) — pass-through only
+    patrol_departure: Optional[str] = None
 
 class NeighborClient(BaseModel):
     id: int

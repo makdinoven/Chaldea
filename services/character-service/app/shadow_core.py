@@ -1,10 +1,12 @@
 """FEAT-199 the shadow (reputation stage 2b) — pure maths (no I/O; character-service only, no copies).
 
-* witnesses: the chance a kill is seen = base by ``Locations.marker_type`` − stealth (effective agility + luck) −
-  subclass bonus − mask + fame (recognisability; not for a masked member) per member; the GROUP chance is the highest
-  member chance (least stealthy) + a bonus per extra attacker, clamped (:func:`member_chance`, :func:`group_chance`);
-* reveal: the daily chance of an unresolved crime grows with the region's suspicion, a masked crime × factor
-  (:func:`reveal_chance`);
+* witnesses (FEAT-201, multiplicative): per member ``base(Locations.marker_type) × (1 − stealth reduction) ×
+  (1 + fame%)`` (fame = recognisability; ignored for a masked member — the mask is anonymity only). The stealth
+  reduction is ``min(max, effective stealth × per point)``, where effective = the FEAT-195 cap of (stored stealth +
+  subclass stealth points). The GROUP chance is the highest member chance (least stealthy) × (1 + per-extra% ×
+  (n − 1)), clamped (:func:`member_chance`, :func:`group_chance`);
+* reveal: the daily chance of an unresolved crime grows with the region's suspicion, a masked crime × factor, and
+  × (1 − the attacker's stealth reduction snapshotted on the crime row) (:func:`reveal_chance`);
 * region suspicion: a value with lazy linear decay (``law_core.materialise`` / ``effective_wanted`` maths), public
   only as a text state (:func:`suspicion_state`);
 * renown: fame (public tier) and infamy (hidden) with 5 fixed-code tiers per scale (:func:`renown_tier_for`).
@@ -14,12 +16,15 @@ from dataclasses import dataclass, fields
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from typing import Iterable, List, Optional, Sequence, Tuple
 
+import stat_caps
+
 # --------------------------------------------------------------------------------------------------- constants
 
 # skills-service subclass keys (stable, never renamed — skills-service/app/subclasses.py)
 SUBCLASS_AGENT = "warrior_agent"
 SUBCLASS_ASSASSIN = "rogue_assassin"
 SUBCLASS_TRICKSTER = "rogue_trickster"
+SUBCLASS_LABELS = {SUBCLASS_ASSASSIN: "Ассасин", SUBCLASS_TRICKSTER: "Фокусник", SUBCLASS_AGENT: "Агент"}
 
 # locations-service Locations.marker_type
 MARKER_SAFE = "safe"
@@ -67,6 +72,7 @@ MAX_INFAMY_MIN_GAIN = 1000
 MAX_TIER_WITNESS_PCT = Decimal(50)
 MAX_TIER_VALUE = 10_000_000
 MAX_DECAY_PER_DAY = Decimal(100_000)
+MAX_SUBCLASS_STEALTH = 500
 
 _CENT = Decimal("0.01")
 _HUNDRED = Decimal(100)
@@ -77,19 +83,19 @@ _HUNDRED = Decimal(100)
 @dataclass(frozen=True)
 class ShadowSettings:
     witness_enabled: bool = True
-    witness_base_safe_pct: Decimal = Decimal(70)
-    witness_base_farm_pct: Decimal = Decimal(45)
-    witness_base_dangerous_pct: Decimal = Decimal(25)
-    witness_base_dungeon_pct: Decimal = Decimal(15)
+    witness_base_safe_pct: Decimal = Decimal(100)
+    witness_base_farm_pct: Decimal = Decimal(70)
+    witness_base_dangerous_pct: Decimal = Decimal(40)
+    witness_base_dungeon_pct: Decimal = Decimal(25)
     witness_base_default_pct: Decimal = Decimal(50)
-    witness_stealth_per_point_pct: Decimal = Decimal("0.1")
-    witness_agent_pct: Decimal = Decimal(10)
-    witness_assassin_pct: Decimal = Decimal(15)
-    witness_trickster_pct: Decimal = Decimal(15)
-    witness_mask_pct: Decimal = Decimal(10)
+    stealth_pct_per_point: Decimal = Decimal("0.5")
+    stealth_max_reduction_pct: Decimal = Decimal(90)
+    stealth_assassin_points: int = 30
+    stealth_trickster_points: int = 30
+    stealth_agent_points: int = 20
     witness_group_per_extra_pct: Decimal = Decimal(10)
     witness_min_pct: Decimal = Decimal(5)
-    witness_max_pct: Decimal = Decimal(95)
+    witness_max_pct: Decimal = Decimal(100)
     reveal_days: int = 3
     reveal_base_pct: Decimal = Decimal(15)
     reveal_per_suspicion_pct: Decimal = Decimal("0.4")
@@ -116,7 +122,8 @@ SETTINGS_FIELDS = tuple(f.name for f in fields(ShadowSettings))
 BOOL_FIELDS = frozenset({"witness_enabled"})
 INT_FIELDS = frozenset({"reveal_days", "suspicion_max", "suspicion_unwitnessed", "suspicion_masked",
                         "suspicion_uneasy_at", "suspicion_alarmed_at", "suspicion_fear_at", "infamy_min_gain",
-                        "fame_quest_default"})
+                        "fame_quest_default", "stealth_assassin_points", "stealth_trickster_points",
+                        "stealth_agent_points"})
 DECIMAL_FIELDS = frozenset(n for n in SETTINGS_FIELDS if n not in BOOL_FIELDS and n not in INT_FIELDS)
 
 SQL_SELECT_SETTINGS = "SELECT " + ", ".join(SETTINGS_FIELDS) + " FROM shadow_settings WHERE id = 1"
@@ -208,42 +215,56 @@ def base_pct(marker_type: Optional[str], s: ShadowSettings) -> Decimal:
     }.get(marker_type or "", s.witness_base_default_pct)
 
 
-def subclass_pct(subclass_key: Optional[str], s: ShadowSettings) -> Decimal:
-    return {
-        SUBCLASS_AGENT: s.witness_agent_pct,
-        SUBCLASS_ASSASSIN: s.witness_assassin_pct,
-        SUBCLASS_TRICKSTER: s.witness_trickster_pct,
-    }.get(subclass_key or "", Decimal(0))
+def subclass_stealth_points(subclass_key: Optional[str], s: ShadowSettings) -> int:
+    """FEAT-201: out-of-battle stealth points of a subclass (0 for none / any other subclass)."""
+    return int({
+        SUBCLASS_AGENT: s.stealth_agent_points,
+        SUBCLASS_ASSASSIN: s.stealth_assassin_points,
+        SUBCLASS_TRICKSTER: s.stealth_trickster_points,
+    }.get(subclass_key or "", 0))
 
 
-def member_chance(base, s: ShadowSettings, eff_agility, eff_luck, subclass_key: Optional[str], masked: bool,
-                  fame_witness_pct) -> Decimal:
-    """One attacker's (unclamped) chance to be seen. A masked member is anonymous: their fame does not count."""
-    stealth = (max(Decimal(0), _dec(eff_agility)) + max(Decimal(0), _dec(eff_luck))) \
-        * _dec(s.witness_stealth_per_point_pct)
-    value = _dec(base) - stealth - subclass_pct(subclass_key, s)
-    if masked:
-        value -= _dec(s.witness_mask_pct)
-    else:
-        value += _dec(fame_witness_pct)
+def effective_stealth(raw_stealth, subclass_points) -> Decimal:
+    """The FEAT-195 cap of (stored stealth + subclass points); the bonus is added BEFORE the cap. 2 decimals."""
+    total = max(0, int(raw_stealth or 0)) + max(0, int(subclass_points or 0))
+    return _q(_dec(stat_caps.effective_stat(total)))
+
+
+def stealth_reduction_pct(eff_stealth, s: ShadowSettings) -> Decimal:
+    """``min(max_reduction, max(0, eff) × pct_per_point)`` — the % of the chance stealth removes. 2 decimals."""
+    raw = max(Decimal(0), _dec(eff_stealth)) * _dec(s.stealth_pct_per_point)
+    return _q(min(_dec(s.stealth_max_reduction_pct), raw))
+
+
+def member_chance(base, reduction_pct, masked: bool, fame_witness_pct) -> Decimal:
+    """One attacker's (unclamped) chance to be seen: ``base × (1 − reduction / 100) × (1 + fame / 100)``.
+    A masked member is anonymous: their fame does not count (the mask gives no other bonus)."""
+    reduction = max(Decimal(0), min(_HUNDRED, _dec(reduction_pct)))
+    value = _dec(base) * (_HUNDRED - reduction) / _HUNDRED
+    if not masked:
+        value = value * (_HUNDRED + max(Decimal(0), _dec(fame_witness_pct))) / _HUNDRED
     return value
 
 
 def group_chance(member_chances: Sequence, n_players: int, s: ShadowSettings) -> Decimal:
-    """``clamp(max(member chances) + per_extra × (n − 1), min, max)``, 2 decimals."""
+    """``clamp(max(member chances) × (1 + per_extra / 100 × (n − 1)), min, max)``, 2 decimals."""
     if not member_chances:
         return _q(_clamp(_dec(s.witness_base_default_pct), s.witness_min_pct, s.witness_max_pct))
-    raw = max(_dec(c) for c in member_chances) + _dec(s.witness_group_per_extra_pct) * max(0, int(n_players) - 1)
+    factor = _HUNDRED + _dec(s.witness_group_per_extra_pct) * max(0, int(n_players) - 1)
+    raw = max(_dec(c) for c in member_chances) * factor / _HUNDRED
     return _q(_clamp(raw, s.witness_min_pct, s.witness_max_pct))
 
 
 # --------------------------------------------------------------------------------------------------- reveal
 
-def reveal_chance(effective_suspicion, masked: bool, s: ShadowSettings) -> Decimal:
-    """``clamp((base + suspicion × per_point) × (masked ? factor / 100 : 1), min, max)``, 2 decimals."""
+def reveal_chance(effective_suspicion, masked: bool, s: ShadowSettings, stealth_reduction_pct=0) -> Decimal:
+    """``clamp((base + suspicion × per_point) × (masked ? factor / 100 : 1) × (1 − snapshot / 100), min, max)``,
+    2 decimals. ``stealth_reduction_pct`` is the attacker's reduction stored on the crime (None / old rows = 0)."""
     raw = _dec(s.reveal_base_pct) + Decimal(max(0, int(effective_suspicion or 0))) * _dec(s.reveal_per_suspicion_pct)
     if masked:
         raw = raw * _dec(s.reveal_mask_factor_pct) / _HUNDRED
+    snapshot = max(Decimal(0), min(_HUNDRED, _dec(stealth_reduction_pct)))
+    raw = raw * (_HUNDRED - snapshot) / _HUNDRED
     return _q(_clamp(raw, s.reveal_min_pct, s.reveal_max_pct))
 
 
@@ -333,10 +354,7 @@ def validate(s: ShadowSettings, tiers: Sequence[RenownTier]) -> Optional[str]:
         ("witness_base_dangerous_pct", "База свидетелей (дикие места)"),
         ("witness_base_dungeon_pct", "База свидетелей (подземелье)"),
         ("witness_base_default_pct", "База свидетелей (по умолчанию)"),
-        ("witness_agent_pct", "Бонус подкласса «Агент»"),
-        ("witness_assassin_pct", "Бонус подкласса «Ассасин»"),
-        ("witness_trickster_pct", "Бонус подкласса «Фокусник»"),
-        ("witness_mask_pct", "Бонус маски"),
+        ("stealth_max_reduction_pct", "Предел снижения скрытностью"),
         ("witness_group_per_extra_pct", "Прибавка за участника группы"),
         ("witness_min_pct", "Минимальный шанс свидетелей"),
         ("witness_max_pct", "Максимальный шанс свидетелей"),
@@ -352,10 +370,14 @@ def validate(s: ShadowSettings, tiers: Sequence[RenownTier]) -> Optional[str]:
         return "Шанс свидетелей: минимум не может быть больше максимума"
     if _dec(s.reveal_min_pct) > _dec(s.reveal_max_pct):
         return "Шанс раскрытия: минимум не может быть больше максимума"
-    for name, label in (("witness_stealth_per_point_pct", "Скрытность за очко ловкости/удачи"),
+    for name, label in (("stealth_pct_per_point", "Снижение за очко скрытности"),
                         ("reveal_per_suspicion_pct", "Прибавка к раскрытию за очко подозрения")):
         if not (Decimal(0) <= _dec(getattr(s, name)) <= MAX_PER_POINT):
             return f"{label}: от 0 до {MAX_PER_POINT}"
+    for name, key in (("stealth_assassin_points", SUBCLASS_ASSASSIN), ("stealth_trickster_points", SUBCLASS_TRICKSTER),
+                      ("stealth_agent_points", SUBCLASS_AGENT)):
+        if not (0 <= int(getattr(s, name)) <= MAX_SUBCLASS_STEALTH):
+            return f"Скрытность подкласса «{SUBCLASS_LABELS[key]}»: от 0 до {MAX_SUBCLASS_STEALTH}"
     if not (1 <= int(s.reveal_days) <= MAX_REVEAL_DAYS):
         return f"Срок раскрытия: от 1 до {MAX_REVEAL_DAYS} дней"
     if not (1 <= int(s.suspicion_max) <= MAX_SUSPICION):
@@ -395,6 +417,6 @@ def validate(s: ShadowSettings, tiers: Sequence[RenownTier]) -> Optional[str]:
             if int(tier.min_value) > MAX_TIER_VALUE:
                 return f"Порог ступени {label} слишком большой"
             if scale == SCALE_FAME and not (Decimal(0) <= _dec(tier.witness_pct) <= MAX_TIER_WITNESS_PCT):
-                return f"Узнаваемость ступени славы: от 0 до {MAX_TIER_WITNESS_PCT} %"
+                return f"Узнаваемость ступени славы (множитель): от 0 до {MAX_TIER_WITNESS_PCT} %"
             previous = int(tier.min_value)
     return None

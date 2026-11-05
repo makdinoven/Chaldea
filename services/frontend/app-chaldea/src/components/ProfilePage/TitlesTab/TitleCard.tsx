@@ -57,6 +57,7 @@ const STAT_LABELS: Record<string, string> = {
   endurance: 'Выносливость',
   charisma: 'Харизма',
   luck: 'Удача',
+  stealth: 'Скрытность',
   level: 'Уровень',
   // Resources
   health: 'Здоровье',

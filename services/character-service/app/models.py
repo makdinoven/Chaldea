@@ -107,6 +107,9 @@ class Character(Base):
     jailed_until = Column(DateTime, nullable=True, default=None)
     jail_region_id = Column(Integer, nullable=True, default=None)
     law_encounter_id = Column(Integer, nullable=True, default=None)
+    # FEAT-202 (042): the country-prison district snapshot of the serving term (NULL for a station term) — a jailed
+    # character may move only inside its subtree; consulted only while the lock reason is `jail`.
+    jail_district_id = Column(Integer, nullable=True, default=None)
 
     # character_titles.character_id входит в составной первичный ключ, поэтому
     # ORM по умолчанию пытается занулить его при удалении персонажа и падает с
@@ -1240,13 +1243,31 @@ class LawSettings(Base):
     flee_min_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
     flee_max_pct = Column(Numeric(5, 2), nullable=False, default=85, server_default="85.00")
     escape_base_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
-    escape_per_point_pct = Column(Numeric(6, 3), nullable=False, default=0.15, server_default="0.150")
+    escape_per_point_pct = Column(Numeric(6, 3), nullable=False, default=0.3, server_default="0.300")
     escape_min_pct = Column(Numeric(5, 2), nullable=False, default=2, server_default="2.00")
     escape_max_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
     escape_cooldown_hours = Column(Integer, nullable=False, default=6, server_default="6")
     escape_fail_extend_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
     max_remaining_jail_hours = Column(Integer, nullable=False, default=168, server_default="168")
     bail_multiplier = Column(Numeric(5, 2), nullable=False, default=2, server_default="2.00")
+    # FEAT-202 (042): the country prison
+    country_prison_min_level = Column(String(20), nullable=False, default="villain", server_default="villain")
+    country_escape_multiplier = Column(Numeric(5, 2), nullable=False, default=0.5, server_default="0.50")
+    country_escape_cooldown_hours = Column(Integer, nullable=False, default=12, server_default="12")
+    # FEAT-203 (043): the guard-detection roll on entry
+    detect_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    detect_base_safe_pct = Column(Numeric(5, 2), nullable=False, default=100, server_default="100.00")
+    detect_base_farm_pct = Column(Numeric(5, 2), nullable=False, default=70, server_default="70.00")
+    detect_base_dangerous_pct = Column(Numeric(5, 2), nullable=False, default=40, server_default="40.00")
+    detect_base_dungeon_pct = Column(Numeric(5, 2), nullable=False, default=25, server_default="25.00")
+    detect_base_default_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
+    detect_per_guard_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
+    detect_mask_factor_pct = Column(Numeric(5, 2), nullable=False, default=75, server_default="75.00")
+    detect_min_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
+    detect_max_pct = Column(Numeric(5, 2), nullable=False, default=100, server_default="100.00")
+    # FEAT-204 (044): guard patrols — the global switch and the max hold of a patrol guard by an open encounter
+    patrols_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    patrol_encounter_hold_min = Column(Integer, nullable=False, default=30, server_default="30")
     pass_last_run_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, nullable=False)
 
@@ -1262,6 +1283,8 @@ class LawLevel(Base):
     min_value = Column(Integer, nullable=False)
     fine = Column(Integer, nullable=False)
     jail_hours = Column(Integer, nullable=False)
+    # FEAT-203 (043): the severity multiplier of the guard-detection chance, %
+    detect_pct = Column(Numeric(5, 2), nullable=False, default=100, server_default="100.00")
 
 
 class LawCrime(Base):
@@ -1291,6 +1314,7 @@ class LawCrime(Base):
     masked = Column(Boolean, nullable=False, default=False, server_default="0")
     witness_chance_pct = Column(Numeric(5, 2), nullable=True)
     witness_roll_pct = Column(Numeric(5, 2), nullable=True)
+    stealth_reduction_pct = Column(Numeric(5, 2), nullable=True)   # FEAT-201 (041): reveal snapshot, NULL = 0
     reveal_until = Column(DateTime, nullable=True)
     next_roll_at = Column(DateTime, nullable=True)
     reveal_attempts = Column(Integer, nullable=False, default=0, server_default="0")
@@ -1335,6 +1359,50 @@ class LawEncounter(Base):
         Index("ix_law_enc_status", "status", "expires_at"),
         Index("ix_law_enc_battle", "battle_id"),
         Index("ix_law_enc_cooldown", "character_id", "location_id", "cooldown_until"),
+        Index("ix_law_enc_guard", "guard_npc_id", "status"),          # FEAT-204 (044): is a guard held?
+    )
+
+
+class GuardPatrol(Base):
+    """FEAT-204 (044): the patrol of one guard NPC (no row = a fixed post). Written by patrol_crud only.
+    No FK (the NPC delete cleans up explicitly)."""
+
+    __tablename__ = "guard_patrols"
+
+    npc_id = Column(Integer, primary_key=True, autoincrement=False)
+    mode = Column(String(10), nullable=False, default="post", server_default="post")            # post|route|zone
+    route_style = Column(String(10), nullable=False, default="loop", server_default="loop")     # loop|pingpong
+    zone_kind = Column(String(10), nullable=False, default="district", server_default="district")  # district|locations
+    zone_district_id = Column(BigInteger, nullable=True)
+    interval_min = Column(SmallInteger, nullable=False, default=20, server_default="20")
+    jitter_pct = Column(SmallInteger, nullable=False, default=25, server_default="25")
+    next_move_at = Column(DateTime, nullable=True)
+    route_index = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    route_dir = Column(SmallInteger, nullable=False, default=1, server_default="1")
+    last_location_id = Column(BigInteger, nullable=True)
+    last_moved_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+    updated_by_user_id = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("ix_guard_patrols_due", "mode", "next_move_at"),
+    )
+
+
+class GuardPatrolPoint(Base):
+    """FEAT-204 (044): an ordered route point / a zone location of a guard patrol."""
+
+    __tablename__ = "guard_patrol_points"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    npc_id = Column(Integer, nullable=False)
+    kind = Column(String(10), nullable=False)               # route | zone
+    position = Column(SmallInteger, nullable=False)
+    location_id = Column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("npc_id", "kind", "position", name="uq_guard_patrol_point"),
+        Index("ix_guard_patrol_point_loc", "location_id"),
     )
 
 
@@ -1358,6 +1426,10 @@ class LawJailTerm(Base):
     bailed_by_character_id = Column(Integer, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
     notified = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-202 (042): the facility snapshot; `region_id` stays the crime / wanted region
+    facility = Column(String(10), nullable=False, default="station", server_default="station")
+    country_id = Column(Integer, nullable=True)
+    district_id = Column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_law_jail_char", "character_id", "status"),
@@ -1400,19 +1472,20 @@ class ShadowSettings(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=False)
     witness_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
-    witness_base_safe_pct = Column(Numeric(5, 2), nullable=False, default=70, server_default="70.00")
-    witness_base_farm_pct = Column(Numeric(5, 2), nullable=False, default=45, server_default="45.00")
-    witness_base_dangerous_pct = Column(Numeric(5, 2), nullable=False, default=25, server_default="25.00")
-    witness_base_dungeon_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
+    witness_base_safe_pct = Column(Numeric(5, 2), nullable=False, default=100, server_default="100.00")
+    witness_base_farm_pct = Column(Numeric(5, 2), nullable=False, default=70, server_default="70.00")
+    witness_base_dangerous_pct = Column(Numeric(5, 2), nullable=False, default=40, server_default="40.00")
+    witness_base_dungeon_pct = Column(Numeric(5, 2), nullable=False, default=25, server_default="25.00")
     witness_base_default_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50.00")
-    witness_stealth_per_point_pct = Column(Numeric(6, 3), nullable=False, default=0.1, server_default="0.100")
-    witness_agent_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
-    witness_assassin_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
-    witness_trickster_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
-    witness_mask_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
+    # FEAT-201 (migration 041): the stealth stat (effective, capped) multiplies the chance down
+    stealth_pct_per_point = Column(Numeric(6, 3), nullable=False, default=0.5, server_default="0.500")
+    stealth_max_reduction_pct = Column(Numeric(5, 2), nullable=False, default=90, server_default="90.00")
+    stealth_assassin_points = Column(Integer, nullable=False, default=30, server_default="30")
+    stealth_trickster_points = Column(Integer, nullable=False, default=30, server_default="30")
+    stealth_agent_points = Column(Integer, nullable=False, default=20, server_default="20")
     witness_group_per_extra_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10.00")
     witness_min_pct = Column(Numeric(5, 2), nullable=False, default=5, server_default="5.00")
-    witness_max_pct = Column(Numeric(5, 2), nullable=False, default=95, server_default="95.00")
+    witness_max_pct = Column(Numeric(5, 2), nullable=False, default=100, server_default="100.00")
     reveal_days = Column(Integer, nullable=False, default=3, server_default="3")
     reveal_base_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15.00")
     reveal_per_suspicion_pct = Column(Numeric(6, 3), nullable=False, default=0.4, server_default="0.400")

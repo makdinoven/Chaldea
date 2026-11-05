@@ -38,9 +38,10 @@ locations-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/countries/create` | Создать страну |
-| PUT | `/countries/{id}/update` | Обновить страну |
-| GET | `/countries/list` | Список стран |
-| GET | `/countries/{id}/details` | Страна с регионами |
+| PUT | `/countries/{id}/update` | Обновить страну (FEAT-202: + `prison_district_id`, проверка района — см. «Закон») |
+| GET | `/countries/list` | Список стран (FEAT-202: + `prison_district_id`) |
+| GET | `/countries/{id}/details` | Страна с регионами (FEAT-202: + `prison_district_id`) |
+| GET | `/countries/{id}/districts` | FEAT-202: все районы страны для выбора тюрьмы (`locations:update`) — см. «Закон» |
 
 ### Regions
 | Метод | Путь | Описание |
@@ -343,7 +344,7 @@ D7 намеренно **не** проверяет владельца: строк
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/locations/admin/data` | Вся иерархия для админ-панели |
-| GET | `/locations/{id}/client/details` | Данные локации для клиента (соседи, игроки, посты, **gathering_nodes** с lazy-restore + lazy-finalize) |
+| GET | `/locations/{id}/client/details` | Данные локации для клиента (соседи, игроки, посты, **gathering_nodes** с lazy-restore + lazy-finalize). FEAT-204: `npcs[]` (`schemas.NpcInLocation`) дополнены `patrol_departure: 'soon' \| 'short' \| 'long' \| null` — подсказка «скоро уйдёт / задержится ненадолго / надолго» у патрульного стражника; поле только пробрасывается из `GET /characters/npcs/by_location` (без него у старого character-service — null) |
 | POST | `/locations/{id}/move_and_post` | Перемещение + создание поста |
 | GET | `/locations/admin/moderation/gate-requests` | Очередь заявок на ретро-гейты (`moderation:read`, FEAT-159 — см. «Редактирование поста») |
 | PUT | `/locations/admin/moderation/gate-requests/{id}/review` | Одобрить / отклонить заявку (`moderation:review`, FEAT-159) |
@@ -456,7 +457,7 @@ Country -> Region -> District -> Location
 
 ## Таблицы БД
 
-- **Countries** - id, name, description, leader_id, map_image_url
+- **Countries** - id, name, description, leader_id, map_image_url, prison_district_id (FEAT-202, BIGINT NULL, FK `Districts.id` ON DELETE SET NULL, индекс `ix_countries_prison_district_id`; NULL = у страны нет тюрьмы)
 - **Regions** - id, name, country_id (FK), description, map_image_url, image_url, entrance_location_id, jail_location_id (FEAT-198, FK `Locations.id` ON DELETE SET NULL, NULL = у края нет тюрьмы), x, y
 - **Districts** - id, name, region_id (FK CASCADE), description, image_url, entrance_location_id, recommended_level, x, y
 - **Locations** - id, name, district_id (FK CASCADE), type (location/subdistrict), image_url, recommended_level, quick_travel_marker, parent_id (FK self CASCADE), description, **is_starting** BOOLEAN NOT NULL DEFAULT 0 (+ индекс `ix_locations_is_starting`), **starting_blurb** TEXT NULL (FEAT-154)
@@ -507,7 +508,10 @@ Country -> Region -> District -> Location
 character-service (персонаж в тюрьме или остановлен стражей) возвращается игроку как **409 с тем же `detail`**
 (раньше любой не-200 → 500); прочие сбои по-прежнему 500. Если при входе персонажа остановила стража, ответ
 (`PostResponse`) содержит `law_encounter` (объект `LawEncounterOut` из character-service, иначе null). Пост
-заключённого в собственной локации (тюрьме) — не перемещение: шаг 6 пропускается (см. «Закон»).
+заключённого в собственной локации (тюрьме) — не перемещение: шаг 6 пропускается (см. «Закон»). FEAT-202:
+заключённый тюрьмы страны может перейти в другую локацию района тюрьмы — тогда шаг 6 выполняется
+(`update_location` перепроверяет поддерево). FEAT-203: если стража не заметила вошедшего (бросок обнаружения в
+character-service), ответ содержит `law_slipped: true` (иначе поле null).
 
 ⚠️ Шаг 5 **коммитит пост до** шагов 6 и 7. Если они упадут (два пути с 500), пост уже записан, а персонаж остался в старой локации с несписанной стаминой — см. «Известные проблемы».
 
@@ -521,7 +525,7 @@ character-service (персонаж в тюрьме или остановлен 
 - `rabbitmq_publisher` → очередь `general_notifications` («зовёт вас на локацию», новый пост в избранной локации), всегда `category: "world"` (настройки уведомлений notification-service).
 
 ### HTTP (исходящие)
-- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`; FEAT-198: тело `{new_location_id, source}`, 409 пробрасывается игроку, из ответа берётся `law_encounter`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/internal/{id}/short_info` (+ `X-Internal-Token`, для имени/аватара активных gatherers в client/details и в очереди модерации постов; **FEAT-171:** публичный `short_info` теряет `currency_balance` и может стать тоньше, поэтому сервис-к-сервису читает внутренний двойник; ошибка глотается в WARNING — лог называет URL двойника)
+- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`; FEAT-198: тело `{new_location_id, source}`, 409 пробрасывается игроку, из ответа берётся `law_encounter`; FEAT-203: и `law_slipped`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/internal/{id}/short_info` (+ `X-Internal-Token`, для имени/аватара активных gatherers в client/details и в очереди модерации постов; **FEAT-171:** публичный `short_info` теряет `currency_balance` и может стать тоньше, поэтому сервис-к-сервису читает внутренний двойник; ошибка глотается в WARNING — лог называет URL двойника)
 - `character-attributes-service:8002` -> GET `/attributes/internal/{id}` (+ `X-Internal-Token`, **FEAT-171:** игровой `/attributes/{id}` уходит под гейт владельца; четыре вызывающих — `main` перемещение/быстрое перемещение/`_fetch_charisma` и `crud._read_current_stamina`), POST `/attributes/{id}/consume_stamina` (+ `X-Internal-Token`), POST `/attributes/{id}/refund_stamina` (+ `X-Internal-Token`, FEAT-128: 50% возврат при cancel/battle-interrupt), PUT `/attributes/{id}/passive_experience` (+ `X-Internal-Token`, опыт за пост), POST `/attributes/cumulative_stats/increment` (+ `X-Internal-Token`, FEAT-167 задача #17 — посты, перемещение, лавка NPC, квесты; все семь мест идут через один хелпер `main._track_cumulative_stats`, он же и ставит заголовок)
 - `inventory-service:8004` -> POST `/inventory/internal/characters/{cid}/items` (+ `X-Internal-Token`, FEAT-167: лут локации, покупка у NPC, награда за квест — раньше был открытый `/inventory/{cid}/items` с проброшенным токеном игрока), POST `/inventory/internal/characters/{cid}/free_slots_check` (+ `X-Internal-Token` с FEAT-169; preflight на старте — падает **закрыто**: без заголовка игроку сказали бы «сумка полна»), POST `/inventory/internal/characters/{cid}/gathering/award` (+ `X-Internal-Token` с FEAT-169; атомарный award на finalize: ресурс + XP + ранг + прочность инструмента — вызов best-effort, потеря заголовка молча съела бы награду), GET `/inventory/characters/{cid}/gathering-skills` (ранговые бонусы для расчёта effective_*), GET `/inventory/internal/characters/{cid}/xp-multiplier` (+ `X-Internal-Token`, FEAT-168 #6: книга опыта за отыгрыш и за задания)
 - `party-service:8014` -> POST `/party/internal/xp-bonus` (+ `X-Internal-Token` с FEAT-169; отрядный бонус за пост, `crud.award_post_xp_and_log`), GET `/party/internal/active-members` (+ `X-Internal-Token` с FEAT-169; `crud._party_active_member_ids` — состав отряда на локации). Оба вызова best-effort и логируются на WARNING: без заголовка отрядные механики отказали бы молча
@@ -828,7 +832,9 @@ internal-эндпоинт.
 (`crud.start_gathering`), FEAT-198 — выборе реплики диалога NPC (если передан `character_id`). Отмена сбора,
 отказ от квеста, черновики и лайки остаются доступными. **FEAT-198:** создание поста и `move_and_post` вызывают
 вариант `check_not_locked_for_post` — причина `jail` пропускается, только если пост пишется в **текущей** локации
-персонажа (тюрьме); любая другая причина или другая локация → 409 как раньше.
+персонажа (тюрьме); любая другая причина или другая локация → 409 как раньше. **FEAT-202:** вариант стал
+трёхисходным (`free` / `in_place` / `prison_move`), а `quick_move` вызывает `check_not_locked_for_move` — оба
+пропускают заключённого тюрьмы страны внутри района тюрьмы (см. «Закон»). Сам `activity_lock.py` не менялся.
 
 Формулировки отказа одинаковы во всех сервисах (`activity_lock.lock_message`):
 «Персонаж находится в подземелье» / «Персонаж без сознания — осталось 2 ч 10 мин» / FEAT-198 «Персонаж в
@@ -1192,7 +1198,57 @@ null (комната не раскрывается). Считает character-se
 - **Перемещение:** `move_and_post` / `quick_move` передают `source` в `PUT /characters/internal/{id}/update_location`,
   пробрасывают его 409 (тюрьма / встреча) с текстом и добавляют в ответ `law_encounter` (`PostResponse.law_encounter:
   Optional[dict]`, аддитивно).
+- **FEAT-203 «стража замечает не всегда»:** `_update_character_location` возвращает `LawArrival(encounter, slipped)`
+  (NamedTuple; `NO_LAW_ARRIVAL` — пусто). `slipped` = `_law_slipped_from(resp)`: только `law_slipped is True` в
+  JSON-объекте ответа; отсутствие поля (старый character-service), `false`, `null`, строка/число, не-JSON → False.
+  `_post_response(new_post, arrival)` — без встречи и без проскальзывания возвращает ORM-пост как есть (оба поля
+  null), иначе словарь `PostResponse` + `law_encounter` и `law_slipped` (`True` или `None`).
+  `PostResponse.law_slipped: Optional[bool] = None` (аддитивно). Пост на месте (`POST_IN_PLACE`) `update_location`
+  не вызывает — броска нет. Сам бросок, журнал и уведомление «Вы проскользнули мимо стражи» — в character-service
+  (раздел «Стража замечает не всегда (FEAT-203)»).
 - **Диалог NPC:** `POST /locations/npcs/{npc_id}/dialogue/{node_id}/choose` принимает необязательный `character_id`
   (владение + блокировка → 409).
 - Блокировка: SELECT читает `jailed_until, law_encounter_id`; если колонок ещё нет (039 не применена) — повтор старым
   запросом с WARNING.
+
+### Тюрьма страны (FEAT-202, миграция 057)
+
+Край теперь держит **отделение стражи** (`Regions.jail_location_id`, мелкие нарушители), а страна — **тюрьму страны**:
+район вместе с вложенными подрайонами и их локациями (тяжёлые преступники; порог `law_settings.country_prison_min_level`
+в character-service). Какое учреждение выбрать, решает character-service (`law_facility.resolve_jail`, см.
+`docs/services/character-service.md`, «Тюрьма страны и отделение стражи (FEAT-202)»); locations-service владеет только
+колонкой и пропускает перемещения заключённого внутри района.
+
+- **Миграция `057_country_prison_district`** (revises `056_quest_fame`): `Countries.prison_district_id` BIGINT NULL
+  (= тип `Districts.id`), индекс `ix_countries_prison_district_id`, FK `fk_countries_prison_district` → `Districts.id`
+  ON DELETE SET NULL; каждый шаг защищён проверкой (как в 055), повторный прогон — no-op; бэкфилла нет; откат удаляет
+  FK, индекс и колонку. ORM: `Country.prison_district_id`.
+- **Поддерево района** — `crud.prison_location_ids(session, district_id)` по `crud.SQL_PRISON_LOCATIONS`: рекурсивный CTE
+  по `Districts.parent_district_id` (глубина ≤ 10) и `Locations.parent_id` (≤ 10 шагов), `GROUP BY id`, порядок
+  `(глубина района, sort_order, id)`. **Байтовая копия** `law_facility.SQL_PRISON_LOCATIONS` в character-service —
+  менять только вместе (общего скрипта сверки для неё нет).
+- **Страна:** `CountryUpdate` / `CountryRead` + `prison_district_id`; поле отдают `GET /countries/{id}/details` и
+  `GET /countries/list`; `CountryCreate` не менялся. В `crud.update_country` (`exclude_unset`) непустое значение
+  проверяет `validate_country_prison_district` → 400: «Район тюрьмы не найден» / «Район тюрьмы должен находиться в
+  одном из краёв этой страны» / «В районе тюрьмы нет ни одной локации» (подрайоны считаются). Явный `null` очищает.
+  Право — прежнее (`locations:update`).
+- **`GET /locations/countries/{country_id}/districts`** (`require_permission("locations:update")`, нужен форме страны):
+  404 «Страна не найдена»; иначе `[{id, name, region_id, region_name, parent_district_id, location_count,
+  entrance_location_id}]` (`CountryDistrictRead`) — все районы всех краёв страны, включая вложенные; порядок: корни по
+  имени края, затем `sort_order, id`, дети сразу за родителем; районы из цикла родителей — в конце.
+  `location_count` = размер поддерева (`prison_location_ids`).
+- **Посты и перемещение заключённого** (`main.py`, вне общей части `activity_lock.py`):
+  - `check_not_locked_for_post(db, cid, location_id, *, allow_prison_move=False) -> str`: `POST_FREE` (нет
+    блокировки), `POST_IN_PLACE` (в тюрьме, пост в текущей локации), `POST_PRISON_MOVE` (в тюрьме,
+    `allow_prison_move`, `characters.jail_district_id` задан, цель ≠ текущей и входит в поддерево); иначе 409 с текстом
+    блокировки.
+  - `POST /locations/posts/` — `allow_prison_move=False` (писать в другой локации по-прежнему нельзя);
+    `move_and_post` — `allow_prison_move=True`, `update_location` вызывается при любом исходе, кроме `in_place`.
+    Соседство, стамина и кулдаун перехода — без изменений.
+  - `quick_move` — `check_not_locked_for_move(db, cid, dest)`: без блокировки или переход заключённого тюрьмы страны
+    внутри поддерева (≠ текущей) — иначе 409; прочие проверки быстрого перемещения не менялись.
+  - Окончательно решает character-service `update_location` (под блокировкой строки, по снимку района).
+  - Рассинхрон деплоя: если `characters.jail_district_id` ещё нет (character 042 не применена) — WARNING и повтор
+    `SELECT current_location_id`; работает прежнее правило «только пост на месте». Прочие ошибки пробрасываются.
+- Посторонние (без блокировки) ходят в район тюрьмы как в обычные локации. Рёбра соседства между локациями тюрьмы —
+  админский контент.

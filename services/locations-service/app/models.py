@@ -43,6 +43,9 @@ class Country(Base):
     # Manual override of the recommended level range; NULL bound = computed from locations
     recommended_level_min = Column(Integer, nullable=True)
     recommended_level_max = Column(Integer, nullable=True)
+    # FEAT-202: the country prison (a district subtree, admin-assigned, must be in this country); NULL = none
+    prison_district_id = Column(BigInteger, ForeignKey('Districts.id', ondelete="SET NULL"),
+                                nullable=True, index=True)
 
     area = relationship("Area", back_populates="countries")
     regions = relationship("Region", back_populates="country")

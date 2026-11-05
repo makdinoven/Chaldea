@@ -29,7 +29,7 @@ export type PassportVariant = 'full' | 'compact';
 export type PassportStatus = 'pending' | 'approved' | 'rejected';
 
 /**
- * The ten preset stats. Kept as an open record (per §3.7) so a source that
+ * The eleven preset stats. Kept as an open record (per §3.7) so a source that
  * carries extra keys does not have to be trimmed before it is passed in.
  */
 export type PassportStats = Record<string, number>;
@@ -46,6 +46,7 @@ export const PASSPORT_STAT_ORDER = [
   'stamina',
   'charisma',
   'luck',
+  'stealth',
 ] as const;
 
 /**

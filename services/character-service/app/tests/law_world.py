@@ -49,7 +49,7 @@ INTERNAL = {"X-Internal-Token": TOKEN}
 
 _EXTRA_DDL = (
     "CREATE TABLE IF NOT EXISTS character_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-    "character_id INTEGER NOT NULL, agility INTEGER DEFAULT 0, luck INTEGER DEFAULT 0, "
+    "character_id INTEGER NOT NULL, agility INTEGER DEFAULT 0, luck INTEGER DEFAULT 0, stealth INTEGER DEFAULT 0, "
     "current_health INTEGER DEFAULT 100, max_health INTEGER DEFAULT 100, current_mana INTEGER DEFAULT 50, "
     "max_mana INTEGER DEFAULT 50, current_energy INTEGER DEFAULT 50, max_energy INTEGER DEFAULT 50, "
     "current_stamina INTEGER DEFAULT 50, max_stamina INTEGER DEFAULT 50)",
@@ -97,8 +97,8 @@ def _build_law(factory):
                                         currency_balance=0))
             db.flush()
         for cid in (ALPHA, BETA, GAMMA, GUARD, OVERRIDE, GUARD_POST, GUARD_FARM):
-            db.execute(text("INSERT INTO character_attributes (character_id, agility, luck) VALUES (:c, 0, 0)"),
-                       {"c": cid})
+            db.execute(text("INSERT INTO character_attributes (character_id, agility, luck, stealth) "
+                            "VALUES (:c, 0, 0, 0)"), {"c": cid})
         for uid in (USER_ALPHA, USER_BETA, USER_GAMMA):
             db.execute(text("INSERT INTO users (id, username) VALUES (:u, :n)"), {"u": uid, "n": f"user{uid}"})
         db.execute(text("INSERT INTO users (id, username) VALUES (1, 'admin'), (2, 'moder')"))
@@ -111,6 +111,13 @@ def _build_law(factory):
         db.close()
 
 
+class _DetectedRng:
+    """``random()`` = 0.0 -> the detection roll 0.00 is below any chance -> always detected."""
+
+    def random(self):
+        return 0.0
+
+
 @pytest.fixture
 def law_world(rep_world, monkeypatch):
     """rep_world + the law extras; ``main._prepare_move`` mocked (``factory.prepare_move``)."""
@@ -118,6 +125,9 @@ def law_world(rep_world, monkeypatch):
     prepare = AsyncMock(return_value=False)
     monkeypatch.setattr(main, "_prepare_move", prepare)
     rep_world.prepare_move = prepare
+    # FEAT-203: the guard-detection roll -> 0.00, below any chance (min 5 %) = always detected, so the FEAT-198/202
+    # entry tests keep their meaning; guard-detection tests override this seam.
+    monkeypatch.setattr(law_crud, "detection_rng", lambda: _DetectedRng())
     return rep_world
 
 

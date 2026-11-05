@@ -62,8 +62,8 @@ def _session(jailed=None, encounter=None, dungeon=None, unconscious=None, locati
         q = str(query)
         if "jailed_until, law_encounter_id FROM characters" in q:
             return _res((dungeon, unconscious, None, None, jailed, encounter))
-        if "SELECT current_location_id FROM characters" in q:
-            return _res((location,))
+        if "SELECT current_location_id" in q and "FROM characters" in q:
+            return _res((location, None))  # FEAT-202: + jail_district_id (station prisoner)
         if '"LocationNeighbors"' in q or "LocationNeighbors" in q:
             return _res(first=neighbor)
         return _res()
@@ -214,7 +214,7 @@ def test_activity_lock_copies_share_the_canonical_upper_part(copy_path):
 class TestCheckNotLockedForPost:
     @pytest.mark.asyncio
     async def test_jailed_in_current_location_is_allowed(self):
-        assert await main.check_not_locked_for_post(_session(jailed=SOON, location=JAIL), CID, JAIL) is True
+        assert await main.check_not_locked_for_post(_session(jailed=SOON, location=JAIL), CID, JAIL) == main.POST_IN_PLACE
 
     @pytest.mark.asyncio
     async def test_jailed_elsewhere_is_refused(self):
@@ -239,11 +239,11 @@ class TestCheckNotLockedForPost:
 
     @pytest.mark.asyncio
     async def test_free_character_passes(self):
-        assert await main.check_not_locked_for_post(_session(location=JAIL), CID, OTHER) is False
+        assert await main.check_not_locked_for_post(_session(location=JAIL), CID, OTHER) == main.POST_FREE
 
     @pytest.mark.asyncio
     async def test_expired_jail_passes(self):
-        assert await main.check_not_locked_for_post(_session(jailed=PAST, location=JAIL), CID, OTHER) is False
+        assert await main.check_not_locked_for_post(_session(jailed=PAST, location=JAIL), CID, OTHER) == main.POST_FREE
 
 
 class _PastTheLock(Exception):
@@ -308,7 +308,9 @@ def _fake_post(location_id):
 def _drive(path, payload, session, dest, update_result=None, update_exc=None):
     """Run a move endpoint with the outside world mocked. Returns (response, update_mock, http)."""
     http = _http()
-    update = AsyncMock(return_value=update_result, side_effect=update_exc)
+    # FEAT-203: _update_character_location returns a LawArrival (encounter, slipped)
+    arrival = update_result if isinstance(update_result, main.LawArrival) else main.LawArrival(update_result)
+    update = AsyncMock(return_value=arrival, side_effect=update_exc)
     with patch("main.verify_character_ownership", new_callable=AsyncMock), \
             patch("main.check_not_in_battle", new_callable=AsyncMock), \
             patch("main.check_not_gathering", new_callable=AsyncMock), \
@@ -427,7 +429,7 @@ class TestUpdateCharacterLocation:
     async def test_sends_source_and_internal_token(self):
         client = _put_client(200, {"ok": True, "law_encounter": None})
         with patch("httpx.AsyncClient", return_value=client):
-            assert await main._update_character_location(CID, OTHER, "quick_move") is None
+            assert await main._update_character_location(CID, OTHER, "quick_move") == main.NO_LAW_ARRIVAL
         call = client.put.await_args
         assert call.args[0].endswith(f"/characters/internal/{CID}/update_location")
         assert call.kwargs["json"] == {"new_location_id": OTHER, "source": "quick_move"}
@@ -436,13 +438,13 @@ class TestUpdateCharacterLocation:
     @pytest.mark.asyncio
     async def test_returns_the_encounter(self):
         with patch("httpx.AsyncClient", return_value=_put_client(200, {"law_encounter": ENCOUNTER})):
-            assert await main._update_character_location(CID, OTHER, "move") == ENCOUNTER
+            assert await main._update_character_location(CID, OTHER, "move") == main.LawArrival(ENCOUNTER)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("body", [{"law_encounter": "x"}, [], {"law_encounter": None}])
     async def test_non_dict_encounter_is_ignored(self, body):
         with patch("httpx.AsyncClient", return_value=_put_client(200, body)):
-            assert await main._update_character_location(CID, OTHER, "move") is None
+            assert await main._update_character_location(CID, OTHER, "move") == main.NO_LAW_ARRIVAL
 
     @pytest.mark.asyncio
     async def test_409_detail_is_passed_through(self):
@@ -474,8 +476,8 @@ class TestUpdateCharacterLocation:
 
 def test_post_response_shapes():
     post = _fake_post(OTHER)
-    assert main._post_response(post, None) is post
-    data = main._post_response(post, ENCOUNTER)
+    assert main._post_response(post, main.NO_LAW_ARRIVAL) is post
+    data = main._post_response(post, main.LawArrival(ENCOUNTER))
     assert data["law_encounter"] == ENCOUNTER and data["id"] == 555
 
 
@@ -591,3 +593,114 @@ class TestDialogueChoose:
         assert r.status_code == 409
         assert r.json()["detail"].startswith(prefix)
         node.assert_not_called()
+
+
+# ===========================================================================
+# FEAT-203: `law_slipped` pass-through (the guards did not notice the character)
+# ===========================================================================
+
+SLIPPED = main.LawArrival(None, True)
+
+
+def _quick_move_session():
+    neighbor = SimpleNamespace(energy_cost=0)
+    dest = SimpleNamespace(id=OTHER, name="Застава", no_quick_move=False)
+    session = _session(location=JAIL, neighbor=neighbor)
+    base_execute = session.execute.side_effect
+
+    async def execute(query, params=None):
+        if '"Locations"' in str(query) and "LocationNeighbors" not in str(query):
+            return _res(first=dest)
+        return await base_execute(query, params)
+
+    session.execute = AsyncMock(side_effect=execute)
+    return session
+
+
+def _drive_quick_move(update_result):
+    with patch("crud.get_favorite_user_ids", new_callable=AsyncMock, return_value=[]):
+        return _drive(f"/locations/{OTHER}/quick_move", {"character_id": CID}, _quick_move_session(), OTHER,
+                      update_result=update_result)
+
+
+def _drive_move(update_result):
+    neighbor = SimpleNamespace(energy_cost=0)
+    return _drive(f"/locations/{OTHER}/move_and_post", {"character_id": CID, "content": MOVE_TEXT},
+                  _session(location=JAIL, neighbor=neighbor), OTHER, update_result=update_result)
+
+
+class TestLawSlipped:
+    def test_move_and_post_passes_the_slip(self):
+        r, update, _ = _drive_move(SLIPPED)
+        assert r.status_code == 200, r.text
+        assert update.await_args.args == (CID, OTHER, "move")
+        body = r.json()
+        assert body["law_slipped"] is True and body["law_encounter"] is None
+        assert body["id"] == 555 and body["location_id"] == OTHER
+
+    def test_move_and_post_without_slip_is_null(self):
+        r, _, _ = _drive_move(main.NO_LAW_ARRIVAL)
+        assert r.status_code == 200, r.text
+        assert r.json()["law_slipped"] is None and r.json()["law_encounter"] is None
+
+    def test_move_and_post_encounter_has_no_slip(self):
+        r, _, _ = _drive_move(main.LawArrival(ENCOUNTER))
+        assert r.json()["law_encounter"] == ENCOUNTER and r.json()["law_slipped"] is None
+
+    def test_quick_move_passes_the_slip(self):
+        r, update, _ = _drive_quick_move(SLIPPED)
+        assert r.status_code == 200, r.text
+        assert update.await_args.args == (CID, OTHER, "quick_move")
+        assert r.json()["law_slipped"] is True and r.json()["law_encounter"] is None
+
+    def test_quick_move_without_slip_is_null(self):
+        r, _, _ = _drive_quick_move(main.NO_LAW_ARRIVAL)
+        assert r.status_code == 200, r.text
+        assert r.json()["law_slipped"] is None
+
+    def test_post_in_place_never_asks_and_has_no_slip(self):
+        r, update, _ = _drive(f"/locations/{JAIL}/move_and_post", {"character_id": CID, "content": MOVE_TEXT},
+                              _session(jailed=SOON, location=JAIL), JAIL, update_result=SLIPPED)
+        assert r.status_code == 200, r.text
+        update.assert_not_called()
+        assert r.json()["law_slipped"] is None
+
+
+class TestLawSlippedContract:
+    @pytest.mark.asyncio
+    async def test_true_is_a_slip(self):
+        with patch("httpx.AsyncClient", return_value=_put_client(200, {"law_encounter": None, "law_slipped": True})):
+            assert await main._update_character_location(CID, OTHER, "move") == SLIPPED
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [
+        {"law_encounter": None, "law_slipped": False},
+        {"law_encounter": None, "law_slipped": None},
+        {"law_encounter": None},                                  # an older character-service: no field
+        {"law_slipped": "true"}, {"law_slipped": 1}, [True],
+    ], ids=["false", "none", "absent", "string", "int", "list"])
+    async def test_anything_but_true_is_no_slip(self, body):
+        with patch("httpx.AsyncClient", return_value=_put_client(200, body)):
+            assert await main._update_character_location(CID, OTHER, "move") == main.NO_LAW_ARRIVAL
+
+    @pytest.mark.asyncio
+    async def test_not_json_is_no_slip(self):
+        with patch("httpx.AsyncClient", return_value=_put_client(200, json_error=True)):
+            assert await main._update_character_location(CID, OTHER, "move") == main.NO_LAW_ARRIVAL
+
+    @pytest.mark.asyncio
+    async def test_encounter_and_slip_are_independent(self):
+        body = {"law_encounter": ENCOUNTER, "law_slipped": False}
+        with patch("httpx.AsyncClient", return_value=_put_client(200, body)):
+            assert await main._update_character_location(CID, OTHER, "move") == main.LawArrival(ENCOUNTER, False)
+
+    def test_post_response_slip_shape(self):
+        post = _fake_post(OTHER)
+        data = main._post_response(post, SLIPPED)
+        assert data["law_slipped"] is True and data["law_encounter"] is None and data["id"] == 555
+        data = main._post_response(post, main.LawArrival(ENCOUNTER))
+        assert data["law_slipped"] is None
+
+    def test_schema_field_is_optional(self):
+        assert schemas.PostResponse.__fields__["law_slipped"].required is False
+        assert schemas.PostResponse.__fields__["law_slipped"].default is None

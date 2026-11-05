@@ -102,6 +102,7 @@ export interface CharacterAttributes {
   endurance: number;
   charisma: number;
   luck: number;
+  stealth: number;
   // Combat
   damage: number;
   dodge: number;
@@ -169,6 +170,7 @@ export interface ItemData {
   stamina_modifier: number;
   charisma_modifier: number;
   luck_modifier: number;
+  stealth_modifier: number;
   damage_modifier: number;
   dodge_modifier: number;
   // recovery

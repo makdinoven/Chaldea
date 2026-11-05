@@ -35,9 +35,12 @@ WS_UNSEEN = "law_unseen"
 WS_MASKED = "law_masked"
 WS_REVEALED = "law_revealed"
 WS_FAME_TIER = "fame_tier"
+# FEAT-203: the guards did not notice the character on entry (category progress)
+WS_SLIPPED = "law_slipped"
 
 MSG_UNSEEN = "Похоже, никто не видел, что произошло"
 MSG_MASKED = "Свидетели видели лишь неизвестного в маске"
+MSG_SLIPPED = "Вы проскользнули мимо стражи"
 
 
 @dataclass
@@ -62,6 +65,11 @@ def revealed_message(region_name: Optional[str]) -> str:
     return f"Ваше преступление в крае {region_label(region_name)} раскрыто — стража знает, кто это был"
 
 
+def slipped_message(location_name: Optional[str]) -> str:
+    """FEAT-203: no chance / roll / wanted numbers in the player text."""
+    return f"{MSG_SLIPPED} в «{location_name}»" if location_name else MSG_SLIPPED
+
+
 def remaining(value: Optional[datetime], now: Optional[datetime] = None) -> str:
     """Relative time left («3 д 4 ч», «5 ч 10 мин») — player text never shows clock times (§3.14-ANSWERED A8)."""
     if value is None:
@@ -75,8 +83,21 @@ def encounter_message(region_name: Optional[str], expires_at: Optional[datetime]
             f"в течение {remaining(expires_at, now)}")
 
 
-def jailed_message(region_name: Optional[str], until: Optional[datetime], now: Optional[datetime] = None) -> str:
-    return f"Стража края {region_label(region_name)} заключила вас под стражу — срок {remaining(until, now)}"
+def patrol_encounter_message(location_name: Optional[str], expires_at: Optional[datetime],
+                             now: Optional[datetime] = None) -> str:
+    """FEAT-204: a patrolling guard noticed the character where he stands."""
+    where = f"Вас заметил патруль стражи в «{location_name}»" if location_name else "Вас заметил патруль стражи"
+    return f"{where}. Решите, как поступить, в течение {remaining(expires_at, now)}"
+
+
+def jailed_message(region_name: Optional[str], until: Optional[datetime], now: Optional[datetime] = None, *,
+                   facility: str = "station", country_name: Optional[str] = None) -> str:
+    """FEAT-202: the text names the facility (the region guard station or the country prison)."""
+    if facility == "country":
+        return (f"Стража края {region_label(region_name)} отправила вас в тюрьму страны «{country_name or '—'}» "
+                f"— срок {remaining(until, now)}. Залога нет, передвигаться можно только внутри тюрьмы")
+    return (f"Стража края {region_label(region_name)} заключила вас в отделение стражи — "
+            f"срок {remaining(until, now)}")
 
 
 def _payload(notice: Notice) -> dict:

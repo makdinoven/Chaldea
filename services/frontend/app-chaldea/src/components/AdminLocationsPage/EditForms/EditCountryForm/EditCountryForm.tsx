@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -6,6 +6,15 @@ import type { RootState } from '../../../../redux/store';
 import type { Area } from '../../../../redux/actions/adminLocationsActions';
 import RecommendedLevelFields from '../RecommendedLevelFields';
 import { parseLevelRange } from '../../../../api/recommendedLevel';
+import { fetchCountryDistricts, type CountryDistrict } from '../../../../api/countryPrison';
+import { apiErrorMessage } from '../../../../api/errors';
+
+/** Guard against a cyclic `parent_district_id` when indenting nested districts. */
+const MAX_DISTRICT_DEPTH = 10;
+/** Non-breaking space: `<option>` text collapses ordinary spaces, so indentation needs these. */
+const NBSP = ' ';
+const FIELD_CLASS =
+  'w-full p-2.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] transition-colors focus:border-site-blue/50 focus:outline-none';
 
 interface CountryFormData {
   name: string;
@@ -26,6 +35,8 @@ interface InitialData {
   leader_id?: number | null;
   area_id?: number | null;
   is_hidden?: boolean;
+  /** FEAT-202: the country prison district (null = no country prison). */
+  prison_district_id?: number | null;
 }
 
 interface EditCountryFormProps {
@@ -56,6 +67,57 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
   const [emblemPreview, setEmblemPreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+
+  // FEAT-202: the country prison — a district of one of this country's regions ('' = none)
+  const countryId = initialData?.id;
+  const [prisonDistrictId, setPrisonDistrictId] = useState<string>(
+    initialData?.prison_district_id != null ? String(initialData.prison_district_id) : ''
+  );
+  const [districts, setDistricts] = useState<CountryDistrict[]>([]);
+  const [districtsLoading, setDistrictsLoading] = useState(false);
+  const [districtsError, setDistrictsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!countryId) return undefined;
+    let cancelled = false;
+    setDistrictsLoading(true);
+    setDistrictsError(null);
+    fetchCountryDistricts(countryId)
+      .then((list) => {
+        if (!cancelled) setDistricts(list);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const msg = apiErrorMessage(e, 'Не удалось загрузить районы страны');
+        setDistrictsError(msg);
+        toast.error(msg);
+      })
+      .finally(() => {
+        if (!cancelled) setDistrictsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [countryId]);
+
+  /** Nesting depth of each district inside the list (sub-districts are indented). */
+  const districtDepth = useMemo(() => {
+    const parentOf = new Map(districts.map((d) => [d.id, d.parent_district_id]));
+    const depth = new Map<number, number>();
+    districts.forEach((d) => {
+      let level = 0;
+      let parent = d.parent_district_id;
+      while (parent != null && parentOf.has(parent) && level < MAX_DISTRICT_DEPTH) {
+        level += 1;
+        parent = parentOf.get(parent) ?? null;
+      }
+      depth.set(d.id, level);
+    });
+    return depth;
+  }, [districts]);
+
+  const selectedPrisonMissing =
+    prisonDistrictId !== '' && !districtsLoading && !districts.some((d) => String(d.id) === prisonDistrictId);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -150,6 +212,8 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
         id: initialData.id,
         recommended_level_min: levels.min,
         recommended_level_max: levels.max,
+        // FEAT-202: null clears the country prison; the server validates the district
+        prison_district_id: prisonDistrictId === '' ? null : Number(prisonDistrictId),
       };
 
       if (selectedFile) {
@@ -318,6 +382,51 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
             }}
           />
         )}
+
+        {initialData?.id ? (
+          <div className="mb-6">
+            <label htmlFor="prison_district_id" className="block mb-2 text-[#8ab3d5] font-medium">
+              ТЮРЬМА СТРАНЫ (РАЙОН):
+            </label>
+            <select
+              id="prison_district_id"
+              value={prisonDistrictId}
+              onChange={(e) => setPrisonDistrictId(e.target.value)}
+              disabled={districtsLoading}
+              className={`${FIELD_CLASS} disabled:opacity-50`}
+            >
+              <option value="">Нет тюрьмы страны</option>
+              {selectedPrisonMissing && (
+                <option value={prisonDistrictId}>Район #{prisonDistrictId} (не найден в краях этой страны)</option>
+              )}
+              {districts.map((d) => {
+                const depth = districtDepth.get(d.id) ?? 0;
+                const empty = d.location_count === 0;
+                const indent = NBSP.repeat(depth * 2) + (depth > 0 ? '↳ ' : '');
+                return (
+                  <option
+                    key={d.id}
+                    value={d.id}
+                    disabled={empty && String(d.id) !== prisonDistrictId}
+                  >
+                    {`${d.region_name} → ${indent}${d.name} · ${empty ? 'нет локаций' : `локаций: ${d.location_count}`}`}
+                  </option>
+                );
+              })}
+            </select>
+            {districtsLoading && <p className="text-xs text-gray-400 mt-1">Загрузка районов...</p>}
+            {districtsError && <p className="text-xs text-site-red mt-1">{districtsError}</p>}
+            {!districtsLoading && !districtsError && districts.length === 0 && (
+              <p className="text-xs text-gray-400 mt-1">В краях этой страны пока нет районов.</p>
+            )}
+            <p className="text-xs text-gray-400 mt-2">
+              Сюда попадают тяжёлые преступники (порог — в настройках закона). Заключённые могут ходить между
+              локациями района и его подрайонов — проверьте, что локации соединены. Камера по умолчанию — входная
+              локация района, иначе первая. Залога из тюрьмы страны нет. Мелких нарушителей везут в отделение
+              стражи края.
+            </p>
+          </div>
+        ) : null}
 
         <div className="mb-6">
           <label className="block mb-2 text-[#8ab3d5] font-medium">ПРАВИТЕЛЬ:</label>

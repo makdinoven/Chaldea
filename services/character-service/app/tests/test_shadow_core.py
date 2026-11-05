@@ -1,11 +1,11 @@
 """FEAT-199 QA (task 7): shadow_core pure maths + the migration 040 contract.
 
-* witness: base by marker type, stealth from effective agility + luck, subclass keys, mask, fame (a masked member is
-  anonymous), group = max member + size bonus, clamps 5..95;
+* witness (FEAT-201, multiplicative): base by marker type × (1 − stealth reduction) × fame (a masked member is
+  anonymous), subclass stealth points before the cap, group = max member × size multiplier, clamps 5..100;
 * reveal chance (suspicion, mask factor, clamps), suspicion states, infamy gain, fame from reputation per action;
 * renown tiers / progress, settings row / tier row loaders, settings validation;
 * law_core.chance with Decimal (effective) points; stat_caps effective values;
-* migration 040: revision id, seeds == code defaults, DDL columns == ORM columns.
+* migration 040 (+ the 041 column swap): revision id, seeds == code defaults, DDL columns == ORM columns.
 """
 
 import importlib.util
@@ -33,55 +33,76 @@ def _s(**kw):
 # =============================================================================================== witnesses
 
 @pytest.mark.parametrize("marker,expected", [
-    ("safe", 70), ("farm", 45), ("dangerous", 25), ("dungeon", 15), (None, 50), ("", 50), ("volcano", 50),
+    ("safe", 100), ("farm", 70), ("dangerous", 40), ("dungeon", 25), (None, 50), ("", 50), ("volcano", 50),
 ])
 def test_base_pct_by_marker(marker, expected):
     assert sc.base_pct(marker, S) == D(expected)
 
 
 @pytest.mark.parametrize("key,expected", [
-    ("warrior_agent", 10), ("rogue_assassin", 15), ("rogue_trickster", 15), ("warrior_berserk", 0), (None, 0),
+    ("warrior_agent", 20), ("rogue_assassin", 30), ("rogue_trickster", 30), ("warrior_berserk", 0), (None, 0),
     ("ROGUE_ASSASSIN", 0),
 ])
-def test_subclass_bonus_only_for_the_three_keys(key, expected):
-    assert sc.subclass_pct(key, S) == D(expected)
+def test_subclass_stealth_points_only_for_the_three_keys(key, expected):
+    assert sc.subclass_stealth_points(key, S) == expected
+
+
+@pytest.mark.parametrize("raw,points,eff", [
+    (0, 0, "0.00"), (100, 0, "100.00"), (0, 30, "30.00"), (100, 30, "115.00"), (400, 0, "200.00"), (-20, 30, "30.00"),
+])
+def test_effective_stealth_adds_subclass_before_the_cap(raw, points, eff):
+    assert sc.effective_stealth(raw, points) == D(eff)
+
+
+@pytest.mark.parametrize("eff,expected", [("0", "0.00"), ("100", "50.00"), ("115", "57.50"), ("200", "90.00"),
+                                          ("-5", "0.00")])
+def test_stealth_reduction_pct(eff, expected):
+    assert sc.stealth_reduction_pct(D(eff), S) == D(expected)
+
+
+def _alone(base, raw, subclass=None, masked=False, fame=0):
+    red = sc.stealth_reduction_pct(sc.effective_stealth(raw, sc.subclass_stealth_points(subclass, S)), S)
+    return sc.group_chance([sc.member_chance(base, red, masked, fame)], 1, S)
+
+
+@pytest.mark.parametrize("base,raw,subclass,masked,fame,expected", [
+    (100, 0, None, False, 0, "100.00"),                # settlement, stealth 0: reaches 100
+    (100, 100, None, False, 0, "50.00"),
+    (40, 100, None, False, 0, "20.00"),
+    (100, 0, "rogue_assassin", False, 0, "85.00"),
+    (100, 100, "rogue_assassin", False, 0, "42.50"),
+    (100, 400, None, False, 0, "10.00"),               # reduction capped at 90
+    (25, 400, None, False, 0, "5.00"),                 # 2.50 -> min clamp
+    (40, 0, None, False, 15, "46.00"),                 # legend fame multiplier
+    (40, 0, None, True, 15, "40.00"),                  # masked: fame ignored, no flat mask bonus
+])
+def test_witness_worked_numbers(base, raw, subclass, masked, fame, expected):
+    assert _alone(base, raw, subclass, masked, D(fame)) == D(expected)
 
 
 def test_member_chance_formula():
-    # 70 - (50 + 30) * 0.1 = 62
-    assert sc.member_chance(70, S, 50, 30, None, False, 0) == D("62.0")
-    assert sc.member_chance(70, S, 50, 30, "rogue_assassin", False, 0) == D("47.0")
-    assert sc.member_chance(70, S, 50, 30, "warrior_agent", False, 0) == D("52.0")
-    # mask -10, fame +witness_pct
-    assert sc.member_chance(70, S, 50, 30, None, True, 0) == D("52.0")
-    assert sc.member_chance(70, S, 50, 30, None, False, D(15)) == D("77.0")
+    assert sc.member_chance(70, D(50), False, 0) == D(35)
+    assert sc.member_chance(70, D(50), False, D(10)) == D("38.5")
+    assert sc.member_chance(70, D(0), True, D(10)) == D(70)
 
 
-def test_masked_member_fame_is_ignored():
-    assert sc.member_chance(70, S, 0, 0, None, True, D(15)) == sc.member_chance(70, S, 0, 0, None, True, 0) == D(60)
-
-
-def test_member_chance_negative_stats_do_not_raise_the_chance():
-    assert sc.member_chance(70, S, -40, -10, None, False, 0) == D(70)
-
-
-def test_member_chance_accepts_decimal_effective_stats():
-    eff = D(str(stat_caps.effective_stat(300)))          # 175
-    assert sc.member_chance(70, S, eff, D("0"), None, False, 0) == D("52.5")
+def test_member_chance_reduction_is_bounded():
+    assert sc.member_chance(70, D(-20), False, 0) == D(70)
+    assert sc.member_chance(70, D(150), False, 0) == D(0)
 
 
 def test_member_chance_is_unclamped():
-    assert sc.member_chance(15, S, 400, 400, "rogue_assassin", True, 0) < 0
+    assert sc.member_chance(200, D(0), False, D(50)) == D(300)
 
 
-def test_group_chance_max_member_plus_size_bonus():
-    assert sc.group_chance([D(62), D(40)], 2, S) == D("72.00")
+def test_group_chance_max_member_times_size_multiplier():
+    assert sc.group_chance([D(50), D(20)], 2, S) == D("55.00")
     assert sc.group_chance([D(30)], 1, S) == D("30.00")
-    assert sc.group_chance([D(30), D(20), D(10)], 3, S) == D("50.00")
+    assert sc.group_chance([D(30), D(20), D(10)], 3, S) == D("36.00")
 
 
 @pytest.mark.parametrize("chances,n,expected", [
-    ([D(-30)], 1, "5.00"), ([D(4.99)], 1, "5.00"), ([D(90)], 3, "95.00"), ([D(200)], 1, "95.00"),
+    ([D(-30)], 1, "5.00"), ([D(4.99)], 1, "5.00"), ([D(90)], 3, "100.00"), ([D(200)], 1, "100.00"),
     ([D("12.345")], 1, "12.35"),
 ])
 def test_group_chance_clamps_and_rounds(chances, n, expected):
@@ -109,6 +130,14 @@ def test_reveal_chance(susp, masked, expected):
 
 def test_reveal_chance_min_clamp():
     assert sc.reveal_chance(0, True, _s(reveal_mask_factor_pct=D(0))) == D("1.00")
+
+
+@pytest.mark.parametrize("masked,snapshot,expected", [
+    (False, D(50), "17.50"), (True, D(50), "8.75"), (False, None, "35.00"), (False, 0, "35.00"),
+    (False, D(90), "3.50"),
+])
+def test_reveal_chance_times_stealth_snapshot(masked, snapshot, expected):
+    assert sc.reveal_chance(50, masked, S, snapshot) == D(expected)
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -201,10 +230,15 @@ def test_defaults_are_valid():
 
 @pytest.mark.parametrize("kw,fragment", [
     ({"witness_base_safe_pct": D(101)}, "от 0 до 100"),
-    ({"witness_mask_pct": D(-1)}, "от 0 до 100"),
+    ({"stealth_max_reduction_pct": D(101)}, "Предел снижения скрытностью"),
+    ({"stealth_max_reduction_pct": D(-1)}, "от 0 до 100"),
+    ({"stealth_assassin_points": 501}, "Скрытность подкласса «Ассасин»"),
+    ({"stealth_trickster_points": -1}, "Скрытность подкласса «Фокусник»"),
+    ({"stealth_agent_points": 501}, "Скрытность подкласса «Агент»"),
+    ({"witness_max_pct": D(101)}, "от 0 до 100"),
     ({"witness_min_pct": D(60), "witness_max_pct": D(50)}, "минимум не может быть больше максимума"),
     ({"reveal_min_pct": D(60), "reveal_max_pct": D(50)}, "минимум не может быть больше максимума"),
-    ({"witness_stealth_per_point_pct": D(11)}, "от 0 до 10"),
+    ({"stealth_pct_per_point": D(11)}, "Снижение за очко скрытности: от 0 до 10"),
     ({"reveal_days": 0}, "Срок раскрытия"), ({"reveal_days": 31}, "Срок раскрытия"),
     ({"suspicion_max": 0}, "Максимальное подозрение"),
     ({"suspicion_unwitnessed": 101}, "Подозрение за незамеченное"),
@@ -262,6 +296,7 @@ def test_stat_caps_copy(raw, eff):
 
 def test_law_chance_accepts_decimal_points_and_ints_unchanged():
     assert lc.chance(10, D(1), 0, 100, D("12.5"), 3) == D("25.50")
+    assert lc.chance(10, D(1), 0, 100, D("12.5")) == D("22.50")              # FEAT-201: one stat (escape)
     assert lc.chance(20, D("0.25"), 5, 85, 40, 20) == D("35.00")
     assert lc.chance(20, D("0.25"), 5, 85, D(40), D(20)) == D("35.00")
 
@@ -306,12 +341,33 @@ def _ddl_columns(sql_text, table):
                                    "renown_log"])
 def test_migration_ddl_columns_equal_orm(table):
     text_ = open(_mig040().__file__, encoding="utf-8").read()
-    assert set(_ddl_columns(text_, table)) == set(models.Base.metadata.tables[table].columns.keys())
+    cols = _ddl_columns(text_, table)
+    if table == "shadow_settings":
+        cols = _apply_041(cols)
+    assert set(cols) == set(models.Base.metadata.tables[table].columns.keys())
+
+
+def _mig041():
+    spec = importlib.util.spec_from_file_location("migration_041_stealth", os.path.join(_VERSIONS, "041_stealth.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _apply_041(cols):
+    """The 040 shadow_settings DDL after 041: old knobs dropped, stealth columns added, bases / max re-defaulted."""
+    mig = _mig041()
+    cols = {k: v for k, v in cols.items() if k not in {c for c, _ in mig._OLD_SHADOW_COLUMNS}}
+    for column, ddl in mig._NEW_SHADOW_COLUMNS:
+        cols[column] = f"{column} {ddl}"
+    for column, new, _old in mig._BASES:
+        cols[column] = f"{column} DECIMAL(5,2) NOT NULL DEFAULT {new}"
+    return cols
 
 
 def test_migration_settings_defaults_equal_code_defaults():
     text_ = open(_mig040().__file__, encoding="utf-8").read()
-    cols = _ddl_columns(text_, "shadow_settings")
+    cols = _apply_041(_ddl_columns(text_, "shadow_settings"))
     for name in sc.SETTINGS_FIELDS:
         default = re.search(r"DEFAULT (\S+)", cols[name]).group(1)
         value = getattr(S, name)

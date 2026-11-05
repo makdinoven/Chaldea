@@ -47,10 +47,12 @@ const ItemTypeLine = ({ item }: ItemTypeLineProps) => {
         ? 'Еда'
         : item.item_type === 'cloak' && item.is_backpack
           ? 'Походный рюкзак'
-          : item.item_type === 'head' && item.is_mask
-            ? 'Маска'
-            : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
+          : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
     segments.push({ text: typeLabel, className: 'text-white/80' });
+    // FEAT-201: «Скрывает личность» is a property of the head gear, not a type of its own.
+    if (item.item_type === 'head' && item.is_mask) {
+      segments.push({ text: 'Скрывает личность', className: 'text-site-blue' });
+    }
     if (item.item_type === 'furniture' && isFurnitureGroup(item.furniture_room_type)) {
       segments.push({ text: FURNITURE_GROUP_LABEL[item.furniture_room_type], className: 'text-white' });
     }

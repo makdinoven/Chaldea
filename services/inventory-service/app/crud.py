@@ -140,6 +140,7 @@ MAIN_STAT_FIELDS = [
     'strength_modifier', 'agility_modifier', 'intelligence_modifier', 'endurance_modifier',
     'health_modifier', 'energy_modifier', 'mana_modifier', 'stamina_modifier',
     'charisma_modifier', 'luck_modifier', 'damage_modifier', 'dodge_modifier',
+    'stealth_modifier',  # FEAT-201: sharpenable / socketable like the others
 ]
 
 FLOAT_STAT_FIELDS = [
@@ -158,6 +159,7 @@ STAT_DISPLAY_NAMES = {
     'health_modifier': 'Здоровье', 'energy_modifier': 'Энергия',
     'mana_modifier': 'Мана', 'stamina_modifier': 'Выносливость (стамина)',
     'charisma_modifier': 'Харизма', 'luck_modifier': 'Удача',
+    'stealth_modifier': 'Скрытность',
     'damage_modifier': 'Урон', 'dodge_modifier': 'Уклонение',
     'res_physical_modifier': 'Сопр. физическому', 'res_catting_modifier': 'Сопр. режущему',
     'res_crushing_modifier': 'Сопр. дробящему', 'res_piercing_modifier': 'Сопр. колющему',
@@ -677,6 +679,8 @@ def build_modifiers_dict(item_obj: models.Items, negative: bool = False, enhance
         mods["charisma"] = item_obj.charisma_modifier
     if item_obj.luck_modifier:
         mods["luck"] = item_obj.luck_modifier
+    if item_obj.stealth_modifier:
+        mods["stealth"] = item_obj.stealth_modifier
     if item_obj.damage_modifier:
         mods["damage"] = item_obj.damage_modifier
     if item_obj.dodge_modifier:

@@ -29,6 +29,10 @@ character-service/app/
 ├── law_api.py            # FEAT-198: роутер закона (игрок / админ / internal)
 ├── law_pass.py           # FEAT-198: проход планировщика закона (из econ_scheduler)
 ├── law_notify.py         # FEAT-198: уведомления закона (sync pika)
+├── law_facility.py       # FEAT-202: где держать осуждённого — отделение стражи края или тюрьма страны (resolve_jail)
+├── patrol_core.py        # FEAT-204: чистая математика патрулей (валидация, интервал ± разброс, шаг маршрута/зоны, подсказка)
+├── patrol_crud.py        # FEAT-204: шаг патрульного (step_guard), проверка прибывшим патрулём, подсказка, админ-конфиг
+├── patrol_api.py         # FEAT-204: админ-роутер патрулей (GET/PUT /admin/npcs/{id}/patrol, POST …/step)
 ├── battle_client.py      # FEAT-198: HTTP-клиент к battle-service (бой со стражей, опрос итога)
 ├── shadow_core.py        # FEAT-199: чистая математика тени (свидетели, раскрытие, подозрение, слава; без копий)
 ├── shadow_crud.py        # FEAT-199: оркестратор преступления, раскрытие/закрытие, подозрение края, staff, настройки
@@ -110,7 +114,7 @@ PUT заменяет таблицу целиком (уровни подряд с
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/characters/by_location?location_id=X` | Персонажи в локации |
-| PUT | `/characters/internal/{id}/update_location` | Обновить текущую локацию (internal, `X-Internal-Token`, nginx 403 снаружи). FEAT-198: тело `{new_location_id, source?: "move"\|"quick_move"}`, строка персонажа берётся `FOR UPDATE`; в тюрьме или при ожидающей встрече со стражей → **409** с текстом блокировки; при реальной смене локации — проверка стражи (`law_crud.evaluate_entry`) в той же транзакции; ответ дополнен `law_encounter` (объект или null). См. «Law» |
+| PUT | `/characters/internal/{id}/update_location` | Обновить текущую локацию (internal, `X-Internal-Token`, nginx 403 снаружи). FEAT-198: тело `{new_location_id, source?: "move"\|"quick_move"}`, строка персонажа берётся `FOR UPDATE`; в тюрьме или при ожидающей встрече со стражей → **409** с текстом блокировки; при реальной смене локации — проверка стражи (`law_crud.evaluate_entry`) в той же транзакции; ответ дополнен `law_encounter` (объект или null). FEAT-203: проверка — `law_crud.check_entry` с броском обнаружения; ответ дополнен `law_slipped: bool` (true — стража не заметила). FEAT-202: заключённый тюрьмы страны может перемещаться внутри поддерева своего района (`characters.jail_district_id`), остальное — 409. См. «Law» |
 | GET | `/characters/admin/{id}` | FEAT-200: один персонаж игрока в форме строки `/characters/admin/list` (`AdminCharacterListItem`), `characters:read`; NPC/моб или неизвестный id → 404 «Персонаж не найден». Путь с конвертером `{character_id:int}`, поэтому не перекрывает `/characters/admin/list`, `/admin/npcs` и др. Используется карточкой `/admin/characters/:id` |
 | POST | `/characters/admin/{id}/move` | Перенос персонажа в произвольную локацию (админ, `characters:teleport`). Гасит намерения и заявки в покидаемой локации, отменяет сбор ресурсов, сбрасывает кулдаун перехода, пишет `admin_teleport` в `character_logs`. Отказ 409, если персонаж в бою или в подземелье; та же локация — no-op без записей |
 
@@ -154,6 +158,10 @@ PUT заменяет таблицу целиком (уровни подряд с
 - **character_reputation**, **reputation_log**, **reputation_settings**, **reputation_tiers**, **reputation_actions**, **reputation_npc_role_weights** — репутация в регионах (FEAT-197, миграция `038_reputation`), см. раздел «Region reputation» в конце
 - **character_wanted**, **law_settings**, **law_levels**, **law_crimes**, **law_encounters**, **law_jail_terms**, **law_log** + колонки `characters.jailed_until`, `jail_region_id`, `law_encounter_id` — закон: розыск, стража, тюрьма (FEAT-198, миграция `039_law`), см. раздел «Law» в конце
 - **shadow_settings**, **region_suspicion**, **character_renown**, **renown_tiers**, **renown_log** + 11 колонок снимка в `law_crimes` — тень: свидетели, нераскрытые преступления, подозрение края, слава и дурная слава (FEAT-199, миграция `040_shadow_renown`), см. раздел «Shadow» в конце
+- FEAT-201 (миграция `041_stealth`): новые поля скрытности в `shadow_settings`, `law_crimes.stealth_reduction_pct`, `law_settings.escape_per_point_pct` по умолчанию 0.300 — см. раздел «Скрытность (FEAT-201)» в конце
+- FEAT-202 (миграция `042_country_prison`): 3 настройки тюрьмы страны в `law_settings`, `law_jail_terms.facility` / `country_id` / `district_id`, `characters.jail_district_id` — см. «Тюрьма страны и отделение стражи (FEAT-202)» в конце
+- FEAT-203 (миграция `043_guard_detection`): 10 настроек обнаружения в `law_settings` (`detect_*`) и `law_levels.detect_pct` — см. «Стража замечает не всегда (FEAT-203)» в конце
+- **guard_patrols**, **guard_patrol_points** + `law_settings.patrols_enabled` / `patrol_encounter_hold_min`, индекс `law_encounters.ix_law_enc_guard` — патрули стражи (FEAT-204, миграция `044_guard_patrols`), см. «Патрули стражи (FEAT-204)» в конце
 
 ### Колонки, добавленные FEAT-154
 
@@ -221,6 +229,14 @@ PUT заменяет таблицу целиком (уровни подряд с
 | Одобрение заявки | `crud.generate_attributes_for_subrace` **ровно один раз**: один результат идёт и в character-attributes-service, и в слепок |
 | Паспорт | слепок `characters.starting_attributes` |
 | Паспорт, если слепка нет | `subraces.stat_preset` как реконструкция, `starting_attributes_is_snapshot: false` |
+
+**Ключи пресета и паспорта (FEAT-201).** `schemas.STAT_PRESET_KEYS` и `crud.PASSPORT_STAT_KEYS` — 11 статов: 10 прежних +
+`stealth` (последним). `StatPreset.stealth` необязателен (по умолчанию 0) — старые пресеты остаются валидными; старые
+слепки без скрытности просто не содержат ключа (`normalize_starting_attributes`). Проверка «сумма = 100» —
+`@root_validator(skip_on_failure=True)`, суммирует **каждый** ключ ровно один раз (раньше это был валидатор поля
+`luck`, зависевший от порядка ключей: новый последний ключ задвоил бы удачу); текст ошибки прежний —
+«Сумма пресета должна быть равна 100, получено {total}». Запасной пресет `generate_attributes_for_subrace` (все по
+10) содержит `stealth: 0`.
 
 **`GET /characters/{id}/public` не ходит в character-attributes-service и не отдаёт текущие статы.** До FEAT-155 отдавал: блок «Оценка при вступлении» показывал актуальный билд персонажа, из-за чего подпись «Всего распределено: N из 100 очков подрасы» врала (N > 100 после вложенных очков), а чужая анкета раскрывала распределение очков игрока. Утечка закрыта в источнике — из ответа API просто нечего взять. Уровень (`level`) остаётся публичным: спойлером было распределение, а не УР.
 
@@ -1736,7 +1752,7 @@ FK на `characters` везде `ON DELETE CASCADE`, каждая FK-колон�
 - `law_settings` — одна строка `id=1`: `max_wanted` 1000, `decay_per_day` 50.00 (0 = без спада), `heavy_wanted` 600
   (пол после победы над стражником / удачного побега), `outlaw_min_level` `criminal`, `encounter_timeout_hours` 24,
   `guard_ko_hours` 6, шанс бегства `flee_base/per_point/min/max_pct` 20 / 0.25 / 5 / 85, шанс побега
-  `escape_base/per_point/min/max_pct` 5 / 0.15 / 2 / 50, `escape_cooldown_hours` 6, `escape_fail_extend_pct` 50,
+  `escape_base/per_point/min/max_pct` 5 / 0.15 (FEAT-201: 0.30, см. ниже) / 2 / 50, `escape_cooldown_hours` 6, `escape_fail_extend_pct` 50,
   `max_remaining_jail_hours` 168, `bail_multiplier` 2.00, `pass_last_run_at` (захват прохода), `updated_at`.
 - `law_levels` — ровно 5 строк с фиксированными кодами (`code` PK, `sort_order` UNIQUE, `name`, `min_value`, `fine`,
   `jail_hours`). Сид:
@@ -1753,7 +1769,7 @@ FK на `characters` везде `ON DELETE CASCADE`, каждая FK-колон�
   `character_id`, `region_id`, `location_id`, `victim_character_id` (без FK), `battle_id`, `wanted_points`,
   `wanted_applied` (после зажима), `status` (`reported`; FEAT-199 добавил `unwitnessed` | `masked` | `closed`,
   `pending_witness` удалён), `created_at`, `resolved_at`; FEAT-199 — колонки снимка отложенного преступления (см.
-  «Shadow» → «Таблицы»).
+  «Shadow» → «Таблицы»); FEAT-201 — `stealth_reduction_pct` (снимок снижения скрытности для раскрытия).
 - `law_encounters` — встреча со стражей: `region_id`, `location_id`, `from_location_id` (откуда пришёл; для возврата
   при бегстве), `guard_npc_id`, снимки `is_outlaw`, `has_jail`, `level_code`, `wanted_value` (только staff), `fine`,
   `jail_hours`; `flee_used`, `status` (`pending` | `fighting` | `fined` | `jailed` | `fled` | `won` | `auto_fined` |
@@ -1783,11 +1799,16 @@ FK на `characters` везде `ON DELETE CASCADE`, каждая FK-колон�
 - Вес преступления = `−kill_points` из весов убийства репутации (`reputation_crud.npc_kill_points`: личный вес NPC ??
   вес роли ?? `*`); положительный вес (бандит) — не преступление. `add_wanted = min(max_wanted, max(текущее + очки,
   пол))`.
-- Варианты встречи (`options`): не «вне закона» — `fine`, `surrender` (только если у края есть тюрьма), `flee`
-  (если ещё не использован), `fight`; «вне закона» — `surrender` (если есть тюрьма), `fight`.
-- Шанс бегства / побега: `clamp(base + (agility + luck) × per_point, min, max)`; с FEAT-199 agility / luck —
-  **эффективные** (`law_crud.effective_attributes_of`: значения `character_attributes` с учётом снаряжения, пропущенные
-  через `stat_caps.effective_stat`, до 2 знаков; для статов ≤ 100 результат прежний),
+- Варианты встречи (`options`): не «вне закона» — `fine`, `surrender` (только если есть куда заключить), `flee`
+  (если ещё не использован), `fight`; «вне закона» — `surrender` (если есть куда заключить), `fight`. FEAT-202:
+  «есть куда заключить» = `law_facility.resolve_jail(...) is not None` (отделение стражи края или тюрьма страны).
+- Шанс бегства / побега (FEAT-201): `law_core.chance(base, per_point, min, max, *points)` =
+  `clamp(base + Σ max(0, p) × per_point, min, max)`. **Бегство** — `points = (скрытность, ловкость)` поровну,
+  **побег** — только `(скрытность,)`. Значения **эффективные** (`law_crud.stealth_info`: скрытность = кап FEAT-195 от
+  `character_attributes.stealth` + очки подкласса Ассасин / Фокусник / Агент **до капа**; ловкость = кап от
+  `character_attributes.agility`; до 2 знаков). Удача больше не участвует. Пример: бегство при базе 20 и 0.25 за очко,
+  скрытность 40 + ловкость 60 → 45 %; побег при базе 5 и 0.30, скрытность 100 → 35 %, Ассасин без вложений → 14 %.
+  Миграция 041 поднимает `escape_per_point_pct` 0.150 → 0.300 **только если** там ещё заводское значение;
   бросок — `secrets.SystemRandom`, успех при `roll < chance`; шанс и бросок пишутся в журнал.
 - Неудачный побег: новый срок `now + min(остаток × (1 + extend_pct/100), max_remaining_jail_hours)`.
 - Валидация настроек (400 с русским текстом): `max_wanted` 1…100 000, спад ≥ 0, `heavy_wanted` 1…`max_wanted`,
@@ -1823,6 +1844,10 @@ guard_ko_hours WHERE npc_status='alive' AND (unconscious_until IS NULL OR ≤ no
 встречают игроков, battle-service не даёт с ними драться.
 
 ### Встреча со стражей: `law_crud.evaluate_entry`
+> FEAT-203: точка входа теперь `law_crud.check_entry` (возвращает `EntryResult`); `evaluate_entry` — тонкая обёртка
+> (`.encounter`). После всех перечисленных ниже пропусков и выбора ступени — бросок обнаружения; встреча создаётся,
+> только если стража заметила. См. «Стража замечает не всегда (FEAT-203)».
+
 Вызывается в транзакции перемещения при **реальной смене** локации: `update_location` (`source` move / quick_move)
 и `crud.execute_teleport` (Мастер Телепорта, `source=teleport`). Не вызывается для свитка возвращения домой,
 админского переноса, возврата из подземелья, одобрения заявки, перевода в тюрьму и возврата после бегства.
@@ -1836,7 +1861,8 @@ guard_ko_hours WHERE npc_status='alive' AND (unconscious_until IS NULL OR ≤ no
 
 ### Выбор игрока (`law_flows.choose`; идемпотентность — `law:choice:{encounter_id}:{request_id}`)
 Только `pending`; повтор того же `request_id` отвечает по текущему состоянию. Варианты пересчитываются в момент
-выбора (наличие тюрьмы перечитывается): `surrender` без тюрьмы → 409 «В этом крае больше нет тюрьмы», вариант
+выбора (наличие тюрьмы перечитывается): `surrender` без тюрьмы → 409 (FEAT-202: `MSG_NO_JAIL` «Здесь некуда
+заключить под стражу: нет ни отделения стражи, ни тюрьмы страны»), вариант
 не из списка → 400 «Этот вариант сейчас недоступен».
 
 | Выбор | Эффект |
@@ -1846,12 +1872,14 @@ guard_ko_hours WHERE npc_status='alive' AND (unconscious_until IS NULL OR ≤ no
 | `flee` | бросок шанса. Успех → встреча `fled`, `cooldown_until = now + 1 ч` (константа `FLEE_GUARD_COOLDOWN`, не настройка), блокировка снята, затем best-effort **возврат в `from_location_id`** (`_prepare_move` + `apply_admin_move`, событие `law_flee`, без проверки стражи); при любой ошибке персонаж остаётся. Розыск не меняется. Неудача → `flee_used=1` и сразу `fight`; если свободного стражника нет — `{result: flee_failed_blocked}`, встреча остаётся `pending` без бегства |
 | `fight` | свободный стражник (жив, не оглушён, в локации, не в бою; исходный — первым). Все заняты → 409 «Стражник сейчас занят — попробуйте чуть позже»; стражников нет → встреча `guard_gone`, блокировка снята. Иначе стражник лечится до максимума (health/mana/energy/stamina), встреча `fighting` + коммит, затем `POST /battles/internal/guard`; отказ battle-service 409 → 409 с его текстом, иначе 502 «Не удалось начать бой со стражей» (встреча возвращается в `pending`) |
 
-**`send_to_jail`** (сдача, проигрыш, авторазрешение): тюрьма = `Regions.jail_location_id` региона встречи (нет →
-409). Если тюрьма в другой локации — сначала `main._prepare_move(..., "jail")` (отмена добычи, намерения/группа
+**`send_to_jail`** (сдача, проигрыш, авторазрешение): тюрьма = `law_facility.resolve_jail(enc.region_id,
+enc.level_code)` (FEAT-202: отделение стражи `Regions.jail_location_id` или камера тюрьмы страны; нет обоих → 409
+`MSG_NO_JAIL`). Если тюрьма в другой локации — сначала `main._prepare_move(..., "jail")` (отмена добычи, намерения/группа
 старой локации) без удержания блокировок, затем одна транзакция: `crud.apply_admin_move(commit=False,
 event_type="jail")` (локация, выход из дома, сброс кулдауна перехода, журнал), `jailed_until = now + jail_hours`,
 `jail_region_id`, строка `law_jail_terms` (`serving`), розыск края → 0, встреча `jailed`, `law_encounter_id` →
-NULL. Уведомление `law_jailed` после коммита.
+NULL. Уведомление `law_jailed` после коммита. FEAT-202: в строке срока — снимок учреждения (`facility`, `country_id`,
+`district_id`), в персонаже — `jail_district_id`; журнал перемещения «Заключён под стражу: «A» → «B» (учреждение)».
 
 **Итог боя** (`POST /characters/internal/law/battle-result` или опрос проходом): применяется только к встрече
 `fighting`, иначе `duplicate`; чужой `battle_id` → 409. `aborted` → встреча снова `pending` (выбор предлагается
@@ -1878,28 +1906,29 @@ npc-status); проигрыш → тюрьма, а без тюрьмы — **п�
 - Отбытый срок освобождает лениво (прошедший `jailed_until`), проход только помечает `served` и шлёт «Срок
   заключения окончен — вы свободны».
 - В тюрьме разрешено **только писать посты в текущей локации** (исключение в locations-service), всё остальное
-  закрыто блокировкой.
+  закрыто блокировкой. FEAT-202: в тюрьме страны — ещё перемещение (и быстрое) внутри района тюрьмы; залога там
+  нет, побег сложнее — см. «Тюрьма страны и отделение стражи (FEAT-202)».
 
 ### API игрока (`law_api.py`, префикс `/characters`, JWT)
 
 | Метод и путь | Доступ | Ответ |
 |---|---|---|
 | `GET /{character_id}/law` | владелец или staff с `characters:read` | `{wanted [{region_id, region_name, level_code, level_name, fine, jail_hours, decaying}], encounter, jail}` — только регионы с розыском > 0, **без чисел** |
-| `GET /{character_id}/law/encounter` | владелец | `{encounter: LawEncounterOut \| null}` — `{id, region_id, region_name, location_id, guard_name, guard_avatar, is_outlaw, has_jail, level_name, fine, jail_hours, options, flee_chance_pct, status, battle_id, expires_at}` |
+| `GET /{character_id}/law/encounter` | владелец | `{encounter: LawEncounterOut \| null}` — `{id, region_id, region_name, location_id, guard_name, guard_avatar, is_outlaw, has_jail, level_name, fine, jail_hours, jail_facility, jail_name, options, flee_chance_pct, status, battle_id, expires_at}` (FEAT-202: `jail_facility` `station\|country\|null`, `jail_name` — только у `pending`) |
 | `POST /{character_id}/law/encounter/{encounter_id}/choice` | владелец | тело `{choice: fine\|surrender\|flee\|fight, request_id: UUID}` → `{result: fined\|jailed\|fled\|fight\|flee_failed_blocked\|guard_gone, message, battle_id, jail, encounter}`; 400 / 404 / 409 / 502 (см. выше) |
-| `GET /{character_id}/law/jail` | владелец или staff | `{jail: LawJailOut \| null}` — `{id, region_id, region_name, location_id, location_name, until, bail_price, can_escape_at, escape_chance_pct, escape_attempts}` |
+| `GET /{character_id}/law/jail` | владелец или staff | `{jail: LawJailOut \| null}` — `{id, region_id, region_name, location_id, location_name, until, bail_price, bail_available, facility, facility_name, country_id, district_id, district_name, allowed_location_ids, can_escape_at, escape_chance_pct, escape_attempts}` (FEAT-202: `bail_price` null при `bail_available=false`) |
 | `POST /{character_id}/law/jail/escape` | владелец | `{request_id}` → `{success, message, jail}`; 409 не в тюрьме / перерыв |
-| `POST /{character_id}/law/jail/bail` | владелец | `{request_id}` → `{message, jail: null}`; 400 нехватка, 409 не в тюрьме |
-| `GET /law/prisoners?q=&page=1&page_size=20` | любой авторизованный | `{items [{character_id, name, avatar, region_name, location_name, until, bail_price}], total}`; `page_size ≤ 50`, `q ≤ 50` (LIKE-экранирование) |
-| `POST /law/bail` | плательщик — персонаж пользователя | `{payer_character_id, banker_npc_id, prisoner_character_id, request_id}` → `{message, paid}`; узник получает «За вас внесли залог: {имя}. Вы свободны» |
+| `POST /{character_id}/law/jail/bail` | владелец | `{request_id}` → `{message, jail: null}`; 400 нехватка, 409 не в тюрьме; FEAT-202: 409 «Из тюрьмы страны нельзя выйти под залог» |
+| `GET /law/prisoners?q=&page=1&page_size=20` | любой авторизованный | `{items [{character_id, name, avatar, region_name, location_name, until, bail_price}], total}`; `page_size ≤ 50`, `q ≤ 50` (LIKE-экранирование); FEAT-202: узники тюрьмы страны не показываются |
+| `POST /law/bail` | плательщик — персонаж пользователя | `{payer_character_id, banker_npc_id, prisoner_character_id, request_id}` → `{message, paid}`; узник получает «За вас внесли залог: {имя}. Вы свободны»; FEAT-202: срок в тюрьме страны → 409 до проводки |
 
 ### Админ-API (префикс `/characters/admin/law`; права репутации, новых прав нет)
 
 | Метод и путь | Право | Описание |
 |---|---|---|
-| `GET /settings` | `reputation:read` | `{settings {все поля law_settings, кроме pass_last_run_at}, levels [{code, sort_order, name, min_value, fine, jail_hours}]}` |
-| `PUT /settings` | `reputation:settings` | то же тело, ровно 5 кодов; валидация выше; смена `decay_per_day` сначала материализует строки с `value > 0` по старой ставке |
-| `GET /characters/{id}` | `reputation:read` | `{wanted [{region_id, region_name, value, level_code, level_name}], encounter (+ staff-поля: character_id, guard_npc_id, level_code, wanted_value, source, from_location_id, flee_used, created_at, fight_started_at, resolved_at), jail (+ status, level_code, encounter_id, started_at), crimes [последние 50; FEAT-199 + status, masked, witness_chance_pct, witness_roll_pct, reputation_delta, wanted_floor, reveal_attempts, next_roll_at, reveal_until, revealed_at], renown {fame, fame_tier_name, infamy, infamy_tier_name} и renown_log [последние 50] (FEAT-199), log [последние 100, с reason, actor_username, chance/roll]}` |
+| `GET /settings` | `reputation:read` | `{settings {все поля law_settings, кроме pass_last_run_at}, levels [{code, sort_order, name, min_value, fine, jail_hours, detect_pct}]}` (FEAT-203: + `detect_enabled` и 9 полей `detect_*_pct`, `levels[].detect_pct`) |
+| `PUT /settings` | `reputation:settings` | то же тело, ровно 5 кодов; валидация выше; смена `decay_per_day` сначала материализует строки с `value > 0` по старой ставке. FEAT-202: 3 новых поля необязательны — пропущенное сохраняет текущее значение. FEAT-203: 10 полей `detect_*` и `levels[].detect_pct` тоже необязательны (`null` / отсутствует → хранимое значение) |
+| `GET /characters/{id}` | `reputation:read` | `{wanted [{region_id, region_name, value, level_code, level_name}], encounter (+ staff-поля: character_id, guard_npc_id, level_code, wanted_value, source, from_location_id, flee_used, created_at, fight_started_at, resolved_at), jail (+ status, level_code, encounter_id, started_at), crimes [последние 50; FEAT-199 + status, masked, witness_chance_pct, witness_roll_pct, stealth_reduction_pct (FEAT-201), reputation_delta, wanted_floor, reveal_attempts, next_roll_at, reveal_until, revealed_at], renown {fame, fame_tier_name, infamy, infamy_tier_name} и renown_log [последние 50] (FEAT-199), log [последние 100, с reason, actor_username, chance/roll]}` |
 | `POST /characters/{id}/release` | `reputation:manage` | `{reason 3…500, request_id}` — завершает срок (`released`) и/или отменяет открытую встречу (`cancelled`; идущий бой доигрывается, его колбэк становится no-op); 409 «Персонаж не в тюрьме и не задержан стражей»; уведомление «Решением властей вы освобождены» |
 | `POST /characters/{id}/clear-wanted` | `reputation:manage` | `{region_id \| null (все), reason, request_id}` → `{message, cleared_region_ids, duplicate}`; журнал `staff_clear`. FEAT-200: где розыска нет — ничего не пишется, ответ «Розыска нет» |
 
@@ -1908,9 +1937,11 @@ npc-status); проигрыш → тюрьма, а без тюрьмы — **п�
 ### Internal и изменённые маршруты
 - `POST /characters/internal/law/battle-result` (`X-Internal-Token`) `{battle_id, law_encounter_id, winner_team?,
   aborted}` → `{ok, status, duplicate}`; 404 неизвестная встреча, 409 чужой бой. Вызывающий — battle-service.
-- `PUT /characters/internal/{id}/update_location` — `source`, 409 в тюрьме / при встрече, поле `law_encounter`.
+- `PUT /characters/internal/{id}/update_location` — `source`, 409 в тюрьме / при встрече, поле `law_encounter`;
+  FEAT-203: поле `law_slipped: bool`.
+  FEAT-202: исключение для перемещения внутри района тюрьмы страны (см. ниже).
 - `PUT /characters/internal/npc-status/{id}` — нокаут стражника, преступление, поле `knocked_out_until`.
-- `POST /characters/npcs/{npc_id}/teleport` — ответ `TeleportResult` дополнен `law_encounter`.
+- `POST /characters/npcs/{npc_id}/teleport` — ответ `TeleportResult` дополнен `law_encounter`; FEAT-203: `law_slipped: bool`.
 - `GET /characters/npcs/by_location` — без оглушённых NPC и с NPC без роли.
 
 ### Проход планировщика (`law_pass.run_pass`)
@@ -1920,22 +1951,118 @@ npc-status); проигрыш → тюрьма, а без тюрьмы — **п�
 1. просроченные `pending` → авторазрешение;
 2. `fighting` дольше 2 мин → без `battle_id` или бой не найден (404) — обратно в `pending`; бой `finished`/`forfeit` —
    тот же обработчик итога, что у колбэка (`winner_team`, `aborted` из `GET /battles/internal/{id}/result`);
-3. `serving` с `until ≤ now` → `served`, `jail_region_id` очищается, уведомление;
+3. `serving` с `until ≤ now` → `served`, `jail_region_id` и (FEAT-202) `jail_district_id` очищаются условным
+   `UPDATE … WHERE jailed_until IS NULL OR jailed_until <= now` (свежий повторный срок не затирается), уведомление;
 4. стражники: свободные (живы, не оглушены, не в бою) с `current_health < max_health` лечатся до максимума, у
    истёкших нокаутов `unconscious_until` → NULL;
-5. FEAT-199 `_reveal_crimes` — ежедневные броски раскрытия (см. «Shadow» → «Раскрытие»).
+5. FEAT-204 `_guard_patrols` — шаги патрульных стражников (см. «Патрули стражи (FEAT-204)»); пропускается целиком при
+   `law_settings.patrols_enabled = false`;
+6. FEAT-199 `_reveal_crimes` — ежедневные броски раскрытия (см. «Shadow» → «Раскрытие»).
 
-Статистика прохода дополнена `reveal_rolls`, `revealed`, `closed`.
+Статистика прохода дополнена `reveal_rolls`, `revealed`, `closed`, (FEAT-204) `patrol_moves`, `patrol_blocked`,
+`patrol_checked`, `patrol_encounters`, `patrol_slips`.
 
 ### Уведомления (`law_notify`, очередь `general_notifications`, только игрокам)
 `ws_type`: `law_encounter` (стража остановила, «Решите, как поступить, до DD.MM HH:MM МСК»), `law_jailed`,
 `law_released` (отбыто / залог / побег / решение властей), `law_resolved` (штраф, бегство, победа, авторазрешение) —
 категория `system`; `law_wanted` (ступень розыска выросла после преступления) — `progress`. Чисел розыска нет.
 FEAT-199 добавил `law_unseen`, `law_masked`, `law_revealed`, `fame_tier` (см. «Shadow» → «Уведомления»).
+FEAT-202: текст `law_jailed` называет учреждение (см. ниже).
+FEAT-203: `law_slipped` — «Вы проскользнули мимо стражи в «{локация}»», категория `progress` (см. «Стража замечает не всегда»).
 
 ### Деньги
 Операции `law_fine` и `law_bail` (`econ_core.LAW_OP_TYPES`, 4 байтовые копии): персонаж → `AccountRef.region`
 (регион встречи / срока), `apply_tax=True` (10 % стране). Только через `econ_ledger.post_operation`.
+
+## Тюрьма страны и отделение стражи (FEAT-202)
+
+Осуждённого держат в одном из двух **учреждений** (`law_core.FACILITY_STATION` / `FACILITY_COUNTRY`, в БД строки
+`station` / `country`):
+- **отделение стражи края** (`station`) — прежняя тюрьма FEAT-198: одна локация `Regions.jail_location_id`;
+- **тюрьма страны** (`country`) — район `Countries.prison_district_id` (колонка locations-service, миграция `057`)
+  **вместе с поддеревом**: вложенные подрайоны (`Districts.parent_district_id`) и локации, висящие на них через
+  `Locations.parent_id`.
+
+### Миграция `042_country_prison` (revises `041_stealth`; без FK на таблицы locations-service, каждый шаг защищён `information_schema`, повторный прогон — no-op)
+- `law_settings`: `country_prison_min_level` VARCHAR(20) DEFAULT `'villain'` (ступень, с которой предпочитается тюрьма
+  страны), `country_escape_multiplier` DECIMAL(5,2) DEFAULT 0.50 (× шанс побега отделения),
+  `country_escape_cooldown_hours` INT DEFAULT 12 (вместо `escape_cooldown_hours`).
+- `law_jail_terms`: `facility` VARCHAR(10) NOT NULL DEFAULT `'station'` (не ENUM), `country_id` INT NULL, `district_id`
+  INT NULL — снимок учреждения срока (заполняются только у `country`). `region_id` по-прежнему = **край преступления /
+  розыска** (преступление побега, казна залога, `region_name`).
+- `characters.jail_district_id` INT NULL — снимок района тюрьмы для проверки перемещений (смотрится только при
+  причине блокировки `jail`).
+- Существующие сроки становятся `station` через умолчание; бэкфилла нет. Откат удаляет 7 колонок.
+
+### Выбор учреждения (`law_facility.py`, sync, сырой SQL в транзакции вызывающего)
+- `resolve_jail(db, region_id, level_code, *, settings=None, levels=None) -> Optional[JailTarget]` — **единственное**
+  решение «куда / можно ли заключить»: им пользуются `evaluate_entry` (снимок `has_jail`), `encounter_options` /
+  `encounter_out` (живой пересчёт для `pending`, через `law_crud.encounter_target`), `send_to_jail`, ветка проигрыша
+  боя и авторазрешение. `region_jail_location` больше нигде не вызывается (`station_location` — его преемник).
+- `JailTarget` (frozen dataclass): `facility`, `location_id` (локация отделения / камера по умолчанию), `region_id`
+  (край учреждения), `country_id`, `district_id` (только country), `name`, `district_name`.
+- Чистый выбор — `law_core.pick_facility(level, threshold, levels, has_station, has_country)`: `is_heavy` (порядок
+  ступени ≥ порядка `country_prison_min_level`; неизвестный код → False) → предпочитается тюрьма страны, иначе
+  отделение; предпочтительного нет → другое; нет обоих → None (нет `surrender`, проигрыш/таймаут = принудительный
+  штраф, как раньше).
+- `country_prison(db, country_id)` — тюрьма страны **пригодна**, если: `Countries.prison_district_id` задан; район
+  существует; его край **сейчас** принадлежит этой стране (перепроверяется при каждом выборе; иначе INFO-лог и None);
+  в поддереве ≥ 1 локации. **Камера** = `Districts.entrance_location_id`, если она в поддереве, иначе первая локация
+  поддерева.
+- `prison_location_ids(db, district_id)` — упорядоченные локации поддерева по `SQL_PRISON_LOCATIONS`: рекурсивный CTE
+  по районам (глубина ≤ 10) и по `Locations.parent_id` (≤ 10 шагов), `GROUP BY id`, порядок `(глубина района,
+  sort_order, id)`; работает на MySQL 8 и SQLite. **Текст SQL байт в байт совпадает** с
+  `locations-service crud.SQL_PRISON_LOCATIONS` — менять только вместе.
+- Рассинхрон деплоя: до миграции locations `057` чтение `Countries.prison_district_id` падает с «unknown column» →
+  WARNING «… no country prison» (внутри `begin_nested`), учреждение — только отделение. Любая другая ошибка БД
+  пробрасывается.
+- Имя для игрока — `law_core.facility_title`: «Тюрьма страны «{страна}»» / «Отделение стражи края «{край}»» (нет
+  имени → «—»).
+
+### Правила срока по учреждению
+| | Отделение стражи (`station`) | Тюрьма страны (`country`) |
+|---|---|---|
+| Где держат | `Regions.jail_location_id` края встречи | камера района (см. выше); край может быть другим |
+| Залог | `bail_price = max(1, ceil(fine × bail_multiplier))` | **нет**: в строке `bail_price = 0`; самовыкуп и залог у банкира → 409 `MSG_NO_BAIL_COUNTRY` «Из тюрьмы страны нельзя выйти под залог» (после блокировки срока, до проводки); в `GET /law/prisoners` не показывается (`t.facility <> 'country'`) |
+| Шанс побега | FEAT-201: `chance(escape_*, скрытность)` с зажимом min/max | шанс отделения **после зажима** × `country_escape_multiplier`, до 2 знаков, не ниже 0 (`law_core.country_escape_chance`); при умолчаниях максимум 25 % |
+| Перерыв побега | `escape_cooldown_hours` | `country_escape_cooldown_hours` |
+| Перемещение | только посты в своей локации | ещё перемещение / быстрое перемещение / посты внутри поддерева `jail_district_id` |
+
+Продление после неудачи, предел срока и преступление побега (в крае `term.region_id`, пол `heavy_wanted`) одинаковы.
+
+### Запись и очистка снимка
+- `law_crud.jail_writes(db, character, enc, target, …)`: в сроке `location_id`, `facility`, `country_id` / `district_id`
+  (только country), `bail_price`; в персонаже `jail_region_id = enc.region_id` и `jail_district_id` (у station всегда
+  перезаписывается в NULL).
+- `jail_district_id` обнуляют `_end_term` (побег, залог, освобождение властями), `staff_release` (в том числе при
+  «устаревшем» `jailed_until` без срока) и проход закона (шаг 3).
+- Перемещения проверяются **по снимку**, а не по текущему `Countries`: переназначение тюрьмы посреди срока никого не
+  переносит и не освобождает. Админский перенос (`POST /characters/admin/{id}/move`) не ограничен — срок продолжается.
+
+### Перемещение заключённого: `PUT /characters/internal/{id}/update_location` (окончательная проверка)
+Под блокировкой строки: `law_encounter` → 409 как раньше; `jail` → 409, **кроме** случая `main._prison_move_allowed`:
+`characters.jail_district_id` задан и `new_location_id` входит в `law_facility.prison_location_ids(jail_district_id)`.
+Тогда перемещение проходит обычным путём (выход из дома, смена локации); стража для заключённого не проверяется
+(`evaluate_entry` пропускает тюрьму), `law_encounter` в ответе = null. Заключённый отделения (снимка нет) двигаться не
+может. locations-service делает предварительную проверку тем же SQL (см. `docs/services/locations-service.md`,
+«Закон»).
+
+### Контракты (аддитивно; только `bail_price` стал nullable)
+- `LawEncounterOut` + `jail_facility` (`station|country|null`), `jail_name` — живой `resolve_jail` только для
+  `pending`; у закрытых встреч оба null (снимок `has_jail` сохраняет смысл).
+- `LawJailOut` + `facility`, `facility_name`, `country_id`, `district_id`, `district_name`, `bail_available`,
+  `allowed_location_ids` (country — поддерево снимка района, `[]`, если район удалён; station — `[location_id]`);
+  `bail_price` = null при `bail_available=false`; `escape_chance_pct` учитывает учреждение. Тот же блок — в staff
+  `GET /characters/admin/law/characters/{id}`.
+- `GET/PUT /characters/admin/law/settings` + `country_prison_min_level`, `country_escape_multiplier`,
+  `country_escape_cooldown_hours` (на входе необязательны). Валидация (400): порог — один из 5 кодов («Порог тюрьмы
+  страны должен быть одним из уровней розыска»), множитель 0…1 (0 = побег невозможен), перерыв 1…168 ч.
+- `LawPrisonerOut` не менялся.
+
+### Уведомление `law_jailed` (`law_notify.jailed_message(..., facility, country_name)`)
+- station: «Стража края «{край}» заключила вас в отделение стражи — срок {остаток}»;
+- country: «Стража края «{край}» отправила вас в тюрьму страны «{страна}» — срок {остаток}. Залога нет,
+  передвигаться можно только внутри тюрьмы».
 
 ## Shadow: witnesses, hidden crimes, masks, suspicion, fame (FEAT-199, этап 2б репутации)
 
@@ -1964,7 +2091,7 @@ commit: оркестратор, раскрытие/закрытие, подоз�
 
   | Группа | Поля (по умолчанию) |
   |---|---|
-  | Свидетели | `witness_enabled` 1 (выключатель: 0 = каждое преступление замечено, поведение 2а); база по `Locations.marker_type`: `safe` 70, `farm` 45, `dangerous` 25, `dungeon` 15, без локации / неизвестный тип 50; `witness_stealth_per_point_pct` 0.1 (минус за очко эффективной ловкости + удачи); подклассы `witness_agent_pct` 10 (`warrior_agent`), `witness_assassin_pct` 15 (`rogue_assassin`), `witness_trickster_pct` 15 (`rogue_trickster`); `witness_mask_pct` 10; `witness_group_per_extra_pct` 10; `witness_min_pct` 5, `witness_max_pct` 95 |
+  | Свидетели | `witness_enabled` 1 (выключатель: 0 = каждое преступление замечено, поведение 2а); база по `Locations.marker_type` (**FEAT-201**): `safe` 100, `farm` 70, `dangerous` 40, `dungeon` 25, без локации / неизвестный тип 50; скрытность (FEAT-201): `stealth_pct_per_point` 0.5 (% шанса, снимаемый за эффективное очко скрытности), `stealth_max_reduction_pct` 90 (потолок снижения), очки скрытности подклассов `stealth_assassin_points` 30 (`rogue_assassin`), `stealth_trickster_points` 30 (`rogue_trickster`), `stealth_agent_points` 20 (`warrior_agent`); `witness_group_per_extra_pct` 10 (множитель: +N % за каждого участника после первого); `witness_min_pct` 5, `witness_max_pct` 100 (FEAT-201; было 95). Поля FEAT-199 `witness_stealth_per_point_pct`, `witness_agent_pct`, `witness_assassin_pct`, `witness_trickster_pct`, `witness_mask_pct` удалены миграцией 041 |
   | Раскрытие | `reveal_days` 3; `reveal_base_pct` 15; `reveal_per_suspicion_pct` 0.4; `reveal_mask_factor_pct` 50; `reveal_min_pct` 1, `reveal_max_pct` 90 |
   | Подозрение | `suspicion_max` 100; `suspicion_unwitnessed` 10, `suspicion_masked` 20 (за событие); `suspicion_decay_per_day` 5; пороги `suspicion_uneasy_at` 20, `suspicion_alarmed_at` 50, `suspicion_fear_at` 80 |
   | Дурная слава | `infamy_ratio` 1.0, `infamy_min_gain` 10 |
@@ -1974,7 +2101,7 @@ commit: оркестратор, раскрытие/закрытие, подоз�
 - **`character_renown`** — `character_id` PK (FK `characters` CASCADE), `fame` ≥ 0, `infamy` ≥ 0, `updated_at`. Нет
   строки = 0 / 0.
 - **`renown_tiers`** — `(scale, code)` PK, `sort_order` (UNIQUE `(scale, sort_order)`), `name`, `min_value`,
-  `witness_pct` (только у славы — узнаваемость, прибавка к шансу свидетелей). По 5 фиксированных кодов на шкалу;
+  `witness_pct` (только у славы — узнаваемость; с FEAT-201 это **множитель** `× (1 + witness_pct/100)` к шансу свидетелей, а не прибавка п.п.). По 5 фиксированных кодов на шкалу;
   редактируются имя, порог, `witness_pct`:
 
   | scale | code | name | min_value | witness_pct |
@@ -1998,22 +2125,37 @@ commit: оркестратор, раскрытие/закрытие, подоз�
 ### Эффективные статы (`stat_caps.py`, 4-я копия)
 `character-service/app/stat_caps.py` — байтовая копия канона `character-attributes-service/app/stat_caps.py`
 (FEAT-195; копии также в battle-service и dungeon-service, сверяет группа `stat_caps` в
-`scripts/check_econ_copies.sh`). `law_crud.effective_attributes_of(db, character_id)` → `(agility, luck)` =
-`effective_stat` от значений `character_attributes` (уже со снаряжением), до 2 знаков. Используется броском
-свидетелей и шансами бегства / побега FEAT-198. `law_core.chance` принимает Decimal (целые дают прежний результат).
+`scripts/check_econ_copies.sh`). С FEAT-201 `attributes_of` / `effective_attributes_of` удалены; вместо них
+`law_crud.stealth_info(db, character_id, shadow_settings=None)` → `StealthInfo(raw, subclass_key, subclass_points,
+effective, reduction_pct, eff_agility)` (см. «Скрытность (FEAT-201)»). Используется броском свидетелей, шансами
+бегства / побега и `GET /{id}/stealth`. `law_core.chance` принимает Decimal и любое число статов (целые дают прежний
+результат).
 
-### Формула свидетелей (`shadow_core`)
+### Формула свидетелей (`shadow_core`, FEAT-201 — мультипликативная)
 Для каждого игрока группы:
 ```
-member = base(marker_type) − (max(0, eff_agility) + max(0, eff_luck)) × stealth_per_point
-         − subclass_pct (Агент / Ассасин / Фокусник, иначе 0)
-         − (в маске ? mask_pct : 0) + (в маске ? 0 : witness_pct ступени славы)
-group  = clamp(max(member) + group_per_extra × (n − 1), witness_min, witness_max)   — 2 знака
+eff       = stat_caps.effective_stat(max(0, stealth) + subclass_stealth_points)        — 2 знака
+reduction = min(stealth_max_reduction_pct, max(0, eff) × stealth_pct_per_point)        — 2 знака
+member    = base(marker_type) × (1 − reduction/100) × (в маске ? 1 : 1 + witness_pct ступени славы/100)
+group     = clamp(max(member) × (1 + group_per_extra/100 × (n − 1)), witness_min, witness_max)   — 2 знака
 ```
+`subclass_stealth_points`: `rogue_assassin` → `stealth_assassin_points`, `rogue_trickster` → `stealth_trickster_points`,
+`warrior_agent` → `stealth_agent_points`, иначе 0 (имена — `shadow_core.SUBCLASS_LABELS`). Ловкость, удача, плоский
+бонус подкласса и плоский бонус маски в броске **больше не участвуют**. Маска — только анонимность: слава участника в
+маске не учитывается, дело откладывается со статусом `masked`. Пустой список участников → `clamp(base_default)`.
+Примеры (настройки по умолчанию, слава 0): поселение, скрытность 0 → 100 %; поселение, 100 → 50 %; дикие места
+(40), 100 → 20 %; Ассасин без вложений в поселении → eff 30, снижение 15 → 85 %; Ассасин со 100 → 130 → eff 115 →
+снижение 57.5 → 42.5 %; скрытность 400 → eff 200 → снижение 90 (потолок) → 10 %, в подземелье (25) → 2.5 → 5 %
+(минимум); дикие места, «Легенда» (15) → 46 %, в маске → 40 %; группа из двух с шансами 50 и 20 → 50 × 1.10 = 55 %.
+
 Шанс группы определяет **наименее скрытный** участник; участник в маске анонимен — его слава не учитывается. Бросок
 один на событие: `law_core.roll_succeeds(chance, law_crud.rng())` (`secrets.SystemRandom`, успех при `roll < chance`).
-Читатели чужих таблиц (`text()`, ошибки не глотаются): `Locations.marker_type`; подкласс — `character_tree_progress`
-⨝ `tree_nodes` (`node_type='subclass_choice'`, последний; тот же SQL, что в inventory `equipment_rules`); маска —
+Читатели чужих таблиц (`text()`, ошибки не глотаются): `Locations.marker_type`; подкласс — `law_crud.subclass_of`
+(FEAT-201: перенесён из `shadow_crud`, там оставлен алиас `shadow_crud.subclass_of`): `character_tree_progress`
+⨝ `tree_nodes` (`node_type='subclass_choice'`, последний; тот же SQL, что в inventory `equipment_rules`); скрытность и
+ловкость — `law_crud.stealth_agility_of` (`character_attributes`, в `begin_nested()`; **только** ошибка про
+отсутствующую колонку `stealth` → WARNING «character_attributes.stealth is missing (attributes migration 009 not
+applied?) — treating stealth as 0» и повторный `SELECT 0, agility`, остальное пробрасывается); маска —
 `equipment_slots` ⨝ `items` с `is_mask = 1` (в `begin_nested()`; **только** ошибка про отсутствующую колонку
 `is_mask` → WARNING и «без маски», остальное пробрасывается); бой встречи со стражей — `battles.law_encounter_id`.
 Маска читается в момент отчёта о смерти NPC (экипировка в бою заморожена).
@@ -2032,6 +2174,8 @@ group  = clamp(max(member) + group_per_extra × (n − 1), witness_min, witness_
    `npc_kill:{npc}:{stamp}:{killer}`, преступление `crime:npc_kill:{npc}:{stamp}:{killer}`):
    - **сразу** (замечено и без маски, либо принудительно): `reputation_crud.apply_npc_kill_for` (репутация) +
      `register_crime(status=reported)` (строка + розыск + дурная слава);
+   - FEAT-201: каждый `register_crime` броска получает `stealth_reduction_pct` участника (снимок для раскрытия);
+     на принудительном пути (п. 4) — `NULL`. Побег из тюрьмы и прочие прямые вызовы `record_crime` пишут `NULL`;
    - **отложено**: `register_crime(status = masked, если замечен в маске, иначе unwitnessed)` со снимком,
      `reveal_until = now + reveal_days`, `next_roll_at = now + 24 ч`; ни репутации, ни розыска. Уведомление
      `law_masked` или `law_unseen`. Дубликат строки — ничего.
@@ -2057,8 +2201,10 @@ group  = clamp(max(member) + group_per_extra × (n − 1), witness_min, witness_
 - Шаг прохода закона `law_pass._reveal_crimes` (5-й шаг `run_pass`, тот же захват / троттлинг 55 с; проход идёт и
   при выключенном тике экономики): `status IN (unwitnessed, masked) AND next_roll_at ≤ now`, по `next_roll_at, id`,
   пачка 200, каждая строка — своя транзакция. `roll_reveal`: блокировка строки `FOR UPDATE` с перепроверкой статуса и
-  срока, `chance = clamp((reveal_base + эффективное_подозрение × per_suspicion) × (masked ? factor/100 : 1), min,
-  max)`. Успех → `reveal_crime`. Неудача → `reveal_attempts + 1`, журнал `reveal_fail` (ключ
+  срока, `chance = clamp((reveal_base + эффективное_подозрение × per_suspicion) × (masked ? factor/100 : 1) ×
+  (1 − stealth_reduction_pct/100), min, max)` (FEAT-201: снимок снижения скрытности преступника на момент
+  преступления, 1:1; `NULL` у старых / принудительных строк = 0). Пример: подозрение 50 (15 + 20 = 35), снимок 50 →
+  17.5 %; то же в маске → 8.75 %. Успех → `reveal_crime`. Неудача → `reveal_attempts + 1`, журнал `reveal_fail` (ключ
   `law:reveal_roll:{id}:{attempt}`), `next_roll_at += 24 ч` (от прежнего значения — после простоя догоняет по одному
   броску за проход); если новое `next_roll_at > reveal_until` → `close_crime`. При `reveal_days = 3`: броски на +1, +2,
   +3 сутки, затем дело закрыто.
@@ -2089,6 +2235,7 @@ group  = clamp(max(member) + group_per_extra × (n − 1), witness_min, witness_
 |---|---|---|
 | `GET /renown/fame-tiers` | без авторизации | `[{code, name, sort_order}]` — ступени славы (для редакторов и легенды) |
 | `GET /{character_id}/renown` | JWT + `require_private_access` (владелец или staff с `characters:read`) | `{fame {tier_code, tier_name, progress 0…1, next_tier_name}, rumors {tier_code, tier_name}}` — **без чисел и без списка преступлений**; 404 / 403 |
+| `GET /{character_id}/stealth` | JWT + `require_private_access` (владелец или staff с `characters:read`) | **FEAT-201** `StealthPlayerOut` `{stealth (хранимая сумма: очки + снаряжение + еда + перки), subclass_bonus (0 без подкласса скрытности), subclass_name («Ассасин» / «Фокусник» / «Агент» или null), effective (кап от stealth + бонус), reduction_pct («−X % к шансу быть замеченным»), pct_per_point, max_reduction_pct}`; 404 / 403. Только чтение, для строки профиля |
 | `GET /{character_id}/public` | публично | + `fame_tier_code`, `fame_tier_name` |
 | `GET /economy/regions/{region_id}/card` | публично | + `suspicion {code, label} \| null` в обеих формах |
 
@@ -2097,8 +2244,8 @@ group  = clamp(max(member) + group_per_extra × (n − 1), witness_min, witness_
 | Метод и путь | Право | Описание |
 |---|---|---|
 | `GET /settings` | `reputation:read` | `{settings {все поля shadow_settings}, fame_tiers [{code, sort_order, name, min_value, witness_pct}], infamy_tiers [{code, sort_order, name, min_value}]}` |
-| `PUT /settings` | `reputation:settings` | то же тело; 400 с русским текстом: проценты 0…100 и `min ≤ max`, «за очко» 0…10, `reveal_days` 1…30, `suspicion_max` 1…10 000, прибавки подозрения 0…max, спад ≥ 0, пороги `1 ≤ uneasy < alarmed < fear ≤ max`, доли 0…10, `fame_quest_default` и `infamy_min_gain` 0…1000; ровно 5 кодов на шкалу, первая ступень с 0, пороги строго растут, имя 1…60, `witness_pct` 0…50 |
-| `GET /crimes?status=open\|unwitnessed\|masked\|closed\|reported\|all&region_id=&character_id=&page=1&page_size=20` | `reputation:read` | `{items [{id, character_id, character_name, crime_type, region_id, region_name, location_id, location_name, victim_id, victim_name, status, masked, witness_chance_pct, witness_roll_pct, reputation_delta, wanted_points, wanted_floor, reveal_attempts, next_roll_at, reveal_until, created_at, resolved_at, revealed_at}], total}`; по умолчанию `open` (= unwitnessed + masked), `page_size ≤ 50`, неизвестный статус → 422 |
+| `PUT /settings` | `reputation:settings` | то же тело; 400 с русским текстом: проценты 0…100 и `min ≤ max`, «за очко» 0…10, `reveal_days` 1…30, `suspicion_max` 1…10 000, прибавки подозрения 0…max, спад ≥ 0, пороги `1 ≤ uneasy < alarmed < fear ≤ max`, доли 0…10, `fame_quest_default` и `infamy_min_gain` 0…1000; FEAT-201: `stealth_pct_per_point` 0…10 «Снижение за очко скрытности», `stealth_max_reduction_pct` 0…100 «Предел снижения скрытностью», очки подклассов 0…500 «Скрытность подкласса «Ассасин»: от 0 до 500», `witness_max_pct` ≤ 100; ровно 5 кодов на шкалу, первая ступень с 0, пороги строго растут, имя 1…60, `witness_pct` 0…50 |
+| `GET /crimes?status=open\|unwitnessed\|masked\|closed\|reported\|all&region_id=&character_id=&page=1&page_size=20` | `reputation:read` | `{items [{id, character_id, character_name, crime_type, region_id, region_name, location_id, location_name, victim_id, victim_name, status, masked, witness_chance_pct, witness_roll_pct, stealth_reduction_pct (FEAT-201, null = 0), reputation_delta, wanted_points, wanted_floor, reveal_attempts, next_roll_at, reveal_until, created_at, resolved_at, revealed_at}], total}`; по умолчанию `open` (= unwitnessed + masked), `page_size ≤ 50`, неизвестный статус → 422 |
 | `POST /crimes/{id}/reveal` | `reputation:manage` | `{reason 3…500, request_id: UUID}` → `{message: "Преступление раскрыто", crime}`; 404 «Преступление не найдено», 409 «Дело уже раскрыто или закрыто»; применяет и уведомляет как проход |
 | `POST /crimes/{id}/close` | `reputation:manage` | то же тело → `{message: "Дело закрыто", crime}`; 404 / 409; без уведомления игрока |
 | `GET /regions/suspicion` | `reputation:read` | `[{region_id, region_name, value (эффективное), code, label}]` — только регионы с подозрением > 0 |
@@ -2120,3 +2267,203 @@ locations-service при завершении задания. Рост ступ�
 ### Безопасность
 Игрокам не уходят числа славы / дурной славы / подозрения, шансы, броски и список дел. Случайность только на сервере;
 шанс и бросок хранятся в строке и в `law_log`. Reveal / close идемпотентны за счёт условного UPDATE.
+
+## Скрытность (FEAT-201)
+
+Стат `character_attributes.stealth` (character-attributes-service, миграция `009_add_stealth`) — 11-й первичный,
+прокачивается очками и приходит со снаряжения / еды / перков (`items.stealth_modifier`, inventory `035`).
+character-service читает его SQL-ом и применяет в трёх местах: бросок свидетелей, бегство от стражи (скрытность +
+ловкость), побег из тюрьмы (только скрытность); через снимок на деле — и в раскрытии. **В бою скрытность ничего не
+даёт.** Противовеса (внимательности стражи) нет.
+
+- **Бонус подклассов** — очки скрытности из `shadow_settings` (Ассасин 30, Фокусник 30, Агент 20), добавляются к
+  хранимому стату **до** капа FEAT-195 в момент расчёта (`law_crud.stealth_info`); в `character_attributes` не
+  пишутся и в цифре стата в профиле не видны (видны в строке «−X %» через `GET /{id}/stealth`). Действуют на
+  свидетелей, бегство и побег.
+- **Миграция `041_stealth`** (revises `040_shadow_renown`; каждый шаг защищён проверкой `information_schema`, повторный
+  прогон — no-op):
+  - `shadow_settings` + `stealth_pct_per_point` DECIMAL(6,3) 0.500, `stealth_max_reduction_pct` DECIMAL(5,2) 90.00,
+    `stealth_assassin_points` / `stealth_trickster_points` / `stealth_agent_points` INT 30 / 30 / 20;
+  - удалены `witness_stealth_per_point_pct`, `witness_agent_pct`, `witness_assassin_pct`, `witness_trickster_pct`,
+    `witness_mask_pct`;
+  - базы 100 / 70 / 40 / 25 и `witness_max_pct` 100 — и умолчания колонок, и существующая строка `id=1`;
+  - `law_crimes.stealth_reduction_pct` DECIMAL(5,2) NULL;
+  - `law_settings.escape_per_point_pct` по умолчанию 0.300; строка `id=1` поднимается 0.150 → 0.300, только если
+    значение заводское (настроенное админом не трогается);
+  - откат: возвращает 5 колонок FEAT-199 с их умолчаниями (свои значения теряются), удаляет новые, базы 70/45/25/15
+    и максимум 95, удаляет `stealth_reduction_pct`, возвращает 0.150 там, где 0.300.
+- **Рассинхрон деплоя.** Если character-service читает скрытность раньше, чем применена миграция атрибутов 009,
+  `law_crud.stealth_agility_of` пишет WARNING и считает скрытность 0 (ловкость читается). Любая другая ошибка БД
+  пробрасывается — тихих отказов нет. Аналогично `items.is_mask` (inventory 034).
+- **Маска** (`items.is_mask`, в интерфейсе «Скрывает личность») — для свидетелей только анонимность, без бонуса к шансу.
+  FEAT-203: против стражи на входе маска убирает славу и умножает шанс обнаружения на `detect_mask_factor_pct` (0,75).
+- Формулы и примеры — в «Формула свидетелей», «Раскрытие» и разделе «Law» (бегство / побег).
+
+## Стража замечает не всегда (FEAT-203)
+
+Разыскиваемый (или «Вне закона») при входе в локацию с живым стражником попадает на встречу со стражей только при
+успешном **броске обнаружения**; иначе он «проскальзывает» — без встречи, без блокировки, без кулдауна.
+
+### Миграция `043_guard_detection` (revises `042_country_prison`; каждый шаг защищён `information_schema`, без ENUM / FK, повторный прогон — no-op)
+- `law_settings`: `detect_enabled` TINYINT(1) 1; `detect_base_safe_pct` / `_farm_` / `_dangerous_` / `_dungeon_` /
+  `_default_pct` DECIMAL(5,2) 100 / 70 / 40 / 25 / 50 (свои колонки, независимо от баз свидетелей);
+  `detect_per_guard_pct` 10; `detect_mask_factor_pct` 75; `detect_min_pct` 5; `detect_max_pct` 100.
+- `law_levels.detect_pct` DECIMAL(5,2) 100 — множитель тяжести, %. Засев 60 / 80 / 100 / 120 / 140 (Подозреваемый …
+  Враг края) — **только в момент добавления колонки**; повторный прогон правки админа не трогает.
+- Откат удаляет 11 колонок (значения теряются).
+
+### Формула (`law_core.detection_chance`, чистая)
+```
+chance = base(marker)                                  # detection_base_pct: safe/farm/dangerous/dungeon, иначе default
+       × (1 + per_guard × (n − 1))                     # n — живые неоглушённые стражники в локации (guards_at)
+       × (1 − stealth_reduction)                       # эффективная скрытность (подкласс + кап FEAT-195), shadow_settings
+       × (1 + fame_witness_pct)  — только без маски    # ступень славы (renown_tiers.witness_pct)
+       × detect_mask_factor      — только в маске      # 0,75; слава под маской не считается (решение PM)
+       × level.detect_pct                              # ступень встречи (у «вне закона» — не ниже outlaw_min_level)
+clamp(detect_min_pct, detect_max_pct), 2 знака ROUND_HALF_UP
+```
+Примеры (умолчания): Подозреваемый, поселение, 1 стражник → 60 %; Преступник, 2 стражника, эфф. скрытность 100
+(−50 %) → 55 %; Враг края → 140 → 100 %; Враг края в маске, эфф. скрытность 180 (−90 %) → 10,5 %; мелочь → 5 %.
+Бросок — `lc.roll_succeeds(chance, law_crud.detection_rng())` (`secrets.SystemRandom`; `detection_rng` — точка
+подмены в тестах, по умолчанию `rng()`): заметили, если `roll < chance` (бросок 0…99,99, поэтому 100 % — всегда).
+
+### Путь входа (`law_crud.check_entry` → `EntryResult(encounter, slipped, chance_pct, roll_pct)`)
+Пропуски FEAT-198 — в прежнем порядке и **без броска**: NPC, открытая встреча, тюрьма, локация без региона, нет
+живого стражника, **кулдаун бегства** (1 ч), розыск 0 и не «вне закона», нет ступени. Затем:
+1. `detect_enabled = false` → заметили всегда (поведение FEAT-198), `chance/roll = NULL`;
+2. иначе `detection_chance_for` (тип локации, число стражников, скрытность, маска, слава, `level.detect_pct`) и бросок;
+3. **не заметили** → запись `law_log` `action='slipped'` (`chance_pct`, `roll_pct`, `wanted_before = wanted_after`,
+   `ref_id` = локация, `reason` = source, ключ `law:slip:{cid}:{loc}:{время µs}:{случайный суффикс}` — уникален на
+   каждый бросок); встречи, `law_encounter_id` и кулдауна нет;
+4. **заметили** → встреча как раньше; строка журнала `encounter` теперь несёт `chance_pct` / `roll_pct`.
+
+Каждый вход — новый бросок; пост в той же локации стражу не проверяет (оба вызывающих проверяют реальную смену
+локации). Свиток домой, админский перенос, возврат после бегства — без проверки (как раньше). Телепорт у мастера —
+вход, бросок применяется.
+
+### Ответы и уведомление
+- `PUT /characters/internal/{id}/update_location` → `{detail, character_id, current_location_id, law_encounter, law_slipped: bool}`.
+- `POST /characters/npcs/{npc_id}/teleport` → `TeleportResult` + `law_slipped: bool` (по умолчанию false).
+- Игроку только булево — ни шанса, ни броска, ни розыска.
+- После коммита перемещения (best-effort) — `law_crud.slip_notice`: `ws_type = law_slipped`, категория `progress`,
+  текст «Вы проскользнули мимо стражи в «{локация}»» (без названия — «Вы проскользнули мимо стражи»),
+  `ws_data = {character_id, location_id}`. Сбой уведомления перемещение не откатывает.
+
+### Настройки (`GET/PUT /characters/admin/law/settings`, вкладка «Закон», право `reputation:settings`)
+10 полей `detect_*` и `levels[].detect_pct` — во входе необязательны (старый клиент сохраняет хранимые значения).
+Валидация (`lc.validate`, русские тексты): базы / за стражника / маска / минимум / максимум — 0…100 («Обнаружение
+стражей: проценты должны быть от 0 до 100»); минимум ≤ максимума; `detect_pct` ступени — 0…500
+(`MAX_DETECT_LEVEL_PCT`, «Заметность ступени розыска: от 0 до 500 %»). Журнал персонажа в админке показывает
+действие `slipped` с шансом и броском.
+
+## Патрули стражи (FEAT-204)
+
+Стражник-НПС (`npc_role = 'guard'`) либо стоит на посту (по умолчанию; нет строки = пост), либо патрулирует: по
+**маршруту** (упорядоченный список локаций, «по кругу» `loop` или «туда-обратно» `pingpong`) или по **зоне** (район
+с поддеревом подрайонов или явный набор локаций; каждый шаг — в случайную соседнюю локацию внутри зоны). Пришедший
+патруль проверяет всех разыскиваемых в локации — **в том числе игроков не в сети** — тем же броском обнаружения
+FEAT-203. Погони нет (точка расширения `patrol_crud._override_target`, сейчас всегда None).
+
+### Миграция `044_guard_patrols` (revises `043_guard_detection`; каждый шаг защищён `information_schema`, без ENUM / FK, повторный прогон — no-op)
+- `guard_patrols` (PK `npc_id`): `mode` VARCHAR(10) `post|route|zone` ('post'), `route_style` `loop|pingpong`
+  ('loop'), `zone_kind` `district|locations` ('district'), `zone_district_id` BIGINT NULL, `interval_min` SMALLINT 20
+  (5…1440), `jitter_pct` SMALLINT 25 (0…50, ± %), `next_move_at` DATETIME NULL (NULL — не запланирован),
+  `route_index` / `route_dir` (+1 / −1), `last_location_id` (откуда пришёл — против возврата назад в зоне),
+  `last_moved_at`, `updated_at`, `updated_by_user_id`; индекс `ix_guard_patrols_due (mode, next_move_at)`.
+- `guard_patrol_points`: `npc_id`, `kind` `route|zone`, `position`, `location_id`; `uq_guard_patrol_point (npc_id,
+  kind, position)`, `ix_guard_patrol_point_loc (location_id)`. Оба списка хранятся независимо от режима (смена режима
+  их не теряет).
+- `law_settings.patrols_enabled` TINYINT(1) 1 — общий рубильник «Патрули стражи ходят»;
+  `law_settings.patrol_encounter_hold_min` INT 30 — сколько минут открытая встреча держит патрульного на месте (0…1440).
+- Индекс `ix_law_enc_guard (guard_npc_id, status)` на `law_encounters`.
+- Откат удаляет индекс, 2 колонки и обе таблицы (конфиги теряются).
+
+### Чистая математика (`patrol_core.py`)
+- `validate(...)` — русские ошибки (активный список проверяется полностью, неактивный — только по размеру): режим,
+  порядок обхода, вид зоны, интервал 5…1440, разброс 0…50, id > 0, маршрут 2…30 точек без одинаковых соседних
+  (для `loop` — и последняя ≠ первой), зона-набор 2…100 без повторов, у зоны-района район обязателен.
+- `next_delay(interval, jitter, u)` = `interval × (1 + jitter × (2u − 1))`, не меньше 1 мин (20 мин ± 25 % = 15–25).
+- `route_step` — на своей точке: `loop` → следующая по кругу, `pingpong` → `index + dir` с разворотом на концах;
+  стоит на другой точке маршрута → пересинхронизация на её первую позицию; вне маршрута → прыжок на `points[0]`.
+  Соседство точек не требуется (админ получает предупреждение).
+- `zone_step` — кандидаты = соседи (`LocationNeighbors`, хранятся в обе стороны) ∩ зона − текущая; `last` убирается,
+  если есть другой кандидат; кандидатов нет (изолированная локация / стражник вне зоны) → случайная локация зоны ≠
+  текущей (`jumped`, лог INFO); в живой зоне < 2 локаций — шага нет.
+- `departure_bucket(next_move_at, now, held)`: `held` → `long`; нет расписания → None; осталось ≤ 5 мин (в т.ч.
+  просрочено) → `soon`; ≤ 15 → `short`; иначе `long`.
+
+### Шаг патрульного (`patrol_crud.step_guard(db, npc_id, now, force=False)`, коммитит)
+Вызывается из `law_pass._guard_patrols` для `due_guards` (`mode IN (route, zone) AND next_move_at <= now`, по
+`next_move_at, npc_id`, пачка 200) и админским «Шаг сейчас» (`force=True` — игнорирует расписание, но не блокировки).
+1. **Txn A**: строка `guard_patrols` `FOR UPDATE`; нет строки / `post` → `not_patrolling`; не пора и не `force` →
+   `not_due` (повтор / второй раннер ничего не делает). Строка стражника `FOR UPDATE`; NPC удалён → его конфиг и
+   точки удаляются, `not_patrolling`.
+2. **Блокировки** (`blocked_reason`, те же проверки показывает админка): не стражник (`not_guard`), мёртв (`dead`),
+   оглушён (`ko`), в активном бою (`battle`), держит открытая встреча (`encounter`: любая `fighting` или `pending`,
+   созданная меньше `patrol_encounter_hold_min` минут назад — `law_crud.held_guards` / `guard_held`). Заблокирован →
+   шага нет, `next_move_at = now + 2 мин` (`BLOCKED_RETRY`), исход `blocked`.
+3. Цель: `_override_target` (погоня, None) → маршрут / зона. Зона-район — `law_facility.prison_location_ids`
+   (поддерево); удалённые локации отбрасываются (`Locations`); меньше 2 живых точек → `stayed` (лог WARNING).
+   `patrol_rng()` (по умолчанию `law_crud.rng()`) — выбор в зоне и разброс; точка подмены в тестах.
+4. `next_move_at = now + next_delay(...)`; цели нет / та же локация → `stayed`. Иначе `UPDATE characters SET
+   current_location_id`, `last_location_id`, `route_index/dir`, `last_moved_at`; COMMIT. Строки `law_log` на шаг нет.
+5. **Проход по прибытии** (после коммита шага; его сбой шаг не откатывает): игроки `is_npc = 0` в новой локации,
+   по id, не больше `PATROL_SWEEP_LIMIT = 200`; **каждый — своя транзакция** (`lock_character` →
+   `law_crud.check_patrol_arrival` → COMMIT → уведомление); сбой одного не мешает остальным.
+
+Исход — `StepOutcome(outcome: moved|stayed|blocked|not_patrolling|not_due, blocked_reason, from_location_id,
+to_location_id, checked, encounters, slipped)`.
+
+### Проверка прибывшим патрулём (`law_crud.check_patrol_arrival`)
+Общее ядро — `law_crud._check` (тело FEAT-203 `check_entry`; `check_entry` не изменился и по-прежнему берёт
+`guards[0]`). Сначала пропуски патруля (без броска): не игрок / не в этой локации; любая блокировка активности
+(тюрьма, открытая встреча, нокаут, подземелье, сон, чтение); внутри дома (`house_room_id`); в активном бою. Дальше —
+FEAT-203 как есть: кулдаун бегства в этой локации, розыск / «вне закона», ступень, бросок с `n = guards_at(...)`
+(прибывший патрульный считается вместе со стоящими); `detect_enabled = false` → заметили всегда.
+- **Заметили** → встреча `source = 'patrol'` (`lc.SOURCE_PATROL`, входит в `ENTRY_SOURCES`), стражник встречи —
+  **прибывший патрульный**, `from_location_id = NULL` (успешное бегство оставляет на месте, защищает кулдаун 1 ч),
+  `expires_at = now + encounter_timeout_hours` (24 ч), авторазрешение — прежним проходом. После коммита —
+  `encounter_notice`: «Вас заметил патруль стражи в «{локация}». Решите, как поступить, в течение {осталось}»
+  (`law_notify.patrol_encounter_message`; без названия — «Вас заметил патруль стражи. …»), `ws_type = law_encounter`,
+  категория `system`.
+- **Не заметили** → строка `law_log` `slipped` с `reason = 'patrol'`, **без уведомления** (решение PM).
+- Каждое прибытие — новый бросок (грейса после проскальзывания нет).
+- `encounter_out` (DTO игрока) += `by_patrol: bool`.
+- «Драться» после ухода патрульного (удержание 30 мин истекло): прежний `pick_free_guard` — другой свободный
+  стражник в локации встречи, иначе исход `guard_gone`. Штраф / сдача / бегство доступны как раньше.
+
+### Подсказка игроку (`GET /characters/npcs/by_location`, публичный)
+Каждому НПС добавлено `patrol_departure: 'soon' | 'short' | 'long' | null` (`patrol_crud.departure_hints`, 2 запроса
+на весь список): только патрулирующим стражникам (`mode IN (route, zone)`); удерживаемый встречей → `long`; при
+выключенном рубильнике — null у всех. Минут игрок не видит. locations-service пробрасывает поле в `client/details`
+(`NpcInLocation.patrol_departure`). Фронтенд опрашивает список НПС раз в 60 с.
+
+### Админ-API (`patrol_api.py`, префикс `/characters`; существующие права, без RBAC-миграции)
+| Метод | Путь | Право | Описание |
+|-------|------|-------|----------|
+| GET | `/characters/admin/npcs/{npc_id}/patrol` | `npcs:read` | `PatrolOut`: конфиг (без строки — умолчания: `post`, 20 / 25, пустые списки), `route` / `zone_locations` с названиями, `zone_district_name`, `current_location_*`, `next_move_at`, `last_moved_at`, живой `blocked_reason`, `patrols_enabled`, `warnings` |
+| PUT | `/characters/admin/npcs/{npc_id}/patrol` | `npcs:update` | `PatrolIn {mode, route_style?, route_location_ids?, zone_kind?, zone_district_id?, zone_location_ids?, interval_min?, jitter_pct?}` → `PatrolOut` |
+| POST | `/characters/admin/npcs/{npc_id}/patrol/step` | `npcs:update` | «Шаг сейчас»: `step_guard(force=True)` → `{outcome, blocked_reason, from_location_id, to_location_id, checked, encounters, slipped, patrol}` |
+
+- 404 «NPC не найден» — не NPC, моб, нет такого. 400 — русские тексты `patrol_core.validate` (несколько — через
+  «; »), а также «Патруль доступен только стражникам» (режим ≠ post у не-стражника), «Локация не найдена: {ids}»
+  (активный список), «Район не найден», «В районе должно быть хотя бы 2 локации». 422 — неверные типы / списки длиннее
+  200. 409 — гонка уникального ключа точек.
+- Опущенное поле / список сохраняет хранимое значение; явный `zone_district_id: null` очищает район. Неактивный
+  список молча очищается от несуществующих локаций.
+- Планирование: `post` → `next_move_at = NULL` (точки сохраняются); смена режима / точек / интервала / разброса или
+  отсутствие расписания → `next_move_at = now + next_delay`, `route_index` = позиция текущей локации в маршруте
+  (иначе 0), `route_dir = 1`; сохранение без изменений расписание не трогает.
+- `warnings` (мягкие): «„A“ и „B“ не соседние — стражник перейдёт напрямую» (соседние точки маршрута; для `loop` из
+  3+ точек — и замыкающая пара), «Локации зоны находятся в разных регионах», «Между локациями зоны нет переходов —
+  стражник будет перемещаться напрямую».
+
+### Прочие точки
+- `PUT /characters/admin/npcs/{id}`: смена роли со `guard` на другую → `patrol_crud.disable_patrol` (`mode = post`,
+  `next_move_at = NULL`, точки сохраняются). Перенос НПС админом — ничего (шаг вернёт его на маршрут).
+- `DELETE /characters/admin/npcs/{id}`: `patrol_crud.delete_patrol` в той же транзакции (FK нет).
+- `GET/PUT /characters/admin/law/settings`: `patrols_enabled`, `patrol_encounter_hold_min` — во входе необязательны
+  (старый клиент сохраняет значения); «Сколько патрульный ждёт ответа: от 0 до 1440 мин».
+- battle-service не менялся: стражник, ушедший до старта боя, даёт прежний 409 → прежний откат в `pending`.
+- Тесты: `tests/test_guard_patrols.py` (мир с таблицей `LocationNeighbors`; точки подмены `patrol_rng`,
+  `detection_rng`).

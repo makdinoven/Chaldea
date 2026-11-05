@@ -11,6 +11,7 @@ import {
   SHADOW_MAX_PER_POINT,
   SHADOW_MAX_RATIO,
   SHADOW_MAX_REVEAL_DAYS,
+  SHADOW_MAX_SUBCLASS_STEALTH,
   SHADOW_MAX_SUSPICION,
   SHADOW_MAX_TIER_VALUE,
   SHADOW_MAX_TIER_WITNESS_PCT,
@@ -60,32 +61,36 @@ const NUMBER_RE = /^\d*([.,]\d*)?$/;
 const INT_RE = /^\d*$/;
 const PCT_MAX = 100;
 const NAME_MAX = 60;
+const SUBCLASS_STEALTH_HINT = 'Очки скрытности, добавляются до капа; действуют на свидетелей, бегство и побег';
 
 const GROUPS: FieldGroup[] = [
   {
     title: 'Свидетели',
     note:
-      'Шанс, что преступление заметят. База зависит от типа локации; локации без типа считаются поселением («safe»). ' +
-      'Шанс группы — самый заметный участник + прибавка за каждого следующего.',
+      'Шанс, что преступление заметят: база локации × (1 − снижение скрытности) × узнаваемость славы (без маски). ' +
+      'База зависит от типа локации; локации без типа считаются поселением («safe»). ' +
+      'Шанс группы — самый заметный участник × множитель за каждого следующего.',
     fields: [
-      { key: 'witness_base_safe_pct', label: 'База: поселение, %', hint: 'Локации с типом «safe» и без типа', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_base_farm_pct', label: 'База: угодья, %', hint: 'Тип «farm»', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_base_dangerous_pct', label: 'База: дикие места, %', hint: 'Тип «dangerous»', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_base_dungeon_pct', label: 'База: подземелье, %', hint: 'Тип «dungeon»', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_base_default_pct', label: 'База: прочее, %', hint: 'Нет локации или неизвестный тип', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_stealth_per_point_pct', label: 'Скрытность за очко, %', hint: 'Минус за каждое очко ловкости + удачи', int: false, min: 0, max: SHADOW_MAX_PER_POINT },
-      { key: 'witness_agent_pct', label: 'Подкласс «Агент», %', hint: 'Минус к шансу', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_assassin_pct', label: 'Подкласс «Ассасин», %', hint: 'Минус к шансу', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_trickster_pct', label: 'Подкласс «Фокусник», %', hint: 'Минус к шансу', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_mask_pct', label: 'Маска, %', hint: 'Минус к шансу; слава в маске не учитывается', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_group_per_extra_pct', label: 'За участника группы, %', hint: 'Плюс за каждого после первого', int: false, min: 0, max: PCT_MAX },
+      { key: 'witness_base_safe_pct', label: 'База: поселение, %', hint: 'Локации с типом «safe» и без типа; множится на (1 − снижение скрытности)', int: false, min: 0, max: PCT_MAX },
+      { key: 'witness_base_farm_pct', label: 'База: угодья, %', hint: 'Тип «farm»; множится на (1 − снижение скрытности)', int: false, min: 0, max: PCT_MAX },
+      { key: 'witness_base_dangerous_pct', label: 'База: дикие места, %', hint: 'Тип «dangerous»; множится на (1 − снижение скрытности)', int: false, min: 0, max: PCT_MAX },
+      { key: 'witness_base_dungeon_pct', label: 'База: подземелье, %', hint: 'Тип «dungeon»; множится на (1 − снижение скрытности)', int: false, min: 0, max: PCT_MAX },
+      { key: 'witness_base_default_pct', label: 'База: прочее, %', hint: 'Нет локации или неизвестный тип; множится на (1 − снижение скрытности)', int: false, min: 0, max: PCT_MAX },
+      { key: 'stealth_pct_per_point', label: 'Снижение за очко скрытности, %', hint: 'Шанс × (1 − скрытность × значение / 100); скрытность — эффективная, после капа', int: false, min: 0, max: SHADOW_MAX_PER_POINT },
+      { key: 'stealth_max_reduction_pct', label: 'Предел снижения, %', hint: 'Больше этого скрытность шанс не снижает', int: false, min: 0, max: PCT_MAX },
+      { key: 'stealth_assassin_points', label: 'Скрытность подкласса «Ассасин»', hint: SUBCLASS_STEALTH_HINT, int: true, min: 0, max: SHADOW_MAX_SUBCLASS_STEALTH },
+      { key: 'stealth_trickster_points', label: 'Скрытность подкласса «Фокусник»', hint: SUBCLASS_STEALTH_HINT, int: true, min: 0, max: SHADOW_MAX_SUBCLASS_STEALTH },
+      { key: 'stealth_agent_points', label: 'Скрытность подкласса «Агент»', hint: SUBCLASS_STEALTH_HINT, int: true, min: 0, max: SHADOW_MAX_SUBCLASS_STEALTH },
+      { key: 'witness_group_per_extra_pct', label: 'За участника группы, %', hint: '+N % к шансу за каждого участника после первого (множитель)', int: false, min: 0, max: PCT_MAX },
       { key: 'witness_min_pct', label: 'Минимум, %', hint: '', int: false, min: 0, max: PCT_MAX },
-      { key: 'witness_max_pct', label: 'Максимум, %', hint: '', int: false, min: 0, max: PCT_MAX },
+      { key: 'witness_max_pct', label: 'Максимум, %', hint: 'Не больше 100', int: false, min: 0, max: PCT_MAX },
     ],
   },
   {
     title: 'Раскрытие',
-    note: 'Раз в сутки по каждому нераскрытому делу бросается шанс раскрытия; после срока дело закрывается навсегда.',
+    note:
+      'Раз в сутки по каждому нераскрытому делу бросается шанс раскрытия; после срока дело закрывается навсегда. ' +
+      'Шанс умножается на (1 − снижение скрытности преступника на момент преступления).',
     fields: [
       { key: 'reveal_days', label: 'Срок раскрытия, дней', hint: 'Сколько суток дело можно раскрыть', int: true, min: 1, max: SHADOW_MAX_REVEAL_DAYS },
       { key: 'reveal_base_pct', label: 'База, %', hint: 'Шанс раскрытия в день', int: false, min: 0, max: PCT_MAX },
@@ -222,7 +227,7 @@ const ShadowSettingsTab = ({ canEdit }: ShadowSettingsTabProps) => {
         if (min > SHADOW_MAX_TIER_VALUE) return `Порог ступени «${name}» слишком большой`;
         if (scale === 'fame') {
           if (!isNum(t.witness_pct) || parseNum(t.witness_pct) < 0 || parseNum(t.witness_pct) > SHADOW_MAX_TIER_WITNESS_PCT) {
-            return `Узнаваемость ступени «${name}»: от 0 до ${SHADOW_MAX_TIER_WITNESS_PCT} %`;
+            return `Узнаваемость ступени «${name}» (множитель): от 0 до ${SHADOW_MAX_TIER_WITNESS_PCT} %`;
           }
         }
         previous = min;
@@ -290,7 +295,7 @@ const ShadowSettingsTab = ({ canEdit }: ShadowSettingsTabProps) => {
           <p className="text-white/50 text-sm">
             Пять ступеней снизу вверх; порядок и коды фиксированы. Первая начинается с 0, пороги строго возрастают.
             {fame
-              ? ` Узнаваемость — прибавка к шансу свидетелей у персонажа без маски (до ${SHADOW_MAX_TIER_WITNESS_PCT} %).`
+              ? ` Узнаваемость — множитель шанса свидетелей у персонажа без маски: шанс × (1 + N / 100), до ${SHADOW_MAX_TIER_WITNESS_PCT} %.`
               : ' Игрок видит название ступени как «слухи в подполье», без чисел.'}
           </p>
         </div>
@@ -299,7 +304,7 @@ const ShadowSettingsTab = ({ canEdit }: ShadowSettingsTabProps) => {
           <span className={LABEL}>Название</span>
           <span className={LABEL}>Порог</span>
           <span className={LABEL}>Диапазон</span>
-          {fame && <span className={LABEL}>Узнаваемость, %</span>}
+          {fame && <span className={LABEL}>Узнаваемость, % (множитель)</span>}
         </div>
 
         <div className="flex flex-col gap-2">
@@ -323,7 +328,7 @@ const ShadowSettingsTab = ({ canEdit }: ShadowSettingsTabProps) => {
               </div>
               {fame && (
                 <label className="flex flex-col gap-1 min-w-0">
-                  <span className={`${LABEL} lg:hidden`}>Узнаваемость, %</span>
+                  <span className={`${LABEL} lg:hidden`}>Узнаваемость, % (множитель)</span>
                   <input className="input-underline w-full" inputMode="decimal" value={t.witness_pct} disabled={disabled}
                     onChange={(e) => setTier(scale, i, 'witness_pct', e.target.value)} />
                 </label>

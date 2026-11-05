@@ -682,10 +682,10 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
         </fieldset>
       )}
 
-      {/* ── Mask (FEAT-199) ── */}
+      {/* ── Hides identity (FEAT-199 is_mask, relabelled in FEAT-201) ── */}
       {item.item_type === "head" && (
         <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
-          <legend className={`${labelText} px-2`}>Маска</legend>
+          <legend className={`${labelText} px-2`}>Личность</legend>
           <label className="flex items-center gap-3 mt-2">
             <input
               type="checkbox"
@@ -694,7 +694,7 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
               onChange={handleChange}
               className="w-5 h-5 accent-site-blue shrink-0"
             />
-            <span className="text-sm text-white">Маска (скрывает лицо при преступлениях)</span>
+            <span className="text-sm text-white">Скрывает личность</span>
           </label>
           {Boolean(item.is_mask) && <p className="text-white/40 text-xs mt-3">{MASK_HINT}</p>}
         </fieldset>

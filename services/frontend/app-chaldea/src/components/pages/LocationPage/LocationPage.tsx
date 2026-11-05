@@ -8,7 +8,7 @@ import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
 import { parseServerDate } from '../../../utils/serverDate';
-import { LocationData, Post } from './types';
+import { LocationData, NpcInLocation, Post } from './types';
 import type { PostGate } from './gateConstants';
 import LocationHeader from './LocationHeader';
 import LocationTopBar from './LocationTopBar';
@@ -38,6 +38,20 @@ import GatheringLockBanner from '../../CommonComponents/GatheringLockBanner';
 import GatheringSection from './GatheringSection/GatheringSection';
 import HousesSection from './HousesSection';
 import RemainingText from '../../CommonComponents/RemainingText';
+import { fetchLawJail, type LawJailOut } from '../../../api/law';
+import { apiErrorMessage } from '../../../api/errors';
+
+/** FEAT-198/203: the law outcome of an entry (move_and_post / quick_move PostResponse). */
+interface LawArrivalResponse {
+  law_encounter?: unknown;
+  law_slipped?: boolean | null;
+}
+
+const LAW_SLIPPED_TOAST = 'Вы проскользнули мимо стражи';
+
+/** FEAT-204: how often the «НПС» list is re-read so patrolling guards come and go without a reload. */
+const NPC_POLL_INTERVAL_MS = 60_000;
+const NPC_POLL_ERROR_TOAST = 'Не удалось обновить список НПС';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -75,6 +89,37 @@ const LocationPage = () => {
   // FEAT-175: in a dungeon run / knocked out after a wipe (banner lives in Layout).
   const activityLock = useActivityLock();
   const actionsLocked = inBattle || isGathering || activityLock.locked;
+
+  // FEAT-202: a country-prison inmate may walk and post inside the prison
+  // district — the allowed location ids come from the jail details.
+  const inJail = activityLock.reason === 'jail';
+  const [jailInfo, setJailInfo] = useState<LawJailOut | null>(null);
+  useEffect(() => {
+    if (!inJail || !character?.id) {
+      setJailInfo(null);
+      return;
+    }
+    let cancelled = false;
+    fetchLawJail(character.id)
+      .then((data) => {
+        if (!cancelled) setJailInfo(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setJailInfo(null);
+          toast.error(apiErrorMessage(err, 'Не удалось загрузить сведения о заключении'));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inJail, character?.id, character?.current_location?.id]);
+  const isCountryPrisoner = inJail && jailInfo?.facility === 'country';
+  /** Locations a country-prison inmate may move to / post in (null = not such an inmate). */
+  const prisonLocationIds = useMemo<ReadonlySet<number> | null>(
+    () => (isCountryPrisoner && jailInfo ? new Set(jailInfo.allowed_location_ids) : null),
+    [isCountryPrisoner, jailInfo],
+  );
 
   // --- Travel cooldown timer ---
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
@@ -142,6 +187,42 @@ const LocationPage = () => {
   useEffect(() => {
     fetchLocationData();
   }, [fetchLocationData]);
+
+  // --- FEAT-204: NPC list poll (patrolling guards) ---
+  // Only `npcs` is merged into the location: no spinner, no full details
+  // reload. Runs while the tab is visible; re-polls when it becomes visible.
+  // A failing streak shows a single toast (reset on the next success).
+  useEffect(() => {
+    if (!locationId) return;
+    let cancelled = false;
+    let errorShown = false;
+    const pollNpcs = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const res = await axios.get<NpcInLocation[]>(`${BASE_URL}/characters/npcs/by_location`, {
+          params: { location_id: locationId },
+        });
+        if (cancelled) return;
+        errorShown = false;
+        const npcs = Array.isArray(res.data) ? res.data : [];
+        setLocation((prev) => (prev && String(prev.id) === String(locationId) ? { ...prev, npcs } : prev));
+      } catch {
+        if (cancelled || errorShown) return;
+        errorShown = true;
+        toast.error(NPC_POLL_ERROR_TOAST);
+      }
+    };
+    const timer = window.setInterval(pollNpcs, NPC_POLL_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void pollNpcs();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [locationId]);
 
   // --- Squads on this location (FEAT-153 §3.5) ---
   // Lifted out of the deleted PartiesOnLocation so the players↔squads join
@@ -477,7 +558,7 @@ const LocationPage = () => {
   const handleSubmitPost = useCallback(
     async (content: string, gates: { action_type: string; targets: number[] }[] = []) => {
       try {
-        const { data } = await axios.post<{ law_encounter?: unknown }>(
+        const { data } = await axios.post<LawArrivalResponse>(
           `${BASE_URL}/locations/${locationId}/move_and_post`,
           {
             character_id: character?.id,
@@ -493,6 +574,8 @@ const LocationPage = () => {
           toast('Стража остановила вас!', { icon: '🛡️' });
           dispatch(getMe());
         }
+        // FEAT-203: the guards did not notice the character on arrival.
+        if (data?.law_slipped === true) toast(LAW_SLIPPED_TOAST, { icon: '🕶️' });
         // If character moved to this location, update Redux state + refresh cooldown
         if (character?.current_location?.id !== Number(locationId) && location) {
           dispatch(setCharacterLocation({ id: location.id, name: location.name }));
@@ -580,7 +663,7 @@ const LocationPage = () => {
     if (!window.confirm(`Быстрое перемещение в "${location.name}" стоит ${cost} выносливости. Продолжить?`)) return;
     setQuickMoving(true);
     try {
-      const { data } = await axios.post<{ law_encounter?: unknown }>(
+      const { data } = await axios.post<LawArrivalResponse>(
         `${BASE_URL}/locations/${location.id}/quick_move`,
         { character_id: character.id },
       );
@@ -593,6 +676,7 @@ const LocationPage = () => {
       dispatch(getMe());
       toast.success(`Вы переместились в ${location.name}`);
       if (data?.law_encounter) toast('Стража остановила вас!', { icon: '🛡️' });
+      if (data?.law_slipped === true) toast(LAW_SLIPPED_TOAST, { icon: '🕶️' });
       await fetchLocationData();
     } catch (err) {
       const message =
@@ -608,8 +692,15 @@ const LocationPage = () => {
   const isCharacterHere = character?.current_location?.id === location?.id;
   // FEAT-198: a prisoner may still write posts in the jail location itself
   // (the server allows exactly this; everything else stays locked).
+  // FEAT-202: a country-prison inmate may also move to (and post in) any
+  // location of the prison district; the server re-checks every move.
+  const prisonMoveAllowed =
+    !inBattle && !isGathering && prisonLocationIds !== null && location !== null &&
+    prisonLocationIds.has(location.id);
   const jailPostingAllowed =
-    activityLock.reason === 'jail' && isCharacterHere && !inBattle && !isGathering;
+    inJail && !inBattle && !isGathering && (isCharacterHere || prisonMoveAllowed);
+  /** The neighbour move UI (post-to-move / quick move) is usable. */
+  const moveUiAllowed = !actionsLocked || (inJail && prisonMoveAllowed);
 
   // Neighbor links are bidirectional with the same energy_cost.
   // If the character's current location appears in this location's neighbor list,
@@ -713,10 +804,15 @@ const LocationPage = () => {
         aside={
           <div
             className={`flex min-h-0 w-full lg:w-[330px] lg:shrink-0 lg:self-stretch ${
-              actionsLocked ? 'pointer-events-none opacity-50' : ''
+              actionsLocked && !(inJail && prisonLocationIds !== null && !inBattle && !isGathering)
+                ? 'pointer-events-none opacity-50'
+                : ''
             }`}
           >
-            <NeighborsSection neighbors={location.neighbors} />
+            <NeighborsSection
+              neighbors={location.neighbors}
+              enabledIds={inJail && !inBattle && !isGathering ? prisonLocationIds : null}
+            />
           </div>
         }
       />
@@ -810,7 +906,7 @@ const LocationPage = () => {
         <div className="order-2 lg:order-1 flex flex-col gap-4 min-w-0">
           {/* Movement choice UI for neighbor locations (B1) */}
           {(character || userIsStaff) &&
-            !isCharacterHere && isNeighborLocation && !actionsLocked && neighborEntry && (
+            !isCharacterHere && isNeighborLocation && moveUiAllowed && neighborEntry && (
             isTravelOnCooldown ? (
               /* Cooldown timer */
               <div className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/30 p-4 flex items-center gap-3.5">
@@ -953,7 +1049,9 @@ const LocationPage = () => {
                         : activityLock.reason === 'reading'
                           ? 'Написание постов будет доступно, когда персонаж закончит чтение.'
                           : activityLock.reason === 'jail'
-                            ? 'Из тюрьмы можно писать посты только в самой тюремной локации.'
+                            ? isCountryPrisoner
+                              ? 'Вы в тюрьме страны: можно ходить и писать посты только в её локациях.'
+                              : 'Из отделения стражи можно писать посты только в самой его локации.'
                             : activityLock.reason === 'law_encounter'
                               ? 'Сначала ответьте страже.'
                               : 'Написание постов будет доступно, когда персонаж очнётся.'}

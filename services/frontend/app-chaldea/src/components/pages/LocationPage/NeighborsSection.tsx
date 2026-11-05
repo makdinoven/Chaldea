@@ -4,6 +4,11 @@ import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
 
 interface NeighborsSectionProps {
   neighbors: NeighborLocation[];
+  /**
+   * FEAT-202: when set, only these neighbours stay clickable (a country-prison
+   * inmate may walk inside the prison district); the rest are dimmed.
+   */
+  enabledIds?: ReadonlySet<number> | null;
 }
 
 /**
@@ -16,7 +21,7 @@ interface NeighborsSectionProps {
  * toggle is gone — inside a fixed-height hero a collapsed panel would leave a
  * hole, so the header is static. Styling is design-system only.
  */
-const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
+const NeighborsSection = ({ neighbors, enabledIds = null }: NeighborsSectionProps) => {
   const navigate = useNavigate();
 
   return (
@@ -42,12 +47,15 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
         </p>
       ) : (
         <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 max-h-[300px] lg:max-h-none overflow-y-auto gold-scrollbar">
-          {neighbors.map((neighbor) => (
+          {neighbors.map((neighbor) => {
+            const blocked = enabledIds !== null && !enabledIds.has(neighbor.id);
+            return (
             <button
               key={neighbor.id}
               type="button"
+              disabled={blocked}
               onClick={() => navigate(`/location/${neighbor.id}`)}
-              className="group flex items-center gap-3 p-2 shrink-0 rounded-card text-left bg-white/[0.03] border border-white/[0.06] hover:border-gold-dark/40 hover:bg-white/[0.06] transition-all duration-200 ease-site"
+              className="group flex items-center gap-3 p-2 shrink-0 rounded-card text-left bg-white/[0.03] border border-white/[0.06] hover:border-gold-dark/40 hover:bg-white/[0.06] transition-all duration-200 ease-site disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             >
               {/* Thumbnail */}
               <span className="w-14 h-14 shrink-0 rounded-[10px] overflow-hidden bg-black/40 flex items-center justify-center">
@@ -90,7 +98,8 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6" />
               </svg>
             </button>
-          ))}
+            );
+          })}
         </div>
       )}
     </aside>

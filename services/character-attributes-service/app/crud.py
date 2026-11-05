@@ -239,6 +239,7 @@ def create_character_attributes(db: Session, attributes: schemas.CharacterAttrib
         stamina=attributes.stamina,
         charisma=attributes.charisma,
         luck=attributes.luck,
+        stealth=attributes.stealth or 0,
     )
 
     # FEAT-196: level/class for the per-level resource growth. The caller's
@@ -448,7 +449,7 @@ def _resolve_quest_name(quest_id: int) -> str | None:
 # Valid attribute keys for flat bonuses (same as simple_keys in apply_modifiers + resource keys)
 VALID_FLAT_BONUS_KEYS = {
     "health", "mana", "energy", "stamina",
-    "strength", "agility", "intelligence", "endurance", "charisma", "luck",
+    "strength", "agility", "intelligence", "endurance", "charisma", "luck", "stealth",
     "damage", "dodge", "res_effects",
     "res_physical", "res_catting", "res_crushing", "res_piercing",
     "res_magic", "res_fire", "res_ice", "res_watering",
@@ -718,7 +719,7 @@ def get_character_perks(db: Session, character_id: int):
     if char_attrs:
         attr_fields = [
             "strength", "agility", "intelligence", "endurance",
-            "health", "mana", "energy", "stamina", "charisma", "luck",
+            "health", "mana", "energy", "stamina", "charisma", "luck", "stealth",
             "damage", "dodge", "critical_hit_chance", "critical_damage",
             "res_effects", "res_physical", "res_catting", "res_crushing",
             "res_piercing", "res_magic", "res_fire", "res_ice",

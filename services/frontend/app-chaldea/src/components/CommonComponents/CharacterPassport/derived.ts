@@ -138,6 +138,7 @@ export const PASSPORT_STAT_LABELS: Record<string, string> = {
   stamina: 'Выносливость',
   charisma: 'Харизма',
   luck: 'Удача',
+  stealth: 'Скрытность',
 };
 
 /** Derived rows in display order: label + how to read the value. */

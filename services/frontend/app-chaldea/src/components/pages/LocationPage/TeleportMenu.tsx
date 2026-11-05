@@ -95,6 +95,8 @@ const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
         toast('Стража остановила вас!', { icon: '🛡️' });
         dispatch(getMe());
       }
+      // FEAT-203: the guards did not notice the character on arrival.
+      if (result.law_slipped === true) toast('Вы проскользнули мимо стражи', { icon: '🕶️' });
     }
   };
 

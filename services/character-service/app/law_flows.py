@@ -3,7 +3,7 @@
 The routers (``law_api``) and the scheduler pass (``law_pass``, through ``asyncio.run``) share these coroutines:
 
 * :func:`choose`         — the player's answer to the guards (fine / surrender / flee / fight);
-* :func:`send_to_jail`   — the forced move to the region jail + the term (reuses ``main._prepare_move`` and
+* :func:`send_to_jail`   — the forced move to the jail (FEAT-202: the station or the country prison) + the term (reuses ``main._prepare_move`` and
                            ``crud.apply_admin_move(commit=False)``, so the move and the jail commit together);
 * :func:`battle_result`  — the guard battle end (callback from battle-service or the pass polling);
 * :func:`auto_resolve`   — an ignored encounter after ``encounter_timeout_hours``.
@@ -23,6 +23,7 @@ import battle_client
 import crud
 import law_core as lc
 import law_crud
+import law_facility
 import law_notify
 from law_crud import LawError
 
@@ -75,9 +76,10 @@ async def send_to_jail(db: Session, character_id: int, encounter_id: int, *, act
         raise LawError(404, law_crud.MSG_ENCOUNTER_NOT_FOUND)
     if enc.status not in statuses:
         return None
-    jail_location = law_crud.region_jail_location(db, enc.region_id)
-    if jail_location is None:
+    target = law_facility.resolve_jail(db, enc.region_id, enc.level_code)
+    if target is None:
         raise LawError(409, law_crud.MSG_NO_JAIL)
+    jail_location = int(target.location_id)
     character = law_crud._require_character(db, character_id)
     from_location = character.current_location_id
     moving = from_location is None or int(from_location) != int(jail_location)
@@ -100,16 +102,19 @@ async def send_to_jail(db: Session, character_id: int, encounter_id: int, *, act
                 db, character_id=character_id, from_location_id=from_location, from_location_name=from_name,
                 to_location_id=jail_location, to_location_name=to_name, gathering_cancelled=gathering_cancelled,
                 event_type="jail",
-                description=f"Заключён под стражу: «{from_name or '—'}» → «{to_name or '—'}»", commit=False)
-        term = law_crud.jail_writes(db, character, enc, jail_location, key=key, action=action, now=now,
+                description=f"Заключён под стражу: «{from_name or '—'}» → «{to_name or '—'}» ({target.name})",
+                commit=False)
+        term = law_crud.jail_writes(db, character, enc, target, key=key, action=action, now=now,
                                     settings=settings)
         db.commit()
     except Exception:
         db.rollback()
         raise
     region_name = law_crud.region_names(db, [term.region_id]).get(int(term.region_id))
-    notice = _user_notice(db, character_id, law_notify.jailed_message(region_name, term.until, now),
-                          law_notify.WS_JAILED, term_id=int(term.id))
+    country_name = law_facility.country_name(db, term.country_id) if term.facility == lc.FACILITY_COUNTRY else None
+    message = law_notify.jailed_message(region_name, term.until, now, facility=term.facility,
+                                        country_name=country_name)
+    notice = _user_notice(db, character_id, message, law_notify.WS_JAILED, term_id=int(term.id))
     return term, [notice]
 
 
@@ -360,7 +365,7 @@ async def battle_result(db: Session, *, battle_id: int, encounter_id: int, winne
         return {"ok": True, "status": lc.ENC_PENDING if aborted else lc.ENC_WON, "duplicate": False}, notices
 
     # lost (incl. a timeout)
-    if law_crud.region_jail_location(db, enc.region_id) is not None:
+    if law_facility.resolve_jail(db, enc.region_id, enc.level_code) is not None:
         done = await send_to_jail(db, character_id, encounter_id, action=lc.LOG_FIGHT_LOST, key=f"{base_key}:lost")
         if done is None:
             current = law_crud.get_encounter(db, encounter_id)
@@ -375,13 +380,14 @@ async def battle_result(db: Session, *, battle_id: int, encounter_id: int, winne
 
 
 async def auto_resolve(db: Session, encounter_id: int) -> List[law_notify.Notice]:
-    """An ignored encounter (user decision 5): auto-surrender when the region has a jail, else a forced fine."""
+    """An ignored encounter (user decision 5): auto-surrender when there is a jail (FEAT-202: the station or the
+    country prison), else a forced fine."""
     enc = law_crud.get_encounter(db, encounter_id)
     if enc is None or enc.status != lc.ENC_PENDING:
         return []
     character_id = int(enc.character_id)
     key = f"law:auto:{encounter_id}"
-    if law_crud.region_jail_location(db, enc.region_id) is not None:
+    if law_facility.resolve_jail(db, enc.region_id, enc.level_code) is not None:
         # FEAT-200 (fix 5): only a still-pending encounter (re-checked under the row lock) — a fight chosen
         # in the meantime is never auto-surrendered / auto-fined
         done = await send_to_jail(db, character_id, encounter_id, action=lc.LOG_AUTO_SURRENDER, key=key,

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
-import { Player, NpcInLocation } from './types';
+import { Player, NpcInLocation, type PatrolDeparture } from './types';
 import type { PartyOnLocation } from '../../../api/squads';
 import { NPC_ROLE_LABELS, NPC_ROLE_ICONS } from '../../../constants/npc';
 import useNpcAttack from '../../../hooks/useNpcAttack';
@@ -185,6 +185,13 @@ const NpcAttackButton = ({ npcId, npcName, currentCharacterId }: { npcId: number
   );
 };
 
+/** FEAT-204: rough «when does this patrol leave» hint — never exact minutes. */
+const PATROL_DEPARTURE_LABELS: Record<PatrolDeparture, string> = {
+  soon: 'скоро уйдёт',
+  short: 'задержится ненадолго',
+  long: 'задержится надолго',
+};
+
 const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: NpcCardProps) => {
   const roleLabel = npc.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
   const roleIcon = npc.npc_role ? (NPC_ROLE_ICONS[npc.npc_role] || null) : null;
@@ -219,6 +226,11 @@ const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: 
         {roleLabel && (
           <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-[10px] sm:text-xs font-medium">
             {roleLabel}
+          </span>
+        )}
+        {npc.patrol_departure && PATROL_DEPARTURE_LABELS[npc.patrol_departure] && (
+          <span className="text-white/50 text-[10px] sm:text-xs italic text-center leading-tight">
+            {PATROL_DEPARTURE_LABELS[npc.patrol_departure]}
           </span>
         )}
       </button>

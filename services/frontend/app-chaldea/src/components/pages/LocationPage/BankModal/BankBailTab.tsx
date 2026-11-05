@@ -12,8 +12,10 @@ import { bankErrorText } from './bankFormat';
 import { BankCard, BankSection } from './BankParts';
 
 /**
- * FEAT-198 — «Залог» tab of the bank: find a prisoner (any region's jail) and
- * pay the bail from the current character's purse at this banker.
+ * FEAT-198 — «Залог» tab of the bank: find a prisoner (any region's guard
+ * station) and pay the bail from the current character's purse at this banker.
+ * FEAT-202: country-prison inmates have no bail — the server leaves them out of
+ * the list and answers 409 on a direct payment (shown as a toast below).
  */
 
 const PAGE_SIZE = 20;

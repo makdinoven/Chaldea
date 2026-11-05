@@ -35,7 +35,7 @@ ADMIN = {"id": 1, "username": "admin", "role": "admin",
          "permissions": ["items:create", "items:update", "items:read"]}
 TOKEN = "test-internal-token"
 INTERNAL = {"X-Internal-Token": TOKEN}
-MASK_ERROR = "Маской может быть только предмет для головы"
+MASK_ERROR = "Скрывать личность может только головной убор"
 
 ALL_TYPES = [t.value for t in schemas.ItemType]
 NON_HEAD_TYPES = [t for t in ALL_TYPES if t != "head"]

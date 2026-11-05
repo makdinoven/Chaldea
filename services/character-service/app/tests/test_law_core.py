@@ -72,7 +72,53 @@ def test_orm_tables_match_migration_columns(table):
         mig040 = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mig040)
         expected |= {c for c, _ddl in mig040._CRIME_COLUMNS}
+        expected |= {"stealth_reduction_pct"}             # FEAT-201: migration 041 reveal snapshot
+    expected |= {c for t, c, _ddl in _load_042()._COLUMNS if t == table}     # FEAT-202: migration 042
+    mig043 = _load_043()                                                       # FEAT-203: migration 043
+    expected |= {c for t, c, _ddl in mig043._COLUMNS + [mig043._LEVEL_COLUMN] if t == table}
+    expected |= {c for t, c, _ddl in _load_044()._COLUMNS if t == table}     # FEAT-204: migration 044
     assert expected == set(models.Base.metadata.tables[table].columns.keys())
+
+
+def _load_044():
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(load_migration().__file__), "044_guard_patrols.py")
+    spec = importlib.util.spec_from_file_location("migration_044_guard_patrols", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_043():
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(load_migration().__file__), "043_guard_detection.py")
+    spec = importlib.util.spec_from_file_location("migration_043_guard_detection", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_042():
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(load_migration().__file__), "042_country_prison.py")
+    spec = importlib.util.spec_from_file_location("migration_042_country_prison", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_migration_042_contract():
+    mig = _load_042()
+    assert mig.revision == "042_country_prison" and len(mig.revision) <= 32
+    assert mig.down_revision == "041_stealth"
+    assert {(t, c) for t, c, _ddl in mig._COLUMNS} == {
+        ("law_settings", "country_prison_min_level"), ("law_settings", "country_escape_multiplier"),
+        ("law_settings", "country_escape_cooldown_hours"), ("law_jail_terms", "facility"),
+        ("law_jail_terms", "country_id"), ("law_jail_terms", "district_id"), ("characters", "jail_district_id")}
+    assert "jail_district_id" in models.Base.metadata.tables["characters"].columns.keys()
 
 
 def test_character_columns_match_migration():
@@ -253,7 +299,14 @@ def test_validate_settings_bounds(field, value, fragment):
 def test_settings_from_row_and_levels_fallback():
     assert lc.settings_from_row(None) == lc.DEFAULT_SETTINGS
     assert lc.levels_from_rows([]) == list(lc.DEFAULT_LEVELS)
-    row = [1000, "50.00", 600, "criminal", 24, 6, "20", "0.25", "5", "85", "5", "0.15", "2", "50", 6, "50", 168, "2"]
+    # FEAT-201: escape per point default 0.15 -> 0.3 (escape uses one stat now)
+    # FEAT-202: + country prison threshold / escape multiplier / escape cooldown
+    row = [1000, "50.00", 600, "criminal", 24, 6, "20", "0.25", "5", "85", "5", "0.3", "2", "50", 6, "50", 168, "2",
+           "villain", "0.50", 12,
+           # FEAT-203: the guard-detection roll
+           1, "100.00", "70.00", "40.00", "25.00", "50.00", "10.00", "75.00", "5.00", "100.00",
+           # FEAT-204: guard patrols (switch + max hold of a patrol guard by an open encounter, min)
+           1, 30]
     assert lc.settings_from_row(row) == lc.DEFAULT_SETTINGS
 
 
@@ -310,7 +363,10 @@ def test_law_player_texts_are_relative_durations():
     import law_notify
     until = NOW + timedelta(days=3, hours=4)
     jailed = law_notify.jailed_message("Ост", until, NOW)
-    assert jailed == "Стража края «Ост» заключила вас под стражу — срок 3 д 4 ч"
+    assert jailed == "Стража края «Ост» заключила вас в отделение стражи — срок 3 д 4 ч"      # FEAT-202
+    assert law_notify.jailed_message("Ост", until, NOW, facility="country", country_name="Мидденгерд") == (
+        "Стража края «Ост» отправила вас в тюрьму страны «Мидденгерд» — срок 3 д 4 ч. "
+        "Залога нет, передвигаться можно только внутри тюрьмы")
     stop = law_notify.encounter_message(None, NOW + timedelta(minutes=30), NOW)
     assert stop.endswith("Решите, как поступить, в течение 30 мин")
     assert law_crud._escape_message(False, NOW + timedelta(days=4, hours=2), NOW) == \

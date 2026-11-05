@@ -446,13 +446,62 @@ async def create_new_country(session: AsyncSession, name: str, description: str,
     await session.refresh(new_country)
     return new_country
 
+# FEAT-202 §3.3/§3.5: the locations of a prison district = the district + its nested sub-districts
+# (over parent_district_id) + locations hanging off them via Locations.parent_id, ordered by
+# (district depth, sort_order, id). Valid on MySQL 8 and SQLite. Both recursive branches carry a depth
+# guard (a cyclic parent chain cannot loop); GROUP BY removes the duplicates a cycle or a double path
+# would produce. KEEP THIS TEXT IDENTICAL to character-service law_facility.SQL_PRISON_LOCATIONS.
+SQL_PRISON_LOCATIONS = (
+    "WITH RECURSIVE dtree(id, depth) AS ("
+    " SELECT id, 0 FROM Districts WHERE id = :d"
+    " UNION ALL"
+    " SELECT c.id, t.depth + 1 FROM Districts c JOIN dtree t ON c.parent_district_id = t.id WHERE t.depth < 10"
+    "), ltree(id, depth, sort_order, hops) AS ("
+    " SELECT l.id, t.depth, COALESCE(l.sort_order, 0), 0 FROM Locations l JOIN dtree t ON l.district_id = t.id"
+    " UNION ALL"
+    " SELECT l.id, t.depth, COALESCE(l.sort_order, 0), t.hops + 1 FROM Locations l JOIN ltree t"
+    " ON l.parent_id = t.id WHERE t.hops < 10"
+    ") SELECT id, MIN(depth) AS min_depth, MIN(sort_order) AS min_sort FROM ltree GROUP BY id"
+    " ORDER BY min_depth, min_sort, id"
+)
+
+COUNTRY_PRISON_DISTRICT_NOT_FOUND = "Район тюрьмы не найден"
+COUNTRY_PRISON_WRONG_COUNTRY = "Район тюрьмы должен находиться в одном из краёв этой страны"
+COUNTRY_PRISON_EMPTY = "В районе тюрьмы нет ни одной локации"
+
+
+async def prison_location_ids(session: AsyncSession, district_id: int) -> List[int]:
+    """FEAT-202: the ordered locations of a prison district subtree; [] for an unknown district."""
+    rows = (await session.execute(text(SQL_PRISON_LOCATIONS), {"d": int(district_id)})).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+async def validate_country_prison_district(session: AsyncSession, country_id: int, district_id: int) -> None:
+    """FEAT-202 §3.5: 400 unless the district exists, its region belongs to `country_id` and its
+    subtree holds at least one location."""
+    row = (await session.execute(
+        text("SELECT r.country_id FROM Districts d JOIN Regions r ON r.id = d.region_id WHERE d.id = :d"),
+        {"d": int(district_id)},
+    )).fetchone()
+    if row is None:
+        raise HTTPException(status_code=400, detail=COUNTRY_PRISON_DISTRICT_NOT_FOUND)
+    if row[0] is None or int(row[0]) != int(country_id):
+        raise HTTPException(status_code=400, detail=COUNTRY_PRISON_WRONG_COUNTRY)
+    if not await prison_location_ids(session, district_id):
+        raise HTTPException(status_code=400, detail=COUNTRY_PRISON_EMPTY)
+
+
 async def update_country(session: AsyncSession, country_id: int, data) -> Country:
     result = await session.execute(select(Country).where(Country.id == country_id))
     db_country = result.scalars().first()
     if not db_country:
         raise HTTPException(status_code=404, detail="Country not found")
 
-    for field, value in data.dict(exclude_unset=True).items():
+    changes = data.dict(exclude_unset=True)
+    # FEAT-202: the prison must be a non-empty district of THIS country (null = the country has no prison)
+    if changes.get("prison_district_id") is not None:
+        await validate_country_prison_district(session, country_id, changes["prison_district_id"])
+    for field, value in changes.items():
         setattr(db_country, field, value)
 
     await session.commit()
@@ -478,6 +527,7 @@ async def get_country_details(session: AsyncSession, country_id: int) -> Optiona
         "leader_id": country.leader_id,
         "map_image_url": country.map_image_url,
         "emblem_url": country.emblem_url,
+        "prison_district_id": country.prison_district_id,
         "regions": [
             {
                 "id": reg.id,
@@ -499,6 +549,60 @@ async def get_countries_lookup(session: AsyncSession) -> List[dict]:
     result = await session.execute(select(Country))
     db_countries = result.scalars().all()
     return [{"id": c.id, "name": c.name} for c in db_countries]
+
+
+async def get_country_districts(session: AsyncSession, country_id: int) -> Optional[List[dict]]:
+    """FEAT-202 §3.5: every district of every region of the country (nested included) for the prison
+    select — ordered by region name, then parent-first, then sort_order, id. `location_count` is the
+    subtree count (the same as the prison resolution). None when the country does not exist."""
+    exists = (await session.execute(
+        text("SELECT id FROM Countries WHERE id = :c"), {"c": int(country_id)},
+    )).fetchone()
+    if exists is None:
+        return None
+    rows = (await session.execute(text(
+        "SELECT d.id, d.name, d.region_id, r.name, d.parent_district_id, d.entrance_location_id, d.sort_order "
+        "FROM Districts d JOIN Regions r ON r.id = d.region_id "
+        "WHERE r.country_id = :c"
+    ), {"c": int(country_id)})).fetchall()
+    by_parent: Dict[Optional[int], list] = {}
+    ids = {int(r[0]) for r in rows}
+    for r in rows:
+        parent = int(r[4]) if r[4] is not None and int(r[4]) in ids else None
+        by_parent.setdefault(parent, []).append(r)
+
+    def _key(r):
+        return (r[6] or 0, int(r[0]))
+
+    ordered: list = []
+    seen: set = set()
+
+    def _walk(r):
+        if int(r[0]) in seen:
+            return
+        seen.add(int(r[0]))
+        ordered.append(r)
+        for child in sorted(by_parent.get(int(r[0]), []), key=_key):
+            _walk(child)
+
+    for root in sorted(by_parent.get(None, []), key=lambda r: ((r[3] or "").lower(),) + _key(r)):
+        _walk(root)
+    # districts caught in a parent cycle (no root) are still listed, after the rest
+    for r in sorted(rows, key=_key):
+        _walk(r)
+
+    out = []
+    for r in ordered:
+        out.append({
+            "id": int(r[0]),
+            "name": r[1],
+            "region_id": int(r[2]),
+            "region_name": r[3],
+            "parent_district_id": int(r[4]) if r[4] is not None else None,
+            "location_count": len(await prison_location_ids(session, int(r[0]))),
+            "entrance_location_id": int(r[5]) if r[5] is not None else None,
+        })
+    return out
 
 
 # -------------------------------
@@ -2139,6 +2243,7 @@ async def get_countries_list(session: AsyncSession) -> List[dict]:
             "x": country.x,
             "y": country.y,
             "is_hidden": country.is_hidden,
+            "prison_district_id": country.prison_district_id,
         } for country in countries
     ]
 

@@ -1,6 +1,6 @@
 from inspect import classify_class_attrs
 from typing import Optional, Dict, List, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, root_validator, validator
 from datetime import datetime
 
 # Базовая схема для заявки на создание персонажа
@@ -619,7 +619,7 @@ class AdminCharacterUpdate(BaseModel):
 STAT_PRESET_KEYS = [
     "strength", "agility", "intelligence", "endurance",
     "health", "energy", "mana", "stamina",
-    "charisma", "luck",
+    "charisma", "luck", "stealth",
 ]
 
 
@@ -634,6 +634,7 @@ class StatPreset(BaseModel):
     stamina: int = 0
     charisma: int = 0
     luck: int = 0
+    stealth: int = 0                            # FEAT-201: optional, existing presets stay valid
 
     @validator(*STAT_PRESET_KEYS)
     def values_non_negative(cls, v):
@@ -641,14 +642,13 @@ class StatPreset(BaseModel):
             raise ValueError("Значение стата не может быть отрицательным")
         return v
 
-    @validator("luck", always=True)
-    def preset_sum_must_be_100(cls, v, values):
-        total = v
-        for key in STAT_PRESET_KEYS[:-1]:  # all except luck (already counted as v)
-            total += values.get(key, 0)
+    @root_validator(skip_on_failure=True)
+    def preset_sum_must_be_100(cls, values):
+        # FEAT-201: a root validator sums EVERY key once (the old field validator on "luck" depended on the key order)
+        total = sum(int(values.get(key) or 0) for key in STAT_PRESET_KEYS)
         if total != 100:
             raise ValueError(f"Сумма пресета должна быть равна 100, получено {total}")
-        return v
+        return values
 
 
 # ========== Race Schemas ==========
@@ -859,6 +859,8 @@ class NpcInLocation(BaseModel):
     class_name: Optional[str] = None
     race_name: Optional[str] = None
     npc_role: Optional[str] = None
+    # FEAT-204: a patrolling guard's departure bucket ('soon' | 'short' | 'long'); None = not patrolling
+    patrol_departure: Optional[str] = None
 
 
 # ========== Mob Template Schemas ==========
@@ -1583,6 +1585,8 @@ class TeleportResult(BaseModel):
     last_teleport_at: datetime
     # FEAT-198: the guard encounter created on arrival (LawEncounterOut shape), else None
     law_encounter: Optional[dict] = None
+    # FEAT-203: the guards did not notice the character on arrival
+    law_slipped: bool = False
 
 
 class PublicPostHistoryItem(BaseModel):
@@ -3689,11 +3693,15 @@ class LawEncounterOut(BaseModel):
     level_name: Optional[str]
     fine: int
     jail_hours: int
+    # FEAT-202: where a surrender would lead right now (pending only; null when closed / nowhere)
+    jail_facility: Optional[str] = None             # station | country
+    jail_name: Optional[str] = None                 # «Тюрьма страны «X»» / «Отделение стражи края «Y»»
     options: List[str]
     flee_chance_pct: Optional[float]
     status: str
     battle_id: Optional[int]
     expires_at: datetime
+    by_patrol: bool = False                         # FEAT-204: noticed by a patrolling guard
 
 
 class LawEncounterStaffOut(LawEncounterOut):
@@ -3716,7 +3724,14 @@ class LawJailOut(BaseModel):
     location_id: int
     location_name: Optional[str]
     until: datetime
-    bail_price: int
+    bail_price: Optional[int]                   # FEAT-202: None when bail is not available (the country prison)
+    bail_available: bool = True
+    facility: str = "station"                   # station | country
+    facility_name: Optional[str] = None
+    country_id: Optional[int] = None
+    district_id: Optional[int] = None           # the prison district (country only)
+    district_name: Optional[str] = None
+    allowed_location_ids: List[int] = []        # where the prisoner may be / move (station: the one location)
     can_escape_at: Optional[datetime]           # None = may try now
     escape_chance_pct: float
     escape_attempts: int
@@ -3833,6 +3848,24 @@ class LawSettingsFields(BaseModel):
     escape_fail_extend_pct: float
     max_remaining_jail_hours: int
     bail_multiplier: float
+    # FEAT-202: the country prison (optional on input: an omitted field keeps the stored value)
+    country_prison_min_level: Optional[str] = Field(None, max_length=20)
+    country_escape_multiplier: Optional[float] = None
+    country_escape_cooldown_hours: Optional[int] = None
+    # FEAT-203: the guard-detection roll (optional on input: an omitted field keeps the stored value)
+    detect_enabled: Optional[bool] = None
+    detect_base_safe_pct: Optional[float] = None
+    detect_base_farm_pct: Optional[float] = None
+    detect_base_dangerous_pct: Optional[float] = None
+    detect_base_dungeon_pct: Optional[float] = None
+    detect_base_default_pct: Optional[float] = None
+    detect_per_guard_pct: Optional[float] = None
+    detect_mask_factor_pct: Optional[float] = None
+    detect_min_pct: Optional[float] = None
+    detect_max_pct: Optional[float] = None
+    # FEAT-204: guard patrols (optional on input: an omitted field keeps the stored value)
+    patrols_enabled: Optional[bool] = None
+    patrol_encounter_hold_min: Optional[int] = None
 
 
 class LawLevelOut(BaseModel):
@@ -3842,6 +3875,7 @@ class LawLevelOut(BaseModel):
     min_value: int
     fine: int
     jail_hours: int
+    detect_pct: float = 100.0                   # FEAT-203: × the guard-detection chance, %
 
 
 class LawLevelIn(BaseModel):
@@ -3851,6 +3885,7 @@ class LawLevelIn(BaseModel):
     min_value: int
     fine: int
     jail_hours: int
+    detect_pct: Optional[float] = None          # FEAT-203: None keeps the stored value (an older client)
 
 
 class LawSettingsOut(BaseModel):
@@ -3887,6 +3922,7 @@ class LawCrimeOut(BaseModel):
     masked: bool = False
     witness_chance_pct: Optional[float] = None
     witness_roll_pct: Optional[float] = None
+    stealth_reduction_pct: Optional[float] = None       # FEAT-201 reveal snapshot (NULL = 0)
     reputation_delta: Optional[int] = None
     wanted_floor: Optional[int] = None
     reveal_attempts: int = 0
@@ -4012,6 +4048,17 @@ class RenownPlayerOut(BaseModel):
     rumors: RenownRumorsOut
 
 
+class StealthPlayerOut(BaseModel):
+    """FEAT-201 ``GET /characters/{id}/stealth`` (owner / staff)."""
+    stealth: int                                # the stored total (points + gear + food + perks)
+    subclass_bonus: int                         # out-of-battle subclass points, added before the cap
+    subclass_name: Optional[str] = None
+    effective: float                            # FEAT-195 cap of (stealth + subclass_bonus)
+    reduction_pct: float                        # «−X % к шансу быть замеченным»
+    pct_per_point: float
+    max_reduction_pct: float
+
+
 class FameTierPublicOut(BaseModel):
     code: str
     name: str
@@ -4025,11 +4072,11 @@ class ShadowSettingsFields(BaseModel):
     witness_base_dangerous_pct: float
     witness_base_dungeon_pct: float
     witness_base_default_pct: float
-    witness_stealth_per_point_pct: float
-    witness_agent_pct: float
-    witness_assassin_pct: float
-    witness_trickster_pct: float
-    witness_mask_pct: float
+    stealth_pct_per_point: float
+    stealth_max_reduction_pct: float
+    stealth_assassin_points: int
+    stealth_trickster_points: int
+    stealth_agent_points: int
     witness_group_per_extra_pct: float
     witness_min_pct: float
     witness_max_pct: float
@@ -4095,6 +4142,7 @@ class ShadowCrimeOut(BaseModel):
     masked: bool
     witness_chance_pct: Optional[float]
     witness_roll_pct: Optional[float]
+    stealth_reduction_pct: Optional[float] = None       # FEAT-201 reveal snapshot (NULL = 0)
     reputation_delta: Optional[int]
     wanted_points: int
     wanted_floor: Optional[int]
@@ -4179,3 +4227,57 @@ class FameApplyOut(BaseModel):
     applied: bool
     duplicate: bool
     tier_changed: bool
+
+
+# ========== FEAT-204: guard patrols (admin) ==========
+
+PATROL_MAX_LIST = 200                           # hard input bound; patrol_core holds the real (Russian) limits
+
+
+class PatrolIn(BaseModel):
+    """PUT /characters/admin/npcs/{npc_id}/patrol. An omitted list / field keeps the stored value."""
+    mode: str = Field(..., max_length=10)                       # post | route | zone
+    route_style: Optional[str] = Field(None, max_length=10)     # loop | pingpong
+    route_location_ids: Optional[List[int]] = Field(None, max_items=PATROL_MAX_LIST)
+    zone_kind: Optional[str] = Field(None, max_length=10)       # district | locations
+    zone_district_id: Optional[int] = None
+    zone_location_ids: Optional[List[int]] = Field(None, max_items=PATROL_MAX_LIST)
+    interval_min: Optional[int] = None
+    jitter_pct: Optional[int] = None
+
+
+class PatrolPointOut(BaseModel):
+    location_id: int
+    name: Optional[str] = None
+
+
+class PatrolOut(BaseModel):
+    npc_id: int
+    npc_role: Optional[str] = None
+    mode: str
+    route_style: str
+    route: List[PatrolPointOut]
+    zone_kind: str
+    zone_district_id: Optional[int] = None
+    zone_district_name: Optional[str] = None
+    zone_locations: List[PatrolPointOut]
+    interval_min: int
+    jitter_pct: int
+    current_location_id: Optional[int] = None
+    current_location_name: Optional[str] = None
+    next_move_at: Optional[datetime] = None
+    last_moved_at: Optional[datetime] = None
+    blocked_reason: Optional[str] = None                        # not_guard | dead | ko | battle | encounter
+    patrols_enabled: bool
+    warnings: List[str] = []
+
+
+class PatrolStepOut(BaseModel):
+    outcome: str                                                # moved | stayed | blocked | not_patrolling
+    blocked_reason: Optional[str] = None
+    from_location_id: Optional[int] = None
+    to_location_id: Optional[int] = None
+    checked: int = 0
+    encounters: int = 0
+    slipped: int = 0
+    patrol: PatrolOut

@@ -20,6 +20,14 @@ export const LAW_MAX_WANTED_LIMIT = 100_000;
 export const LAW_MAX_FINE = 1_000_000;
 export const LAW_BAIL_MULTIPLIER_MIN = 1;
 export const LAW_BAIL_MULTIPLIER_MAX = 10;
+/** FEAT-202: the country prison escape multiplier (× the station chance), `law_core.validate`. */
+export const LAW_COUNTRY_ESCAPE_MULTIPLIER_MIN = 0;
+export const LAW_COUNTRY_ESCAPE_MULTIPLIER_MAX = 1;
+/** FEAT-203: the per-level guard-detection multiplier, % (`law_core.MAX_DETECT_LEVEL_PCT`). */
+export const LAW_DETECT_LEVEL_PCT_MIN = 0;
+export const LAW_DETECT_LEVEL_PCT_MAX = 500;
+/** FEAT-204: `law_core.MAX_PATROL_HOLD_MIN`. */
+export const LAW_PATROL_HOLD_MIN_MAX = 1440;
 export const LAW_REASON_MIN = 3;
 export const LAW_REASON_MAX = 500;
 
@@ -42,6 +50,24 @@ export interface LawSettingsValues {
   escape_fail_extend_pct: number;
   max_remaining_jail_hours: number;
   bail_multiplier: number;
+  /* FEAT-202: the country prison */
+  country_prison_min_level: string;
+  country_escape_multiplier: number;
+  country_escape_cooldown_hours: number;
+  /* FEAT-203: guard detection on entry (all percents 0..100, min ≤ max) */
+  detect_enabled: boolean;
+  detect_base_safe_pct: number;
+  detect_base_farm_pct: number;
+  detect_base_dangerous_pct: number;
+  detect_base_dungeon_pct: number;
+  detect_base_default_pct: number;
+  detect_per_guard_pct: number;
+  detect_mask_factor_pct: number;
+  detect_min_pct: number;
+  detect_max_pct: number;
+  /* FEAT-204: guard patrols (global switch + how long a patrol guard waits for an answer) */
+  patrols_enabled: boolean;
+  patrol_encounter_hold_min: number;
 }
 
 export interface LawLevel {
@@ -51,6 +77,8 @@ export interface LawLevel {
   min_value: number;
   fine: number;
   jail_hours: number;
+  /** FEAT-203: × the guard-detection chance, % (100 — без изменений). */
+  detect_pct: number;
 }
 
 export interface LawSettingsData {
@@ -78,6 +106,9 @@ export interface LawAdminEncounter {
   guard_avatar: string | null;
   is_outlaw: boolean;
   has_jail: boolean;
+  /** FEAT-202: where a surrender would lead now (pending only; null = closed / nowhere). */
+  jail_facility?: string | null;
+  jail_name?: string | null;
   level_code: string;
   level_name: string | null;
   wanted_value: number;
@@ -102,7 +133,16 @@ export interface LawAdminJail {
   location_id: number;
   location_name: string | null;
   until: string;
-  bail_price: number;
+  /** FEAT-202: null when bail is not available (the country prison). */
+  bail_price: number | null;
+  bail_available?: boolean;
+  /** FEAT-202: `station` (отделение стражи края) | `country` (тюрьма страны). */
+  facility?: string;
+  facility_name?: string | null;
+  country_id?: number | null;
+  district_id?: number | null;
+  district_name?: string | null;
+  allowed_location_ids?: number[];
   can_escape_at: string | null;
   escape_chance_pct: number;
   escape_attempts: number;
@@ -128,6 +168,8 @@ export interface LawCrime {
   masked: boolean;
   witness_chance_pct: number | null;
   witness_roll_pct: number | null;
+  /** FEAT-201: the attacker's stealth reduction snapshotted at crime time (null = forced / old rows). */
+  stealth_reduction_pct?: number | null;
   reputation_delta: number | null;
   wanted_floor: number | null;
   reveal_attempts: number;

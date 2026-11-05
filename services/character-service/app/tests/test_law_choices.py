@@ -164,7 +164,8 @@ def test_surrender_after_jail_was_removed_is_409(api, law_world):
     enc_id = _wanted_alpha(law_world)
     exec_(law_world, "UPDATE Regions SET jail_location_id = NULL WHERE id = :r", r=R_OST)
     resp = _choose(api, enc_id, "surrender")
-    assert resp.status_code == 409 and resp.json()["detail"] == "В этом крае больше нет тюрьмы"
+    assert resp.status_code == 409 and resp.json()["detail"] == \
+        "Здесь некуда заключить под стражу: нет ни отделения стражи, ни тюрьмы страны"      # FEAT-202
     as_user(USER_ALPHA)
     options = api.get(f"/characters/{ALPHA}/law/encounter").json()["encounter"]["options"]
     assert options == ["fine", "flee", "fight"]                                        # recomputed

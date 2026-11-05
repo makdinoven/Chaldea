@@ -160,6 +160,7 @@ class Items(Base):
     stamina_modifier = Column(Integer, default=0)
     charisma_modifier = Column(Integer, default=0)
     luck_modifier = Column(Integer, default=0)
+    stealth_modifier = Column(Integer, default=0)  # Скрытность (FEAT-201)
     damage_modifier = Column(Integer, default=0)
     dodge_modifier = Column(Integer, default=0)
 

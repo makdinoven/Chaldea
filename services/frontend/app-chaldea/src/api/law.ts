@@ -32,6 +32,10 @@ export interface LawEncounterOut {
   level_name: string | null;
   fine: number;
   jail_hours: number;
+  /** FEAT-202: where a surrender would lead now (null when closed / nowhere) */
+  jail_facility?: LawJailFacility | null;
+  /** «Тюрьма страны «X»» / «Отделение стражи края «Y»» */
+  jail_name?: string | null;
   options: LawChoice[];
   /** null when «бежать» is not offered */
   flee_chance_pct: number | null;
@@ -40,7 +44,12 @@ export interface LawEncounterOut {
   battle_id: number | null;
   /** auto-surrender time when the player never answers */
   expires_at: string;
+  /** FEAT-204: noticed by a patrolling guard (absent on an older backend) */
+  by_patrol?: boolean;
 }
+
+/** FEAT-202: a regional guard station (one location) or the country prison (a district). */
+export type LawJailFacility = 'station' | 'country';
 
 export interface LawJailOut {
   id: number;
@@ -49,7 +58,18 @@ export interface LawJailOut {
   location_id: number;
   location_name: string | null;
   until: string;
-  bail_price: number;
+  /** null when bail is not available (the country prison) */
+  bail_price: number | null;
+  bail_available: boolean;
+  facility: LawJailFacility;
+  /** «Тюрьма страны «X»» / «Отделение стражи края «Y»» */
+  facility_name: string | null;
+  country_id: number | null;
+  /** the prison district (country only) */
+  district_id: number | null;
+  district_name: string | null;
+  /** where the prisoner may be / move (station: the one location) */
+  allowed_location_ids: number[];
   /** null = may try now */
   can_escape_at: string | null;
   escape_chance_pct: number;

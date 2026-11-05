@@ -15,6 +15,8 @@ export interface StatPreset {
   stamina: number;
   charisma: number;
   luck: number;
+  /** FEAT-201: optional on old presets (backend default 0). */
+  stealth?: number;
 }
 
 export interface Subrace {

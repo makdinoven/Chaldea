@@ -65,6 +65,7 @@ const MODIFIER_LABELS: Record<string, string> = {
   stamina: 'Стамина',
   charisma: 'Харизма',
   luck: 'Удача',
+  stealth: 'Скрытность',
   damage: 'Урон',
   dodge: 'Уклонение',
   health_recovery: 'Реген. здоровья',

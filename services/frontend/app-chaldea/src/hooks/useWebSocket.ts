@@ -48,10 +48,24 @@ import type {
   WsAuctionExpiredData,
 } from '../types/auction';
 import type { ChatMessage, ChatChannel } from '../types/chat';
+import { getMe } from '../redux/slices/userSlice';
 import { getAccessToken, refreshAccessToken } from '../api/authToken';
 import toast from 'react-hot-toast';
 import { alertPlayer } from '../utils/alertPlayer';
 import { battlePath } from '../utils/battlePath';
+
+/**
+ * FEAT-204: law events that change the activity lock out of band (a patrol
+ * encounter, a jailing, a release, an auto-resolve). Besides the bell/popup
+ * they refresh `/users/me` so ActivityLockBanner / GuardEncounterModal update
+ * at once.
+ */
+const LAW_LOCK_REFRESH_TYPES: ReadonlySet<string> = new Set([
+  'law_encounter',
+  'law_jailed',
+  'law_released',
+  'law_resolved',
+]);
 
 const MAX_RECONNECT_DELAY = 30000;
 const INITIAL_RECONNECT_DELAY = 1000;
@@ -483,6 +497,9 @@ const useWebSocket = (): UseWebSocketReturn => {
                   silent: data.silent,
                   sound: isBattleEvent(parsed.type) ? 'battle' : 'notification',
                 });
+              }
+              if (LAW_LOCK_REFRESH_TYPES.has(parsed.type)) {
+                void dispatch(getMe());
               }
               break;
             }

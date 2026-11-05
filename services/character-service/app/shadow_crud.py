@@ -11,8 +11,9 @@ Everything runs in the CALLER's transaction and never commits (``main.update_npc
 * region suspicion (lazy linear decay, ``law_core.materialise`` maths), readers of other services' tables,
   settings and the staff read models.
 
-Readers of foreign tables are parameterised ``text()`` and fail loudly; the only tolerated error is the missing
-``items.is_mask`` column (inventory-service migration 034 not applied yet) -> WARNING + "no mask".
+Readers of foreign tables are parameterised ``text()`` and fail loudly; the only tolerated errors are the missing
+``items.is_mask`` column (inventory-service migration 034 not applied yet) -> WARNING + "no mask", and the missing
+``character_attributes.stealth`` column (attributes migration 009, ``law_crud.stealth_agility_of``) -> WARNING + 0.
 """
 
 import logging
@@ -69,13 +70,8 @@ def location_marker(db: Session, location_id: Optional[int]) -> Optional[str]:
     return str(row[0]) if row is not None and row[0] is not None else None
 
 
-def subclass_of(db: Session, character_id: int) -> Optional[str]:
-    """The chosen subclass key (skills-service tables; the same SQL as inventory-service equipment_rules)."""
-    row = db.execute(text(
-        "SELECT tn.subclass_key FROM character_tree_progress ctp JOIN tree_nodes tn ON tn.id = ctp.node_id "
-        "WHERE ctp.character_id = :cid AND tn.node_type = 'subclass_choice' AND tn.subclass_key IS NOT NULL "
-        "ORDER BY ctp.id DESC LIMIT 1"), {"cid": int(character_id)}).first()
-    return str(row[0]) if row is not None and row[0] else None
+# FEAT-201: moved to law_crud (flee / escape use the subclass stealth too); kept here for existing callers
+subclass_of = law_crud.subclass_of
 
 
 def _missing_mask_column(exc: Exception) -> bool:
@@ -201,6 +197,7 @@ class _Member:
     character_id: int
     masked: bool
     chance: Decimal
+    reduction_pct: Optional[Decimal] = None     # FEAT-201 reveal snapshot; None on the forced path
 
 
 def _players(db: Session, npc_id: int, killer_ids: Iterable[int]) -> List[int]:
@@ -252,10 +249,10 @@ def npc_kill_consequences(db: Session, npc: "models.Character", *, battle_id: Op
         base = sc.base_pct(location_marker(db, npc.current_location_id), s)
         fame_tiers = renown_crud.load_renown_tiers(db, sc.SCALE_FAME)
         for cid in players:
-            agility, luck = law_crud.effective_attributes_of(db, cid)
+            info = law_crud.stealth_info(db, cid, s)
             masked = wears_mask(db, cid)
             members[cid] = _Member(cid, masked, sc.member_chance(
-                base, s, agility, luck, subclass_of(db, cid), masked, fame_witness_pct(db, cid, fame_tiers)))
+                base, info.reduction_pct, masked, fame_witness_pct(db, cid, fame_tiers)), info.reduction_pct)
         chance = sc.group_chance([m.chance for m in members.values()], len(players), s)
         witnessed, roll = lc.roll_succeeds(chance, law_crud.rng())
 
@@ -272,7 +269,8 @@ def npc_kill_consequences(db: Session, npc: "models.Character", *, battle_id: Op
                       event_key=f"crime:npc_kill:{npc.id}:{stamp}:{cid}", location_id=location_id,
                       victim_id=int(npc.id), battle_id=battle_id, floor=floor, now=now,
                       reputation_delta=points or None, reputation_key=rep_key, reputation_reason=reason,
-                      masked=member.masked, witness_chance_pct=chance, witness_roll_pct=roll)
+                      masked=member.masked, witness_chance_pct=chance, witness_roll_pct=roll,
+                      stealth_reduction_pct=member.reduction_pct)
         if witnessed and (forced or not member.masked):
             rep = reputation_crud.apply_npc_kill_for(db, npc, cid, region_id, points, stamp, battle_id=battle_id,
                                                      now=now)
@@ -402,7 +400,8 @@ def roll_reveal(db: Session, crime_id: int, now: datetime) -> Optional[RevealRes
     if next_at is None or next_at > now:
         return None
     s = load_settings(db)
-    chance = sc.reveal_chance(effective_suspicion(db, crime.region_id, s, now), bool(crime.masked), s)
+    chance = sc.reveal_chance(effective_suspicion(db, crime.region_id, s, now), bool(crime.masked), s,
+                              crime.stealth_reduction_pct or 0)
     ok, roll = lc.roll_succeeds(chance, law_crud.rng())
     if ok:
         return reveal_crime(db, crime.id, now=now, chance=chance, roll=roll)
@@ -434,6 +433,7 @@ def _crime_out(c: "models.LawCrime", names: dict) -> dict:
         "status": c.status, "masked": bool(c.masked),
         "witness_chance_pct": float(c.witness_chance_pct) if c.witness_chance_pct is not None else None,
         "witness_roll_pct": float(c.witness_roll_pct) if c.witness_roll_pct is not None else None,
+        "stealth_reduction_pct": float(c.stealth_reduction_pct) if c.stealth_reduction_pct is not None else None,
         "reputation_delta": c.reputation_delta, "wanted_points": int(c.wanted_points),
         "wanted_floor": c.wanted_floor, "reveal_attempts": int(c.reveal_attempts or 0),
         "next_roll_at": c.next_roll_at, "reveal_until": c.reveal_until, "created_at": c.created_at,
@@ -537,6 +537,26 @@ def staff_renown_adjust(db: Session, character_id: int, *, scale: str, delta: in
     return {"scale": scale, "value_before": result.value_before, "value_after": result.value_after,
             "tier_before": result.tier_before, "tier_after": result.tier_after, "duplicate": False,
             "change": result.change}
+
+
+# =====================================================================================================================
+# player
+# =====================================================================================================================
+
+def player_stealth(db: Session, character_id: int) -> dict:
+    """FEAT-201 ``GET /characters/{id}/stealth`` (owner / staff): the stored total, the subclass points (added before
+    the cap), the effective value and the reduction, plus the editable per-point / ceiling for the hint."""
+    s = load_settings(db)
+    info = law_crud.stealth_info(db, character_id, s)
+    return {
+        "stealth": info.raw,
+        "subclass_bonus": info.subclass_points,
+        "subclass_name": sc.SUBCLASS_LABELS.get(info.subclass_key or "") if info.subclass_points else None,
+        "effective": float(info.effective),
+        "reduction_pct": float(info.reduction_pct),
+        "pct_per_point": float(s.stealth_pct_per_point),
+        "max_reduction_pct": float(s.stealth_max_reduction_pct),
+    }
 
 
 # =====================================================================================================================

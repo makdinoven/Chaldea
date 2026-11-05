@@ -754,6 +754,8 @@ def _created_post():
     post.location_id = LOCATION_ID
     post.content = POST_CONTENT
     post.created_at = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
+    post.law_encounter = None   # PostResponse extras (FEAT-198/203): a MagicMock attr is not a valid value
+    post.law_slipped = None
     return post
 
 

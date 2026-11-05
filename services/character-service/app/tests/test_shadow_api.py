@@ -50,7 +50,9 @@ def test_get_settings_defaults_without_a_row(api, law_world):
     resp = api.get("/characters/admin/shadow/settings")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["settings"]["witness_base_safe_pct"] == 70 and body["settings"]["reveal_days"] == 3
+    assert body["settings"]["witness_base_safe_pct"] == 100 and body["settings"]["reveal_days"] == 3
+    assert body["settings"]["stealth_pct_per_point"] == 0.5 and body["settings"]["stealth_assassin_points"] == 30
+    assert "witness_mask_pct" not in body["settings"]                   # FEAT-201: the mask is anonymity only
     assert body["settings"]["witness_enabled"] is True
     assert [t["code"] for t in body["fame_tiers"]] == list(sc.FAME_CODES)
     assert [t["code"] for t in body["infamy_tiers"]] == list(sc.INFAMY_CODES)
@@ -365,3 +367,31 @@ def test_admin_character_card_has_snapshot_and_renown(api, law_world):
                               "infamy_tier_name": "Шёпот в тавернах"}
     assert body["renown_log"][0]["scale"] == "infamy" and body["renown_log"][0]["source"] == "crime"
     assert crime(law_world, cid)["status"] == "masked"
+
+
+# =============================================================================================== FEAT-201 /{id}/stealth
+
+def test_private_stealth_owner_sees_reduction_with_subclass_bonus(api, law_world):
+    from tests.shadow_world import set_attrs, set_subclass
+    set_attrs(law_world, ALPHA, stealth=100)
+    set_subclass(law_world, ALPHA, "rogue_assassin")
+    as_user(USER_ALPHA)
+    resp = api.get(f"/characters/{ALPHA}/stealth")
+    assert resp.status_code == 200
+    assert resp.json() == {"stealth": 100, "subclass_bonus": 30, "subclass_name": "Ассасин", "effective": 115.0,
+                           "reduction_pct": 57.5, "pct_per_point": 0.5, "max_reduction_pct": 90.0}
+
+
+def test_private_stealth_without_subclass(api, law_world):
+    as_user(USER_ALPHA)
+    body = api.get(f"/characters/{ALPHA}/stealth").json()
+    assert (body["stealth"], body["subclass_bonus"], body["subclass_name"], body["reduction_pct"]) == (0, 0, None, 0.0)
+
+
+def test_private_stealth_access(api, law_world):
+    as_user(USER_BETA)
+    assert api.get(f"/characters/{ALPHA}/stealth").status_code == 403
+    as_moderator()
+    assert api.get(f"/characters/{ALPHA}/stealth").status_code == 200
+    as_user(USER_ALPHA)
+    assert api.get("/characters/99999/stealth").status_code == 404

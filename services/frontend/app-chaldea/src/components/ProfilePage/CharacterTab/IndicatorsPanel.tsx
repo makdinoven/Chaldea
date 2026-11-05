@@ -47,7 +47,9 @@ const IndicatorsPanel = ({ characterId }: IndicatorsPanelProps) => {
         </div>
 
         {/* «Характеристики» — tiered bars */}
-        {attributes && <PrimaryStatsSection attributes={attributes} />}
+        {attributes && (
+          <PrimaryStatsSection attributes={attributes} ownCharacterId={characterId} />
+        )}
 
         {/* Stat point distribution (only when there are points to spend) */}
         {attributes && statPoints > 0 && (

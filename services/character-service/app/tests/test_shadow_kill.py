@@ -1,8 +1,11 @@
 """FEAT-199 QA (task 7): the crime orchestrator ``shadow_crud.npc_kill_consequences`` through
 PUT /characters/internal/npc-status/{id} (battle-service contract unchanged).
 
-* the witness chance on the stored crime row: marker base, EFFECTIVE agility / luck (FEAT-195 caps), subclass keys,
-  mask, fame (not for a masked member), group = least stealthy member + size bonus, clamps 5..95; roll boundary;
+* the witness chance on the stored crime row (FEAT-201, multiplicative): marker base × (1 − EFFECTIVE stealth
+  reduction; FEAT-195 caps, subclass points before the cap) × fame (not for a masked member; the mask gives no
+  flat bonus), group = least stealthy member × size multiplier, clamps 5..100; roll boundary; agility / luck no
+  longer count; the stealth snapshot on rolled rows (NULL on forced rows);
+* the market is a «farm» (base 70) by default here: a settlement base of 100 can never be «unseen»;
 * always witnessed (no roll at all): positive kill (bandit), guard-encounter battle, ``witness_enabled = 0``,
   jail escape;
 * witnessed + unmasked -> immediate reputation + wanted with the FEAT-197/198 keys;
@@ -38,6 +41,14 @@ SEEN = 0.0           # roll 0.00 -> always below the (>= 5 %) chance
 UNSEEN = 0.9999      # roll 99.99 -> always above the (<= 95 %) chance
 
 
+@pytest.fixture(autouse=True)
+def _farm_market(request):
+    """FEAT-201: the settlement base is 100 (always seen), so the world's market is a farm (70 — the old settlement
+    base) unless a test sets the marker itself."""
+    if "law_world" in request.fixturenames:
+        set_marker(request.getfixturevalue("law_world"), MARKET, "farm")
+
+
 def _only_crime(f, cid=ALPHA):
     rows_ = crimes(f, cid)
     assert len(rows_) == 1, rows_
@@ -47,24 +58,24 @@ def _only_crime(f, cid=ALPHA):
 # =============================================================================================== witness chance
 
 def test_chance_uses_marker_base_and_roll_boundary(api, law_world, monkeypatch):
-    set_marker(law_world, MARKET, "dangerous")                          # base 25, stats 0 -> 25.00
-    set_roll(monkeypatch, 0.25)                                         # roll 25.00 is NOT < 25.00 -> unseen
+    set_marker(law_world, MARKET, "dangerous")                          # base 40, stealth 0 -> 40.00
+    set_roll(monkeypatch, 0.40)                                         # roll 40.00 is NOT < 40.00 -> unseen
     assert kill(api, MERCHANT, [ALPHA]).status_code == 200
     c = _only_crime(law_world)
-    assert dec(c["witness_chance_pct"]) == D("25.00") and dec(c["witness_roll_pct"]) == D("25.00")
+    assert dec(c["witness_chance_pct"]) == D("40.00") and dec(c["witness_roll_pct"]) == D("40.00")
     assert c["status"] == "unwitnessed"
 
 
 def test_roll_just_below_chance_is_witnessed(api, law_world, monkeypatch):
     set_marker(law_world, MARKET, "dangerous")
-    set_roll(monkeypatch, 0.2499)
+    set_roll(monkeypatch, 0.3999)
     kill(api, MERCHANT, [ALPHA])
     c = _only_crime(law_world)
-    assert c["status"] == "reported" and dec(c["witness_roll_pct"]) == D("24.99")
+    assert c["status"] == "reported" and dec(c["witness_roll_pct"]) == D("39.99")
 
 
-@pytest.mark.parametrize("marker,expected", [("safe", "70.00"), ("farm", "45.00"), ("dangerous", "25.00"),
-                                             ("dungeon", "15.00")])
+@pytest.mark.parametrize("marker,expected", [("safe", "100.00"), ("farm", "70.00"), ("dangerous", "40.00"),
+                                             ("dungeon", "25.00")])
 def test_chance_by_marker(api, law_world, monkeypatch, marker, expected):
     set_marker(law_world, MARKET, marker)
     set_roll(monkeypatch, UNSEEN)
@@ -72,16 +83,25 @@ def test_chance_by_marker(api, law_world, monkeypatch, marker, expected):
     assert dec(_only_crime(law_world)["witness_chance_pct"]) == D(expected)
 
 
-def test_chance_uses_effective_stats_with_caps(api, law_world, monkeypatch):
-    # raw 300 / 100 would give 70 - 40 = 30; effective 175 + 100 = 275 -> 70 - 27.5 = 42.5
+def test_agility_and_luck_no_longer_hide_the_crime(api, law_world, monkeypatch):
     set_attrs(law_world, ALPHA, agility=300, luck=100)
     set_roll(monkeypatch, UNSEEN)
     kill(api, MERCHANT, [ALPHA])
-    assert dec(_only_crime(law_world)["witness_chance_pct"]) == D("42.50")
+    c = _only_crime(law_world)
+    assert dec(c["witness_chance_pct"]) == D("70.00") and dec(c["stealth_reduction_pct"]) == D("0.00")
 
 
-@pytest.mark.parametrize("key,expected", [("rogue_assassin", "55.00"), ("rogue_trickster", "55.00"),
-                                          ("warrior_agent", "60.00"), ("warrior_berserk", "70.00")])
+def test_chance_uses_effective_stealth_with_caps(api, law_world, monkeypatch):
+    # raw 300 -> effective 175 -> reduction 87.5 % -> 70 x 0.125 = 8.75 (raw would hit the 90 % ceiling: 7.00)
+    set_attrs(law_world, ALPHA, stealth=300)
+    set_roll(monkeypatch, UNSEEN)
+    kill(api, MERCHANT, [ALPHA])
+    c = _only_crime(law_world)
+    assert dec(c["witness_chance_pct"]) == D("8.75") and dec(c["stealth_reduction_pct"]) == D("87.50")
+
+
+@pytest.mark.parametrize("key,expected", [("rogue_assassin", "59.50"), ("rogue_trickster", "59.50"),
+                                          ("warrior_agent", "63.00"), ("warrior_berserk", "70.00")])
 def test_subclass_bonus(api, law_world, monkeypatch, key, expected):
     set_subclass(law_world, ALPHA, key)
     set_roll(monkeypatch, UNSEEN)
@@ -94,23 +114,23 @@ def test_latest_subclass_choice_wins(api, law_world, monkeypatch):
     set_subclass(law_world, ALPHA, "rogue_assassin")                    # later progress row
     set_roll(monkeypatch, UNSEEN)
     kill(api, MERCHANT, [ALPHA])
-    assert dec(_only_crime(law_world)["witness_chance_pct"]) == D("55.00")
+    assert dec(_only_crime(law_world)["witness_chance_pct"]) == D("59.50")
 
 
 def test_fame_raises_the_chance(api, law_world, monkeypatch):
-    set_renown(law_world, ALPHA, fame=600)                              # famous: +10
+    set_renown(law_world, ALPHA, fame=600)                              # famous: x1.10
     set_roll(monkeypatch, UNSEEN)
     kill(api, MERCHANT, [ALPHA])
-    assert dec(_only_crime(law_world)["witness_chance_pct"]) == D("80.00")
+    assert dec(_only_crime(law_world)["witness_chance_pct"]) == D("77.00")
 
 
-def test_mask_lowers_the_chance_and_hides_fame(api, law_world, monkeypatch):
+def test_mask_hides_fame_but_gives_no_flat_bonus(api, law_world, monkeypatch):
     set_renown(law_world, ALPHA, fame=1500)                             # legend +15, ignored under a mask
     give_mask(law_world, ALPHA)
     set_roll(monkeypatch, UNSEEN)
     kill(api, MERCHANT, [ALPHA])
     c = _only_crime(law_world)
-    assert dec(c["witness_chance_pct"]) == D("60.00") and bool(c["masked"]) is True
+    assert dec(c["witness_chance_pct"]) == D("70.00") and bool(c["masked"]) is True
 
 
 def test_head_item_without_mask_flag_is_not_a_mask(api, law_world, monkeypatch):
@@ -123,7 +143,7 @@ def test_head_item_without_mask_flag_is_not_a_mask(api, law_world, monkeypatch):
 
 def test_clamp_min(api, law_world, monkeypatch):
     set_marker(law_world, MARKET, "dungeon")
-    set_attrs(law_world, ALPHA, agility=1000, luck=1000)
+    set_attrs(law_world, ALPHA, stealth=1000)                           # reduction 90 % -> 2.5 -> 5
     set_subclass(law_world, ALPHA, "rogue_assassin")
     give_mask(law_world, ALPHA)
     set_roll(monkeypatch, UNSEEN)
@@ -135,29 +155,31 @@ def test_clamp_max(api, law_world, monkeypatch):
     shadow_settings(law_world, witness_group_per_extra_pct=30)
     set_renown(law_world, ALPHA, fame=1500)
     set_roll(monkeypatch, UNSEEN)
-    kill(api, MERCHANT, [ALPHA, BETA])                                  # 70 + 15 + 30 = 115 -> 95
-    assert {dec(c["witness_chance_pct"]) for c in crimes(law_world)} == {D("95.00")}
+    kill(api, MERCHANT, [ALPHA, BETA])                                  # 70 x 1.15 x 1.3 = 104.65 -> 100
+    assert {dec(c["witness_chance_pct"]) for c in crimes(law_world)} == {D("100.00")}
 
 
 def test_group_chance_is_the_least_stealthy_member_plus_size(api, law_world, monkeypatch):
-    set_attrs(law_world, ALPHA, agility=100)                            # 60
-    set_subclass(law_world, ALPHA, "rogue_assassin")                    # 45
-    rng = set_roll(monkeypatch, UNSEEN)                                 # BETA: 70 (weakest) + 10
+    set_attrs(law_world, ALPHA, stealth=100)                            # 100 + 30 -> eff 115 -> 57.5 % -> 29.75
+    set_subclass(law_world, ALPHA, "rogue_assassin")
+    rng = set_roll(monkeypatch, UNSEEN)                                 # BETA: 70 (weakest) x 1.10
     kill(api, MERCHANT, [ALPHA, BETA])
     rows_ = crimes(law_world)
     assert len(rows_) == 2
-    assert {dec(c["witness_chance_pct"]) for c in rows_} == {D("80.00")}
+    assert {dec(c["witness_chance_pct"]) for c in rows_} == {D("77.00")}
+    snapshots = {int(c["character_id"]): dec(c["stealth_reduction_pct"]) for c in rows_}
+    assert snapshots == {ALPHA: D("57.50"), BETA: D("0.00")}              # each member's own reduction
     assert {dec(c["witness_roll_pct"]) for c in rows_} == {D("99.99")}    # ONE roll for the group
     assert rng.calls == 1
 
 
 def test_masked_member_is_anonymous_in_the_group_chance(api, law_world, monkeypatch):
     set_renown(law_world, ALPHA, fame=1500)
-    give_mask(law_world, ALPHA)                                         # ALPHA: 70 - 10 = 60 (fame ignored)
-    set_attrs(law_world, BETA, agility=200)                             # BETA: 70 - 15 = 55
+    give_mask(law_world, ALPHA)                                         # ALPHA: 70 (fame ignored)
+    set_attrs(law_world, BETA, stealth=200)                             # BETA: eff 150 -> 75 % -> 17.5
     set_roll(monkeypatch, UNSEEN)
     kill(api, MERCHANT, [ALPHA, BETA])
-    assert {dec(c["witness_chance_pct"]) for c in crimes(law_world)} == {D("70.00")}     # 60 + 10
+    assert {dec(c["witness_chance_pct"]) for c in crimes(law_world)} == {D("77.00")}     # 70 x 1.10
 
 
 def test_npc_killers_do_not_count_for_the_group(api, law_world, monkeypatch):
@@ -202,7 +224,7 @@ def test_guard_encounter_battle_is_always_witnessed_even_masked(api, law_world, 
     kill(api, MERCHANT, [ALPHA])
     c = _only_crime(law_world)
     assert c["status"] == "reported" and dec(c["witness_chance_pct"]) == D("100.00")
-    assert c["witness_roll_pct"] is None and not c["masked"]
+    assert c["witness_roll_pct"] is None and not c["masked"] and c["stealth_reduction_pct"] is None
     assert value(law_world, ALPHA, R_OST) == -150 and wanted(law_world, ALPHA, R_OST) == 150
 
 
@@ -221,7 +243,7 @@ def test_switch_off_forces_witnessed(api, law_world, monkeypatch):
     no_roll(monkeypatch)
     kill(api, MERCHANT, [ALPHA])
     c = _only_crime(law_world)
-    assert c["status"] == "reported" and c["witness_roll_pct"] is None
+    assert c["status"] == "reported" and c["witness_roll_pct"] is None and c["stealth_reduction_pct"] is None
     assert wanted(law_world, ALPHA, R_OST) == 150
 
 
@@ -233,6 +255,7 @@ def test_jail_escape_is_always_reported_and_adds_infamy(api, law_world, monkeypa
     assert resp.status_code == 200 and resp.json()["success"] is True
     c = _only_crime(law_world)
     assert c["crime_type"] == "jail_escape" and c["status"] == "reported" and c["witness_chance_pct"] is None
+    assert c["stealth_reduction_pct"] is None
     assert renown(law_world, ALPHA) == (0, 10)                          # infamy_min_gain
     assert renown_log(law_world, ALPHA)[0][:3] == (f"infamy:crime:{c['id']}", "infamy", "crime")
     assert term
@@ -431,24 +454,96 @@ def test_missing_mask_column_message_matcher():
 
 # =============================================================================================== flee / escape
 
-def test_flee_and_escape_use_effective_stats(law_world):
+def test_flee_and_escape_use_effective_stealth(law_world):
     import law_crud
-    set_attrs(law_world, ALPHA, agility=300, luck=0)                    # effective 175
+    set_attrs(law_world, ALPHA, stealth=40, agility=60, luck=500)        # luck no longer counts
     db = law_world()
     try:
         s = law_crud.load_settings(db)
-        assert law_crud.effective_attributes_of(db, ALPHA) == (D("175.00"), D("0.00"))
-        assert law_crud.flee_chance(db, ALPHA, s) == D("63.75")          # 20 + 175 x 0.25 (raw would be 85)
-        assert law_crud.escape_chance(db, ALPHA, s) == D("31.25")        # 5 + 175 x 0.15 (raw would be 50)
+        assert law_crud.flee_chance(db, ALPHA, s) == D("45.00")          # 20 + (40 + 60) x 0.25
+        assert law_crud.escape_chance(db, ALPHA, s) == D("17.00")        # 5 + 40 x 0.30
     finally:
         db.close()
 
 
-def test_effective_stats_without_attributes_row(law_world):
+def test_flee_and_escape_use_the_caps_and_the_subclass_bonus(law_world):
+    import law_crud
+    set_attrs(law_world, ALPHA, stealth=300, agility=0)                  # effective 175
+    db = law_world()
+    try:
+        s = law_crud.load_settings(db)
+        assert law_crud.flee_chance(db, ALPHA, s) == D("63.75")          # 20 + 175 x 0.25 (raw would be 85)
+        assert law_crud.escape_chance(db, ALPHA, s) == D("50.00")        # 5 + 175 x 0.3 = 57.5 -> max 50
+    finally:
+        db.close()
+    set_attrs(law_world, ALPHA, stealth=0, agility=0)
+    set_subclass(law_world, ALPHA, "rogue_assassin")
+    db = law_world()
+    try:
+        assert law_crud.escape_chance(db, ALPHA, law_crud.load_settings(db)) == D("14.00")   # 5 + 30 x 0.3
+    finally:
+        db.close()
+
+
+def test_stealth_info_without_attributes_row(law_world):
     import law_crud
     exec_(law_world, "DELETE FROM character_attributes WHERE character_id = :c", c=ALPHA)
     db = law_world()
     try:
-        assert law_crud.effective_attributes_of(db, ALPHA) == (D("0.00"), D("0.00"))
+        assert law_crud.stealth_agility_of(db, ALPHA) == (0, 0)
+        info = law_crud.stealth_info(db, ALPHA)
+        assert (info.effective, info.reduction_pct, info.eff_agility) == (D("0.00"), D("0.00"), D("0.00"))
     finally:
         db.close()
+
+
+# =============================================================================================== stealth reader (FEAT-201)
+
+def _drop_stealth_column(f):
+    exec_(f, "DROP TABLE character_attributes")
+    exec_(f, "CREATE TABLE character_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, character_id INTEGER NOT NULL, "
+             "agility INTEGER DEFAULT 0, luck INTEGER DEFAULT 0)")
+    exec_(f, "INSERT INTO character_attributes (character_id, agility) VALUES (:c, 60)", c=ALPHA)
+
+
+def test_stealth_reader_missing_column_is_a_warning_and_zero(law_world, caplog):
+    import law_crud
+    _drop_stealth_column(law_world)
+    db = law_world()
+    try:
+        with caplog.at_level(logging.WARNING, logger="character-service.law"):
+            assert law_crud.stealth_agility_of(db, ALPHA) == (0, 60)
+        assert any("stealth" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
+        assert db.execute(text("SELECT COUNT(*) FROM characters")).scalar() > 0
+    finally:
+        db.close()
+
+
+def test_kill_still_works_when_the_stealth_column_is_missing(api, law_world, monkeypatch):
+    _drop_stealth_column(law_world)
+    set_roll(monkeypatch, UNSEEN)
+    assert kill(api, MERCHANT, [ALPHA]).status_code == 200
+    c = _only_crime(law_world)
+    assert dec(c["witness_chance_pct"]) == D("70.00") and dec(c["stealth_reduction_pct"]) == D("0.00")
+
+
+def test_stealth_reader_other_errors_raise(law_world):
+    import law_crud
+    exec_(law_world, "DROP TABLE character_attributes")
+    db = law_world()
+    try:
+        with pytest.raises(OperationalError):
+            law_crud.stealth_agility_of(db, ALPHA)
+    finally:
+        db.close()
+
+
+def test_missing_stealth_column_message_matcher():
+    import law_crud
+
+    class E(Exception):
+        pass
+    assert law_crud._missing_stealth_column(E("(1054, \"Unknown column 'stealth' in 'field list'\")"))
+    assert law_crud._missing_stealth_column(E("no such column: stealth"))
+    assert not law_crud._missing_stealth_column(E("no such table: character_attributes"))
+    assert not law_crud._missing_stealth_column(E("Unknown column 'agility' in 'field list'"))

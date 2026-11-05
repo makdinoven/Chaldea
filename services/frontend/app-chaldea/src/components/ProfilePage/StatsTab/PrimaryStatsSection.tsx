@@ -1,10 +1,76 @@
+import { useCallback, useEffect, useState } from 'react';
 import { CharacterAttributes } from '../../../redux/slices/profileSlice';
 import { MAIN_STATS, STAT_LABELS } from '../constants';
-import { STAT_CAP_NOTE } from '../../../utils/statCaps';
+import { STAT_CAP_NOTE, STAT_CAP_SHORT } from '../../../utils/statCaps';
+import { getStealth, type StealthInfo } from '../../../api/shadow';
+import { apiErrorMessage } from '../../../api/errors';
 
 interface PrimaryStatsSectionProps {
   attributes: CharacterAttributes;
+  /**
+   * The viewer's own character (the profile page only ever shows it). When set,
+   * the «Скрытность» row gets its effect line from `GET /characters/{id}/stealth`
+   * — a private endpoint, so it must never be passed for someone else's character.
+   */
+  ownCharacterId?: number;
 }
+
+const formatPct = (value: number): string =>
+  value.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+
+/** FEAT-201: «−X % к шансу быть замеченным» under the stealth row (owner only). */
+const StealthEffectLine = ({ characterId, stealth }: { characterId: number; stealth: number }) => {
+  const [info, setInfo] = useState<StealthInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setInfo(await getStealth(characterId));
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Не удалось загрузить влияние скрытности'));
+    }
+  }, [characterId]);
+
+  // Refetch whenever the stored total changes (points, gear, food, perks).
+  useEffect(() => {
+    load();
+  }, [load, stealth]);
+
+  if (error) {
+    return (
+      <p className="text-site-red text-xs leading-snug">
+        {error}{' '}
+        <button
+          type="button"
+          onClick={load}
+          className="site-link text-xs underline underline-offset-2"
+        >
+          Повторить
+        </button>
+      </p>
+    );
+  }
+  if (!info) return null;
+
+  const tooltip =
+    `Шанс заметить преступление = база места × (1 − снижение) × слава × размер группы. ` +
+    `${formatPct(info.pct_per_point)} % за эффективное очко скрытности, предел — ` +
+    `${formatPct(info.max_reduction_pct)} %. Убывающая отдача: ${STAT_CAP_SHORT}. ` +
+    `В бою скрытность не действует.`;
+
+  return (
+    <p className="text-white/50 text-xs leading-snug break-words" title={tooltip}>
+      −{formatPct(info.reduction_pct)} % к шансу быть замеченным
+      {info.subclass_bonus > 0 && (
+        <span className="text-white/40">
+          {' '}(вкл. +{info.subclass_bonus} от подкласса
+          {info.subclass_name ? ` «${info.subclass_name}»` : ''})
+        </span>
+      )}
+    </p>
+  );
+};
 
 const TieredBar = ({ value }: { value: number }) => {
   const greenWidth = Math.min(value, 100);
@@ -41,7 +107,7 @@ const TieredBar = ({ value }: { value: number }) => {
   );
 };
 
-const PrimaryStatsSection = ({ attributes }: PrimaryStatsSectionProps) => {
+const PrimaryStatsSection = ({ attributes, ownCharacterId }: PrimaryStatsSectionProps) => {
   return (
     <div>
       {/* FEAT-149: section title row with a fading gold rule (per mock) */}
@@ -69,6 +135,9 @@ const PrimaryStatsSection = ({ attributes }: PrimaryStatsSectionProps) => {
                 </span>
               </div>
               <TieredBar value={value} />
+              {stat === 'stealth' && ownCharacterId != null && (
+                <StealthEffectLine characterId={ownCharacterId} stealth={value} />
+              )}
             </div>
           );
         })}

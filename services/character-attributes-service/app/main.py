@@ -676,7 +676,8 @@ async def upgrade_attributes(
         upgrade_request.mana +
         upgrade_request.stamina +
         upgrade_request.charisma +
-        upgrade_request.luck
+        upgrade_request.luck +
+        upgrade_request.stealth
     )
     if total_needed == 0:
         raise HTTPException(status_code=400, detail="No stats to upgrade")
@@ -722,6 +723,7 @@ async def upgrade_attributes(
             "stamina": upgrade_request.stamina,
             "charisma": upgrade_request.charisma,
             "luck": upgrade_request.luck,
+            "stealth": upgrade_request.stealth,
         })
 
         db.commit()
@@ -756,6 +758,7 @@ async def upgrade_attributes(
         "current_stamina": attr.current_stamina,
         "charisma": attr.charisma,
         "luck": attr.luck,
+        "stealth": attr.stealth,
         "dodge": attr.dodge,
         "critical_hit_chance": attr.critical_hit_chance,
         "res_physical": attr.res_physical,

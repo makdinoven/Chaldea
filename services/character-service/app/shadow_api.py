@@ -3,6 +3,7 @@
 Public / player:
     GET  /characters/renown/fame-tiers                           (no auth: names only, for editors and legends)
     GET  /characters/{character_id}/renown                       (private: owner or staff characters:read; no numbers)
+    GET  /characters/{character_id}/stealth                      (private: FEAT-201 stealth reduction for the profile)
 Admin (no new permissions — reputation:read / manage / settings):
     GET/PUT /characters/admin/shadow/settings                    (reputation:read / reputation:settings)
     GET     /characters/admin/shadow/crimes                      (reputation:read)
@@ -192,3 +193,11 @@ def get_renown(character_id: int, db: Session = Depends(get_db),
                current_user: UserRead = Depends(get_current_user_via_http)):
     require_private_access(db, character_id, current_user)
     return _read(db, lambda: renown_crud.player_renown(db, character_id))
+
+
+@router.get("/{character_id}/stealth", response_model=schemas.StealthPlayerOut)
+def get_stealth(character_id: int, db: Session = Depends(get_db),
+                current_user: UserRead = Depends(get_current_user_via_http)):
+    """FEAT-201: the stored stealth, the subclass bonus and the resulting «−X % к шансу быть замеченным»."""
+    require_private_access(db, character_id, current_user)
+    return _read(db, lambda: shadow_crud.player_stealth(db, character_id))

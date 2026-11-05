@@ -190,6 +190,7 @@ GATHERING_TOOL_FORBIDDEN_STAT_FIELDS = (
     "stamina_modifier",
     "charisma_modifier",
     "luck_modifier",
+    "stealth_modifier",
     "damage_modifier",
     "dodge_modifier",
     "res_effects_modifier",
@@ -639,6 +640,7 @@ class ItemBase(BaseModel):
     stamina_modifier: Optional[int] = None
     charisma_modifier: Optional[int] = None
     luck_modifier: Optional[int] = None
+    stealth_modifier: Optional[int] = None
     damage_modifier: Optional[int] = None
     dodge_modifier: Optional[int] = None
     res_effects_modifier: Optional[float] = None
@@ -884,7 +886,7 @@ class ItemCreate(ItemBase):
         if values.get("is_backpack") and item_type != "cloak":
             raise ValueError("Походным рюкзаком может быть только плащ")
         if values.get("is_mask") and item_type != MASK_ITEM_TYPE:
-            raise ValueError("Маской может быть только предмет для головы")
+            raise ValueError("Скрывать личность может только головной убор")
         if values.get("is_food"):
             if item_type != FOOD_ITEM_TYPE:
                 raise ValueError("Едой может быть только расходуемый предмет")
@@ -1012,6 +1014,7 @@ class ItemResponse(BaseModel):
     stamina_modifier: Optional[int] = None
     charisma_modifier: Optional[int] = None
     luck_modifier: Optional[int] = None
+    stealth_modifier: Optional[int] = None
     damage_modifier: Optional[int] = None
     dodge_modifier: Optional[int] = None
     res_effects_modifier: Optional[float] = None

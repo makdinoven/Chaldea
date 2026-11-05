@@ -24,12 +24,14 @@ from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 import activity_lock
 import econ_core
 import econ_ledger
 import law_core as lc
+import law_facility
 import models
 import renown_crud
 import reputation_core as rc
@@ -50,10 +52,12 @@ MSG_CHARACTER_NOT_FOUND = "Персонаж не найден"
 MSG_ENCOUNTER_NOT_FOUND = "Встреча со стражей не найдена"
 MSG_ENCOUNTER_CLOSED = "Встреча со стражей уже завершена"
 MSG_CHOICE_UNAVAILABLE = "Этот вариант сейчас недоступен"
-MSG_NO_JAIL = "В этом крае больше нет тюрьмы"
+MSG_NO_JAIL = "Здесь некуда заключить под стражу: нет ни отделения стражи, ни тюрьмы страны"
+MSG_NO_BAIL_COUNTRY = "Из тюрьмы страны нельзя выйти под залог"
 MSG_GUARD_BUSY = "Стражник сейчас занят — попробуйте чуть позже"
 MSG_NOT_JAILED = "Персонаж не в тюрьме"
 MSG_ESCAPE_COOLDOWN = "Следующая попытка побега — через {time}"
+MSG_ESCAPE_IMPOSSIBLE = "Отсюда не сбежать"
 MSG_BAIL_DONE = "Залог уже внесён"
 MSG_NOT_OWNER = "Вы можете управлять только своими персонажами"
 MSG_NOT_PLAYER = "Это действие доступно только персонажу игрока"
@@ -83,6 +87,11 @@ _rng = secrets.SystemRandom()
 def rng():
     """The server-side RNG (tests patch this function)."""
     return _rng
+
+
+def detection_rng():
+    """FEAT-203: THE seam of the guard-detection roll on entry (tests patch it); defaults to :func:`rng`."""
+    return rng()
 
 
 # =====================================================================================================================
@@ -120,14 +129,6 @@ def load_levels(db: Session) -> List[lc.Level]:
     return lc.levels_from_rows(db.execute(text(lc.SQL_SELECT_LEVELS)).fetchall())
 
 
-def region_jail_location(db: Session, region_id: Optional[int]) -> Optional[int]:
-    """``Regions.jail_location_id`` (locations-service column, read by raw SQL)."""
-    if not region_id:
-        return None
-    row = db.execute(text("SELECT jail_location_id FROM Regions WHERE id = :r"), {"r": int(region_id)}).first()
-    return int(row[0]) if row is not None and row[0] is not None else None
-
-
 def region_names(db: Session, region_ids: Iterable[int]) -> Dict[int, Optional[str]]:
     return {rid: info.name for rid, info in reputation_crud.region_infos(db, region_ids).items()}
 
@@ -157,35 +158,88 @@ def lock_character(db: Session, character_id: int) -> Optional["models.Character
     return query.populate_existing().first()
 
 
-def attributes_of(db: Session, character_id: int) -> Tuple[int, int]:
-    """(agility, luck) from ``character_attributes`` (attributes-service table, raw SQL); (0, 0) without a row."""
-    row = db.execute(text("SELECT agility, luck FROM character_attributes WHERE character_id = :c"),
-                     {"c": int(character_id)}).first()
-    if row is None:
-        return 0, 0
-    return int(row[0] or 0), int(row[1] or 0)
+def subclass_of(db: Session, character_id: int) -> Optional[str]:
+    """The chosen subclass key (skills-service tables; the same SQL as inventory-service equipment_rules)."""
+    row = db.execute(text(
+        "SELECT tn.subclass_key FROM character_tree_progress ctp JOIN tree_nodes tn ON tn.id = ctp.node_id "
+        "WHERE ctp.character_id = :cid AND tn.node_type = 'subclass_choice' AND tn.subclass_key IS NOT NULL "
+        "ORDER BY ctp.id DESC LIMIT 1"), {"cid": int(character_id)}).first()
+    return str(row[0]) if row is not None and row[0] else None
 
 
 def _effective(value: int) -> Decimal:
     return Decimal(str(stat_caps.effective_stat(value))).quantize(Decimal("0.01"))
 
 
-def effective_attributes_of(db: Session, character_id: int) -> Tuple[Decimal, Decimal]:
-    """FEAT-199 §3.3: (agility, luck) after the FEAT-195 caps (the stored values already include gear)."""
-    agility, luck = attributes_of(db, character_id)
-    return _effective(agility), _effective(luck)
+def _missing_stealth_column(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "stealth" in message and ("unknown column" in message or "no such column" in message)
+
+
+def stealth_agility_of(db: Session, character_id: int) -> Tuple[int, int]:
+    """(stealth, agility) — the stored totals of ``character_attributes`` (attributes-service table, raw SQL);
+    (0, 0) without a row. Deploy skew (attributes migration 009 not applied yet): ONLY the missing ``stealth``
+    column -> WARNING + stealth 0; any other DB error re-raises."""
+    try:
+        with db.begin_nested():
+            row = db.execute(text("SELECT stealth, agility FROM character_attributes WHERE character_id = :c"),
+                             {"c": int(character_id)}).first()
+    except DBAPIError as exc:
+        if not _missing_stealth_column(exc):
+            raise
+        logger.warning("character_attributes.stealth is missing (attributes migration 009 not applied?) "
+                       "— treating stealth as 0")
+        row = db.execute(text("SELECT 0, agility FROM character_attributes WHERE character_id = :c"),
+                         {"c": int(character_id)}).first()
+    if row is None:
+        return 0, 0
+    return int(row[0] or 0), int(row[1] or 0)
+
+
+@dataclass(frozen=True)
+class StealthInfo:
+    """FEAT-201: a character's stealth for witnesses / flee / escape (subclass points added BEFORE the cap)."""
+    raw: int
+    subclass_key: Optional[str]
+    subclass_points: int
+    effective: Decimal
+    reduction_pct: Decimal
+    eff_agility: Decimal
+
+
+def stealth_info(db: Session, character_id: int,
+                 shadow_settings: Optional[sc.ShadowSettings] = None) -> StealthInfo:
+    s = shadow_settings or renown_crud.load_shadow_settings(db)
+    stealth, agility = stealth_agility_of(db, character_id)
+    subclass_key = subclass_of(db, character_id)
+    points = sc.subclass_stealth_points(subclass_key, s)
+    effective = sc.effective_stealth(stealth, points)
+    return StealthInfo(raw=stealth, subclass_key=subclass_key, subclass_points=points, effective=effective,
+                       reduction_pct=sc.stealth_reduction_pct(effective, s), eff_agility=_effective(agility))
 
 
 def flee_chance(db: Session, character_id: int, settings: lc.LawSettings) -> Decimal:
-    agility, luck = effective_attributes_of(db, character_id)
+    """FEAT-201: effective stealth + effective agility, equal weight."""
+    info = stealth_info(db, character_id)
     return lc.chance(settings.flee_base_pct, settings.flee_per_point_pct, settings.flee_min_pct,
-                     settings.flee_max_pct, agility, luck)
+                     settings.flee_max_pct, info.effective, info.eff_agility)
 
 
-def escape_chance(db: Session, character_id: int, settings: lc.LawSettings) -> Decimal:
-    agility, luck = effective_attributes_of(db, character_id)
-    return lc.chance(settings.escape_base_pct, settings.escape_per_point_pct, settings.escape_min_pct,
-                     settings.escape_max_pct, agility, luck)
+def escape_chance(db: Session, character_id: int, settings: lc.LawSettings,
+                  facility: Optional[str] = lc.FACILITY_STATION) -> Decimal:
+    """FEAT-201: effective stealth only. FEAT-202: the country prison = the clamped station chance × the multiplier."""
+    info = stealth_info(db, character_id)
+    value = lc.chance(settings.escape_base_pct, settings.escape_per_point_pct, settings.escape_min_pct,
+                      settings.escape_max_pct, info.effective)
+    if facility == lc.FACILITY_COUNTRY:
+        return lc.country_escape_chance(value, settings.country_escape_multiplier)
+    return value
+
+
+def escape_cooldown_hours(settings: lc.LawSettings, facility: Optional[str]) -> int:
+    if facility == lc.FACILITY_COUNTRY:
+        return int(settings.country_escape_cooldown_hours)
+    return int(settings.escape_cooldown_hours)
 
 
 def in_active_battle(db: Session, character_id: int) -> bool:
@@ -326,7 +380,7 @@ def record_crime(db: Session, *, crime_type: str, character_id: int, region_id: 
                  status: str = lc.CRIME_REPORTED, reputation_delta: Optional[int] = None,
                  reputation_key: Optional[str] = None, reputation_reason: Optional[str] = None, masked: bool = False,
                  witness_chance_pct=None, witness_roll_pct=None, reveal_until: Optional[datetime] = None,
-                 next_roll_at: Optional[datetime] = None) -> CrimeResult:
+                 next_roll_at: Optional[datetime] = None, stealth_reduction_pct=None) -> CrimeResult:
     """Write the crime row (+ the FEAT-199 snapshot) and its infamy, WITHOUT any wanted change.
 
     ``points <= 0`` without a floor -> nothing (a bandit kill is not a crime). Idempotent per ``event_key`` (pre-check +
@@ -352,6 +406,7 @@ def record_crime(db: Session, *, crime_type: str, character_id: int, region_id: 
         wanted_floor=int(floor) if floor else None, masked=bool(masked),
         witness_chance_pct=Decimal(str(witness_chance_pct)) if witness_chance_pct is not None else None,
         witness_roll_pct=Decimal(str(witness_roll_pct)) if witness_roll_pct is not None else None,
+        stealth_reduction_pct=(Decimal(str(stealth_reduction_pct)) if stealth_reduction_pct is not None else None),
         reveal_until=reveal_until, next_roll_at=next_roll_at, reveal_attempts=0)
     db.add(crime)
     db.flush()
@@ -449,63 +504,185 @@ def _flee_cooldown_active(db: Session, character_id: int, location_id: int, now:
         {"c": int(character_id), "l": int(location_id), "now": now}).first() is not None
 
 
-def evaluate_entry(db: Session, character: "models.Character", location_id, source: str,
-                   now: Optional[datetime] = None, *,
-                   from_location_id: Optional[int] = None) -> Optional["models.LawEncounter"]:
-    """A wanted (or outlaw) character entering a location with a live guard is stopped (§3.4). Runs inside the moving
-    transaction (the character row is already locked); sets ``characters.law_encounter_id``. None = not stopped."""
+@dataclass(frozen=True)
+class EntryResult:
+    """FEAT-203: the outcome of an entry check — an encounter (detected), a slip (not noticed) or nothing."""
+    encounter: Optional["models.LawEncounter"] = None
+    slipped: bool = False
+    chance_pct: Optional[Decimal] = None
+    roll_pct: Optional[Decimal] = None
+
+
+_NO_ENTRY = EntryResult()
+
+
+def detection_chance_for(db: Session, character_id: int, location_id: int, n_guards: int, level: lc.Level,
+                         settings: lc.LawSettings) -> Decimal:
+    """FEAT-203: the guard-detection chance of a character entering ``location_id`` (readers + ``lc.detection_chance``;
+    the stealth / fame maths of FEAT-199/201 are read from ``shadow_settings`` / ``renown_tiers`` unchanged; under a
+    mask fame does not count — PM decision Q2)."""
+    import shadow_crud  # local: shadow_crud imports this module at module level
+    marker = shadow_crud.location_marker(db, location_id)
+    reduction = stealth_info(db, character_id, renown_crud.load_shadow_settings(db)).reduction_pct
+    masked = shadow_crud.wears_mask(db, character_id)
+    fame = Decimal(0) if masked else shadow_crud.fame_witness_pct(
+        db, character_id, renown_crud.load_renown_tiers(db, sc.SCALE_FAME))
+    return lc.detection_chance(lc.detection_base_pct(marker, settings), n_guards, reduction, fame, masked,
+                               level.detect_pct, settings)
+
+
+def check_entry(db: Session, character: "models.Character", location_id, source: str,
+                now: Optional[datetime] = None, *, from_location_id: Optional[int] = None) -> EntryResult:
+    """A wanted (or outlaw) character entering a location with a live guard (§3.4). FEAT-203: the guards notice him
+    only on a successful detection roll; otherwise he slips past (a ``slipped`` law_log row, no encounter, no
+    cooldown — every entry is a new roll). Runs inside the moving transaction (the character row is already locked);
+    sets ``characters.law_encounter_id`` when detected. The exits before the roll are those of FEAT-198 (the flee
+    cooldown precedes the roll)."""
+    return _check(db, character, location_id, source, now, from_location_id=from_location_id)
+
+
+def check_patrol_arrival(db: Session, character: "models.Character", location_id, *, guard_id: int,
+                         now: Optional[datetime] = None) -> EntryResult:
+    """FEAT-204: a patrolling guard arrived where ``character`` stands (online or not). The same FEAT-203 check as an
+    entry (same formula, seam, encounter, timeout), with the arriving guard as the encounter's guard and
+    ``source='patrol'``; characters who are busy are skipped this time: any activity lock (jail / encounter / KO /
+    dungeon / asleep / reading), inside a house, in an active battle. The row must be locked; never commits."""
     now = now or now_utc()
     if character is None or bool(character.is_npc) or not location_id:
-        return None
+        return _NO_ENTRY
+    if int(character.current_location_id or 0) != int(location_id):
+        return _NO_ENTRY
+    lock = activity_lock.compute_lock(
+        getattr(character, "dungeon_session_id", None), getattr(character, "unconscious_until", None), now,
+        asleep_since=getattr(character, "asleep_since", None), reading_since=getattr(character, "reading_since", None),
+        jailed_until=getattr(character, "jailed_until", None),
+        law_encounter_id=getattr(character, "law_encounter_id", None))
+    if lock.get("locked"):
+        return _NO_ENTRY
+    if getattr(character, "house_room_id", None):
+        return _NO_ENTRY
+    if in_active_battle(db, character.id):
+        return _NO_ENTRY
+    return _check(db, character, location_id, lc.SOURCE_PATROL, now, guard_id=guard_id)
+
+
+def held_guards(db: Session, guard_ids: Iterable[int], now: Optional[datetime] = None,
+                settings: Optional[lc.LawSettings] = None) -> set:
+    """FEAT-204 (+ the PM hold cap): the guards of ``guard_ids`` held in place by an open encounter — any
+    ``fighting`` one, or a ``pending`` one created less than ``patrol_encounter_hold_min`` minutes ago (after that the
+    patrol resumes; a later «Драться» picks another free guard here or ends as ``guard_gone``)."""
+    ids = sorted({int(x) for x in guard_ids if x})
+    if not ids:
+        return set()
+    now = now or now_utc()
+    settings = settings or load_settings(db)
+    cutoff = now - timedelta(minutes=int(settings.patrol_encounter_hold_min))
+    ph, params = _in("g", ids)
+    rows = db.execute(text(
+        f"SELECT DISTINCT guard_npc_id FROM law_encounters WHERE guard_npc_id IN ({ph}) "
+        "AND (status = :fighting OR (status = :pending AND created_at > :cutoff))"),
+        {**params, "fighting": lc.ENC_FIGHTING, "pending": lc.ENC_PENDING, "cutoff": cutoff}).fetchall()
+    return {int(r[0]) for r in rows}
+
+
+def guard_held(db: Session, npc_id: int, now: Optional[datetime] = None,
+               settings: Optional[lc.LawSettings] = None) -> bool:
+    """FEAT-204: one guard of :func:`held_guards`."""
+    return int(npc_id) in held_guards(db, [npc_id], now, settings)
+
+
+def _check(db: Session, character: "models.Character", location_id, source: str,
+           now: Optional[datetime] = None, *, from_location_id: Optional[int] = None,
+           guard_id: Optional[int] = None) -> EntryResult:
+    """The shared FEAT-203 check of :func:`check_entry` / :func:`check_patrol_arrival`; the encounter's guard is
+    ``guard_id`` when it is one of the live guards here, else the first of them (FEAT-204)."""
+    now = now or now_utc()
+    if character is None or bool(character.is_npc) or not location_id:
+        return _NO_ENTRY
     if character.law_encounter_id:
-        return None
+        return _NO_ENTRY
     jailed = _dt(character.jailed_until)
     if jailed is not None and jailed > now:
-        return None
+        return _NO_ENTRY
     location_id = int(location_id)
     region_id = reputation_crud.location_region(db, location_id)
     if not region_id:
-        return None
+        return _NO_ENTRY
     guards = guards_at(db, location_id, now)
     if not guards:
-        return None
+        return _NO_ENTRY
     if _flee_cooldown_active(db, character.id, location_id, now):
-        return None
+        return _NO_ENTRY
     settings = load_settings(db)
     wanted = read_wanted(db, character.id, region_id, settings, now)
     outlaw = is_outlaw(db, character.id, region_id)
     if wanted <= 0 and not outlaw:
-        return None
+        return _NO_ENTRY
     levels = load_levels(db)
     level = lc.level_for(wanted, levels)
     if outlaw:
         level = lc.level_at_least(level, settings.outlaw_min_level, levels)
     if level is None:
-        return None
-    has_jail = region_jail_location(db, region_id) is not None
+        return _NO_ENTRY
+    chance_pct = roll_pct = None
+    if settings.detect_enabled:
+        chance_pct = detection_chance_for(db, character.id, location_id, len(guards), level, settings)
+        detected, roll_pct = lc.roll_succeeds(chance_pct, detection_rng())
+        if not detected:
+            stamp = now.strftime("%Y%m%d%H%M%S%f")
+            _log(db, key=f"law:slip:{character.id}:{location_id}:{stamp}:{secrets.token_hex(4)}",
+                 character_id=character.id, action=lc.LOG_SLIPPED, region_id=region_id, wanted_before=int(wanted),
+                 wanted_after=int(wanted), chance_pct=chance_pct, roll_pct=roll_pct, ref_id=location_id,
+                 reason=source, now=now)
+            db.flush()
+            return EntryResult(None, slipped=True, chance_pct=chance_pct, roll_pct=roll_pct)
+    has_jail = law_facility.resolve_jail(db, region_id, level.code, settings=settings, levels=levels) is not None
     enc = models.LawEncounter(
         character_id=int(character.id), region_id=int(region_id), location_id=location_id,
-        from_location_id=int(from_location_id) if from_location_id else None, guard_npc_id=guards[0],
+        from_location_id=int(from_location_id) if from_location_id else None,
+        guard_npc_id=int(guard_id) if guard_id and int(guard_id) in guards else guards[0],
         is_outlaw=bool(outlaw), has_jail=bool(has_jail), level_code=level.code, wanted_value=int(wanted),
         fine=int(level.fine), jail_hours=int(level.jail_hours), flee_used=False, status=lc.ENC_PENDING,
-        source=source if source in (lc.SOURCE_MOVE, lc.SOURCE_QUICK_MOVE, lc.SOURCE_TELEPORT) else lc.SOURCE_MOVE,
+        source=source if source in lc.ENTRY_SOURCES else lc.SOURCE_MOVE,
         created_at=now, expires_at=now + timedelta(hours=int(settings.encounter_timeout_hours)))
     db.add(enc)
     db.flush()
     character.law_encounter_id = int(enc.id)
     _log(db, key=f"law:encounter:{enc.id}", character_id=character.id, action=lc.LOG_ENCOUNTER, region_id=region_id,
-         wanted_before=int(wanted), wanted_after=int(wanted), ref_id=int(enc.id), now=now)
+         wanted_before=int(wanted), wanted_after=int(wanted), chance_pct=chance_pct, roll_pct=roll_pct,
+         ref_id=int(enc.id), now=now)
     db.flush()
-    return enc
+    return EntryResult(enc, slipped=False, chance_pct=chance_pct, roll_pct=roll_pct)
+
+
+def evaluate_entry(db: Session, character: "models.Character", location_id, source: str,
+                   now: Optional[datetime] = None, *,
+                   from_location_id: Optional[int] = None) -> Optional["models.LawEncounter"]:
+    """The FEAT-198 API (kept for callers / tests): the encounter of :func:`check_entry`, None = not stopped."""
+    return check_entry(db, character, location_id, source, now, from_location_id=from_location_id).encounter
+
+
+def slip_notice(db: Session, character_id: int, location_id: int):
+    """FEAT-203: the «вы проскользнули мимо стражи» notification (category progress; send after the commit)."""
+    import law_notify
+    user_id = character_user_ids(db, [character_id]).get(int(character_id))
+    name = location_names(db, [location_id]).get(int(location_id))
+    return law_notify.Notice(user_id, law_notify.slipped_message(name), law_notify.WS_SLIPPED,
+                             category=law_notify.CATEGORY_PROGRESS,
+                             data={"character_id": int(character_id), "location_id": int(location_id)})
 
 
 def encounter_notice(db: Session, enc: "models.LawEncounter"):
     """The «стража остановила вас» notification of a just-created encounter (send after the commit)."""
     import law_notify
     user_id = character_user_ids(db, [enc.character_id]).get(int(enc.character_id))
-    name = region_names(db, [enc.region_id]).get(int(enc.region_id))
-    return law_notify.Notice(user_id, law_notify.encounter_message(name, _dt(enc.expires_at), _dt(enc.created_at)),
-                             law_notify.WS_ENCOUNTER,
+    if enc.source == lc.SOURCE_PATROL:          # FEAT-204: «Вас заметил патруль стражи в «…»»
+        location = location_names(db, [enc.location_id]).get(int(enc.location_id))
+        message = law_notify.patrol_encounter_message(location, _dt(enc.expires_at), _dt(enc.created_at))
+    else:
+        name = region_names(db, [enc.region_id]).get(int(enc.region_id))
+        message = law_notify.encounter_message(name, _dt(enc.expires_at), _dt(enc.created_at))
+    return law_notify.Notice(user_id, message, law_notify.WS_ENCOUNTER,
                              data={"encounter_id": int(enc.id), "character_id": int(enc.character_id)})
 
 
@@ -529,11 +706,18 @@ def open_encounter(db: Session, character: "models.Character") -> Optional["mode
     return enc
 
 
-def encounter_options(db: Session, enc: "models.LawEncounter") -> List[str]:
+def encounter_target(db: Session, enc: "models.LawEncounter") -> Optional["law_facility.JailTarget"]:
+    """FEAT-202: where this encounter would jail the character right now (live resolve)."""
+    return law_facility.resolve_jail(db, enc.region_id, enc.level_code)
+
+
+def encounter_options(db: Session, enc: "models.LawEncounter", *,
+                      target: Optional["law_facility.JailTarget"] = None, resolved: bool = False) -> List[str]:
     if enc.status != lc.ENC_PENDING:
         return []
-    has_jail = region_jail_location(db, enc.region_id) is not None
-    return lc.options(bool(enc.is_outlaw), has_jail, bool(enc.flee_used))
+    if not resolved:
+        target = encounter_target(db, enc)
+    return lc.options(bool(enc.is_outlaw), target is not None, bool(enc.flee_used))
 
 
 def encounter_out(db: Session, enc: "models.LawEncounter", *, staff: bool = False,
@@ -544,9 +728,9 @@ def encounter_out(db: Session, enc: "models.LawEncounter", *, staff: bool = Fals
         guard = db.execute(text("SELECT name, avatar FROM characters WHERE id = :id"),
                            {"id": int(enc.guard_npc_id)}).first()
     level = lc.level_by_code(enc.level_code, load_levels(db))
-    options = encounter_options(db, enc)
-    has_jail = region_jail_location(db, enc.region_id) is not None if enc.status == lc.ENC_PENDING \
-        else bool(enc.has_jail)
+    target = encounter_target(db, enc) if enc.status == lc.ENC_PENDING else None
+    options = encounter_options(db, enc, target=target, resolved=True)
+    has_jail = target is not None if enc.status == lc.ENC_PENDING else bool(enc.has_jail)
     out = {
         "id": int(enc.id),
         "region_id": int(enc.region_id),
@@ -559,11 +743,14 @@ def encounter_out(db: Session, enc: "models.LawEncounter", *, staff: bool = Fals
         "level_name": level.name if level else enc.level_code,
         "fine": int(enc.fine),
         "jail_hours": int(enc.jail_hours),
+        "jail_facility": target.facility if target is not None else None,
+        "jail_name": target.name if target is not None else None,
         "options": options,
         "flee_chance_pct": float(flee_chance(db, enc.character_id, settings)) if lc.CHOICE_FLEE in options else None,
         "status": enc.status,
         "battle_id": int(enc.battle_id) if enc.battle_id else None,
         "expires_at": _dt(enc.expires_at),
+        "by_patrol": enc.source == lc.SOURCE_PATROL,       # FEAT-204
     }
     if staff:
         out.update({
@@ -579,6 +766,10 @@ def encounter_out(db: Session, enc: "models.LawEncounter", *, staff: bool = Fals
             "resolved_at": _dt(enc.resolved_at),
         })
     return out
+
+
+def term_facility(term: "models.LawJailTerm") -> str:
+    return lc.FACILITY_COUNTRY if term.facility == lc.FACILITY_COUNTRY else lc.FACILITY_STATION
 
 
 def active_term(db: Session, character_id: int, now: datetime, *,
@@ -599,16 +790,33 @@ def jail_out(db: Session, term: "models.LawJailTerm", *, staff: bool = False,
     settings = settings or load_settings(db)
     now = now or now_utc()
     next_at = _dt(term.next_escape_at)
+    facility = term_facility(term)
+    country = facility == lc.FACILITY_COUNTRY
+    region_name = region_names(db, [term.region_id]).get(int(term.region_id))
+    district_id = int(term.district_id) if country and term.district_id else None
+    if country:
+        name = lc.facility_title(facility, law_facility.country_name(db, term.country_id), None)
+        allowed = law_facility.prison_location_ids(db, district_id)
+    else:
+        name = lc.facility_title(facility, None, region_name)
+        allowed = [int(term.location_id)]
     out = {
         "id": int(term.id),
         "region_id": int(term.region_id),
-        "region_name": region_names(db, [term.region_id]).get(int(term.region_id)),
+        "region_name": region_name,
         "location_id": int(term.location_id),
         "location_name": location_names(db, [term.location_id]).get(int(term.location_id)),
         "until": _dt(term.until),
-        "bail_price": int(term.bail_price),
+        "bail_price": None if country else int(term.bail_price),
+        "bail_available": not country,
+        "facility": facility,
+        "facility_name": name,
+        "country_id": int(term.country_id) if term.country_id else None,
+        "district_id": district_id,
+        "district_name": law_facility.district_name(db, district_id) if district_id else None,
+        "allowed_location_ids": allowed,
         "can_escape_at": next_at if next_at is not None and next_at > now else None,
-        "escape_chance_pct": float(escape_chance(db, term.character_id, settings)),
+        "escape_chance_pct": float(escape_chance(db, term.character_id, settings, facility)),
         "escape_attempts": int(term.escape_attempts or 0),
     }
     if staff:
@@ -678,8 +886,9 @@ def _escape_like(value: str) -> str:
 def prisoners(db: Session, q: Optional[str], page: int, page_size: int) -> dict:
     """``GET /characters/law/prisoners`` — players serving a term right now (public in-world)."""
     now = now_utc()
-    where = ["t.status = :serving", "t.until > :now", "c.is_npc = 0"]
-    params: Dict[str, object] = {"serving": lc.JAIL_SERVING, "now": now}
+    # FEAT-202: the country prison has no bail, so its prisoners are not listed at the banker
+    where = ["t.status = :serving", "t.until > :now", "c.is_npc = 0", "t.facility <> :country"]
+    params: Dict[str, object] = {"serving": lc.JAIL_SERVING, "now": now, "country": lc.FACILITY_COUNTRY}
     if q and q.strip():
         where.append("c.name LIKE :q ESCAPE '\\\\'" if _is_mysql(db) else "c.name LIKE :q ESCAPE '\\'")
         params["q"] = f"%{_escape_like(q.strip())}%"
@@ -772,18 +981,24 @@ def forced_fine(db: Session, character: "models.Character", enc: "models.LawEnco
     return amount, full
 
 
-def jail_writes(db: Session, character: "models.Character", enc: "models.LawEncounter", jail_location_id: int, *,
-                key: str, action: str, now: datetime, settings: lc.LawSettings) -> "models.LawJailTerm":
-    """The jail itself (after the move to the jail location was written in the same transaction): term, lock columns,
-    wanted -> 0, encounter ``jailed``."""
+def jail_writes(db: Session, character: "models.Character", enc: "models.LawEncounter",
+                target: "law_facility.JailTarget", *, key: str, action: str, now: datetime,
+                settings: lc.LawSettings) -> "models.LawJailTerm":
+    """The jail itself (after the move to the jail location was written in the same transaction): term (with the
+    FEAT-202 facility snapshot), lock columns, wanted -> 0, encounter ``jailed``."""
     until = now + timedelta(hours=int(enc.jail_hours))
+    country = target.facility == lc.FACILITY_COUNTRY
+    district_id = int(target.district_id) if country and target.district_id else None
     character.jailed_until = until
     character.jail_region_id = int(enc.region_id)
+    character.jail_district_id = district_id            # always overwritten (None for a station term)
     term = models.LawJailTerm(
-        character_id=int(character.id), region_id=int(enc.region_id), location_id=int(jail_location_id),
+        character_id=int(character.id), region_id=int(enc.region_id), location_id=int(target.location_id),
         encounter_id=int(enc.id), level_code=enc.level_code, fine_base=int(enc.fine),
-        bail_price=lc.bail_price(int(enc.fine), settings.bail_multiplier), started_at=now, until=until,
-        status=lc.JAIL_SERVING, escape_attempts=0, next_escape_at=None, notified=False)
+        bail_price=0 if country else lc.bail_price(int(enc.fine), settings.bail_multiplier), started_at=now,
+        until=until, status=lc.JAIL_SERVING, escape_attempts=0, next_escape_at=None, notified=False,
+        facility=target.facility, country_id=int(target.country_id) if country and target.country_id else None,
+        district_id=district_id)
     db.add(term)
     db.flush()
     before = clear_wanted(db, character.id, int(enc.region_id), settings, now)
@@ -869,6 +1084,7 @@ def _end_term(character: "models.Character", term: "models.LawJailTerm", status:
     term.notified = True
     character.jailed_until = now
     character.jail_region_id = None
+    character.jail_district_id = None
 
 
 def escape(db: Session, character_id: int, request_id: str) -> Tuple[bool, str, Optional[int]]:
@@ -890,7 +1106,11 @@ def escape(db: Session, character_id: int, request_id: str) -> Tuple[bool, str, 
     next_at = _dt(term.next_escape_at)
     if next_at is not None and next_at > now:
         raise LawError(409, MSG_ESCAPE_COOLDOWN.format(time=_remaining(next_at, now)))
-    chance_pct = escape_chance(db, character_id, settings)
+    facility = term_facility(term)
+    chance_pct = escape_chance(db, character_id, settings, facility)
+    if chance_pct <= 0:
+        # A zero chance (e.g. country multiplier 0) is no attempt at all: refuse instead of extending the term.
+        raise LawError(409, MSG_ESCAPE_IMPOSSIBLE)
     ok, roll = lc.roll_succeeds(chance_pct, rng())
     term.escape_attempts = int(term.escape_attempts or 0) + 1
     attempt = int(term.escape_attempts)
@@ -908,7 +1128,7 @@ def escape(db: Session, character_id: int, request_id: str) -> Tuple[bool, str, 
     new_until = lc.extended_until(now, _dt(term.until), settings.escape_fail_extend_pct,
                                   settings.max_remaining_jail_hours)
     term.until = new_until
-    term.next_escape_at = now + timedelta(hours=int(settings.escape_cooldown_hours))
+    term.next_escape_at = now + timedelta(hours=escape_cooldown_hours(settings, facility))
     character.jailed_until = new_until
     _log(db, key=f"law:escape:{character_id}:{request_id}", character_id=character_id, action=lc.LOG_ESCAPE_FAIL,
          region_id=int(term.region_id), chance_pct=chance_pct, roll_pct=roll, ref_id=int(term.id), now=now)
@@ -942,6 +1162,8 @@ def self_bail(db: Session, character_id: int, request_id: str) -> Tuple[int, Opt
     term = active_term(db, character_id, now, lock=True)
     if term is None:
         raise LawError(409, MSG_NOT_JAILED)
+    if term_facility(term) == lc.FACILITY_COUNTRY:
+        raise LawError(409, MSG_NO_BAIL_COUNTRY)
     _post_bail(db, payer_id=character_id, term=term, now=now)
     _end_term(character, term, lc.JAIL_BAILED, now)
     term.bailed_by_character_id = int(character_id)
@@ -1021,6 +1243,8 @@ def bail_other(db: Session, *, user_id: int, payer_id: int, banker_id: int, pris
         if last is not None and last.status == lc.JAIL_BAILED:
             raise LawError(409, MSG_BAIL_DONE)
         raise LawError(409, MSG_NOT_JAILED)
+    if term_facility(term) == lc.FACILITY_COUNTRY:
+        raise LawError(409, MSG_NO_BAIL_COUNTRY)
     _post_bail(db, payer_id=payer.id, term=term, now=now)
     _end_term(prisoner, term, lc.JAIL_BAILED, now)
     term.bailed_by_character_id = int(payer.id)
@@ -1067,6 +1291,7 @@ def staff_release(db: Session, character_id: int, *, reason: str, request_id: st
     elif character.jailed_until is not None:
         character.jailed_until = None           # a stale lazy value: tidy up
         character.jail_region_id = None
+        character.jail_district_id = None
     if character.law_encounter_id:
         enc = get_encounter(db, character.law_encounter_id, lock=True)
         if enc is not None and enc.status in lc.ENC_OPEN:
@@ -1138,6 +1363,8 @@ def admin_character(db: Session, character_id: int) -> dict:
                     "status": c.status, "created_at": c.created_at, "masked": bool(c.masked),
                     "witness_chance_pct": float(c.witness_chance_pct) if c.witness_chance_pct is not None else None,
                     "witness_roll_pct": float(c.witness_roll_pct) if c.witness_roll_pct is not None else None,
+                    "stealth_reduction_pct": (float(c.stealth_reduction_pct)
+                                              if c.stealth_reduction_pct is not None else None),
                     "reputation_delta": c.reputation_delta, "wanted_floor": c.wanted_floor,
                     "reveal_attempts": int(c.reveal_attempts or 0), "next_roll_at": c.next_roll_at,
                     "reveal_until": c.reveal_until, "revealed_at": c.revealed_at} for c in crimes],
@@ -1169,8 +1396,16 @@ def settings_out(db: Session) -> dict:
     return {
         "settings": _settings_dict(load_settings(db)),
         "levels": [{"code": lv.code, "sort_order": lv.sort_order, "name": lv.name, "min_value": lv.min_value,
-                    "fine": lv.fine, "jail_hours": lv.jail_hours} for lv in load_levels(db)],
+                    "fine": lv.fine, "jail_hours": lv.jail_hours, "detect_pct": float(lv.detect_pct)}
+                   for lv in load_levels(db)],
     }
+
+
+# fields an older admin client may omit (the stored value is kept): FEAT-202 country prison, FEAT-203 detection,
+# FEAT-204 patrols
+_OPTIONAL_SETTINGS = frozenset({"country_prison_min_level", "country_escape_multiplier",
+                                "country_escape_cooldown_hours", "detect_enabled", "patrols_enabled",
+                                "patrol_encounter_hold_min"}) | frozenset(lc.DETECT_PCT_FIELDS)
 
 
 def update_settings(db: Session, body) -> dict:
@@ -1180,20 +1415,30 @@ def update_settings(db: Session, body) -> dict:
     raw = body.settings
     values = {}
     for name in lc.SETTINGS_FIELDS:
-        value = getattr(raw, name)
-        if name in ("decay_per_day", "flee_base_pct", "flee_per_point_pct", "flee_min_pct", "flee_max_pct",
-                    "escape_base_pct", "escape_per_point_pct", "escape_min_pct", "escape_max_pct",
-                    "escape_fail_extend_pct", "bail_multiplier"):
+        value = getattr(raw, name, None)
+        if value is None and name in _OPTIONAL_SETTINGS:
+            value = getattr(old, name)          # an older client omits the newer fields -> keep them
+        if name in lc._DECIMAL_FIELDS:
             value = Decimal(str(value))
-        elif name == "outlaw_min_level":
+        elif name in lc._STRING_FIELDS:
             value = str(value).strip()
+        elif name in lc._BOOL_FIELDS:
+            value = bool(value)
         else:
             value = int(value)
         values[name] = value
     new = lc.LawSettings(**values)
+    old_levels = {lv.code: lv for lv in load_levels(db)}
+
+    def _detect_pct(x) -> Decimal:              # FEAT-203: an older client omits detect_pct -> keep the stored one
+        if getattr(x, "detect_pct", None) is not None:
+            return Decimal(str(x.detect_pct))
+        stored = old_levels.get(x.code)
+        return stored.detect_pct if stored is not None else Decimal(100)
+
     levels = [lc.Level(code=x.code, sort_order=lc.LEVEL_CODES.index(x.code) + 1 if x.code in lc.LEVEL_CODES else 0,
                        name=(x.name or "").strip(), min_value=int(x.min_value), fine=int(x.fine),
-                       jail_hours=int(x.jail_hours)) for x in body.levels]
+                       jail_hours=int(x.jail_hours), detect_pct=_detect_pct(x)) for x in body.levels]
     error = lc.validate(new, levels)
     if error:
         raise LawError(400, error)
@@ -1226,5 +1471,6 @@ def update_settings(db: Session, body) -> dict:
         target.min_value = lv.min_value
         target.fine = lv.fine
         target.jail_hours = lv.jail_hours
+        target.detect_pct = lv.detect_pct
     db.flush()
     return settings_out(db)

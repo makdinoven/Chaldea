@@ -29,7 +29,7 @@ character-attributes-service/app/
 | POST | `/attributes/` | Создать атрибуты для персонажа. FEAT-196: необязательные `level`, `id_class` в теле (не хранятся в строке атрибутов, только для прибавки ресурсов за уровень; не переданы → читаются из `characters`, нет строки → без прибавки) |
 | GET | `/attributes/{character_id}` | Получить все атрибуты. **FEAT-171 (A1): приватно** — владелец, админ/модератор с `characters:read`, NPC |
 | GET | `/attributes/{character_id}/passive_experience` | Пассивный опыт. **FEAT-171 (A4): приватно** |
-| POST | `/attributes/{character_id}/upgrade` | Прокачать статы (тратит stat points) |
+| POST | `/attributes/{character_id}/upgrade` | Прокачать статы (тратит stat points). Тело `StatsUpgradeRequest`: 10 статов + `stealth` (FEAT-201), каждое поле `Field(0, ge=0)` — отрицательное значение → 422 |
 | POST | `/attributes/{character_id}/apply_modifiers` | **internal** (FEAT-167): применить модификаторы (экипировка/баффы); FEAT-195: основные статы со снаряжения тоже двигают производные |
 | POST | `/attributes/{character_id}/recalculate` | Админ (`characters:update`): абсолютный пересчёт производных с учётом снаряжения/перков/еды (FEAT-195). Инвентарь недоступен → 502 «Не удалось получить снаряжение персонажа» |
 | POST | `/attributes/admin/recalculate_all` | Админ (`characters:update`): то же для всех персонажей батчами по 100 → `{"detail", "count", "skipped": [id...]}` (FEAT-195) |
@@ -195,6 +195,19 @@ character-service, inventory-service и (в async-варианте) skills-servi
 
 **Откат миграции 008:** перед `downgrade` снять активные бонусы: `UPDATE character_satiety SET expires_at = UTC_TIMESTAMP();`, затем `POST /attributes/internal/settle-regen` для всех `character_id` из таблицы.
 
+## Скрытность (FEAT-201, миграция 009)
+
+- **Миграция `009_add_stealth`** (revises `008_add_regen_and_satiety`): `character_attributes.stealth INT NOT NULL
+  DEFAULT 0`; существующие строки получают 0; идемпотентна (`_has_column`). Downgrade — `DROP COLUMN stealth`.
+- 11-й первичный стат, хранится как **сумма** (очки + снаряжение + еда + перки), как остальные первичные. Через
+  `apply_attribute_modifiers` автоматически работают прокачка, экипировка (заточка, камни, прочность), плоские бонусы
+  перков (`VALID_FLAT_BONUS_KEYS`), сытость и её истечение. `rebuild_derived_stats` первичные не трогает, поэтому
+  `/recalculate` скрытность не меняет. Кап FEAT-195 применяется при чтении (в character-service).
+- Схемы: `CharacterAttributesBase.stealth = Field(0, ge=0)` — **дефолт 0, а не 1** (как у `charisma`/`luck`), чтобы
+  новый персонаж не получал бесплатное очко; `create_character_attributes` пишет `stealth or 0`; `AdminAttributeUpdate.stealth`;
+  ответ `/upgrade` (`updated_attributes`) содержит `stealth`; `stealth` есть в `attr_fields` прогресса перков.
+- Бонус подклассов (Ассасин / Фокусник / Агент) сюда **не записывается** — его добавляет character-service в момент броска.
+
 ## Модель CharacterAttributes
 
 Все коэффициенты ниже — за **эффективную** единицу стата `eff(x)` (FEAT-195, см. раздел «Убывающая отдача статов»).
@@ -214,6 +227,7 @@ character-service, inventory-service и (в async-варианте) skills-servi
 - `endurance` -> +0.2 к res_effects
 - `luck` -> +0.1 к critical_hit_chance, dodge и res_effects
 - `charisma` -> скидка у торговцев 0.1 % за эффективную единицу (считается в `econ_core.charisma_discount_pct`, не хранится)
+- `stealth` (FEAT-201, «Скрытность») -> **производных полей нет** (в `PRIMARY_ATTRIBUTE_KEYS`, но не в `PRIMARY_DERIVED_EFFECTS`, как харизма). Снижает шанс, что преступление заметят, и даёт шанс бегства от стражи / побега из тюрьмы — считает character-service по своим настройкам (`shadow_settings`, см. `docs/services/character-service.md`, раздел «Shadow»). В бою ничего не даёт
 
 ### Боевые характеристики
 - `damage`, `dodge` (base 5.0), `critical_hit_chance` (base 20.0), `critical_damage` (base 125)
@@ -294,7 +308,7 @@ floor(m·eff(new)) − floor(m·eff(old))`, остальные ключи — п
 ## Система прокачки (upgrade)
 
 1. HTTP -> character-service: получить stat_points персонажа
-2. Проверить достаточно ли points
+2. Проверить достаточно ли points (`total_needed` — сумма всех 11 полей запроса, включая `stealth`; 0 → 400 «No stats to upgrade»). Все поля `StatsUpgradeRequest` — `Field(0, ge=0)` (FEAT-201): отрицательное значение → 422; раньше `{"strength": -20, "agility": 21}` списывало 1 очко и переносило 20 очков между статами (тест `test_upgrade_negative_points.py`)
 3. Применить вложенные очки через `crud.apply_attribute_modifiers` (FEAT-195: с убывающей отдачей)
 4. HTTP -> character-service: списать stat_points
 5. Используется `with_for_update()` для блокировки строки (race condition protection)

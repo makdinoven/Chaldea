@@ -32,6 +32,7 @@ const MODIFIER_FIELDS = [
   'stamina_modifier',
   'charisma_modifier',
   'luck_modifier',
+  'stealth_modifier',
   'damage_modifier',
   'dodge_modifier',
   // Combat
@@ -84,6 +85,7 @@ const MODIFIER_TO_STAT: Record<string, string> = {
   stamina_modifier: 'stamina',
   charisma_modifier: 'charisma',
   luck_modifier: 'luck',
+  stealth_modifier: 'stealth',
   damage_modifier: 'damage',
   dodge_modifier: 'dodge',
   critical_hit_chance_modifier: 'critical_hit_chance',

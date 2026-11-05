@@ -12,7 +12,9 @@ import reputation_crud
 import reputation_notify
 import law_core
 import law_crud
+import law_facility
 import law_notify
+import patrol_crud
 import shadow_crud
 import renown_crud
 from database import SessionLocal, engine
@@ -2341,6 +2343,18 @@ def _houses_inside(db: Session, location_id: int) -> dict:
     return {r[0]: {"house_id": r[1], "house_name": r[2]} for r in rows}
 
 
+def _prison_move_allowed(db: Session, character, new_location_id) -> bool:
+    """FEAT-202: a country-prison prisoner may move only inside the prison district SUBTREE of the term snapshot
+    (``characters.jail_district_id``); a station prisoner (no snapshot) may not move at all."""
+    if not character.jail_district_id:
+        return False
+    try:
+        destination = int(new_location_id)
+    except (TypeError, ValueError):
+        return False
+    return destination in law_facility.prison_location_ids(db, int(character.jail_district_id))
+
+
 @router.put("/internal/{character_id}/update_location")
 def update_location(
     character_id: int,
@@ -2376,7 +2390,8 @@ def update_location(
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     lock = activity_lock.lock_for_character(character)
-    if lock["reason"] in (activity_lock.REASON_JAIL, activity_lock.REASON_LAW_ENCOUNTER):
+    if lock["reason"] == activity_lock.REASON_LAW_ENCOUNTER or (
+            lock["reason"] == activity_lock.REASON_JAIL and not _prison_move_allowed(db, character, new_location_id)):
         db.rollback()
         raise HTTPException(status_code=409, detail=activity_lock.lock_message(lock))
 
@@ -2386,11 +2401,13 @@ def update_location(
         character.house_room_id = None  # FEAT-180 stage 7: leaving the location leaves any house
     character.current_location_id = new_location_id
     encounter = None
+    slipped = False
     try:
         if moving:
-            encounter = law_crud.evaluate_entry(
+            entry = law_crud.check_entry(
                 db, character, int(new_location_id), source,
                 from_location_id=int(from_location_id) if from_location_id is not None else None)
+            encounter, slipped = entry.encounter, entry.slipped
         db.commit()
     except Exception as e:
         db.rollback()
@@ -2408,12 +2425,20 @@ def update_location(
         except Exception:
             db.rollback()
             logger.exception("law encounter %s: response/notification failed", encounter.id)
+    if slipped:
+        # FEAT-203: the guards did not notice the character (the slip log row is committed with the move)
+        try:
+            law_notify.publish([law_crud.slip_notice(db, character.id, int(new_location_id))])
+        except Exception:
+            db.rollback()
+            logger.exception("law slip notification of character %s failed", character.id)
 
     return {
         "detail": "Текущая локация персонажа обновлена",
         "character_id": character.id,
         "current_location_id": character.current_location_id,
         "law_encounter": encounter_out,
+        "law_slipped": bool(slipped),
     }
 
 
@@ -3193,6 +3218,10 @@ async def admin_update_npc(
     if role_changed_away_from_teleport:
         crud.purge_teleport_links_for_npc(db, npc.id)
 
+    # FEAT-204: an NPC that stops being a guard goes back to a fixed post (its route / zone points are kept)
+    if "npc_role" in update_data and old_role == law_core.GUARD_ROLE and npc.npc_role != law_core.GUARD_ROLE:
+        patrol_crud.disable_patrol(db, npc.id)
+
     try:
         if target_balance is not None:
             crud.admin_set_balance(
@@ -3288,6 +3317,7 @@ async def admin_delete_npc(
     # Delete the NPC row (FEAT-181 C8: its gold is posted to the location treasury first)
     try:
         crud.post_character_deletion(db, npc)
+        patrol_crud.delete_patrol(db, npc.id)   # FEAT-204: no FK on guard_patrols -> explicit cleanup
         db.delete(npc)
         db.commit()
     except (SQLAlchemyError, crud.econ_ledger.EconomyError) as e:
@@ -3316,6 +3346,10 @@ def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
         or_(models.Character.unconscious_until.is_(None), models.Character.unconscious_until <= now),
     ).all()
 
+    # FEAT-204: a patrolling guard shows only a coarse departure bucket (soon / short / long), never minutes
+    hints = patrol_crud.departure_hints(
+        db, [npc.id for npc in npcs if npc.npc_role == law_core.GUARD_ROLE], now) if npcs else {}
+
     result = []
     for npc in npcs:
         race = db.query(models.Race).filter(models.Race.id_race == npc.id_race).first()
@@ -3328,6 +3362,7 @@ def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
             "class_name": cls.name if cls else None,
             "race_name": race.name if race else None,
             "npc_role": npc.npc_role,
+            "patrol_departure": hints.get(npc.id),
         })
     return result
 
@@ -4601,6 +4636,11 @@ def post_teleport(
             law_notify.publish([law_crud.encounter_notice(db, encounter)])
         except Exception:
             logger.exception("law encounter notification after teleport failed")
+    if result.get("law_slipped"):              # FEAT-203: the guards did not notice the arrival (already committed)
+        try:
+            law_notify.publish([law_crud.slip_notice(db, result["character_id"], result["new_location_id"])])
+        except Exception:
+            logger.exception("law slip notification after teleport failed")
     return schemas.TeleportResult(**result)
 
 
@@ -4713,10 +4753,12 @@ from economy_api import router as economy_router  # noqa: E402
 from reputation_api import router as reputation_router  # noqa: E402
 from law_api import router as law_router  # noqa: E402
 from shadow_api import router as shadow_router  # noqa: E402
+from patrol_api import router as patrol_router  # noqa: E402
 app.include_router(economy_router)
 app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
 app.include_router(law_router)          # FEAT-198; before the main router (static /law/..., /admin/law/... paths)
 app.include_router(shadow_router)       # FEAT-199; before the main router (static /renown/..., /admin/shadow/... paths)
+app.include_router(patrol_router)       # FEAT-204; /admin/npcs/{id}/patrol[/step]
 app.include_router(router)
 
 

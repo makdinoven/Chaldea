@@ -52,6 +52,7 @@ const SECTIONS: { title: string; fields: { key: keyof CharacterAttributes; label
       { key: 'endurance', label: 'Выносливость' },
       { key: 'charisma', label: 'Харизма' },
       { key: 'luck', label: 'Удача' },
+      { key: 'stealth', label: 'Скрытность' },
     ],
   },
   {

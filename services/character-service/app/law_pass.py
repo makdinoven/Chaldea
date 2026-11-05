@@ -12,6 +12,9 @@ Steps:
 5. FEAT-199 reveal rolls: unwitnessed / masked crimes whose ``next_roll_at <= now`` -> one roll each (chance grows with
    the region's suspicion, masked × factor) -> reveal (reputation + wanted + «раскрыто») or ``next_roll_at += 1 d``;
    past ``reveal_until`` the case is closed forever.
+6. FEAT-204 guard patrols (between 4 and 5): due patrol guards (``next_move_at <= now``) take one step each
+   (``patrol_crud.step_guard``: own transactions, blocked guards retry in 2 min, the arrival sweep checks every
+   player present); skipped entirely when ``law_settings.patrols_enabled`` is off.
 
 Wanted decay is not materialised here: readers compute it lazily and exactly. The async flows run through
 ``asyncio.run`` (the scheduler thread has no event loop).
@@ -30,6 +33,7 @@ import law_core as lc
 import law_crud
 import law_flows
 import law_notify
+import patrol_crud
 import shadow_crud
 
 logger = logging.getLogger("character-service.law_pass")
@@ -120,8 +124,8 @@ def _served_terms(db: Session, now: datetime, stats: dict) -> None:
             term.status = lc.JAIL_SERVED
             term.resolved_at = now
             term.notified = True
-            db.execute(text("UPDATE characters SET jail_region_id = NULL WHERE id = :c AND "
-                            "(jailed_until IS NULL OR jailed_until <= :now)"),
+            db.execute(text("UPDATE characters SET jail_region_id = NULL, jail_district_id = NULL "
+                            "WHERE id = :c AND (jailed_until IS NULL OR jailed_until <= :now)"),
                        {"c": int(term.character_id), "now": now})
             law_crud._log(db, key=f"law:served:{term.id}", character_id=int(term.character_id),
                           action=lc.LOG_SERVED, region_id=int(term.region_id), ref_id=int(term.id), now=now)
@@ -163,6 +167,27 @@ def _guard_recovery(db: Session, now: datetime, stats: dict) -> None:
         logger.exception("law pass: guard recovery failed")
 
 
+def _guard_patrols(db: Session, now: datetime, stats: dict) -> None:
+    settings = law_crud.load_settings(db)
+    db.rollback()
+    if not settings.patrols_enabled:
+        return
+    for npc_id in patrol_crud.due_guards(db, now, BATCH_SIZE):
+        try:
+            outcome = patrol_crud.step_guard(db, npc_id, now)
+        except Exception:
+            db.rollback()
+            logger.exception("law pass: patrol step of guard %s failed", npc_id)
+            continue
+        if outcome.outcome == patrol_crud.OUT_MOVED:
+            stats["patrol_moves"] += 1
+        elif outcome.outcome == patrol_crud.OUT_BLOCKED:
+            stats["patrol_blocked"] += 1
+        stats["patrol_checked"] += outcome.checked
+        stats["patrol_encounters"] += outcome.encounters
+        stats["patrol_slips"] += outcome.slipped
+
+
 def _reveal_crimes(db: Session, now: datetime, stats: dict) -> None:
     for crime_id in _ids(db, "SELECT id FROM law_crimes WHERE status IN (:u, :m) AND next_roll_at <= :now "
                              "ORDER BY next_roll_at, id LIMIT :n",
@@ -186,14 +211,16 @@ def _reveal_crimes(db: Session, now: datetime, stats: dict) -> None:
 def run_pass(session_factory: Callable[[], Session], now: Optional[datetime] = None, *, claim: bool = True) -> dict:
     """One law pass. Never raises for one bad item."""
     stats = {"ran": False, "auto_resolved": 0, "fights_applied": 0, "fights_reset": 0, "served": 0,
-             "guards_healed": 0, "guards_recovered": 0, "reveal_rolls": 0, "revealed": 0, "closed": 0}
+             "guards_healed": 0, "guards_recovered": 0, "patrol_moves": 0, "patrol_blocked": 0, "patrol_checked": 0,
+             "patrol_encounters": 0, "patrol_slips": 0, "reveal_rolls": 0, "revealed": 0, "closed": 0}
     db = session_factory()
     try:
         now = now or law_crud.now_utc()
         if claim and not claim_run(db, now):
             return stats
         stats["ran"] = True
-        for step in (_expired_encounters, _lost_callbacks, _served_terms, _guard_recovery, _reveal_crimes):
+        for step in (_expired_encounters, _lost_callbacks, _served_terms, _guard_recovery, _guard_patrols,
+                     _reveal_crimes):
             try:
                 step(db, now, stats)
             except Exception:

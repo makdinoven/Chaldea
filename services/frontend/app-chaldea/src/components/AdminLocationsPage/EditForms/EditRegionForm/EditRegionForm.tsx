@@ -273,17 +273,18 @@ const EditRegionForm = ({
           </div>
 
           <div className="mb-4">
-            <label className="block mb-2 text-[#8ab3d5] font-medium">ТЮРЬМА КРАЯ:</label>
+            <label className="block mb-2 text-[#8ab3d5] font-medium">ОТДЕЛЕНИЕ СТРАЖИ:</label>
             {regionId !== 'new' ? (
               <div className="flex flex-col gap-1 min-w-0">
                 <EntityPicker kind="location" value={jailLocationId} onChange={setJailLocationId} />
                 <span className="text-white/40 text-xs">
-                  Локация этого края, куда стража отправляет задержанных. Пусто — тюрьмы нет (сдаться нельзя, только
-                  штраф, бегство или бой).
+                  Для мелких преступников: локация этого края, куда стража отправляет нарушителей ниже порога
+                  тюрьмы страны. Если отделения нет — их везут в тюрьму страны; нет ни того, ни другого — сдаться
+                  нельзя (только штраф, бегство или бой).
                 </span>
               </div>
             ) : (
-              <span className="text-white/40 text-xs">Тюрьму можно назначить после создания региона.</span>
+              <span className="text-white/40 text-xs">Отделение стражи можно назначить после создания региона.</span>
             )}
           </div>
 

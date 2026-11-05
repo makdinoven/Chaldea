@@ -68,13 +68,13 @@ def set_marker(f, location_id, marker):
     exec_(f, "UPDATE Locations SET marker_type = :m WHERE id = :l", m=marker, l=location_id)
 
 
-def set_attrs(f, character_id, agility=0, luck=0):
+def set_attrs(f, character_id, agility=0, luck=0, stealth=0):
     if q(f, "SELECT COUNT(*) FROM character_attributes WHERE character_id = :c", c=character_id):
-        exec_(f, "UPDATE character_attributes SET agility = :a, luck = :l WHERE character_id = :c",
-              a=agility, l=luck, c=character_id)
+        exec_(f, "UPDATE character_attributes SET agility = :a, luck = :l, stealth = :s WHERE character_id = :c",
+              a=agility, l=luck, s=stealth, c=character_id)
     else:
-        exec_(f, "INSERT INTO character_attributes (character_id, agility, luck) VALUES (:c, :a, :l)",
-              c=character_id, a=agility, l=luck)
+        exec_(f, "INSERT INTO character_attributes (character_id, agility, luck, stealth) VALUES (:c, :a, :l, :s)",
+              c=character_id, a=agility, l=luck, s=stealth)
 
 
 _ITEM_SEQ = {"n": 900}
@@ -133,7 +133,7 @@ def guard_encounter_battle(f, battle_id, encounter_id=5):
 CRIME_COLS = ("id", "character_id", "crime_type", "status", "masked", "witness_chance_pct", "witness_roll_pct",
               "reputation_delta", "reputation_key", "reputation_reason", "wanted_floor", "wanted_points",
               "wanted_applied", "reveal_until", "next_roll_at", "reveal_attempts", "revealed_at", "resolved_at",
-              "created_at", "region_id", "event_key")
+              "created_at", "region_id", "event_key", "stealth_reduction_pct")
 
 
 def crimes(f, character_id=None):

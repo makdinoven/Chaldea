@@ -2,7 +2,7 @@ import os
 import math
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks, Query, Header
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -181,46 +181,127 @@ async def check_not_activity_locked(db: AsyncSession, character_id: int):
     await activity_lock.check_not_activity_locked(db, character_id)
 
 
-async def check_not_locked_for_post(db: AsyncSession, character_id: int, location_id: int) -> bool:
-    """FEAT-198 §3.6: like check_not_activity_locked, but a jailed character may still write posts
-    in the location they are in (= the jail). Any other lock reason, or a jailed character posting
-    elsewhere / moving, gets the usual 409. Returns True when the jail exception was applied."""
-    lock = await activity_lock.get_activity_lock(db, character_id)
-    if lock.get("reason") == activity_lock.REASON_JAIL:
+# FEAT-202 §3.5: outcomes of check_not_locked_for_post
+POST_FREE = "free"                # no lock: the normal flow
+POST_IN_PLACE = "in_place"        # jailed, posting where they are (no move)
+POST_PRISON_MOVE = "prison_move"  # jailed in a country prison, moving inside its district subtree
+
+
+def _is_missing_jail_district_column(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "jail_district_id" in msg and ("unknown column" in msg or "no such column" in msg)
+
+
+async def _jail_position(db: AsyncSession, character_id: int):
+    """FEAT-202: (current_location_id, jail_district_id) of a jailed character. Deploy skew
+    (character-service 042 not applied yet) -> WARNING and district None (today's behaviour);
+    any other error re-raises. Read outside the shared part of activity_lock.py on purpose."""
+    try:
+        row = (await db.execute(
+            text("SELECT current_location_id, jail_district_id FROM characters WHERE id = :cid"),
+            {"cid": character_id},
+        )).fetchone()
+    except Exception as e:
+        if not _is_missing_jail_district_column(e):
+            raise
+        logger.warning("characters.jail_district_id ещё нет (миграция character-service 042 не применена) — "
+                       "перемещение внутри тюрьмы страны недоступно")
         row = (await db.execute(
             text("SELECT current_location_id FROM characters WHERE id = :cid"),
             {"cid": character_id},
         )).fetchone()
-        if row is not None and row[0] is not None and int(row[0]) == int(location_id):
-            return True
+    if row is None:
+        return None, None
+    current = int(row[0]) if row[0] is not None else None
+    district = int(row[1]) if len(row) > 1 and row[1] is not None else None
+    return current, district
+
+
+async def _is_prison_move(db: AsyncSession, current: Optional[int], district: Optional[int],
+                          location_id: int) -> bool:
+    """A move of a country prisoner to another location of their prison district subtree (snapshot)."""
+    if district is None or (current is not None and current == int(location_id)):
+        return False
+    return int(location_id) in await crud.prison_location_ids(db, district)
+
+
+def _raise_lock(lock: dict) -> None:
     message = activity_lock.lock_message(lock)
     if message:
         raise HTTPException(status_code=activity_lock.LOCK_STATUS_CODE, detail=message)
-    return False
+
+
+async def check_not_locked_for_post(db: AsyncSession, character_id: int, location_id: int, *,
+                                    allow_prison_move: bool = False) -> str:
+    """FEAT-198 §3.6 / FEAT-202 §3.5: like check_not_activity_locked, but a jailed character may
+    still write posts in the location they are in (POST_IN_PLACE), and — with `allow_prison_move` —
+    a country prisoner may move to another location of their prison district (POST_PRISON_MOVE;
+    the caller must then call update_location, which re-validates under the row lock). Any other
+    lock reason or destination gets the usual 409. No lock -> POST_FREE."""
+    lock = await activity_lock.get_activity_lock(db, character_id)
+    if lock.get("reason") == activity_lock.REASON_JAIL:
+        current, district = await _jail_position(db, character_id)
+        if current is not None and current == int(location_id):
+            return POST_IN_PLACE
+        if allow_prison_move and await _is_prison_move(db, current, district, location_id):
+            return POST_PRISON_MOVE
+    _raise_lock(lock)
+    return POST_FREE
+
+
+async def check_not_locked_for_move(db: AsyncSession, character_id: int, location_id: int) -> None:
+    """FEAT-202 §3.5 (quick move): no lock, or a country prisoner moving inside their prison
+    district subtree (to another location); anything else -> 409 with the lock message."""
+    lock = await activity_lock.get_activity_lock(db, character_id)
+    if lock.get("reason") == activity_lock.REASON_JAIL:
+        current, district = await _jail_position(db, character_id)
+        if await _is_prison_move(db, current, district, location_id):
+            return
+    _raise_lock(lock)
 
 
 LOCATION_UPDATE_REFUSED = "Перемещение сейчас невозможно"
 
 
+class LawArrival(NamedTuple):
+    """What the guards did on arrival (update_location response): FEAT-198 encounter / FEAT-203 slipped past."""
+    encounter: Optional[dict] = None
+    slipped: bool = False
+
+
+NO_LAW_ARRIVAL = LawArrival()
+
+
+def _response_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return None
+
+
 def _law_encounter_from(resp) -> Optional[dict]:
     """FEAT-198: the guard encounter character-service created while moving the character
     (`law_encounter` in the update_location response), or None."""
-    try:
-        data = resp.json()
-    except Exception:
-        return None
+    data = _response_json(resp)
     if isinstance(data, dict) and isinstance(data.get("law_encounter"), dict):
         return data["law_encounter"]
     return None
 
 
+def _law_slipped_from(resp) -> bool:
+    """FEAT-203: the guards did not notice the character (`law_slipped: true`); an older
+    character-service without the field -> False."""
+    data = _response_json(resp)
+    return isinstance(data, dict) and data.get("law_slipped") is True
+
+
 async def _update_character_location(character_id: int, destination_location_id: int,
-                                     source: str) -> Optional[dict]:
+                                     source: str) -> LawArrival:
     """PUT /characters/internal/{id}/update_location (FEAT-162 §3.4: internal, X-Internal-Token).
 
     FEAT-198: passes `source` ("move" | "quick_move") so character-service can evaluate the guard
     encounter; a 409 (jailed / stopped by the guards) is returned to the player as 409 with its
-    detail; any other failure stays a 500. Returns the `law_encounter` from the response, or None."""
+    detail; any other failure stays a 500. Returns the `LawArrival` (FEAT-198 encounter, FEAT-203 slip)."""
     async with httpx.AsyncClient(timeout=5.0) as client:
         update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/update_location"
         update_resp = await client.put(
@@ -239,15 +320,16 @@ async def _update_character_location(character_id: int, destination_location_id:
                             detail=detail if isinstance(detail, str) and detail else LOCATION_UPDATE_REFUSED)
     if update_resp.status_code != 200:
         raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
-    return _law_encounter_from(update_resp)
+    return LawArrival(_law_encounter_from(update_resp), _law_slipped_from(update_resp))
 
 
-def _post_response(new_post, law_encounter: Optional[dict] = None):
-    """PostResponse of a move / quick move + the FEAT-198 guard encounter (additive field)."""
-    if law_encounter is None:
+def _post_response(new_post, arrival: LawArrival = NO_LAW_ARRIVAL):
+    """PostResponse of a move / quick move + the FEAT-198 guard encounter / FEAT-203 slip (additive fields)."""
+    if arrival.encounter is None and not arrival.slipped:
         return new_post
     data = schemas.PostResponse.from_orm(new_post).dict()
-    data["law_encounter"] = law_encounter
+    data["law_encounter"] = arrival.encounter
+    data["law_slipped"] = True if arrival.slipped else None
     return data
 
 
@@ -361,6 +443,15 @@ async def delete_country_route(country_id: int, session: AsyncSession = Depends(
 async def get_countries_list_route(session: AsyncSession = Depends(get_db)):
     """Возвращает список стран"""
     return await crud.get_countries_list(session)
+
+@router.get("/countries/{country_id}/districts", response_model=List[schemas.CountryDistrictRead])
+async def get_country_districts_route(country_id: int, session: AsyncSession = Depends(get_db),
+                                      current_user=Depends(require_permission("locations:update"))):
+    """FEAT-202: the country's districts (nested included) for the prison select of the edit form."""
+    data = await crud.get_country_districts(session, country_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Страна не найдена")
+    return data
 
 @router.get("/countries/{country_id}/details")
 async def get_country_details_route(country_id: int, session: AsyncSession = Depends(get_db)):
@@ -937,7 +1028,9 @@ async def create_new_post(
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
     # FEAT-198: a jailed character may post in the location they are in (the jail).
-    await check_not_locked_for_post(session, post_data.character_id, post_data.location_id)
+    # FEAT-202: no prison move here — posting elsewhere still requires being there.
+    await check_not_locked_for_post(session, post_data.character_id, post_data.location_id,
+                                    allow_prison_move=False)
     await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
     await check_not_gathering(session, post_data.character_id, "Вы не можете писать посты во время добычи")
 
@@ -1326,7 +1419,9 @@ async def move_and_post(
     # 0. Проверяем, что персонаж принадлежит текущему пользователю
     await verify_character_ownership(session, movement.character_id, current_user.id)
     # FEAT-198: a jailed character may only post where they are (the jail); no move.
-    jail_post = await check_not_locked_for_post(session, movement.character_id, destination_location_id)
+    # FEAT-202: a country prisoner may also move inside the prison district subtree.
+    post_outcome = await check_not_locked_for_post(session, movement.character_id, destination_location_id,
+                                                   allow_prison_move=True)
     await check_not_in_battle(session, movement.character_id, "Вы не можете покинуть локацию во время боя")
     await check_not_gathering(session, movement.character_id, "Вы не можете покинуть локацию во время добычи")
 
@@ -1452,9 +1547,10 @@ async def move_and_post(
     # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
     # FEAT-198: a post in the jail is not a move — character-service would refuse it (409, jailed),
     # so update_location is skipped; otherwise a guard encounter may come back with the move.
-    law_encounter = None
-    if not jail_post:
-        law_encounter = await _update_character_location(
+    # FEAT-202: a prison move is a real move — update_location is called (it re-checks the subtree).
+    law_arrival = NO_LAW_ARRIVAL
+    if post_outcome != POST_IN_PLACE:
+        law_arrival = await _update_character_location(
             movement.character_id, destination_location_id, "move",
         )
 
@@ -1590,7 +1686,7 @@ async def move_and_post(
         "write_chars_in_location", move_char_count, destination_location_id,
     )
 
-    return _post_response(new_post, law_encounter)
+    return _post_response(new_post, law_arrival)
 
 
 @router.post("/{destination_location_id}/quick_move", response_model=schemas.PostResponse)
@@ -1608,7 +1704,8 @@ async def quick_move(
     """
     # 0. Проверяем владение персонажем и отсутствие боя
     await verify_character_ownership(session, body.character_id, current_user.id)
-    await check_not_activity_locked(session, body.character_id)
+    # FEAT-202: a country prisoner may quick-move inside the prison district subtree.
+    await check_not_locked_for_move(session, body.character_id, destination_location_id)
     await check_not_in_battle(session, body.character_id, "Вы не можете покинуть локацию во время боя")
     await check_not_gathering(session, body.character_id, "Вы не можете покинуть локацию во время добычи")
 
@@ -1709,7 +1806,7 @@ async def quick_move(
     # 6. Обновляем текущую локацию персонажа
     # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
     # FEAT-198: 409 (jailed / stopped by the guards) is passed through; a guard encounter may come back.
-    law_encounter = await _update_character_location(
+    law_arrival = await _update_character_location(
         body.character_id, destination_location_id, "quick_move",
     )
 
@@ -1813,7 +1910,7 @@ async def quick_move(
             "visit_location", 1, destination_location_id,
         )
 
-    return _post_response(new_post, law_encounter)
+    return _post_response(new_post, law_arrival)
 
 
 @router.post("/posts/as-npc", response_model=schemas.PostResponse)

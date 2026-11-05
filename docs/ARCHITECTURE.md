@@ -78,11 +78,11 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | Сервис | Таблицы |
 |--------|---------|
 | user-service | `users`, `users_character`, `users_avatar_preview`, `users_avatar_character_preview` |
-| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL), закон FEAT-198 (миграция `039_law`): `character_wanted`, `law_settings`, `law_levels`, `law_crimes`, `law_encounters`, `law_jail_terms`, `law_log` + `characters.jailed_until`, `jail_region_id`, `law_encounter_id` (две из них читаются остальными сервисами как блокировка активности), тень FEAT-199 (миграция `040_shadow_renown`): `shadow_settings`, `region_suspicion`, `character_renown`, `renown_tiers`, `renown_log` + колонки снимка в `law_crimes` (`character_renown` / `renown_tiers` читает locations-service SQL-ом) |
-| character-attributes-service | `character_attributes` |
+| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL), закон FEAT-198 (миграция `039_law`): `character_wanted`, `law_settings`, `law_levels`, `law_crimes`, `law_encounters`, `law_jail_terms`, `law_log` + `characters.jailed_until`, `jail_region_id`, `law_encounter_id` (две из них читаются остальными сервисами как блокировка активности), тень FEAT-199 (миграция `040_shadow_renown`): `shadow_settings`, `region_suspicion`, `character_renown`, `renown_tiers`, `renown_log` + колонки снимка в `law_crimes` (`character_renown` / `renown_tiers` читает locations-service SQL-ом); скрытность FEAT-201 (миграция `041_stealth`): новые поля в `shadow_settings`, `law_crimes.stealth_reduction_pct`; тюрьма страны FEAT-202 (миграция `042_country_prison`): 3 поля в `law_settings`, `law_jail_terms.facility` / `country_id` / `district_id`, `characters.jail_district_id` (читается locations-service SQL-ом для перемещений внутри тюрьмы); патрули стражи FEAT-204 (миграция `044_guard_patrols`): `guard_patrols`, `guard_patrol_points`, `law_settings.patrols_enabled` / `patrol_encounter_hold_min` (читает `LocationNeighbors` / `Locations` / `Districts` locations-service SQL-ом) |
+| character-attributes-service | `character_attributes` (+ `stealth` — FEAT-201, миграция `009_add_stealth`, читается character-service SQL-ом) |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
-| inventory-service | `items` (+ `is_mask` — FEAT-199, читается character-service SQL-ом), `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160), `quests` (+ `reputation_reward`, `min_reputation_tier` — FEAT-197), `house_plots` (+ `min_reputation_tier` — FEAT-197), `Regions.jail_location_id` (FEAT-198, тюрьма края), `quests` + `min_fame_tier`, `fame_reward` (FEAT-199) |
+| inventory-service | `items` (+ `is_mask` — FEAT-199, читается character-service SQL-ом; + `stealth_modifier` — FEAT-201, миграция 035), `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160), `quests` (+ `reputation_reward`, `min_reputation_tier` — FEAT-197), `house_plots` (+ `min_reputation_tier` — FEAT-197), `Regions.jail_location_id` (FEAT-198, отделение стражи края), `quests` + `min_fame_tier`, `fame_reward` (FEAT-199), `Countries.prison_district_id` (FEAT-202, миграция 057, тюрьма страны; читается character-service SQL-ом) |
 | notification-service | `notifications` |
 | battle-service | `battles` (+ `pause_reason`, `paused_by_admin`, `dungeon_session_id`, `law_encounter_id` — FEAT-198), `battle_participants` (+ `dropped_out_at` — читается ещё тремя сервисами как снятие блокировки боя), `battle_turns` |
 
@@ -175,7 +175,8 @@ locations-service ──> character-service (игроки в локации)
                       слава за задание после коммита)
                   ──> character-service (FEAT-198: update_location получает source; его 409
                       «в тюрьме / остановлен стражей» пробрасывается игроку, из ответа —
-                      law_encounter)
+                      law_encounter; FEAT-202: перемещение заключённого внутри района тюрьмы
+                      страны тоже идёт через update_location)
 
 inventory-service ──> character-attributes-service (модификаторы при экипировке)
 
@@ -301,6 +302,14 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
    на 6 ч. В тюрьме можно только писать посты в своей локации; выход — срок, побег (шанс, перерыв, продление) или
    залог у банкира. Деньги — операции книги `law_fine` / `law_bail`. Админка — права `reputation:*`.
 
+   **FEAT-202 — два учреждения.** Отделение стражи края (`Regions.jail_location_id`, одна локация) и тюрьма страны
+   (`Countries.prison_district_id` — район с вложенными подрайонами и их локациями). Ступень розыска ≥
+   `law_settings.country_prison_min_level` (по умолчанию «Злодей») → тюрьма страны, ниже → отделение; нет
+   предпочтительного — другое; нет обоих — сдаться нельзя. Выбор — один `law_facility.resolve_jail` в
+   character-service. В тюрьме страны нет залога, шанс побега × 0.5, перерыв 12 ч, но можно ходить и писать посты
+   по всему району (снимок района в `characters.jail_district_id` и сроке, переназначение тюрьмы на сидящих не
+   влияет).
+
    Поток перемещения:
    ```
    Игрок → locations: move_and_post / quick_move → character: PUT update_location {new_location_id, source}
@@ -311,11 +320,36 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
           конец боя → npc-status (нокаут, −300, розыск) → POST /characters/internal/law/battle-result
           проигрыш → _prepare_move (locations) → TX: перенос в тюрьму, jailed_until, розыск 0, срок
           (страховка — проход закона опрашивает /battles/internal/{id}/result)
+   Тюрьма (FEAT-202): resolve_jail(край встречи, ступень) → Regions.jail_location_id | Countries.prison_district_id →
+          проверка «район в этой стране, в поддереве есть локации» → камера (вход района или первая локация) →
+          TX: перенос + срок (facility, country_id, district_id) + characters.jail_district_id
+   Ход в тюрьме страны: locations move_and_post / quick_move → jail + цель в поддереве jail_district_id →
+          PUT update_location → character: FOR UPDATE, та же проверка поддерева → смена локации (иначе 409)
+   ```
+
+   **FEAT-204 — патрули стражи.** Стражник ходит по маршруту (по кругу / туда-обратно) или по зоне (район или набор
+   локаций, случайный сосед по `LocationNeighbors` внутри зоны), раз в 20 мин ± 25 % (у каждого свой интервал).
+   Шаг делает проход закона; стражник стоит, пока оглушён / в бою / его держит встреча (`pending` — не дольше
+   `patrol_encounter_hold_min` = 30 мин, `fighting` — до конца). Пришедший патруль бросает обнаружение FEAT-203 на
+   каждого разыскиваемого в локации, **включая игроков не в сети**; игрок видит только «скоро уйдёт / ненадолго /
+   надолго» (`patrol_departure`). Рубильник — `law_settings.patrols_enabled`.
+   ```
+   econ_scheduler (60 с) → law_pass.run_pass → _guard_patrols: guard_patrols.next_move_at ≤ now (≤ 200)
+     Txn A: патруль FOR UPDATE → стражник FOR UPDATE → занят? (KO / мёртв / бой / встреча) → +2 мин
+            → цель (маршрут / зона; точка погони _override_target) → UPDATE characters → next_move_at → COMMIT
+     Txn B_i (каждый игрок в новой локации, ≤ 200): FOR UPDATE → check_patrol_arrival (блокировки, дом, бой →
+            пропуск) → бросок FEAT-203 → law_encounters(source=patrol, стражник = пришедший) → COMMIT →
+            «Вас заметил патруль стражи в «…»» (law_encounter) | slipped в law_log без уведомления
+   Игрок: GET /characters/npcs/by_location (опрос 60 с) → patrol_departure; locations client/details — проброс поля
+   Админ: GET/PUT /characters/admin/npcs/{id}/patrol, POST …/patrol/step («Шаг сейчас»; npcs:read / npcs:update)
    ```
 10. **Тень: свидетели, маски, подозрение, слава** (FEAT-199, этап 2б; всё в character-service). Убийство мирного
-    NPC (и нокаут стражника через «Нападение») сначала проходит **один бросок свидетелей на группу**: база по
-    `Locations.marker_type` минус скрытность (эффективные ловкость + удача через `stat_caps`), подклассы Агент /
-    Ассасин / Фокусник, маска (`items.is_mask` на шлеме), плюс узнаваемость славы и прибавка за размер группы.
+    NPC (и нокаут стражника через «Нападение») сначала проходит **один бросок свидетелей на группу**. С FEAT-201
+    формула мультипликативная: база по `Locations.marker_type` (100 / 70 / 40 / 25) × (1 − снижение от стата
+    «Скрытность» `character_attributes.stealth`, эффективного через `stat_caps`, с очками подклассов Ассасин /
+    Фокусник / Агент до капа) × узнаваемость славы × размер группы, зажим 5…100 %. Маска (`items.is_mask` на шлеме,
+    в интерфейсе «Скрывает личность») — только анонимность. Бегство от стражи — скрытность + ловкость, побег из
+    тюрьмы — скрытность; раскрытие дела × (1 − снимок снижения на строке преступления). В бою скрытность не действует.
     Замечено без маски — репутация и розыск сразу (как в 2а); незамечено / в маске — отложенное дело в `law_crimes`
     (снимок с теми же ключами), подозрение края растёт, проход закона раз в сутки бросает раскрытие (шанс растёт с
     подозрением), через 3 дня дело закрывается. Бой встречи со стражей и выключатель — всегда «замечено». Слава
@@ -338,11 +372,13 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
     `tests/econ_contract_cases.py` (character, inventory, locations, dungeon), `econ_ledger.py` sync (character,
     inventory) и async (locations, dungeon), `stat_caps.py` (канон character-attributes-service + battle, dungeon и с
     FEAT-199 character-service), `reputation_core.py` (character + locations). `shadow_core.py` копий не имеет.
+    Вне скрипта: `activity_lock.py` (4 копии, сверяет тест паритета locations-service) и FEAT-202 SQL поддерева тюрьмы
+    `SQL_PRISON_LOCATIONS` (character-service `law_facility.py` = locations-service `crud.py`, текст байт в байт).
 
 ### Character Progression
 
 - Пассивный опыт -> уровни (по таблице LevelThreshold)
 - 10 stat points за уровень
-- Прокачка атрибутов: strength, agility, intelligence, endurance, health, mana, energy, stamina, charisma, luck
+- Прокачка атрибутов: strength, agility, intelligence, endurance, health, mana, energy, stamina, charisma, luck, stealth (FEAT-201; только вне боя — свидетели, бегство, побег). Отрицательные значения в запросе прокачки → 422
 - Дерево навыков с рангами (бинарное ветвление)
 - Экипировка с модификаторами (13 типов слотов + 10 быстрых слотов)

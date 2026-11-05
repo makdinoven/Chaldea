@@ -63,11 +63,13 @@ const SOURCE_LABELS: Record<string, string> = {
   move: 'переход',
   quick_move: 'быстрый переход',
   teleport: 'телепорт',
+  patrol: 'патруль',
 };
 
 const LOG_LABELS: Record<string, string> = {
   crime: 'Преступление',
   encounter: 'Встреча со стражей',
+  slipped: 'Проскользнул мимо стражи',
   fine: 'Штраф',
   surrender: 'Сдался страже',
   jail: 'Заключение',
@@ -252,6 +254,7 @@ const LawPanel = ({ characterId, canManage }: LawPanelProps) => {
 
   const enc = data?.encounter ?? null;
   const jail = data?.jail ?? null;
+  const isCountryJail = jail?.facility === 'country';
 
   return (
     <section className="gray-bg p-4 sm:p-6 flex flex-col gap-5 min-w-0">
@@ -301,7 +304,8 @@ const LawPanel = ({ characterId, canManage }: LawPanelProps) => {
                   {enc.level_name ?? enc.level_code} · розыск {enc.wanted_value}
                   {enc.is_outlaw && <span className="text-site-red"> · вне закона</span>}
                 </Info>
-                <Info name="Штраф / срок">{enc.fine} · {enc.jail_hours} ч{!enc.has_jail && ' (в крае нет тюрьмы)'}</Info>
+                <Info name="Штраф / срок">{enc.fine} · {enc.jail_hours} ч{!enc.has_jail && ' (некуда заключить)'}</Info>
+                {enc.jail_name && <Info name="Если сдастся">{enc.jail_name}</Info>}
                 <Info name="Варианты">{enc.options.map((o) => label(CHOICE_LABELS, o)).join(', ') || '—'}</Info>
                 <Info name="Шанс бегства">
                   {enc.flee_chance_pct != null ? `${enc.flee_chance_pct}%` : '—'}
@@ -320,14 +324,22 @@ const LawPanel = ({ characterId, canManage }: LawPanelProps) => {
           {/* Jail */}
           {jail && (
             <div className="flex flex-col gap-3 rounded-card border border-white/[0.07] bg-white/[0.02] p-3 sm:p-4 min-w-0">
-              <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">В тюрьме</h3>
+              <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">В заключении</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <Info name="Край">{jail.region_name ?? `#${jail.region_id}`}</Info>
+                <Info name="Учреждение">
+                  {jail.facility_name ?? (isCountryJail ? 'Тюрьма страны' : 'Отделение стражи')}
+                  {jail.district_name && ` · район «${jail.district_name}»`}
+                </Info>
+                <Info name="Край розыска">{jail.region_name ?? `#${jail.region_id}`}</Info>
                 <Info name="Локация">{jail.location_name ?? `#${jail.location_id}`}</Info>
                 <Info name="Осталось">
                   <RemainingText until={jail.until} prefix="" doneText="истекло" className="text-gold" />
                 </Info>
-                <Info name="Залог">{jail.bail_price}</Info>
+                <Info name="Залог">
+                  {jail.bail_available === false || jail.bail_price == null
+                    ? <span className="text-white/50">залога нет</span>
+                    : jail.bail_price}
+                </Info>
                 <Info name="Шанс побега">{jail.escape_chance_pct}% · попыток {jail.escape_attempts}</Info>
                 <Info name="Следующий побег">
                   {jail.can_escape_at
@@ -427,6 +439,9 @@ const LawPanel = ({ characterId, canManage }: LawPanelProps) => {
                             свидетели: шанс {pct(c.witness_chance_pct)}
                             {c.witness_roll_pct != null && `, бросок ${pct(c.witness_roll_pct)}`}
                           </span>
+                        )}
+                        {c.stealth_reduction_pct != null && c.stealth_reduction_pct > 0 && (
+                          <span>Скрытность снизила шанс на {pct(c.stealth_reduction_pct)}</span>
                         )}
                         {c.reputation_delta != null && <span>репутация {c.reputation_delta}</span>}
                         {c.wanted_floor != null && <span>розыск не меньше {c.wanted_floor}</span>}
@@ -577,7 +592,7 @@ const LawPanel = ({ characterId, canManage }: LawPanelProps) => {
                       {(x.reason || x.actor_username) && (
                         <div className="text-xs text-white/50 break-words">
                           {x.actor_username && <span className="text-white/70">{x.actor_username}: </span>}
-                          {x.reason}
+                          {x.action === 'slipped' ? label(SOURCE_LABELS, x.reason) : x.reason}
                         </div>
                       )}
                     </div>

@@ -160,9 +160,20 @@ const GuardEncounterModal = ({ characterId, encounterId, onClose }: GuardEncount
     </div>
   );
 
+  // FEAT-202: where a surrender leads — the country prison (no bail) or the region's guard station.
+  const isCountryJail = encounter?.jail_facility === 'country';
+  const surrenderText = (enc: LawEncounterOut): string => {
+    const term = jailTermText(enc.jail_hours);
+    if (!enc.jail_name) {
+      return `Вас заключат в тюрьму края на ${term}. Выйти раньше можно по залогу или попытавшись бежать.`;
+    }
+    return enc.jail_facility === 'country'
+      ? `Вас заключат на ${term}. Место заключения — ${enc.jail_name}. Залога нет, побег сложнее.`
+      : `Вас заключат на ${term}. Место заключения — ${enc.jail_name}. Выйти раньше можно по залогу или попытавшись бежать.`;
+  };
   const confirmText =
     confirming === 'surrender' && encounter
-      ? `Вас заключат в тюрьму края на ${jailTermText(encounter.jail_hours)}. Выйти раньше можно по залогу или попытавшись бежать.`
+      ? surrenderText(encounter)
       : 'Начнётся бой со стражником. Победа — путь свободен, но розыск станет тяжелее; поражение — тюрьма.';
 
   return (
@@ -196,9 +207,14 @@ const GuardEncounterModal = ({ characterId, encounterId, onClose }: GuardEncount
           </div>
         ) : (
           <div className="flex flex-col gap-4 min-w-0">
+            {encounter.by_patrol && (
+              <p className="text-site-red text-xs sm:text-sm font-medium uppercase tracking-wide">
+                Вас заметил патруль стражи
+              </p>
+            )}
             <p className="text-white text-sm sm:text-base leading-relaxed break-words">
               <span className="gold-text font-medium">{encounter.guard_name || 'Стражник'}</span>{' '}
-              преграждает вам путь.{' '}
+              {encounter.by_patrol ? 'подходит к вам.' : 'преграждает вам путь.'}{' '}
               {encounter.is_outlaw
                 ? `Для края «${encounter.region_name || '—'}» вы вне закона — договориться не выйдет.`
                 : `Вас разыскивают в крае «${encounter.region_name || '—'}».`}
@@ -261,7 +277,12 @@ const GuardEncounterModal = ({ characterId, encounterId, onClose }: GuardEncount
                       </span>
                       <span className="text-white/50 text-xs">
                         {choice === 'fine' && `${encounter.fine.toLocaleString('ru-RU')} золота — розыск снят`}
-                        {choice === 'surrender' && `Тюрьма на ${jailTermText(encounter.jail_hours)}`}
+                        {choice === 'surrender' &&
+                          (encounter.jail_name
+                            ? `${encounter.jail_name} на ${jailTermText(encounter.jail_hours)}${
+                                isCountryJail ? ' — тюрьма страны, залога нет' : ''
+                              }`
+                            : `Тюрьма на ${jailTermText(encounter.jail_hours)}`)}
                         {choice === 'flee' &&
                           `Шанс ${encounter.flee_chance_pct != null ? percentText(encounter.flee_chance_pct) : '—'}; провал — бой`}
                         {choice === 'fight' && 'Бой со стражником'}
@@ -270,7 +291,7 @@ const GuardEncounterModal = ({ characterId, encounterId, onClose }: GuardEncount
                   ))}
                 </div>
                 {!encounter.has_jail && (
-                  <p className="text-white/40 text-xs">В этом крае нет тюрьмы — сдаться некому.</p>
+                  <p className="text-white/40 text-xs">Ни отделения стражи, ни тюрьмы страны нет — сдаться некому.</p>
                 )}
                 <p className="text-white/50 text-xs leading-snug">
                   Пока вы не решите, персонаж задержан на месте. Если не ответить, стража решит сама —{' '}

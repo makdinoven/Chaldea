@@ -11,6 +11,7 @@ const STAT_FIELDS: { key: keyof StatPreset; label: string }[] = [
   { key: 'stamina', label: 'Выносливость' },
   { key: 'charisma', label: 'Харизма' },
   { key: 'luck', label: 'Удача' },
+  { key: 'stealth', label: 'Скрытность' },
 ];
 
 const DEFAULT_PRESET: StatPreset = {
@@ -24,6 +25,7 @@ const DEFAULT_PRESET: StatPreset = {
   stamina: 10,
   charisma: 10,
   luck: 10,
+  stealth: 0,
 };
 
 interface StatPresetEditorProps {

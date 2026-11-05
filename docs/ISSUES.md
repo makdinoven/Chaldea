@@ -387,6 +387,13 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## MEDIUM
 
+### ~~Баг: прокачка статов принимает отрицательные значения — очки можно перекладывать между статами~~ DONE (FEAT-201, 2026-11-04: `Field(0, ge=0)` на всех полях, тест `test_upgrade_negative_points.py`)
+**Сервис:** character-attributes-service
+**Файлы:** `services/character-attributes-service/app/schemas.py` (`StatsUpgradeRequest`), `app/main.py` (`upgrade_attributes`)
+**Описание (было):** у полей `StatsUpgradeRequest` (strength … luck) не было `ge=0`, а эндпоинт проверяет только `total_needed == 0` и `available < total_needed`. Тело `{"strength": -20, "agility": 21}` списывало 1 очко и переносило 20 очков из силы в ловкость (бесплатный респек; можно было уйти и в отрицательные значения стата). Найдено в FEAT-201.
+**Исправлено (FEAT-201):** теперь у ВСЕХ одиннадцати полей запроса (strength, agility, intelligence, endurance, health, energy, mana, stamina, charisma, luck, stealth) стоит `Field(0, ge=0)` — отрицательное значение любого поля даёт 422. Тест: `app/tests/test_upgrade_negative_points.py`.
+
+
 
 ### ~~Баг: «Нападение» на воскрешённого NPC с нулевым здоровьем создаёт бой, который нельзя закончить~~ — DONE (FEAT-200)
 **Исправлено:** воскрешение (internal `npc-status` → `alive` и админское `npc_status: dead → alive`) поднимает
@@ -883,6 +890,25 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 ---
 
 ## LOW
+
+### Долг: удаление района тюрьмы страны посреди срока оставляет заключённого «в пустоте» (FEAT-202, Q5)
+**Сервис:** character-service + locations-service
+**Файл:** `services/character-service/app/law_facility.py`, `law_crud.jail_out`; `services/locations-service/app/crud.py` (каскадное удаление района)
+**Обнаружено:** FEAT-202 (Architect, принято по умолчанию)
+**Описание:** снимок `characters.jail_district_id` / `law_jail_terms.district_id` не имеет FK. Если админ удалит район
+тюрьмы (его локации удаляются каскадом), у заключённого висит `current_location_id` на несуществующую локацию,
+`allowed_location_ids` пустой, ходить некуда. Автоматической обработки нет — помогает освобождение властями
+(`POST /characters/admin/law/characters/{id}/release`). Возможное решение: запрет удаления района, назначенного
+тюрьмой / с заключёнными, или авто-освобождение.
+
+### Долг: админский перенос заключённого не ограничен тюрьмой (FEAT-202, Q2)
+**Сервис:** character-service
+**Файл:** `services/character-service/app/main.py` (`POST /characters/admin/{id}/move`)
+**Обнаружено:** FEAT-202 (Architect, принято по умолчанию)
+**Описание:** staff может перенести заключённого в любую локацию; срок продолжается, а снимок района не меняется —
+заключённый окажется вне района и сможет двигаться только в локации района тюрьмы (если они соседние), а
+заключённый отделения — никуда до конца срока. Сейчас так задумано (как у отделения в FEAT-198). Альтернатива: отказ или авто-освобождение
+при переносе.
 
 ### ~~Баг: «Нападение» на NPC с нулевым здоровьем создаёт бой, который никогда не завершается~~ DONE (FEAT-200, 2026-11-04, дубль записи выше: бой против NPC с `current_health <= 0` теперь 409, оживление поднимает HP)
 **Сервис:** battle-service (+ character-attributes-service: данные NPC)
@@ -1401,6 +1427,16 @@ autobattle-service такого пути нет (есть `/register` под JWT
 
 ---
 
+### Баг: locations-service оставляет висящие открытые транзакции после быстрого перемещения
+**Сервис:** locations-service
+**Файл:** `services/locations-service/app/main.py` (`quick_move` и/или вызываемые из него обратные запросы — точное место не установлено)
+**Обнаружено:** FEAT-202 (Reviewer, задача #8, 2026-11-05)
+**Приоритет:** LOW
+**Описание:** при живой проверке в MySQL остались три соединения locations-service в состоянии `Sleep` с **открытой** InnoDB-транзакцией (`information_schema.innodb_trx`), начатые ровно в моменты трёх быстрых перемещений (`POST /locations/{id}/quick_move`; два из них со встречей со стражей, одно — внутри тюрьмы). Пост с перемещением (`move_and_post`) такого не оставлял. Висящая транзакция держит metadata lock: `DROP DATABASE` при восстановлении дампа ждал её бесконечно (пришлось `KILL`), а на проде так же заблокировалось бы любое `ALTER TABLE` миграции. В логах locations-service и раньше встречались `SAWarning: The garbage collector is trying to clean up non-checked-in connection` — похоже на ту же утечку соединения, то есть проблема, скорее всего, старше FEAT-202 (у `quick_move` в FEAT-202 поменялась только проверка блокировки, сессия по-прежнему из `get_db`).
+**Возможное решение:** воспроизвести на чистом `main` (одно быстрое перемещение → `SELECT * FROM information_schema.innodb_trx`), найти место, где сессия/соединение берётся мимо `get_db` (фоновые задачи, обратные вызовы из character-service, `async_session()` без `async with`), и закрывать его явно.
+
+---
+
 ## GLOBAL TASKS (стратегические задачи)
 
 Крупные задачи по улучшению проекта. Каждая может быть разбита на подзадачи.
@@ -1516,8 +1552,8 @@ autobattle-service такого пути нет (есть `/register` под JWT
 | CRITICAL | 1 |
 | HIGH | 10 |
 | MEDIUM | 23 |
-| LOW | 38 |
-| **Итого** | **72** |
+| LOW | 39 |
+| **Итого** | **73** |
 
 _Пересчитано 2026-09-14 (FEAT-163): таблица разошлась с содержимым файла — считаются только
 незакрытые записи (`###`-заголовки без зачёркивания) в секциях CRITICAL/HIGH/MEDIUM/LOW._

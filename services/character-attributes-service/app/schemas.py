@@ -14,6 +14,8 @@ class CharacterAttributesBase(BaseModel):
     stamina: Optional[int] = Field(10, ge=0, description="Прокачка выносливости")
     charisma: Optional[int] = Field(1, ge=0, description="Харизма")
     luck: Optional[int] = Field(1, ge=0, description="Удача")
+    # FEAT-201: default 0 (NOT 1 like charisma/luck) — no free point.
+    stealth: Optional[int] = Field(0, ge=0, description="Скрытность")
     damage: Optional[int] = Field(0, ge=0, description = "Базовый урон персонажа")
 
     class Config:
@@ -93,16 +95,17 @@ class CharacterAttributesResponse(CharacterAttributesBase):
 
 # Схема запроса на прокачку статов
 class StatsUpgradeRequest(BaseModel):
-    strength: Optional[int] = 0
-    agility: Optional[int] = 0
-    intelligence: Optional[int] = 0
-    endurance: Optional[int] = 0
-    health: Optional[int] = 0
-    energy: Optional[int] = 0
-    mana: Optional[int] = 0
-    stamina: Optional[int] = 0
-    charisma: Optional[int] = 0
-    luck: Optional[int] = 0
+    strength: Optional[int] = Field(0, ge=0)
+    agility: Optional[int] = Field(0, ge=0)
+    intelligence: Optional[int] = Field(0, ge=0)
+    endurance: Optional[int] = Field(0, ge=0)
+    health: Optional[int] = Field(0, ge=0)
+    energy: Optional[int] = Field(0, ge=0)
+    mana: Optional[int] = Field(0, ge=0)
+    stamina: Optional[int] = Field(0, ge=0)
+    charisma: Optional[int] = Field(0, ge=0)
+    luck: Optional[int] = Field(0, ge=0)
+    stealth: Optional[int] = Field(0, ge=0)  # FEAT-201
 
     class Config:
         orm_mode = True
@@ -179,6 +182,7 @@ class AdminAttributeUpdate(BaseModel):
     endurance: Optional[int] = None
     charisma: Optional[int] = None
     luck: Optional[int] = None
+    stealth: Optional[int] = None
     # Combat
     damage: Optional[int] = None
     dodge: Optional[float] = None

@@ -51,6 +51,7 @@ const BONUS_KEY_LABELS: Record<string, string> = {
   endurance: 'выносливости',
   charisma: 'харизме',
   luck: 'удаче',
+  stealth: 'скрытности',
   damage: 'урону',
   armor: 'броне',
   dodge: 'уклонению',
@@ -104,6 +105,7 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   endurance: (v) => `Выносливость ${v}+`,
   charisma: (v) => `Харизма ${v}+`,
   luck: (v) => `Удача ${v}+`,
+  stealth: (v) => `Скрытность ${v}+`,
   // Ресурсы
   health: (v) => `Здоровье ${v}+`,
   mana: (v) => `Мана ${v}+`,

@@ -121,6 +121,7 @@ export const STAT_LABELS: Record<string, string> = {
   stamina: 'Выносливость',
   charisma: 'Харизма',
   luck: 'Удача',
+  stealth: 'Скрытность',
   damage: 'Урон',
   dodge: 'Уклонение',
   critical_hit_chance: 'Шанс крит. удара',
@@ -209,13 +210,14 @@ export const PRIMARY_STATS = [
   'stamina',
   'charisma',
   'luck',
+  'stealth',
   'damage',
   'dodge',
   'critical_hit_chance',
   'critical_damage',
 ] as const;
 
-// --- 6 main stats for the tiered color bar display ---
+// --- 7 main stats for the tiered color bar display ---
 
 export const MAIN_STATS = [
   'strength',
@@ -224,9 +226,10 @@ export const MAIN_STATS = [
   'endurance',
   'charisma',
   'luck',
+  'stealth',
 ] as const;
 
-// --- 10 upgradeable stats for stat distribution ---
+// --- 11 upgradeable stats for stat distribution ---
 
 export const UPGRADEABLE_STATS = [
   'strength',
@@ -239,6 +242,7 @@ export const UPGRADEABLE_STATS = [
   'stamina',
   'charisma',
   'luck',
+  'stealth',
 ] as const;
 
 // --- Derived combat stats for grid display ---

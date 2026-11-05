@@ -35,6 +35,8 @@ export interface ItemData {
   stamina_modifier: number;
   charisma_modifier: number;
   luck_modifier: number;
+  /** FEAT-201; absent on payloads from before the column existed */
+  stealth_modifier?: number;
   damage_modifier: number;
   dodge_modifier: number;
   // recovery
@@ -55,6 +57,8 @@ export interface ItemData {
   repair_power: number | null;
   /** Food gives satiety when eaten (FEAT-164); older payloads may omit it */
   is_food?: boolean;
+  /** «Скрывает личность» (FEAT-199/201): head gear only; older payloads may omit it */
+  is_mask?: boolean;
   /**
    * Battle configuration (FEAT-168). Every field is optional: an item payload
    * from before the feature — or any non-consumable — simply omits them.
@@ -185,6 +189,8 @@ export interface CharacterAttributes {
   stamina: number;
   charisma: number;
   luck: number;
+  /** FEAT-201: out-of-battle stat (witnesses, flight, jail escape); 0 by default */
+  stealth: number;
   damage: number;
   dodge: number;
   critical_hit_chance: number;
@@ -238,6 +244,7 @@ export interface UpgradeStatsPayload {
   stamina?: number;
   charisma?: number;
   luck?: number;
+  stealth?: number;
 }
 
 export interface CharacterRaceInfo {

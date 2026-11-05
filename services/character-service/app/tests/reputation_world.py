@@ -49,7 +49,7 @@ PEOPLE = [  # id, name, user, npc, role, status, location, kill override
 # Readers fail loudly, so every world that can kill an NPC must have them (memory: «фикстура не той схемы»).
 SHADOW_DDL = (
     "CREATE TABLE IF NOT EXISTS character_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-    "character_id INTEGER NOT NULL, agility INTEGER DEFAULT 0, luck INTEGER DEFAULT 0, "
+    "character_id INTEGER NOT NULL, agility INTEGER DEFAULT 0, luck INTEGER DEFAULT 0, stealth INTEGER DEFAULT 0, "
     "current_health INTEGER DEFAULT 100, max_health INTEGER DEFAULT 100, current_mana INTEGER DEFAULT 50, "
     "max_mana INTEGER DEFAULT 50, current_energy INTEGER DEFAULT 50, max_energy INTEGER DEFAULT 50, "
     "current_stamina INTEGER DEFAULT 50, max_stamina INTEGER DEFAULT 50)",

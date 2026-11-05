@@ -8,14 +8,14 @@ import { searchLocations } from '../../../../api/startingPoints';
   name or its id and shown by name — no more typing bare ids.
 */
 
-interface Option {
+export interface Option {
   id: number;
   label: string;
   /** A second line: level and tier, the location's region… */
   sub?: string;
 }
 
-type Kind = 'item' | 'mob' | 'location' | 'npc' | 'quest';
+export type Kind = 'item' | 'mob' | 'location' | 'npc' | 'quest' | 'district';
 
 const TIER_LABELS: Record<string, string> = { normal: 'обычный', elite: 'элитный', boss: 'босс' };
 const SEARCH_LIMIT = 20;
@@ -23,7 +23,7 @@ const BULK_MAX = 100;
 
 // Names already looked up, for every picker on the page.
 const known: Record<Kind, Map<number, Option>> = {
-  item: new Map(), mob: new Map(), location: new Map(), npc: new Map(), quest: new Map(),
+  item: new Map(), mob: new Map(), location: new Map(), npc: new Map(), quest: new Map(), district: new Map(),
 };
 const remember = (kind: Kind, options: Option[]) => options.forEach((o) => known[kind].set(o.id, o));
 
@@ -82,6 +82,27 @@ const allQuests = (): Promise<Option[]> => {
   return questCache;
 };
 
+interface DistrictRow {
+  id: number;
+  name: string;
+}
+const districtOption = (d: DistrictRow): Option => ({ id: d.id, label: d.name, sub: `#${d.id}` });
+
+// FEAT-204: the district lookup has no search either: loaded once, filtered here.
+let districtCache: Promise<Option[]> | null = null;
+const allDistricts = (): Promise<Option[]> => {
+  if (!districtCache) {
+    districtCache = axios
+      .get<DistrictRow[]>('/locations/districts/lookup')
+      .then(({ data }) => (Array.isArray(data) ? data : []).map(districtOption))
+      .catch((e) => {
+        districtCache = null;
+        throw e;
+      });
+  }
+  return districtCache;
+};
+
 const isId = (q: string) => /^\d+$/.test(q.trim());
 
 const search: Record<Kind, (q: string) => Promise<Option[]>> = {
@@ -128,6 +149,12 @@ const search: Record<Kind, (q: string) => Promise<Option[]>> = {
       .filter((o) => String(o.id) === needle || o.label.toLowerCase().includes(needle))
       .slice(0, SEARCH_LIMIT);
   },
+  district: async (q) => {
+    const needle = q.trim().toLowerCase();
+    return (await allDistricts())
+      .filter((o) => String(o.id) === needle || o.label.toLowerCase().includes(needle))
+      .slice(0, SEARCH_LIMIT);
+  },
 };
 
 /** Names for ids picked earlier (saved configs come with ids only). */
@@ -154,6 +181,7 @@ const lookup: Record<Kind, (ids: number[]) => Promise<Option[]>> = {
       ids.map((id) => axios.get<NpcRow>(`/characters/admin/npcs/${id}`).then(({ data }) => npcOption(data)).catch(() => null)),
     )).filter((o): o is Option => o !== null),
   quest: async (ids) => (await allQuests()).filter((o) => ids.includes(o.id)),
+  district: async (ids) => (await allDistricts()).filter((o) => ids.includes(o.id)),
 };
 
 /** The names of these ids; unknown ones read "#id" until (or unless) they are found. */
@@ -187,10 +215,11 @@ const PLACEHOLDERS: Record<Kind, string> = {
   location: 'Локация: название или id',
   npc: 'НПС: имя или id',
   quest: 'Квест: название или id',
+  district: 'Район: название или id',
 };
 
 /** A search box with a list of what it found; picking one hands its id over. */
-const SearchBox = ({ kind, onPick, autoFocus }: { kind: Kind; onPick: (o: Option) => void; autoFocus?: boolean }) => {
+export const SearchBox = ({ kind, onPick, autoFocus }: { kind: Kind; onPick: (o: Option) => void; autoFocus?: boolean }) => {
   const [query, setQuery] = useState('');
   const debounced = useDebounce(query, 300) as string;
   const [results, setResults] = useState<Option[]>([]);

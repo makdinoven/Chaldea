@@ -141,12 +141,15 @@ const WantedSection = ({
         {law.jail && (
           <ProfileCard className="p-3 flex flex-col gap-1" variant="danger">
             <span className="text-white text-sm font-medium break-words">
-              В тюрьме края «{law.jail.region_name || '—'}»
+              {law.jail.facility_name || `Отделение стражи края «${law.jail.region_name || '—'}»`}
+              {law.jail.facility === 'country' && law.jail.district_name ? ` · район «${law.jail.district_name}»` : ''}
               {law.jail.location_name ? ` — «${law.jail.location_name}»` : ''}
             </span>
-            <span className="text-white/60 text-xs">
+            <span className="text-white/60 text-xs break-words">
               <RemainingText until={law.jail.until} doneText="срок истёк" className="text-gold-light" />
-              {' · '}залог {law.jail.bail_price.toLocaleString('ru-RU')} золота
+              {law.jail.bail_available && law.jail.bail_price != null
+                ? ` · залог ${law.jail.bail_price.toLocaleString('ru-RU')} золота`
+                : ' · залога нет'}
             </span>
           </ProfileCard>
         )}

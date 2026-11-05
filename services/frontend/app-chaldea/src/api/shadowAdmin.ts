@@ -31,6 +31,8 @@ export const SHADOW_MAX_SUSPICION = 10_000;
 export const SHADOW_MAX_FAME_QUEST = 1000;
 export const SHADOW_MAX_INFAMY_MIN_GAIN = 1000;
 export const SHADOW_MAX_TIER_WITNESS_PCT = 50;
+/** FEAT-201 `shadow_core.MAX_SUBCLASS_STEALTH`. */
+export const SHADOW_MAX_SUBCLASS_STEALTH = 500;
 export const SHADOW_MAX_TIER_VALUE = 10_000_000;
 export const SHADOW_MAX_DECAY_PER_DAY = 100_000;
 export const RENOWN_ADJUST_MAX = 10_000;
@@ -45,11 +47,14 @@ export interface ShadowSettingsValues {
   witness_base_dangerous_pct: number;
   witness_base_dungeon_pct: number;
   witness_base_default_pct: number;
-  witness_stealth_per_point_pct: number;
-  witness_agent_pct: number;
-  witness_assassin_pct: number;
-  witness_trickster_pct: number;
-  witness_mask_pct: number;
+  /** FEAT-201: % of the chance removed per EFFECTIVE (capped) stealth point. */
+  stealth_pct_per_point: number;
+  /** FEAT-201: ceiling of the stealth reduction, %. */
+  stealth_max_reduction_pct: number;
+  /** FEAT-201: subclass stealth points, added before the cap (witnesses, flee, escape). */
+  stealth_assassin_points: number;
+  stealth_trickster_points: number;
+  stealth_agent_points: number;
   witness_group_per_extra_pct: number;
   witness_min_pct: number;
   witness_max_pct: number;
@@ -112,6 +117,8 @@ export interface ShadowCrime {
   masked: boolean;
   witness_chance_pct: number | null;
   witness_roll_pct: number | null;
+  /** FEAT-201: the attacker's stealth reduction snapshotted at crime time (null = forced / old rows). */
+  stealth_reduction_pct?: number | null;
   reputation_delta: number | null;
   wanted_points: number;
   wanted_floor: number | null;

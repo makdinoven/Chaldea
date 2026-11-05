@@ -620,19 +620,20 @@ def resubmit_character_request(db: Session, db_request: models.CharacterRequest,
     return db_request
 
 
-# Десять базовых характеристик, из которых состоит пресет подрасы и которые
+# Одиннадцать базовых характеристик (FEAT-201: + скрытность), из которых состоит пресет подрасы и которые
 # печатает паспорт (правило 27). Всё остальное, что хранит
 # character-attributes-service (текущие/максимальные пулы, резисты, вложенные
 # игроком очки), к записи о вступлении отношения не имеет.
 PASSPORT_STAT_KEYS = (
     "strength", "agility", "intelligence", "endurance", "health",
-    "mana", "energy", "stamina", "charisma", "luck",
+    "mana", "energy", "stamina", "charisma", "luck", "stealth",
 )
 
 
 def normalize_starting_attributes(raw) -> Optional[dict]:
     """
-    Приводит пресет/слепок к десяти целым ключам паспорта.
+    Приводит пресет/слепок к одиннадцати целым ключам паспорта (старые слепки без
+    скрытности просто не содержат этого ключа).
 
     Всё, что не число, отбрасывается; пустой результат — это None, и тогда блок
     «Оценка при вступлении» просто не рисуется. Никаких выдуманных значений.
@@ -1114,6 +1115,7 @@ def generate_attributes_for_subrace(db: Session, subrace_id: int) -> dict:
         "stamina": 10,
         "charisma": 10,
         "luck": 10,
+        "stealth": 0,
     }
 
 
@@ -3880,9 +3882,11 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     # character, in the same commit as the arrival.
     import law_crud  # local: law_crud imports this module lazily itself
     encounter = None
+    slipped = False
     if previous_location_id is None or int(previous_location_id) != int(target.current_location_id):
-        encounter = law_crud.evaluate_entry(db, character, int(target.current_location_id), "teleport",
-                                            from_location_id=previous_location_id)
+        entry = law_crud.check_entry(db, character, int(target.current_location_id), "teleport",
+                                     from_location_id=previous_location_id)
+        encounter, slipped = entry.encounter, entry.slipped  # FEAT-203: the detection roll applies to a teleport
 
     location_name = _get_location_name(db, character.current_location_id)
 
@@ -3920,6 +3924,8 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
         "last_teleport_at": character.last_teleport_at,
         "law_encounter": encounter_out,
         "law_encounter_id": int(encounter.id) if encounter is not None else None,  # not in TeleportResult
+        "law_slipped": bool(slipped),
+        "character_id": int(character.id),  # not in TeleportResult (the slip notice after the commit)
     }
 
 

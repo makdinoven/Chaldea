@@ -629,8 +629,10 @@ const AdminLocationsPage = () => {
                   try {
                     await dispatch(updateCountry(countryData) as any).unwrap();
                     toast.success('Страна обновлена');
-                  } catch {
-                    toast.error('Ошибка обновления страны');
+                  } catch (err) {
+                    // FEAT-202: show the server's reason (e.g. a wrong prison district) when it has one
+                    const detail = (err as { detail?: unknown } | null)?.detail;
+                    toast.error(typeof detail === 'string' && detail.trim() ? detail : 'Ошибка обновления страны');
                     return;
                   }
                 }

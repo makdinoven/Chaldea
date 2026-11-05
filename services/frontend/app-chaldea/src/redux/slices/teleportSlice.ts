@@ -33,6 +33,8 @@ export interface TeleportResult {
   last_teleport_at: string; // ISO
   /** FEAT-198: the guards met the character on arrival (LawEncounterOut shape) */
   law_encounter?: Record<string, unknown> | null;
+  /** FEAT-203: the guards did not notice the character on arrival */
+  law_slipped?: boolean;
 }
 
 export interface TeleportLink {

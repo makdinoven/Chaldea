@@ -10,8 +10,8 @@ Model (features/FEAT-198 §3.1-3.2, §3.14-ANSWERED):
   :func:`effective_wanted`, writers :func:`materialise` (the anchor advances by exactly the time the consumed points
   took, so frequent writes never lose fractions — the same rule as ``reputation_core.materialise_decay``);
 * 5 severity levels with FIXED codes (:data:`LEVEL_CODES`), editable name / threshold / fine / jail term;
-* the guard encounter offers :func:`options`; flee / escape chances come from agility + luck (:func:`chance`;
-  FEAT-199: the EFFECTIVE values after the FEAT-195 caps).
+* the guard encounter offers :func:`options`; flee chance comes from stealth + agility, jail escape from stealth
+  (:func:`chance`; FEAT-201 — the EFFECTIVE values after the FEAT-195 caps, subclass stealth added before the cap).
 """
 
 import math
@@ -69,7 +69,9 @@ ENC_OPEN = (ENC_PENDING, ENC_FIGHTING)
 SOURCE_MOVE = "move"
 SOURCE_QUICK_MOVE = "quick_move"
 SOURCE_TELEPORT = "teleport"
+SOURCE_PATROL = "patrol"                  # FEAT-204: a patrolling guard arrived where the character stands
 MOVE_SOURCES = (SOURCE_MOVE, SOURCE_QUICK_MOVE)
+ENTRY_SOURCES = (SOURCE_MOVE, SOURCE_QUICK_MOVE, SOURCE_TELEPORT, SOURCE_PATROL)
 
 # jail term statuses
 JAIL_SERVING = "serving"
@@ -77,6 +79,12 @@ JAIL_SERVED = "served"
 JAIL_BAILED = "bailed"
 JAIL_ESCAPED = "escaped"
 JAIL_RELEASED = "released"
+
+# FEAT-202: jail facilities (law_jail_terms.facility) — the region guard station (one location,
+# Regions.jail_location_id) and the country prison (a district subtree, Countries.prison_district_id)
+FACILITY_STATION = "station"
+FACILITY_COUNTRY = "country"
+FACILITIES = (FACILITY_STATION, FACILITY_COUNTRY)
 
 # law_log actions
 LOG_CRIME = "crime"
@@ -108,6 +116,14 @@ LOG_REVEAL_FAIL = "reveal_fail"
 LOG_CRIME_CLOSED = "crime_closed"
 LOG_STAFF_REVEAL = "staff_reveal"
 LOG_STAFF_CLOSE = "staff_close"
+# FEAT-203: the guards did not notice the character on entry
+LOG_SLIPPED = "slipped"
+
+# FEAT-203: Locations.marker_type codes (= shadow_core MARKER_*; duplicated — this module has no project imports)
+MARKER_SAFE = "safe"
+MARKER_FARM = "farm"
+MARKER_DANGEROUS = "dangerous"
+MARKER_DUNGEON = "dungeon"
 
 # §3.14-ANSWERED A7: after a successful flee the guards of that location leave the character alone this long
 FLEE_GUARD_COOLDOWN = timedelta(hours=1)
@@ -121,6 +137,8 @@ MAX_HOURS = 168
 MIN_BAIL_MULTIPLIER = Decimal(1)
 MAX_BAIL_MULTIPLIER = Decimal(10)
 MAX_PER_POINT_PCT = Decimal(100)
+MAX_DETECT_LEVEL_PCT = Decimal(500)        # FEAT-203: the severity multiplier of a level, %
+MAX_PATROL_HOLD_MIN = 1440                 # FEAT-204: how long an open encounter may hold a patrol guard, minutes
 
 _CENT = Decimal("0.01")
 
@@ -135,6 +153,7 @@ class Level:
     min_value: int              # inclusive lower bound of wanted; level 1 >= 1
     fine: int
     jail_hours: int
+    detect_pct: Decimal = Decimal(100)  # FEAT-203: × the guard-detection chance, % (100 = unchanged)
 
 
 @dataclass(frozen=True)
@@ -150,41 +169,71 @@ class LawSettings:
     flee_min_pct: Decimal = Decimal(5)
     flee_max_pct: Decimal = Decimal(85)
     escape_base_pct: Decimal = Decimal(5)
-    escape_per_point_pct: Decimal = Decimal("0.15")
+    escape_per_point_pct: Decimal = Decimal("0.3")
     escape_min_pct: Decimal = Decimal(2)
     escape_max_pct: Decimal = Decimal(50)
     escape_cooldown_hours: int = 6
     escape_fail_extend_pct: Decimal = Decimal(50)
     max_remaining_jail_hours: int = 168
     bail_multiplier: Decimal = Decimal(2)
+    # FEAT-202: the country prison
+    country_prison_min_level: str = "villain"
+    country_escape_multiplier: Decimal = Decimal("0.5")
+    country_escape_cooldown_hours: int = 12
+    # FEAT-203: the guard-detection roll on entry
+    detect_enabled: bool = True
+    detect_base_safe_pct: Decimal = Decimal(100)
+    detect_base_farm_pct: Decimal = Decimal(70)
+    detect_base_dangerous_pct: Decimal = Decimal(40)
+    detect_base_dungeon_pct: Decimal = Decimal(25)
+    detect_base_default_pct: Decimal = Decimal(50)
+    detect_per_guard_pct: Decimal = Decimal(10)
+    detect_mask_factor_pct: Decimal = Decimal(75)
+    detect_min_pct: Decimal = Decimal(5)
+    detect_max_pct: Decimal = Decimal(100)
+    # FEAT-204: guard patrols (global switch + the max hold of a patrol guard by an open encounter)
+    patrols_enabled: bool = True
+    patrol_encounter_hold_min: int = 30
 
 
 DEFAULT_SETTINGS = LawSettings()
 
 DEFAULT_LEVELS: Tuple[Level, ...] = (
-    Level("suspect", 1, "Подозреваемый", 1, 50, 2),
-    Level("offender", 2, "Нарушитель", 100, 150, 12),
-    Level("criminal", 3, "Преступник", 300, 400, 24),
-    Level("villain", 4, "Злодей", 600, 1000, 72),
-    Level("enemy", 5, "Враг края", 900, 2500, 168),
+    Level("suspect", 1, "Подозреваемый", 1, 50, 2, Decimal(60)),
+    Level("offender", 2, "Нарушитель", 100, 150, 12, Decimal(80)),
+    Level("criminal", 3, "Преступник", 300, 400, 24, Decimal(100)),
+    Level("villain", 4, "Злодей", 600, 1000, 72, Decimal(120)),
+    Level("enemy", 5, "Враг края", 900, 2500, 168, Decimal(140)),
 )
 
 SETTINGS_FIELDS = (
     "max_wanted", "decay_per_day", "heavy_wanted", "outlaw_min_level", "encounter_timeout_hours", "guard_ko_hours",
     "flee_base_pct", "flee_per_point_pct", "flee_min_pct", "flee_max_pct", "escape_base_pct", "escape_per_point_pct",
     "escape_min_pct", "escape_max_pct", "escape_cooldown_hours", "escape_fail_extend_pct", "max_remaining_jail_hours",
-    "bail_multiplier",
+    "bail_multiplier", "country_prison_min_level", "country_escape_multiplier", "country_escape_cooldown_hours",
+    "detect_enabled", "detect_base_safe_pct", "detect_base_farm_pct", "detect_base_dangerous_pct",
+    "detect_base_dungeon_pct", "detect_base_default_pct", "detect_per_guard_pct", "detect_mask_factor_pct",
+    "detect_min_pct", "detect_max_pct", "patrols_enabled", "patrol_encounter_hold_min",
+)
+# FEAT-203: the percent fields of the guard-detection roll (each validated 0..100)
+DETECT_PCT_FIELDS = (
+    "detect_base_safe_pct", "detect_base_farm_pct", "detect_base_dangerous_pct", "detect_base_dungeon_pct",
+    "detect_base_default_pct", "detect_per_guard_pct", "detect_mask_factor_pct", "detect_min_pct", "detect_max_pct",
 )
 _DECIMAL_FIELDS = frozenset({
     "decay_per_day", "flee_base_pct", "flee_per_point_pct", "flee_min_pct", "flee_max_pct", "escape_base_pct",
     "escape_per_point_pct", "escape_min_pct", "escape_max_pct", "escape_fail_extend_pct", "bail_multiplier",
-})
+    "country_escape_multiplier",
+}) | frozenset(DETECT_PCT_FIELDS)
+_STRING_FIELDS = frozenset({"outlaw_min_level", "country_prison_min_level"})
+_BOOL_FIELDS = frozenset({"detect_enabled", "patrols_enabled"})
 
 
 # --------------------------------------------------------------------------------------------------- SQL (shared)
 
 SQL_SELECT_SETTINGS = "SELECT " + ", ".join(SETTINGS_FIELDS) + " FROM law_settings WHERE id = 1"
-SQL_SELECT_LEVELS = "SELECT code, sort_order, name, min_value, fine, jail_hours FROM law_levels ORDER BY sort_order"
+SQL_SELECT_LEVELS = ("SELECT code, sort_order, name, min_value, fine, jail_hours, detect_pct FROM law_levels "
+                     "ORDER BY sort_order")
 
 
 # --------------------------------------------------------------------------------------------------- helpers
@@ -206,8 +255,10 @@ def settings_from_row(row) -> LawSettings:
         raw = row[index]
         if name in _DECIMAL_FIELDS:
             values[name] = _dec(raw)
-        elif name == "outlaw_min_level":
+        elif name in _STRING_FIELDS:
             values[name] = str(raw)
+        elif name in _BOOL_FIELDS:
+            values[name] = bool(int(raw)) if raw is not None else True
         else:
             values[name] = int(raw)
     return LawSettings(**values)
@@ -215,7 +266,8 @@ def settings_from_row(row) -> LawSettings:
 
 def levels_from_rows(rows) -> List[Level]:
     """``SQL_SELECT_LEVELS`` rows; an empty table (fresh test DB) = the defaults."""
-    levels = [Level(str(r[0]), int(r[1]), str(r[2]), int(r[3]), int(r[4]), int(r[5])) for r in rows or ()]
+    levels = [Level(str(r[0]), int(r[1]), str(r[2]), int(r[3]), int(r[4]), int(r[5]),
+                    _dec(r[6]) if len(r) > 6 and r[6] is not None else Decimal(100)) for r in rows or ()]
     return sorted(levels, key=lambda lv: lv.sort_order) if levels else list(DEFAULT_LEVELS)
 
 
@@ -326,10 +378,11 @@ def options(is_outlaw: bool, has_jail: bool, flee_used: bool) -> List[str]:
     return out
 
 
-def chance(base, per_point, lo, hi, agility, luck) -> Decimal:
-    """``clamp(base + (agility + luck) * per_point, lo, hi)`` percent, 2 decimals. Agility / luck may be Decimal
-    (FEAT-199: the effective values after the FEAT-195 caps); integers give the same result as before."""
-    points = max(Decimal(0), _dec(agility)) + max(Decimal(0), _dec(luck))
+def chance(base, per_point, lo, hi, *points) -> Decimal:
+    """``clamp(base + Σ max(0, point) * per_point, lo, hi)`` percent, 2 decimals. FEAT-201: flee passes
+    (stealth, agility), jail escape passes (stealth,) — the effective values after the FEAT-195 caps (Decimal);
+    integers and the old two-stat callers give exactly the same result as before."""
+    points = sum((max(Decimal(0), _dec(p)) for p in points), Decimal(0))
     raw = _dec(base) + points * _dec(per_point)
     raw = max(_dec(lo), min(_dec(hi), raw))
     return raw.quantize(_CENT, rounding=ROUND_HALF_UP)
@@ -341,6 +394,38 @@ def roll_succeeds(chance_pct, rng) -> Tuple[bool, Decimal]:
     if roll >= 100:
         roll = Decimal("99.99")
     return roll < _dec(chance_pct), roll
+
+
+# --------------------------------------------------------------------------------------------------- detection
+
+def detection_base_pct(marker_type: Optional[str], s: LawSettings) -> Decimal:
+    """FEAT-203: the base guard-detection chance by ``Locations.marker_type`` (unknown / None -> the default)."""
+    by_marker = {
+        MARKER_SAFE: s.detect_base_safe_pct,
+        MARKER_FARM: s.detect_base_farm_pct,
+        MARKER_DANGEROUS: s.detect_base_dangerous_pct,
+        MARKER_DUNGEON: s.detect_base_dungeon_pct,
+    }
+    return _dec(by_marker.get(marker_type, s.detect_base_default_pct))
+
+
+def detection_chance(base, n_guards: int, reduction_pct, fame_pct, masked: bool, level_pct,
+                     s: LawSettings) -> Decimal:
+    """FEAT-203 §3.2 + PM decision Q2: the chance (percent, 2 decimals) that the guards notice an entering character:
+
+    ``base × (1 + per_guard × (n − 1)) × (1 − stealth reduction) × (1 + fame) × level``; under a mask the fame factor
+    is dropped (the mask hides the face) and the mask factor applies instead. Clamped to ``[detect_min, detect_max]``."""
+    hundred = Decimal(100)
+    value = _dec(base)
+    value *= (hundred + _dec(s.detect_per_guard_pct) * max(0, int(n_guards or 0) - 1)) / hundred
+    value *= (hundred - max(Decimal(0), min(hundred, _dec(reduction_pct)))) / hundred
+    if masked:
+        value *= _dec(s.detect_mask_factor_pct) / hundred
+    else:
+        value *= (hundred + max(Decimal(0), _dec(fame_pct))) / hundred
+    value *= max(Decimal(0), _dec(level_pct)) / hundred
+    value = max(_dec(s.detect_min_pct), min(_dec(s.detect_max_pct), value))
+    return value.quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
 # --------------------------------------------------------------------------------------------------- jail
@@ -360,6 +445,44 @@ def extended_until(now: datetime, until: datetime, pct, cap_hours: int) -> datet
 def bail_price(fine_base: int, multiplier) -> int:
     """``max(1, ceil(fine_base * multiplier))``."""
     return max(1, int(math.ceil(Decimal(int(fine_base or 0)) * _dec(multiplier))))
+
+
+# --------------------------------------------------------------------------------------------------- facilities
+
+def is_heavy(level_code: Optional[str], threshold_code: Optional[str], levels: Sequence[Level]) -> bool:
+    """FEAT-202: the level is at or above the country-prison threshold (an unknown code -> False)."""
+    level = level_by_code(level_code, levels)
+    threshold = level_by_code(threshold_code, levels)
+    if level is None or threshold is None:
+        return False
+    return level.sort_order >= threshold.sort_order
+
+
+def pick_facility(level_code: Optional[str], threshold_code: Optional[str], levels: Sequence[Level],
+                  has_station: bool, has_country: bool) -> Optional[str]:
+    """FEAT-202 user decision 5: a heavy level prefers the country prison, a light one the region station; the
+    preferred one missing -> the other; neither -> None (no surrender)."""
+    if is_heavy(level_code, threshold_code, levels):
+        order = ((FACILITY_COUNTRY, has_country), (FACILITY_STATION, has_station))
+    else:
+        order = ((FACILITY_STATION, has_station), (FACILITY_COUNTRY, has_country))
+    for facility, available in order:
+        if available:
+            return facility
+    return None
+
+
+def country_escape_chance(station_chance, multiplier) -> Decimal:
+    """FEAT-202: the country-prison escape chance = the (already clamped) station chance × the multiplier."""
+    value = _dec(station_chance) * _dec(multiplier)
+    return max(Decimal(0), value).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def facility_title(facility: str, country_name: Optional[str], region_name: Optional[str]) -> str:
+    """The player-facing facility name («Тюрьма страны «X»» / «Отделение стражи края «Y»»)."""
+    if facility == FACILITY_COUNTRY:
+        return f"Тюрьма страны «{country_name or '—'}»"
+    return f"Отделение стражи края «{region_name or '—'}»"
 
 
 # --------------------------------------------------------------------------------------------------- validation
@@ -397,6 +520,19 @@ def validate(settings: LawSettings, levels: Sequence[Level]) -> Optional[str]:
         return "Продление срока после неудачного побега: от 0 до 1000 %"
     if not (MIN_BAIL_MULTIPLIER <= _dec(settings.bail_multiplier) <= MAX_BAIL_MULTIPLIER):
         return "Множитель залога должен быть от 1 до 10"
+    if settings.country_prison_min_level not in LEVEL_CODES:
+        return "Порог тюрьмы страны должен быть одним из уровней розыска"
+    if not (Decimal(0) <= _dec(settings.country_escape_multiplier) <= Decimal(1)):
+        return "Множитель побега из тюрьмы страны: от 0 до 1"
+    if not (1 <= int(settings.country_escape_cooldown_hours) <= MAX_HOURS):
+        return f"Перезарядка побега из тюрьмы страны: от 1 до {MAX_HOURS} ч"
+    for name in DETECT_PCT_FIELDS:
+        if not _pct_ok(getattr(settings, name)):
+            return "Обнаружение стражей: проценты должны быть от 0 до 100"
+    if _dec(settings.detect_min_pct) > _dec(settings.detect_max_pct):
+        return "Обнаружение стражей: минимум не может быть больше максимума"
+    if not (0 <= int(settings.patrol_encounter_hold_min) <= MAX_PATROL_HOLD_MIN):
+        return f"Сколько патрульный ждёт ответа: от 0 до {MAX_PATROL_HOLD_MIN} мин"
 
     codes = [lv.code for lv in levels]
     if sorted(codes) != sorted(LEVEL_CODES) or len(codes) != len(LEVEL_CODES):
@@ -413,5 +549,7 @@ def validate(settings: LawSettings, levels: Sequence[Level]) -> Optional[str]:
             return f"Штраф должен быть от 0 до {MAX_FINE}"
         if not (1 <= int(lv.jail_hours) <= MAX_JAIL_HOURS):
             return f"Срок заключения должен быть от 1 до {MAX_JAIL_HOURS} часов"
+        if not (Decimal(0) <= _dec(lv.detect_pct) <= MAX_DETECT_LEVEL_PCT):
+            return f"Заметность ступени розыска: от 0 до {MAX_DETECT_LEVEL_PCT} %"
         previous = int(lv.min_value)
     return None

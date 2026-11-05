@@ -10,6 +10,7 @@ import QuestEditor from './QuestEditor';
 import NpcStatsEditor from './NpcStatsEditor';
 import NpcEquipmentEditor from './NpcEquipmentEditor';
 import TeleportLinksPanel from './TeleportLinksPanel';
+import GuardPatrolPanel from './GuardPatrolPanel';
 import AdminPagination from '../Admin/AdminPagination/AdminPagination';
 import ReputationTierSelect from '../Admin/ReputationPage/ReputationTierSelect';
 import { roleKillWeight, useReputationRoleWeights } from '../Admin/ReputationPage/useReputationRefs';
@@ -711,6 +712,10 @@ const AdminNpcsPage = () => {
 
       {formOpen && editingId != null && form.npc_role === 'teleport_master' && (
         <TeleportLinksPanel npcId={editingId} />
+      )}
+
+      {formOpen && editingId != null && form.npc_role === 'guard' && (
+        <GuardPatrolPanel npcId={editingId} />
       )}
 
       {/* NPC Table */}

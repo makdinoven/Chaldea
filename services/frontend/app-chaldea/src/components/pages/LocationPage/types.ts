@@ -83,7 +83,11 @@ export interface NpcInLocation {
   class_name: string | null;
   race_name: string | null;
   npc_role: string | null;
+  /** FEAT-204: a patrolling guard's rough departure bucket; null/absent = not patrolling. */
+  patrol_departure?: PatrolDeparture | null;
 }
+
+export type PatrolDeparture = 'soon' | 'short' | 'long';
 
 export interface LocationData {
   id: number;

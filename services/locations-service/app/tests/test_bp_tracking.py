@@ -118,6 +118,8 @@ def _mock_post_result():
     mock_post.updated_at = datetime(2026, 3, 29, 12, 0, 0)
     mock_post.character_name = "Воин"
     mock_post.character_avatar = None
+    mock_post.law_encounter = None   # PostResponse extras (FEAT-198/203): a MagicMock attr is not a valid value
+    mock_post.law_slipped = None
     mock_post.likes_count = 0
     mock_post.liked_by_me = False
     return mock_post

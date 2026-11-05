@@ -114,8 +114,8 @@ export const validateHouseFlags = (item: Record<string, unknown>): string | null
 };
 
 export const MASK_HINT =
-  "Носится в слоте головы как обычный шлем. Персонаж в маске, совершивший преступление при свидетелях, остаётся " +
-  "неузнанным: стража видит лишь «неизвестного в маске», а дело может раскрыться позже.";
+  "Носится в слоте головы как обычный шлем. Свидетели видят преступника, но не узнают его: дело не приписывается " +
+  "персонажу сразу, слава не учитывается. Скрытность предмет даёт только через модификатор «Скрытность».";
 
 export const BACKPACK_HINT =
   "Носится в слоте плаща. В подземелье из своих вещей доступно только содержимое рюкзака (расходники). " +
@@ -148,6 +148,7 @@ export const ATTR_MODS: ModDef[] = [
   { key: "stamina_modifier", label: "Выносливость" },
   { key: "charisma_modifier", label: "Харизма" },
   { key: "luck_modifier", label: "Удача" },
+  { key: "stealth_modifier", label: "Скрытность" },
   { key: "damage_modifier", label: "Урон" },
   { key: "dodge_modifier", label: "Уклонение" },
   { key: "critical_hit_chance_modifier", label: "Шанс крит. удара", fractional: true },
