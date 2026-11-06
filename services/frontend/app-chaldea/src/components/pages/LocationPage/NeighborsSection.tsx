@@ -48,12 +48,15 @@ const NeighborsSection = ({ neighbors, enabledIds = null }: NeighborsSectionProp
       ) : (
         <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 max-h-[300px] lg:max-h-none overflow-y-auto gold-scrollbar">
           {neighbors.map((neighbor) => {
-            const blocked = enabledIds !== null && !enabledIds.has(neighbor.id);
+            // FEAT-207: closed faction territory the character may not enter (the server re-checks the move).
+            const closed = neighbor.access_allowed === false;
+            const blocked = (enabledIds !== null && !enabledIds.has(neighbor.id)) || closed;
             return (
             <button
               key={neighbor.id}
               type="button"
               disabled={blocked}
+              title={closed && neighbor.access_label ? neighbor.access_label : undefined}
               onClick={() => navigate(`/location/${neighbor.id}`)}
               className="group flex items-center gap-3 p-2 shrink-0 rounded-card text-left bg-white/[0.03] border border-white/[0.06] hover:border-gold-dark/40 hover:bg-white/[0.06] transition-all duration-200 ease-site disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             >
@@ -91,6 +94,19 @@ const NeighborsSection = ({ neighbors, enabledIds = null }: NeighborsSectionProp
                     {neighbor.energy_cost}
                   </span>
                 </span>
+                {neighbor.access_label && (
+                  <span
+                    className={`flex items-center gap-1 text-[11px] leading-tight min-w-0 ${
+                      closed ? 'text-site-red' : 'text-gold-light/80'
+                    }`}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2} aria-hidden>
+                      <rect x="5" y="11" width="14" height="10" rx="2" />
+                      <path strokeLinecap="round" d="M8 11V7a4 4 0 018 0v4" />
+                    </svg>
+                    <span className="truncate">{neighbor.access_label}</span>
+                  </span>
+                )}
               </span>
 
               {/* Chevron */}

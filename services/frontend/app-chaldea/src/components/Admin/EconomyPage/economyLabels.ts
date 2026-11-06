@@ -46,6 +46,11 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   caravan_delivery: 'Караван: доставка',
   caravan_cancel: 'Караван: возврат',
   guild_order: 'Заказ гильдии',
+  faction_tick: 'Жизнь фракции',
+  faction_donation: 'Пожертвование фракции',
+  faction_qm_sale: 'Покупка у интенданта',
+  faction_qm_refund: 'Возврат за покупку у интенданта',
+  faction_payout: 'Выплата фракции',
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
@@ -63,6 +68,7 @@ export const ACCOUNT_KIND_LABELS: Record<EconAccountKind, string> = {
   bank: 'Банк региона',
   bank_deposits: 'Вклады игроков',
   caravan_escrow: 'Караваны в пути',
+  faction_treasury: 'Казна фракции',
 };
 
 export const accountKindLabel = (kind: string | null | undefined): string =>
@@ -102,6 +108,7 @@ export const EMISSION_KINDS: EconAccountKind[] = [
   'population_purse',
   'country_treasury',
   'world_treasury',
+  'faction_treasury',
 ];
 
 /** Account kinds an admin adjustment may target (everything except source and auction accounts). */
@@ -111,6 +118,7 @@ export const ADJUST_KINDS: EconAccountKind[] = [
   'population_purse',
   'country_treasury',
   'world_treasury',
+  'faction_treasury',
 ];
 
 /** Every account kind, for «all kinds» pickers (journal filter). */
@@ -127,6 +135,7 @@ export const ALL_ACCOUNT_KINDS: EconAccountKind[] = [
   'bank',
   'bank_deposits',
   'caravan_escrow',
+  'faction_treasury',
 ];
 
 /** Op type the journal hides by default: one per simulated region every 6 hours. */

@@ -18,7 +18,9 @@ export type EconAccountKind =
   | 'bank'
   | 'bank_deposits'
   /** FEAT-192: singleton «Караваны в пути» — money of caravans on the road (never negative) */
-  | 'caravan_escrow';
+  | 'caravan_escrow'
+  /** FEAT-206: a faction's treasury (ref = faction id, never negative) */
+  | 'faction_treasury';
 
 export type EconLegType = 'main' | 'refund' | 'commission' | 'tax' | 'trade_tax' | 'interest';
 
@@ -39,6 +41,8 @@ export interface EconTotals {
   bank_deposits?: number;
   /** FEAT-192: balance of «Караваны в пути» (already counted in `held`) */
   caravan_escrow?: number;
+  /** FEAT-206: all faction treasuries (already counted in `held`) */
+  factions?: number;
 }
 
 export interface EconDriftingCharacter {

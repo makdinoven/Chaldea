@@ -46,6 +46,13 @@ shop_row_prices, merchant_buys_groups, shop_row_bid) at the end of this module.
 FEAT-197 (region reputation) appends PRICING_CASES for reputation_ask / reputation_discount_split /
 reputation_bid and the property grids REPUTATION_ASK_GRID / REPUTATION_BID_GRID (see there).
 
+FEAT-206 (faction economy) appends faction ledger CASES (`faction_treasury` = a faction's treasury,
+ref_id = factions.id, never negative, not a tax source; donation / quartermaster sale character ->
+faction, the 6 h `faction_tick` purse -> faction -> purse / characters, payouts faction -> characters;
+all untaxed, no sources) and FACTION_OP_TYPE_NAMES / FACTION_TREASURY_KIND_NAME, which a runner checks
+against econ_core's constants directly. The DDL gains a minimal `factions(id, name)` table (name
+snapshot of a lazily created faction account).
+
 Only econ_core is imported here, so this module is identical in every service.
 """
 
@@ -143,6 +150,10 @@ SQLITE_DDL = [
         metadata TEXT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""",
+    """CREATE TABLE IF NOT EXISTS factions (
+        id INTEGER PRIMARY KEY,
+        name VARCHAR(100) NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS econ_postings (
         id INTEGER PRIMARY KEY,
         operation_id BIGINT NOT NULL REFERENCES econ_operations (id),
@@ -179,6 +190,7 @@ SEED_SQL: List[Tuple[str, Dict[str, object]]] = [
     ("INSERT INTO characters (id, name, currency_balance) VALUES (2, 'Bob', 0)", {}),
     ("INSERT INTO characters (id, name, currency_balance) VALUES (3, 'Carol', 0)", {}),
     ("INSERT INTO characters (id, name, currency_balance) VALUES (4, 'Dave', 0)", {}),
+    ("INSERT INTO factions (id, name) VALUES (1, 'Faction One')", {}),
     ("INSERT INTO econ_settings (id, currency_name, currency_genitive, currency_one, currency_few, currency_many, "
      "currency_short, country_tax_rate) VALUES (1, :name, :genitive, :one, :few, :many, :short, 0.1)",
      {"name": "Марки", "genitive": "марок", "one": "марка", "few": "марки", "many": "марок",
@@ -978,6 +990,81 @@ CASES += [
                Step("law_bail", [Leg(C1, ADJUSTMENT, 5)], error="EconomyError")],
         expected_characters={1: 50},
         expected_operations=1, expected_postings=1,
+    ),
+]
+
+# ---------------------------------------------------------------------------
+# FEAT-206 faction economy: a faction's treasury `faction_treasury` (ref_id = factions.id, never negative,
+# not a tax source); every faction op is untaxed and never touches the money sources
+# ---------------------------------------------------------------------------
+
+# a runner checks == FACTION_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES,
+# COMMENT_REQUIRED_OP_TYPES and the other fixed groups
+FACTION_OP_TYPE_NAMES: Tuple[str, ...] = (
+    "faction_tick", "faction_donation", "faction_qm_sale", "faction_qm_refund", "faction_payout",
+)
+# a runner checks: in ACCOUNT_KINDS and REF_KINDS, not in NEGATIVE_ALLOWED_KINDS / TAX_SOURCE_KINDS / SOURCE_KINDS
+FACTION_TREASURY_KIND_NAME = "faction_treasury"
+
+F1 = AccountRef("faction_treasury", 1)
+
+CASES += [
+    # donation character -> faction: no comment, no tax leg, idempotent per request key
+    ContractCase(
+        name="faction_donation_character_to_faction_untaxed_idempotent",
+        steps=[_fund((C1, 500)),
+               Step("faction_donation", [Leg(C1, F1, 120)],
+                    {"idempotency_key": "faction_donation:c1:req-1", "metadata": {"faction_id": 1}}),
+               Step("faction_donation", [Leg(C1, F1, 120)],
+                    {"idempotency_key": "faction_donation:c1:req-1"}, error="DuplicateOperation"),
+               Step("faction_qm_sale", [Leg(C1, F1, 30)], {"idempotency_key": "faction_qm:c1:req-2"})],
+        expected_characters={1: 350},
+        expected_accounts={("faction_treasury", 1): 150},
+        expected_operations=3, expected_postings=3, expected_tax_legs=0,
+    ),
+    # the treasury never goes negative; ref_id 0 is rejected; faction ops never touch the sources
+    ContractCase(
+        name="faction_treasury_never_negative_and_no_sources",
+        steps=[_fund((C1, 40)),
+               Step("faction_donation", [Leg(C1, F1, 40)], {"idempotency_key": "faction_donation:c1:a"}),
+               Step("faction_payout", [Leg(F1, C2, 41)], error="InsufficientFunds"),
+               Step("faction_qm_refund", [Leg(F1, C1, 41)], error="InsufficientFunds"),
+               Step("faction_donation", [Leg(C1, AccountRef("faction_treasury", 0), 1)], error="EconomyError"),
+               Step("faction_tick", [Leg(EMISSION, F1, 5)], {"apply_tax": False}, error="EconomyError"),
+               Step("faction_payout", [Leg(F1, ADJUSTMENT, 5)], error="EconomyError"),
+               Step("faction_payout", [Leg(F1, C2, 40)], {"idempotency_key": "faction_payout:f1:s1"})],
+        expected_characters={1: 0, 2: 40},
+        expected_accounts={("faction_treasury", 1): 0},
+        expected_operations=3, expected_postings=3, expected_tax_legs=0,
+    ),
+    # admin start capital: admin_emission emission -> faction with a comment
+    ContractCase(
+        name="faction_fill_by_admin_emission_with_comment",
+        steps=[Step("admin_emission", [Leg(EMISSION, F1, 900)], {"apply_tax": False}, error="EconomyError"),
+               Step("admin_emission", [Leg(EMISSION, F1, 900)],
+                    {"comment": "faction fill", "apply_tax": False, "idempotency_key": "faction_fill:f1:p0"})],
+        expected_accounts={("faction_treasury", 1): 900, ("emission", 0): -900},
+        expected_operations=1, expected_postings=1, expected_tax_legs=0,
+    ),
+    # one 6 h step: purse -> faction (dues), region -> faction (profile), faction -> purse (wages, restock),
+    # faction -> characters (debt payouts); untaxed even with the default apply_tax, the world sum stays 0
+    ContractCase(
+        name="faction_tick_dues_wages_restock_debts_net_correctly",
+        steps=[_fund((P10, 1000), (R10, 200), (F1, 50)),
+               Step("faction_tick", [Leg(P10, F1, 300), Leg(R10, F1, 20), Leg(F1, P10, 250),
+                                     Leg(F1, P10, 40), Leg(F1, C1, 50), Leg(F1, C2, 25)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "faction_tick:7:f1",
+                     "metadata": {"run_id": 7}}),
+               Step("faction_tick", [Leg(P10, F1, 300)],
+                    {"region_id": 10, "apply_tax": False, "idempotency_key": "faction_tick:7:f1"},
+                    error="DuplicateOperation"),
+               Step("faction_tick", [Leg(P10, F1, 1), Leg(F1, C1, 7)],
+                    {"region_id": 10, "apply_tax": False}, error="InsufficientFunds")],
+        expected_characters={1: 50, 2: 25},
+        # F1 = 50 + 300 + 20 - 250 - 40 - 50 - 25 = 5; P10 = 1000 - 300 + 250 + 40 = 990
+        expected_accounts={("population_purse", 10): 990, ("region_treasury", 10): 180,
+                           ("faction_treasury", 1): 5},
+        expected_operations=2, expected_postings=9, expected_tax_legs=0,
     ),
 ]
 

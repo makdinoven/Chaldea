@@ -1571,6 +1571,487 @@ class RenownLog(Base):
     )
 
 
+# --------------------------------------------------------------------------- FEAT-205 factions (migration 045)
+# Rules: faction_core (pure); flows: faction_crud / faction_admin_crud; rewards outbox: faction_rewards.
+
+class Faction(Base):
+    __tablename__ = "factions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    emblem_url = Column(String(512), nullable=True)
+    hq_location_id = Column(BigInteger, nullable=True)          # Locations.id (no FK, cross-service)
+    leader_npc_ids = Column(JSON, nullable=True)                # [characters.id of NPCs]
+    member_limit = Column(Integer, nullable=True)               # NULL = unlimited
+    is_invite_only = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_secret = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=False, server_default="0")
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    # FEAT-207 (migration 047): per-faction kill-point day cap (NULL = faction_settings.kill_points_daily_cap)
+    kill_points_daily_cap = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_factions_name"),
+    )
+
+
+class FactionRank(Base):
+    __tablename__ = "faction_ranks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_rank_faction", ondelete="CASCADE"),
+                        nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, nullable=False)
+    min_points = Column(Integer, nullable=False, default=0, server_default="0")
+    min_level = Column(Integer, nullable=False, default=0, server_default="0")
+    required_quest_id = Column(BigInteger, nullable=True)       # quests.id (non-repeatable)
+    reward_xp = Column(Integer, nullable=False, default=0, server_default="0")
+    reward_title_id = Column(Integer, nullable=True)            # titles.id_title (validated)
+    reward_items = Column(JSON, nullable=True)                  # [{item_id, quantity}]
+    reward_house_location_id = Column(BigInteger, nullable=True)
+    reward_plot_location_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    # FEAT-206 (migration 046): marks paid through the debt queue on grant; quartermaster discount of this rank
+    reward_marks = Column(Integer, nullable=False, default=0, server_default="0")
+    qm_discount_pct = Column(Integer, nullable=False, default=0, server_default="0")
+    # FEAT-207 (migration 047): battle-time passive of this rank (cumulative up the ladder)
+    passive_name = Column(String(100), nullable=True)
+    passive_description = Column(String(500), nullable=True)
+    passive_modifiers = Column(JSON, nullable=True)             # {key: int}, keys in faction_core.FACTION_PASSIVE_KEYS
+
+    __table_args__ = (
+        Index("ix_faction_ranks_order", "faction_id", "sort_order"),
+    )
+
+
+class FactionCondition(Base):
+    __tablename__ = "faction_conditions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_cond_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    cond_type = Column(String(30), nullable=False)
+    params = Column(JSON, nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+
+
+class FactionHostility(Base):
+    __tablename__ = "faction_hostilities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    faction_a_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_host_a", ondelete="CASCADE"),
+                          nullable=False)                       # always faction_a_id < faction_b_id
+    faction_b_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_host_b", ondelete="CASCADE"),
+                          nullable=False)
+    irreconcilable = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("faction_a_id", "faction_b_id", name="uq_faction_hostility"),
+        Index("ix_faction_host_b", "faction_b_id"),
+    )
+
+
+class FactionMember(Base):
+    """One row per (character, faction); survives leave / expel (status), so rejoin reuses it."""
+
+    __tablename__ = "faction_members"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_member_character", ondelete="CASCADE"),
+                          nullable=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_member_faction", ondelete="CASCADE"),
+                        nullable=False)
+    status = Column(String(10), nullable=False)                 # active | left | expelled
+    points = Column(Integer, nullable=False, default=0, server_default="0")
+    rank_id = Column(Integer, ForeignKey("faction_ranks.id", name="fk_faction_member_rank", ondelete="SET NULL"),
+                     nullable=True, index=True)
+    joined_at = Column(DateTime, nullable=False)
+    left_at = Column(DateTime, nullable=True)
+    rejoin_after = Column(DateTime, nullable=True)
+    warning_at = Column(DateTime, nullable=True)
+    warning_reasons = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "faction_id", name="uq_faction_member"),
+        Index("ix_faction_members_status", "faction_id", "status"),
+        Index("ix_faction_members_warning", "status", "warning_at"),
+    )
+
+
+class FactionApplication(Base):
+    __tablename__ = "faction_applications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_app_character", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_app_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    status = Column(String(10), nullable=False)                 # pending | approved | rejected | cancelled
+    message = Column(String(500), nullable=True)
+    pending_key = Column(String(40), nullable=True)             # "{character_id}:{faction_id}" while pending
+    reject_reason = Column(String(500), nullable=True)
+    decided_by_user_id = Column(Integer, nullable=True)
+    decided_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("pending_key", name="uq_faction_app_pending"),
+        Index("ix_faction_app_status", "status", "created_at"),
+    )
+
+
+class FactionRankGrant(Base):
+    """Rank reward ledger: once per (character, rank), forever (leave / rejoin never re-grants)."""
+
+    __tablename__ = "faction_rank_grants"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_grant_character", ondelete="CASCADE"),
+                          nullable=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_grant_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    rank_id = Column(Integer, ForeignKey("faction_ranks.id", name="fk_faction_grant_rank", ondelete="RESTRICT"),
+                     nullable=False, index=True)
+    granted_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "rank_id", name="uq_faction_grant"),
+    )
+
+
+class FactionRewardDelivery(Base):
+    """Outbox: one row per reward component of a grant (xp | title | item | voucher)."""
+
+    __tablename__ = "faction_reward_deliveries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    grant_id = Column(Integer, ForeignKey("faction_rank_grants.id", name="fk_faction_delivery_grant",
+                                          ondelete="CASCADE"), nullable=False, index=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    kind = Column(String(15), nullable=False)
+    payload = Column(JSON, nullable=False)
+    status = Column(String(10), nullable=False)                 # pending | sending | done | failed
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime, nullable=False)
+    last_error = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_faction_delivery_due", "status", "next_attempt_at"),
+    )
+
+
+class FactionLog(Base):
+    """Player journal + audit; ``event_key`` + UNIQUE(event_key, faction_id) = idempotency."""
+
+    __tablename__ = "faction_log"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_log_character", ondelete="CASCADE"),
+                          nullable=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_log_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    event_type = Column(String(30), nullable=False)
+    points_delta = Column(Integer, nullable=True)
+    points_after = Column(Integer, nullable=True)
+    rank_id = Column(Integer, nullable=True)
+    event_key = Column(String(120), nullable=True)
+    reason = Column(String(500), nullable=True)
+    actor_user_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("event_key", "faction_id", name="uq_faction_log_key"),
+        Index("ix_faction_log_char", "character_id", "id"),
+    )
+
+
+class FactionSettings(Base):
+    """Single row id=1 (seeded by migration 045)."""
+
+    __tablename__ = "faction_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    warning_days = Column(Integer, nullable=False, default=3, server_default="3")
+    rejoin_cooldown_days = Column(Integer, nullable=False, default=7, server_default="7")
+    leave_burn_pct = Column(Integer, nullable=False, default=50, server_default="50")
+    hostile_penalty_pct = Column(Integer, nullable=False, default=50, server_default="50")
+    reapply_cooldown_hours = Column(Integer, nullable=False, default=24, server_default="24")
+    pass_last_run_at = Column(DateTime, nullable=True)
+    # FEAT-206 (migration 046): donations, the faction tick step, quartermaster restock
+    donation_marks_per_point = Column(Integer, nullable=False, default=10, server_default="10")
+    donation_points_daily_cap = Column(Integer, nullable=False, default=50, server_default="50")
+    econ_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    econ_purse_share_pct = Column(Integer, nullable=False, default=2, server_default="2")
+    econ_treasury_share_pct = Column(Integer, nullable=False, default=1, server_default="1")
+    members_leave_pct = Column(Integer, nullable=False, default=5, server_default="5")
+    members_grow_pct = Column(Integer, nullable=False, default=1, server_default="1")
+    qm_take_share_pct = Column(Integer, nullable=False, default=5, server_default="5")
+    # FEAT-207 (migration 047): kill points, outlaw membership checks, donated item sale
+    kill_points_daily_cap = Column(Integer, nullable=False, default=50, server_default="50")
+    pvp_kill_repeat_hours = Column(Integer, nullable=False, default=24, server_default="24")
+    outlaw_check_cooldown_hours = Column(Integer, nullable=False, default=24, server_default="24")
+    econ_item_sale_share_pct = Column(Integer, nullable=False, default=2, server_default="2")
+
+
+# --------------------------------------------------------------------------- FEAT-206 faction economy (migration 046)
+# Rules: faction_econ (pure); flows: faction_econ_crud / faction_qm_crud; tick step: econ_tick._faction_econ_pass.
+
+class FactionEconTemplate(Base):
+    __tablename__ = "faction_econ_templates"
+
+    code = Column(String(32), primary_key=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    params = Column(JSON, nullable=False)                       # whitelisted keys (faction_econ.PARAM_KEYS)
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False)
+
+
+class FactionEconomy(Base):
+    """1:1 with ``factions`` (ensured lazily by faction_econ_crud.ensure_economy_row)."""
+
+    __tablename__ = "faction_economy"
+
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_econ_faction", ondelete="CASCADE"),
+                        primary_key=True, autoincrement=False)
+    template_code = Column(String(32), ForeignKey("faction_econ_templates.code", name="fk_faction_econ_template",
+                                                  ondelete="RESTRICT"), nullable=True, index=True)
+    overrides = Column(JSON, nullable=True)
+    econ_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    members_count = Column(Integer, nullable=False, default=0, server_default="0")
+    members_carry = Column(Numeric(10, 4), nullable=False, default=0, server_default="0")
+    members_min = Column(Integer, nullable=False, default=10, server_default="10")
+    members_max = Column(Integer, nullable=False, default=5000, server_default="5000")
+    payout_seq = Column(Integer, nullable=False, default=0, server_default="0")
+    last_run_id = Column(BigInteger, nullable=True)
+    last_tick_at = Column(DateTime, nullable=True)
+    last_dues = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_profile = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_wages_due = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_wages_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_restock = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_debts_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_members_delta = Column(Integer, nullable=False, default=0, server_default="0")
+    last_wealth = Column(Integer, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False)
+    last_item_sales = Column(BigInteger, nullable=False, default=0, server_default="0")    # FEAT-207
+
+
+class FactionEconHistory(Base):
+    __tablename__ = "faction_econ_history"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    run_id = Column(BigInteger, nullable=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_econ_hist_faction", ondelete="CASCADE"),
+                        nullable=False)
+    balance_before = Column(BigInteger, nullable=False, default=0, server_default="0")
+    balance_after = Column(BigInteger, nullable=False, default=0, server_default="0")
+    dues = Column(BigInteger, nullable=False, default=0, server_default="0")
+    profile = Column(BigInteger, nullable=False, default=0, server_default="0")
+    wages_due = Column(BigInteger, nullable=False, default=0, server_default="0")
+    wages_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    restock_spent = Column(BigInteger, nullable=False, default=0, server_default="0")
+    restock_items = Column(Integer, nullable=False, default=0, server_default="0")
+    debts_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    members_before = Column(Integer, nullable=False, default=0, server_default="0")
+    members_after = Column(Integer, nullable=False, default=0, server_default="0")
+    wealth = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    item_sales = Column(BigInteger, nullable=False, default=0, server_default="0")         # FEAT-207
+    items_sold = Column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "faction_id", name="uq_faction_econ_hist_run"),
+        Index("ix_faction_econ_hist_faction", "faction_id", "id"),
+    )
+
+
+class FactionDebt(Base):
+    """Payout queue (rank marks, deferred refunds); survives leave / expel / hide; paid FIFO, partially."""
+
+    __tablename__ = "faction_debts"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_debt_character", ondelete="CASCADE"),
+                          nullable=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_debt_faction", ondelete="CASCADE"),
+                        nullable=False)
+    source = Column(String(10), nullable=False)                 # rank | refund
+    source_key = Column(String(64), nullable=False)             # rank:g<grant_id> | refund:p<purchase_id>
+    amount = Column(BigInteger, nullable=False)
+    paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    status = Column(String(8), nullable=False)                  # open | paid
+    unpaid_notified = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    paid_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("source_key", name="uq_faction_debt_source"),
+        Index("ix_faction_debts_queue", "faction_id", "status", "id"),
+        Index("ix_faction_debts_character", "character_id", "status"),
+    )
+
+
+class FactionDonationDay(Base):
+    __tablename__ = "faction_donation_days"
+
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_don_character", ondelete="CASCADE"),
+                          primary_key=True, autoincrement=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_don_faction", ondelete="CASCADE"),
+                        primary_key=True, autoincrement=False, index=True)
+    day = Column(Date, primary_key=True)
+    marks = Column(BigInteger, nullable=False, default=0, server_default="0")
+    points = Column(Integer, nullable=False, default=0, server_default="0")
+    kill_points = Column(Integer, nullable=False, default=0, server_default="0")          # FEAT-207 own day cap
+
+
+class FactionQuartermaster(Base):
+    __tablename__ = "faction_quartermasters"
+
+    npc_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_qm_npc", ondelete="CASCADE"),
+                    primary_key=True, autoincrement=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_qm_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class FactionQmItem(Base):
+    __tablename__ = "faction_qm_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_qm_item_faction", ondelete="CASCADE"),
+                        nullable=False)
+    item_id = Column(Integer, nullable=False)                   # items.id (validated, no FK)
+    price = Column(Integer, nullable=False)
+    min_rank_id = Column(Integer, ForeignKey("faction_ranks.id", name="fk_faction_qm_item_rank", ondelete="RESTRICT"),
+                         nullable=True, index=True)
+    stock = Column(Integer, nullable=False, default=0, server_default="0")
+    restock_target = Column(Integer, nullable=False, default=0, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("faction_id", "item_id", name="uq_faction_qm_item"),
+        Index("ix_faction_qm_items_order", "faction_id", "sort_order"),
+    )
+
+
+class FactionQmPurchase(Base):
+    """Purchase journal + item delivery outbox (pending | sending | done | failed | refunded)."""
+
+    __tablename__ = "faction_qm_purchases"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_qmp_character", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_qmp_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    qm_item_id = Column(Integer, ForeignKey("faction_qm_items.id", name="fk_faction_qmp_item", ondelete="SET NULL"),
+                        nullable=True, index=True)
+    npc_id = Column(Integer, nullable=True)
+    item_id = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    price_total = Column(BigInteger, nullable=False)
+    op_key = Column(String(128), nullable=False)
+    status = Column(String(10), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime, nullable=False)
+    last_error = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("op_key", name="uq_faction_qm_purchase_key"),
+        Index("ix_faction_qm_purchases_due", "status", "next_attempt_at"),
+    )
+
+
+# --------------------------------------------------------------------------- FEAT-207 territory / enemies (migration 047)
+# Rules: faction_core (pure); flows: faction_territory / faction_kills / faction_items.
+
+class FactionAccessRule(Base):
+    """A closed location / dungeon: only active members (optionally from a rank up) may enter."""
+
+    __tablename__ = "faction_access_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(10), nullable=False)                   # location | dungeon
+    target_id = Column(BigInteger, nullable=False)              # Locations.id | dungeons.id (validated, no FK)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_access_faction", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    min_rank_id = Column(Integer, ForeignKey("faction_ranks.id", name="fk_faction_access_rank", ondelete="RESTRICT"),
+                         nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("kind", "target_id", name="uq_faction_access_target"),
+    )
+
+
+class FactionEnemy(Base):
+    __tablename__ = "faction_enemies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_enemy_faction", ondelete="CASCADE"),
+                        nullable=False)
+    kind = Column(String(10), nullable=False)                   # mob | npc | hostile
+    ref_id = Column(BigInteger, nullable=False, default=0, server_default="0")
+    points = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("faction_id", "kind", "ref_id", name="uq_faction_enemy"),
+    )
+
+
+class FactionPvpKill(Base):
+    """24 h per-opponent rule for PvP kill points."""
+
+    __tablename__ = "faction_pvp_kills"
+
+    character_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_pvp_character", ondelete="CASCADE"),
+                          primary_key=True, autoincrement=False)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_pvp_faction", ondelete="CASCADE"),
+                        primary_key=True, autoincrement=False, index=True)
+    victim_id = Column(Integer, ForeignKey("characters.id", name="fk_faction_pvp_victim", ondelete="CASCADE"),
+                       primary_key=True, autoincrement=False, index=True)
+    last_at = Column(DateTime, nullable=False)
+
+
+class FactionOutlawRegion(Base):
+    __tablename__ = "faction_outlaw_regions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_outlaw_faction", ondelete="CASCADE"),
+                        nullable=False)
+    region_id = Column(BigInteger, nullable=False, index=True)  # Regions.id (validated, no FK)
+    level_code = Column(String(16), nullable=False)             # law level code
+
+    __table_args__ = (
+        UniqueConstraint("faction_id", "region_id", name="uq_faction_outlaw_region"),
+    )
+
+
+class FactionItemStock(Base):
+    """Donated items waiting for the tick sale on the HQ region market."""
+
+    __tablename__ = "faction_item_stock"
+
+    faction_id = Column(Integer, ForeignKey("factions.id", name="fk_faction_item_stock_faction", ondelete="CASCADE"),
+                        primary_key=True, autoincrement=False)
+    item_id = Column(Integer, primary_key=True, autoincrement=False)     # items.id (no FK)
+    quantity = Column(Integer, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime, nullable=False)
+
+
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
 # ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
 # change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance

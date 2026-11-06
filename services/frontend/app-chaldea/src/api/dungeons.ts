@@ -347,6 +347,10 @@ export interface DungeonAtLocation {
   /** Another group is inside right now — entry is closed for everyone else. */
   is_occupied: boolean;
   image_url: string | null;
+  /** FEAT-207: faction territory mark («Закрыто: …» / «Территория фракции …»); null — open. */
+  access_label?: string | null;
+  /** FEAT-207: false — this character may not enter; null — not checked for this viewer. */
+  access_allowed?: boolean | null;
 }
 
 export interface SessionMember {
@@ -602,8 +606,12 @@ export const itemLabel = (item: { item_id: number; item_name?: string | null }):
 
 // --- Player Gameplay API calls ---
 
-export const fetchDungeonsAtLocation = async (locationId: number): Promise<DungeonAtLocation[]> => {
-  const { data } = await axios.get<DungeonAtLocation[]>(`/dungeons/at-location/${locationId}`);
+export const fetchDungeonsAtLocation = async (
+  locationId: number,
+  characterId?: number | null,
+): Promise<DungeonAtLocation[]> => {
+  const params = characterId ? { character_id: characterId } : undefined;
+  const { data } = await axios.get<DungeonAtLocation[]>(`/dungeons/at-location/${locationId}`, { params });
   return data;
 };
 

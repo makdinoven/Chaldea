@@ -375,25 +375,32 @@ async def admin_clear_dungeon_cooldown(
 @app.get("/dungeons/at-location/{location_id}", response_model=List[DungeonAtLocationResponse])
 async def get_dungeons_at_location(
     location_id: int,
+    character_id: Optional[int] = Query(None, ge=1),
     db: AsyncSession = Depends(get_db),
     user: UserRead = Depends(get_current_user_via_http),
 ):
-    """Active dungeons at a location with cooldown / occupancy info."""
+    """Active dungeons at a location with cooldown / occupancy info. FEAT-207: closed faction dungeons get
+    ``access_label`` / ``access_allowed`` (viewer-aware only when character-service confirms the character is the
+    user's own; failure -> no marks)."""
     dungeons = (await db.execute(
         select(Dungeon)
         .where(Dungeon.location_id == location_id, Dungeon.is_active == True)  # noqa: E712
         .order_by(Dungeon.recommended_level.asc(), Dungeon.id.asc())
     )).scalars().all()
+    marks = await http_clients.faction_access_labels([d.id for d in dungeons], character_id, user.id) \
+        if dungeons else {}
     response = []
     for d in dungeons:
         is_on_cooldown, remaining = await gameplay.check_cooldown(db, d.id)
         occupied = await gameplay.get_occupying_session(db, d.id) is not None
+        mark = marks.get(int(d.id)) or {}
         response.append(DungeonAtLocationResponse(
             id=d.id, name=d.name, description=d.description, lore_text=d.lore_text,
             stability_type=d.stability_type, danger_level=d.danger_level,
             recommended_level=d.recommended_level, recommended_party_size=d.recommended_party_size,
             is_on_cooldown=is_on_cooldown, cooldown_remaining_seconds=remaining,
             is_occupied=occupied, image_url=d.image_url,
+            access_label=mark.get("access_label"), access_allowed=mark.get("access_allowed"),
         ))
     return response
 

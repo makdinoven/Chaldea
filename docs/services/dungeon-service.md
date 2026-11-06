@@ -416,3 +416,19 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 выше; сила 250 → 162 против сложности 170 — провал). Счётчики `cumulative_stats` сравниваются
 как есть. Используется в `perform_stat_check` (ловушки, порталы, замки, тайники) и `_challenger`
 (мини-игры получают эффективное значение; `challenges.py` не менялся).
+
+## Фракционные подземелья (FEAT-207, без миграции)
+
+Правило «только для фракции X (от звания N)» хранится в character-service (`faction_access_rules`, kind `dungeon`);
+админ ставит его в редакторе данжа через `PUT /characters/admin/factions/access/dungeon/{id}`.
+
+- **Вход** (`gameplay.start_run`, соло и отряд): после сборки группы (лидер + участники, прошедшие прочие проверки —
+  правило пропуска для них не менялось) — `http_clients.check_faction_access` →
+  `POST /characters/internal/factions/access/check`. Хоть один не проходит → **403 на всю группу** (текст строит
+  character-service: «Подземелье только для членов фракции «X» — не проходят: Имя1, Имя2»; для тайной фракции —
+  «Подземелье закрыто — войти могут не все участники отряда»). character-service недоступен → **503** «Не удалось
+  проверить доступ к подземелью — попробуйте позже» (fail closed). Идущий забег при потере членства не прерывается.
+- **Список** — `GET /dungeons/at-location/{location_id}?character_id=`: `access_label` / `access_allowed`
+  (`DungeonAtLocationResponse`, необязательные) из `POST /characters/internal/factions/access/labels`; с учётом
+  зрителя — только если character-service подтвердил, что персонаж принадлежит пользователю. Ошибка → без отметок.
+- Тестовый harness (`tests/dungeon_harness.py`) подменяет обе функции (по умолчанию «правила нет»).

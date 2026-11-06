@@ -18,6 +18,10 @@ export interface NeighborLocation {
   energy_cost: number;
   image_url: string | null;
   recommended_level: number;
+  /** FEAT-207: faction territory mark («Закрыто: …», «Территория фракции …»); null — open. */
+  access_label?: string | null;
+  /** FEAT-207: false — the viewer's character may not enter; null — unknown (not his character / public). */
+  access_allowed?: boolean | null;
 }
 
 export interface Post {

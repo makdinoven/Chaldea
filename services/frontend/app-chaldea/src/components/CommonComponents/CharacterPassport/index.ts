@@ -34,6 +34,7 @@ export type {
   PassportAudience,
   PassportData,
   PassportExtras,
+  PassportFaction,
   PassportKit,
   PassportModerationRequest,
   PassportOrigin,

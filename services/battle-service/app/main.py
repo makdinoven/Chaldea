@@ -60,6 +60,7 @@ from tasks import save_log
 from skills_client import character_has_skill, get_resolved_skill, get_item, character_skills, get_character_subclass
 from passives import passive_damage_bonus, PASSIVE_SABER
 import passives
+import faction_passives
 import httpx
 import logging
 import activity_lock
@@ -389,6 +390,12 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         subclass = None
         passive = None
         is_npc = False
+
+    # FEAT-207: faction rank passives folded into the snapshot attributes (players only; soft-fail inside)
+    if not is_npc:
+        faction_mods = await faction_passives.fetch_faction_passives(char_id)
+        if faction_mods:
+            faction_passives.apply(attr, faction_mods)
 
     return {
         "participant_id": participant_id,
@@ -1806,6 +1813,61 @@ async def _notify_law_battle_end(db, battle_id: int, winner_team, aborted: bool 
     asyncio.create_task(_post_law_callback(payload))
 
 
+async def _post_faction_callback(payload: dict) -> None:
+    """FEAT-207: fire-and-forget POST of a finished battle to character-service (kill points), 3 retries. A miss
+    only loses the points of that battle (the endpoint is idempotent per battle, so retries are safe)."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/factions/battle-result"
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=payload, headers=_internal_token_headers())
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Faction callback for battle %s answered %s: %s",
+                        payload.get("battle_id"), resp.status_code, resp.text[:200],
+                    )
+                return
+        except httpx.RequestError as e:
+            logger.warning("Faction callback for battle %s failed: %s", payload.get("battle_id"), e)
+        await asyncio.sleep(1 + attempt * 2)
+    logger.error("Faction callback for battle %s gave up after retries", payload.get("battle_id"))
+
+
+async def _faction_battle_payload(db, battle_id: int, battle_state: dict, winner_team) -> dict:
+    """{battle_id, battle_type, winner_team, participants: [{character_id, team, alive, mob_template_id}]}."""
+    row = (await db.execute(text("SELECT battle_type FROM battles WHERE id = :bid"), {"bid": battle_id})).fetchone()
+    battle_type = row[0] if row else "pve"
+    battle_type = getattr(battle_type, "value", battle_type)
+    parts = []
+    for pdata in (battle_state.get("participants") or {}).values():
+        parts.append({"character_id": int(pdata["character_id"]), "team": int(pdata["team"]),
+                      "alive": (pdata.get("hp") or 0) > 0, "mob_template_id": None})
+    losers = sorted({p["character_id"] for p in parts if p["team"] != winner_team})
+    if losers:
+        placeholders = ", ".join(f":c{i}" for i in range(len(losers)))
+        rows = (await db.execute(
+            text(f"SELECT character_id, mob_template_id FROM active_mobs WHERE character_id IN ({placeholders})"),
+            {f"c{i}": cid for i, cid in enumerate(losers)},
+        )).fetchall()
+        templates = {int(r[0]): int(r[1]) for r in rows if r[1] is not None}
+        for p in parts:
+            if p["team"] != winner_team:
+                p["mob_template_id"] = templates.get(p["character_id"])
+    return {"battle_id": int(battle_id), "battle_type": str(battle_type), "winner_team": int(winner_team),
+            "participants": parts[:50]}
+
+
+async def _notify_faction_battle_end(db, battle_id: int, battle_state: dict, winner_team) -> None:
+    """FEAT-207: report every finished battle with a winner; never breaks the battle ending."""
+    try:
+        payload = await _faction_battle_payload(db, battle_id, battle_state, winner_team)
+    except Exception as e:
+        logger.error("Faction callback payload of battle %s failed: %s", battle_id, e)
+        return
+    asyncio.create_task(_post_faction_callback(payload))
+
+
 async def _get_dungeon_session_id(db, battle_id: int):
     row = (await db.execute(
         text("SELECT dungeon_session_id FROM battles WHERE id = :bid"),
@@ -2761,6 +2823,9 @@ async def _finalize_battle(
     # FEAT-198: a guard battle reports its outcome to character-service AFTER the NPC-death loop
     # (the guard KO, reputation and wanted have already been applied through npc-status).
     await _notify_law_battle_end(db_session, battle_id, winner_team)
+    # FEAT-207: faction kill points (fire-and-forget; character-service decides who gets what)
+    if winner_team is not None:
+        await _notify_faction_battle_end(db_session, battle_id, battle_state, winner_team)
 
     # Save battle history to MySQL
     try:

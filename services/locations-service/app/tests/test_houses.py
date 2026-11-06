@@ -63,7 +63,7 @@ TABLES = [models.Region, models.District, models.Location, models.HousePlot, mod
           models.HouseBuildCost, models.HouseBuildCostItem, models.HouseFurniture, models.HouseSettings,
           models.GameTimeConfig, models.HousePlotLayer, models.HousePlotCell, models.HouseLayerUnlock,
           models.HouseCellUnlock, models.HouseGardenBed, models.HouseBathUse, models.HouseBuff,
-          models.HouseShrineUse, models.HouseGuest]
+          models.HouseShrineUse, models.HouseGuest, models.HouseVoucher]
 
 
 @pytest.fixture()

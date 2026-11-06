@@ -19,6 +19,7 @@ import econ_core
 import econ_ledger
 import reputation_core
 import reputation_read
+import faction_read
 import visibility
 import activity_lock
 from database import get_db, async_session
@@ -1325,7 +1326,10 @@ async def get_location_client_details(
             pass
 
     user_id = current_user.id if current_user else None
-    data = await crud.get_client_location_details(session, location_id, user_id=user_id)
+    # FEAT-207: viewer-aware closed marks only for the viewer's own character (else public labels)
+    viewer = await faction_read.owned_character(session, character_id, user_id)
+    data = await crud.get_client_location_details(session, location_id, user_id=user_id,
+                                                  viewer_character_id=viewer)
     if not data:
         raise HTTPException(status_code=404, detail="Location not found")
     return data
@@ -1486,6 +1490,12 @@ async def move_and_post(
                 detail="Целевая локация не является соседней"
             )
         movement_cost = neighbor.energy_cost
+
+    # FEAT-207: closed faction territory — refused BEFORE the post is created (character-service re-checks)
+    if current_location is None or int(current_location) != destination_location_id:
+        faction_refusal = await faction_read.location_access(session, movement.character_id, destination_location_id)
+        if faction_refusal:
+            raise HTTPException(status_code=403, detail=faction_refusal)
 
     # 3. Проверяем, достаточно ли выносливости (stamina)
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1785,6 +1795,12 @@ async def quick_move(
             )
         base_energy_cost = neighbor.energy_cost
         movement_cost = base_energy_cost * 2  # двойная стоимость
+
+    # FEAT-207: closed faction territory — refused BEFORE the auto post is created (character-service re-checks)
+    if current_location is None or int(current_location) != destination_location_id:
+        faction_refusal = await faction_read.location_access(session, body.character_id, destination_location_id)
+        if faction_refusal:
+            raise HTTPException(status_code=403, detail=faction_refusal)
 
     # 4. Проверяем выносливость
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -3572,6 +3588,53 @@ async def _apply_quest_fame(character_id: int, character_quest_id: int, points: 
     return False
 
 
+QUEST_FACTION_ATTEMPTS = 2          # FEAT-205 §3.10: one retry
+
+
+async def _apply_quest_faction(character_id: int, quest_id: int, character_quest_id: int,
+                               rewards: Optional[list]) -> bool:
+    """FEAT-205 §3.10: POST /characters/internal/factions/quest-completed for a completed quest.
+
+    Called AFTER the completion commit, when the quest gives faction points or the character is in some
+    faction (quest-condition ranks are re-checked even without points). character-service is idempotent by
+    `faction:quest:cq:{cq_id}`, so the retry is safe. Network errors / 5xx are retried once; a failure is
+    logged and never fails the completion. True when character-service answered 200.
+    """
+    payload = {
+        "character_id": int(character_id),
+        "quest_id": int(quest_id),
+        "cq_id": int(character_quest_id),
+        "rewards": [
+            {"faction_id": int(r["faction_id"]), "points": int(r["points"])}
+            for r in rewards or [] if isinstance(r, dict) and r.get("faction_id") and r.get("points")
+        ],
+    }
+    for attempt in range(1, QUEST_FACTION_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{settings.CHARACTER_SERVICE_URL}/characters/internal/factions/quest-completed",
+                    json=payload,
+                    headers=_internal_token_headers(),
+                )
+            if resp.status_code == 200:
+                return True
+            if resp.status_code < 500:
+                logger.error("Quest faction call refused for character %s (cq %s): status %s",
+                             character_id, character_quest_id, resp.status_code)
+                return False
+            logger.warning("Quest faction attempt %s failed for cq %s: status %s",
+                           attempt, character_quest_id, resp.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("Quest faction attempt %s failed for cq %s: %s", attempt, character_quest_id, exc)
+        except Exception:  # the quest is already committed — never turn this into a 500
+            logger.exception("Quest faction call failed unexpectedly for cq %s", character_quest_id)
+            return False
+    logger.error("Quest faction points NOT applied for character %s (cq %s) after %s attempts",
+                 character_id, character_quest_id, QUEST_FACTION_ATTEMPTS)
+    return False
+
+
 @router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
 async def complete_quest(
     quest_id: int,
@@ -3693,6 +3756,16 @@ async def complete_quest(
     # FEAT-199: fame for the quest (after the commit, any region; 0 = none, NULL = the default)
     if quest.fame_reward != 0:
         await _apply_quest_fame(body.character_id, cq_id, quest.fame_reward)
+
+    # FEAT-205: faction points + rank re-check (after the commit; never fails the completion)
+    try:
+        faction_call = bool(quest.faction_points_rewards) or await faction_read.in_any_faction(
+            session, body.character_id)
+    except Exception:  # pragma: no cover - in_any_faction already swallows SQL errors
+        logger.exception("Faction membership read failed for cq %s", cq_id)
+        faction_call = True
+    if faction_call:
+        await _apply_quest_faction(body.character_id, quest_id, cq_id, quest.faction_points_rewards)
 
     # Track cumulative stats: quests_completed + gold earned from quest
     quest_increments = {"quests_completed": 1}

@@ -40,6 +40,8 @@ import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 import EconomyPage from "../Admin/EconomyPage/EconomyPage";
 import ReputationPage from "../Admin/ReputationPage/ReputationPage";
+import FactionsAdminPage from "../Admin/FactionsPage/FactionsAdminPage";
+import FactionsPage from "../pages/FactionsPage/FactionsPage";
 import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
@@ -191,6 +193,12 @@ const App = () => {
             <Route path="admin/economy" element={
               <ProtectedRoute requiredPermission="economy:read">
                 <EconomyPage />
+              </ProtectedRoute>
+            } />
+            <Route path="factions" element={<ProtectedRoute><FactionsPage /></ProtectedRoute>} />
+            <Route path="admin/factions" element={
+              <ProtectedRoute requiredPermission="factions:read">
+                <FactionsAdminPage />
               </ProtectedRoute>
             } />
             <Route path="admin/reputation" element={

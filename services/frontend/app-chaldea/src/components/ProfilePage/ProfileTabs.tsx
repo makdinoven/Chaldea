@@ -14,6 +14,7 @@ const TABS: Tab[] = [
   { key: 'logs', label: 'Логи персонажа' },
   { key: 'posts', label: 'История постов' },
   { key: 'reputation', label: 'Репутация' },
+  { key: 'factions', label: 'Фракции' },
   { key: 'titles', label: 'Титулы' },
   { key: 'craft', label: 'Крафт' },
 ];

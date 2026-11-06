@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Home, MapPin, Tag } from 'lucide-react';
-import { myHouses, type MyHouse } from '../../../api/houses';
+import { Home, MapPin, ScrollText, Tag } from 'lucide-react';
+import { PLOT_KIND_LABEL, getHouseVouchers, myHouses, type HouseVoucher, type MyHouse } from '../../../api/houses';
 import { apiErrorMessage } from '../../../api/errors';
+import { useAppSelector } from '../../../redux/store';
 
 const MY_HOUSE_STATUS_LABEL: Record<MyHouse['status'], string> = {
   owner: 'Хозяин',
@@ -14,12 +15,27 @@ const MY_HOUSE_STATUS_LABEL: Record<MyHouse['status'], string> = {
 const MyHousesPage = () => {
   const [houses, setHouses] = useState<MyHouse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // FEAT-205: house / plot rights of the active character (faction rank rewards).
+  const characterId = useAppSelector((state) => state.user.character?.id ?? null);
+  const [vouchers, setVouchers] = useState<HouseVoucher[] | null>(null);
+  const [vouchersError, setVouchersError] = useState<string | null>(null);
 
   useEffect(() => {
     myHouses()
       .then(setHouses)
       .catch((e) => setError(apiErrorMessage(e, 'Не удалось загрузить дома')));
   }, []);
+
+  useEffect(() => {
+    if (!characterId) {
+      setVouchers(null);
+      return;
+    }
+    setVouchersError(null);
+    getHouseVouchers(characterId)
+      .then(setVouchers)
+      .catch((e) => setVouchersError(apiErrorMessage(e, 'Не удалось загрузить права на дом')));
+  }, [characterId]);
 
   return (
     <div className="w-full max-w-container mx-auto flex flex-col gap-5 pb-10">
@@ -35,6 +51,52 @@ const MyHousesPage = () => {
           <Tag size={14} />Продажа домов
         </Link>
       </div>
+
+      {vouchersError && <p className="text-site-red text-sm">{vouchersError}</p>}
+      {vouchers && vouchers.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="gold-text text-lg font-medium uppercase tracking-[0.06em] flex items-center gap-2">
+            <ScrollText size={18} className="text-gold shrink-0" />
+            Права на дом
+          </h2>
+          <p className="text-white/50 text-xs max-w-2xl">
+            Награды фракций: дом или участок в указанной локации бесплатно. Дойдите до неё и выберите любое свободное место
+            нужного типа в разделе «Дома» на странице локации — кнопка «Получить по праву». Налог такой дом платит как обычный.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {vouchers.map((v) => (
+              <div
+                key={v.id}
+                className={`rounded-card border p-3 flex flex-col gap-1 ${
+                  v.status === 'unclaimed' ? 'border-gold/30 bg-gold/[0.04]' : 'border-white/[0.07] bg-white/[0.02] opacity-70'
+                }`}
+              >
+                <p className="text-white text-sm font-medium">{PLOT_KIND_LABEL[v.kind] ?? v.kind}</p>
+                <p className="text-white/60 text-xs flex items-center gap-1 min-w-0">
+                  <MapPin size={12} className="shrink-0" />
+                  <Link to={`/location/${v.location.id}`} className="site-link truncate">
+                    {v.location.name ?? `Локация #${v.location.id}`}
+                  </Link>
+                </p>
+                {v.source_text && <p className="text-white/45 text-xs break-words">{v.source_text}</p>}
+                {v.status === 'claimed' ? (
+                  <p className="text-white/50 text-xs">
+                    Использовано
+                    {v.claimed_house_id ? (
+                      <>
+                        {' — '}
+                        <Link to={`/houses/${v.claimed_house_id}`} className="site-link">открыть дом</Link>
+                      </>
+                    ) : null}
+                  </p>
+                ) : (
+                  <p className="text-gold-light text-xs">Можно получить</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {error && <p className="text-site-red text-sm">{error}</p>}
       {!houses && !error && <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />}

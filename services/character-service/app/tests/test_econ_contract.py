@@ -341,3 +341,25 @@ def test_law_op_types():
     for group in (econ_core.BANK_OP_TYPES, econ_core.MINT_OP_TYPES, econ_core.CARAVAN_OP_TYPES,
                   econ_core.GUILD_OP_TYPES):
         assert not (econ_core.LAW_OP_TYPES & group)
+
+
+# --------------------------------------------------------------------------------------------- FEAT-206 factions
+
+def test_faction_op_types_and_treasury_kind():
+    assert frozenset(cc.FACTION_OP_TYPE_NAMES) == econ_core.FACTION_OP_TYPES
+    assert econ_core.FACTION_OP_TYPES <= econ_core.OP_TYPES
+    assert not (econ_core.FACTION_OP_TYPES & econ_core.SOURCE_OP_TYPES)
+    assert not (econ_core.FACTION_OP_TYPES & econ_core.COMMENT_REQUIRED_OP_TYPES)
+    for group in (econ_core.BANK_OP_TYPES, econ_core.MINT_OP_TYPES, econ_core.CARAVAN_OP_TYPES,
+                  econ_core.GUILD_OP_TYPES, econ_core.LAW_OP_TYPES):
+        assert not (econ_core.FACTION_OP_TYPES & group)
+    kind = cc.FACTION_TREASURY_KIND_NAME
+    assert kind == econ_core.KIND_FACTION_TREASURY
+    assert kind in econ_core.ACCOUNT_KINDS
+    assert kind in econ_core.REF_KINDS
+    assert kind not in econ_core.NEGATIVE_ALLOWED_KINDS
+    assert kind not in econ_core.TAX_SOURCE_KINDS
+    assert kind not in econ_core.SOURCE_KINDS
+    assert kind in econ_core.SQL_ACCOUNT_NAME
+    assert econ_core.AccountRef.faction(3) == econ_core.AccountRef(kind, 3)
+    assert not econ_core.AccountRef.faction(3).allow_negative

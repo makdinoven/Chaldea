@@ -7,6 +7,8 @@ export const CRIME_TYPE_LABELS: Record<string, string> = {
   caravan_attack: 'Нападение на караван',
   pvp_attack: 'Нападение на персонажа',
   theft: 'Кража',
+  /** FEAT-207: never carries the faction (crime rows have no faction data). */
+  faction_membership: 'Членство в запрещённой фракции',
 };
 
 export const CRIME_STATUS_LABELS: Record<string, string> = {

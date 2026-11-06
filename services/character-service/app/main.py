@@ -17,6 +17,7 @@ import law_notify
 import patrol_crud
 import shadow_crud
 import renown_crud
+import faction_territory
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -2398,6 +2399,11 @@ def update_location(
     from_location_id = character.current_location_id
     moving = from_location_id is None or str(from_location_id) != str(new_location_id)
     if moving:
+        # FEAT-207: a closed faction territory (players only; NPC patrols never pass here)
+        refusal = faction_territory.location_refusal(db, character, new_location_id)
+        if refusal:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=refusal)
         character.house_room_id = None  # FEAT-180 stage 7: leaving the location leaves any house
     character.current_location_id = new_location_id
     encounter = None
@@ -4754,11 +4760,13 @@ from reputation_api import router as reputation_router  # noqa: E402
 from law_api import router as law_router  # noqa: E402
 from shadow_api import router as shadow_router  # noqa: E402
 from patrol_api import router as patrol_router  # noqa: E402
+from faction_api import router as faction_router  # noqa: E402
 app.include_router(economy_router)
 app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
 app.include_router(law_router)          # FEAT-198; before the main router (static /law/..., /admin/law/... paths)
 app.include_router(shadow_router)       # FEAT-199; before the main router (static /renown/..., /admin/shadow/... paths)
 app.include_router(patrol_router)       # FEAT-204; /admin/npcs/{id}/patrol[/step]
+app.include_router(faction_router)      # FEAT-205; before the main router (static /factions/..., /admin/factions/...)
 app.include_router(router)
 
 

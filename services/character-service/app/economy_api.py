@@ -28,6 +28,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session, sessionmaker
@@ -218,7 +219,22 @@ def post_emission(
     ))
     logger.info("admin emission: user=%s account=%s amount=%s op=%s",
                 current_user.id, body.account_id, body.amount, result["operation_id"])
+    _settle_faction_account(db, body.account_id)
     return result
+
+
+def _settle_faction_account(db: Session, account_id: int) -> None:
+    """FEAT-206 §3.5: money put into a faction treasury pays its debt queue (post-commit, best effort)."""
+    try:
+        row = db.execute(text("SELECT kind, ref_id FROM econ_accounts WHERE id = :id"), {"id": int(account_id)}).first()
+        db.rollback()
+        if row is not None and row[0] == core.KIND_FACTION_TREASURY:
+            import faction_econ_crud
+            faction_econ_crud.settle_after_commit(
+                [int(row[1])], sessionmaker(autocommit=False, autoflush=False, bind=db.get_bind()))
+    except Exception:
+        db.rollback()
+        logger.exception("faction debt settle after emission into account %s failed", account_id)
 
 
 @router.post("/admin/economy/adjust", response_model=schemas.EconActionResponse)

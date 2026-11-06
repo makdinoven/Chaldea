@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import type { PerkCondition, PerkBonuses } from "../../../types/perks";
 import axios from "axios";
 import { capitalize, getCurrencyForms } from '../../../utils/currency';
+import { ATTRIBUTE_BONUS_OPTIONS, type BonusOption } from '../../../constants/attributeBonusOptions';
 
 /* ── Dictionaries ── */
 
@@ -118,53 +119,6 @@ const BONUS_SECTION_DESCRIPTIONS: Record<string, string> = {
   contextual: "Бонусы в определённых ситуациях (Phase 2)",
   passive: "Автоматические эффекты каждый ход в бою (Phase 2)",
 };
-
-interface BonusOption { value: string; label: string; group?: string }
-
-/** Flat & percent share the same attribute keys */
-const ATTRIBUTE_BONUS_OPTIONS: BonusOption[] = [
-  { value: "health", label: "Здоровье", group: "Ресурсы" },
-  { value: "mana", label: "Мана", group: "Ресурсы" },
-  { value: "energy", label: "Энергия", group: "Ресурсы" },
-  { value: "stamina", label: "Выносливость (ресурс)", group: "Ресурсы" },
-  { value: "strength", label: "Сила", group: "Основные" },
-  { value: "agility", label: "Ловкость", group: "Основные" },
-  { value: "intelligence", label: "Интеллект", group: "Основные" },
-  { value: "endurance", label: "Живучесть", group: "Основные" },
-  { value: "charisma", label: "Харизма", group: "Основные" },
-  { value: "luck", label: "Удача", group: "Основные" },
-  { value: "stealth", label: "Скрытность", group: "Основные" },
-  { value: "damage", label: "Урон", group: "Боевые" },
-  { value: "dodge", label: "Уклонение", group: "Боевые" },
-  { value: "critical_hit_chance", label: "Шанс крита", group: "Боевые" },
-  { value: "critical_damage", label: "Крит. урон", group: "Боевые" },
-  { value: "res_physical", label: "Сопр. физическому", group: "Сопротивления" },
-  { value: "res_catting", label: "Сопр. режущему", group: "Сопротивления" },
-  { value: "res_crushing", label: "Сопр. дробящему", group: "Сопротивления" },
-  { value: "res_piercing", label: "Сопр. колющему", group: "Сопротивления" },
-  { value: "res_magic", label: "Сопр. магии", group: "Сопротивления" },
-  { value: "res_fire", label: "Сопр. огню", group: "Сопротивления" },
-  { value: "res_ice", label: "Сопр. льду", group: "Сопротивления" },
-  { value: "res_watering", label: "Сопр. воде", group: "Сопротивления" },
-  { value: "res_electricity", label: "Сопр. электричеству", group: "Сопротивления" },
-  { value: "res_wind", label: "Сопр. ветру", group: "Сопротивления" },
-  { value: "res_sainting", label: "Сопр. святому", group: "Сопротивления" },
-  { value: "res_damning", label: "Сопр. проклятию", group: "Сопротивления" },
-  { value: "res_effects", label: "Сопр. эффектам", group: "Сопротивления" },
-  { value: "vul_physical", label: "Уязв. физическому", group: "Уязвимости" },
-  { value: "vul_catting", label: "Уязв. режущему", group: "Уязвимости" },
-  { value: "vul_crushing", label: "Уязв. дробящему", group: "Уязвимости" },
-  { value: "vul_piercing", label: "Уязв. колющему", group: "Уязвимости" },
-  { value: "vul_magic", label: "Уязв. магии", group: "Уязвимости" },
-  { value: "vul_fire", label: "Уязв. огню", group: "Уязвимости" },
-  { value: "vul_ice", label: "Уязв. льду", group: "Уязвимости" },
-  { value: "vul_watering", label: "Уязв. воде", group: "Уязвимости" },
-  { value: "vul_electricity", label: "Уязв. электричеству", group: "Уязвимости" },
-  { value: "vul_wind", label: "Уязв. ветру", group: "Уязвимости" },
-  { value: "vul_sainting", label: "Уязв. святому", group: "Уязвимости" },
-  { value: "vul_damning", label: "Уязв. проклятию", group: "Уязвимости" },
-  { value: "vul_effects", label: "Уязв. эффектам", group: "Уязвимости" },
-];
 
 const CONTEXTUAL_BONUS_OPTIONS: BonusOption[] = [
   { value: "damage_vs_pve", label: "+% урона по мобам" },

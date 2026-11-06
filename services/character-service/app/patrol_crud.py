@@ -187,7 +187,10 @@ _SQL_PRESENT = "SELECT c.id FROM characters c WHERE c.is_npc = 0 AND c.current_l
 _SQL_SUSPECTS = (
     " AND (EXISTS (SELECT 1 FROM character_wanted w WHERE w.character_id = c.id AND w.region_id = :r AND w.value > 0)"
     " OR EXISTS (SELECT 1 FROM character_reputation p WHERE p.character_id = c.id AND p.region_id = :r"
-    " AND p.value < 0))")
+    " AND p.value < 0)"
+    # FEAT-207 §3.7: an active member of a faction outlawed in the region (even with zero wanted)
+    " OR EXISTS (SELECT 1 FROM faction_members m JOIN faction_outlaw_regions o ON o.faction_id = m.faction_id"
+    " WHERE m.character_id = c.id AND m.status = 'active' AND o.region_id = :r))")
 
 
 def _sweep_candidates(db: Session, location_id: int) -> List[int]:

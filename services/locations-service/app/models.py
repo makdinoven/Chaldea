@@ -2,7 +2,7 @@
 
 from sqlalchemy import (
     Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP,
-    func, Float, JSON, text, UniqueConstraint, Index
+    func, Float, JSON, text, UniqueConstraint, Index, DateTime
 )
 from sqlalchemy.dialects.mysql import MEDIUMTEXT, TINYINT
 from sqlalchemy.orm import relationship
@@ -510,6 +510,11 @@ class Quest(Base):
     # (NULL = character-service default `shadow_settings.fame_quest_default`; 0 = none)
     min_fame_tier = Column(String(20), nullable=True)
     fame_reward = Column(Integer, nullable=True)
+    # FEAT-205: faction quest (members only; character-service `factions.id`, no FK), the faction rank needed
+    # to take it, and faction points for completing ([{faction_id, points}], paid by character-service)
+    faction_id = Column(Integer, nullable=True)  # index ix_quests_faction (migration 058)
+    min_faction_rank_id = Column(Integer, nullable=True)
+    faction_points_rewards = Column(JSON, nullable=True)
 
     objectives = relationship("QuestObjective", back_populates="quest", cascade="all, delete-orphan")
 
@@ -1174,6 +1179,30 @@ class House(Base):
 
     __table_args__ = (
         Index('ix_houses_owner', 'owner_character_id'),
+    )
+
+
+class HouseVoucher(Base):
+    """FEAT-205: a right to a free house (kind ready) / free empty plot (kind empty) in a location.
+
+    Granted by character-service as a faction rank reward (idempotent by `source_key`); the player claims
+    it on any free plot of that kind in that location (`POST /locations/houses/plots/{id}/claim`)."""
+    __tablename__ = "house_vouchers"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(10), nullable=False)
+    source_key = Column(String(120), nullable=False, unique=True)
+    source_text = Column(String(255), nullable=True)
+    status = Column(String(10), nullable=False, default="unclaimed", server_default="unclaimed")
+    claimed_house_id = Column(BigInteger, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('ix_house_vouchers_character', 'character_id'),
+        Index('ix_house_vouchers_location', 'location_id'),
     )
 
 

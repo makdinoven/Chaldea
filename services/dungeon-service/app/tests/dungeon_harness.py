@@ -110,6 +110,9 @@ class FakeWorld:
         self.locks: Dict[int, dict] = {}         # character_id -> {"session": id, "unconscious": dt}
         self.party: dict = {}
         self.gate_ok = True
+        # FEAT-207: faction access of the dungeon (None = no rule -> everybody passes)
+        self.faction_access: Optional[dict] = None
+        self.faction_checks: List[tuple] = []
         self.battle_fail: Optional[HTTPException] = None
         self.next_battle_id = 500
         self.next_mob_id = 9000
@@ -197,6 +200,13 @@ class FakeWorld:
 
     async def consume_dungeon_gate(self, cid, location_id, dungeon_id):
         return self.gate_ok
+
+    async def check_faction_access(self, dungeon_id, ids):
+        self.faction_checks.append((dungeon_id, list(ids)))
+        return self.faction_access or {"rule": False, "allowed": True, "failed_character_ids": [], "detail": None}
+
+    async def faction_access_labels(self, dungeon_ids, character_id, user_id):
+        return {}
 
     async def spawn_dungeon_mobs(self, template_ids, location_id, stat_multiplier=1.0):
         ids = []
@@ -286,6 +296,7 @@ class FakeWorld:
             "get_battle_state", "get_battle_result", "get_character_attributes",
             "consume_stamina", "recover_character",
             "add_item_to_character", "get_item_info",
+            "check_faction_access", "faction_access_labels",  # FEAT-207
         ):
             monkeypatch.setattr(http_clients, name, getattr(self, name))
         monkeypatch.setattr(ws_manager, "broadcast_to_session", self.broadcast)

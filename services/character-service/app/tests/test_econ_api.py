@@ -181,7 +181,7 @@ def test_summary_shape(client):
     assert s["totals"] == {"issued": 150, "held": 150, "players": 100, "npcs": 50, "escrow": 0,
                            "auction_storage": 0, "region_treasuries": 0, "country_treasuries": 0,
                            "world_treasury": 0, "population_purses": 0, "banks": 0, "bank_deposits": 0,
-                           "caravan_escrow": 0}
+                           "caravan_escrow": 0, "factions": 0}
     assert s["invariant"] == {"ok": True, "ledger_sum": 0, "escrow_expected": 0, "escrow_actual": 0,
                               "storage_expected": 0, "storage_actual": 0, "bank_deposits_expected": 0,
                               "bank_deposits_actual": 0, "caravan_escrow_expected": 0,
@@ -292,7 +292,7 @@ def test_emission_only_into_treasuries(client, econ_db, account_id):
     resp = client.post("/characters/admin/economy/emission",
                        json={"account_id": account_id, "amount": 5, "comment": "тест"})
     assert resp.status_code == 400
-    assert resp.json()["detail"] == ("Эмиссия возможна только в казну региона, страны, Казну Скитальцев "
+    assert resp.json()["detail"] == ("Эмиссия возможна только в казну региона, страны, фракции, Казну Скитальцев "
                                      "или кошелёк жителей региона")
     _assert_world_closes(econ_db, client)
 

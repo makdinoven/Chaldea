@@ -37,6 +37,8 @@ CRIME_JAIL_ESCAPE = "jail_escape"
 CRIME_CARAVAN_ATTACK = "caravan_attack"
 CRIME_PVP_ATTACK = "pvp_attack"
 CRIME_THEFT = "theft"
+# FEAT-207: an active member of a faction outlawed in the region (never carries the faction id / name)
+CRIME_FACTION_MEMBERSHIP = "faction_membership"
 
 # crime statuses: 2a applies every crime at once; 2b (FEAT-199) defers unwitnessed / masked crimes
 CRIME_REPORTED = "reported"

@@ -868,3 +868,16 @@ HP, максимум +36%. `max_hp` нет/0 → 0; HP зажимается в `
   `shield_absorb` (`value`, `shield`; только эффекты/DoT), `kill_heal` (`target`, `value`),
   `inspiration` (`stacks`, `value`, `mode` group/solo, `targets`), `inspiration_end` (`targets`),
   `spirit_whisper` (`target`, `mode` ward/curse/might, `value` ±8).
+
+## FEAT-207: пассивки званий фракций и очки за победы
+
+- **Пассивки** — `build_participant_info` для игроков (не NPC) после подкласса вызывает
+  `faction_passives.fetch_faction_passives` → `GET /characters/internal/factions/{cid}/passive-modifiers` (таймаут 3 с,
+  любая ошибка = без пассивок, warning) и `faction_passives.apply`: каждый ключ прибавляется к атрибутам снимка, для
+  первичных (сила, ловкость, интеллект, выносливость, удача) ещё и производные по `buffs._DERIVED_PER_POINT` с капами
+  FEAT-195 (`stat_caps.effective_delta`). Фиксируется на старте боя, в `character_attributes` ничего не пишется.
+- **Очки за победы** — `_finalize_battle` после `_notify_law_battle_end` (только при `winner_team`) вызывает
+  `_notify_faction_battle_end`: payload `{battle_id, battle_type, winner_team, participants[{character_id, team,
+  alive, mob_template_id}]}` (шаблон моба — `active_mobs` для проигравших), отправка `asyncio.create_task` с 3
+  попытками (`_post_faction_callback`) на `POST /characters/internal/factions/battle-result`. Ошибки никогда не
+  ломают завершение боя; окно результатов боя не меняется (очки — журнал фракций + уведомление).

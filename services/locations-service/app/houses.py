@@ -336,6 +336,25 @@ class CharacterIn(BaseModel):
     character_id: int
 
 
+class VoucherIn(BaseModel):
+    """FEAT-205: character-service grants a house / plot right (faction rank reward)."""
+    character_id: conint(ge=1)
+    location_id: conint(ge=1)
+    kind: constr(strip_whitespace=True, min_length=1, max_length=10)
+    source_key: constr(strip_whitespace=True, min_length=1, max_length=120)
+    source_text: Optional[constr(strip_whitespace=True, max_length=255)] = None
+
+    @validator("kind")
+    def _kind(cls, value):
+        if value not in PLOT_KINDS:
+            raise ValueError("Неизвестный вид права: ready или empty")
+        return value
+
+
+class ClaimIn(CharacterIn):
+    voucher_id: conint(ge=1)
+
+
 class HouseIn(CharacterIn):
     name: constr(strip_whitespace=True, min_length=1, max_length=120)
     description: constr(strip_whitespace=True, max_length=5000) = ""
@@ -731,32 +750,29 @@ async def _require_plot_reputation(db: AsyncSession, character_id: int, plot: mo
     await reputation_read.require_tier(db, character_id, region_id, plot.min_reputation_tier)
 
 
-@router.post("/plots/{plot_id}/buy")
-async def buy_house(
-    plot_id: int,
-    body: CharacterIn,
-    db: AsyncSession = Depends(get_db),
-    user: UserRead = Depends(get_current_user_via_http),
-):
+async def _require_plot_takeable(db: AsyncSession, character: dict, plot: models.HousePlot) -> None:
+    """Shared by buy and voucher claim: on the spot, not locked, not in battle (the plot's own
+    reputation gate and the free check follow separately)."""
     from main import check_not_activity_locked, check_not_in_battle
 
-    character = await _own_character(db, body.character_id, user)
-    plot = await _plot(db, plot_id)
     if character["location_id"] is None or int(character["location_id"]) != plot.location_id:
         raise HTTPException(400, "Дом покупают на месте — дойдите до его локации")
-    await check_not_activity_locked(db, body.character_id)
-    await check_not_in_battle(db, body.character_id, "Во время боя дом не купить")
-    await _require_plot_reputation(db, body.character_id, plot)
-    standing = (await db.execute(select(models.House).where(models.House.plot_id == plot_id))).scalar_one_or_none()
+    await check_not_activity_locked(db, character["id"])
+    await check_not_in_battle(db, character["id"], "Во время боя дом не купить")
+
+
+async def _occupy_plot(db: AsyncSession, plot: models.HousePlot, character_id: int) -> int:
+    """The plot must be free; creates the House with the plot's template rooms (flushed, not committed)."""
+    standing = (await db.execute(select(models.House).where(models.House.plot_id == plot.id))).scalar_one_or_none()
     if standing is not None:
         await _settle_house(db, standing)  # an overdue house leaves the plot here
         if standing.status != "seized":
             raise HTTPException(409, "Этот дом уже куплен")
     templates = (await db.execute(
-        select(models.HousePlotRoom).where(models.HousePlotRoom.plot_id == plot_id)
+        select(models.HousePlotRoom).where(models.HousePlotRoom.plot_id == plot.id)
         .order_by(models.HousePlotRoom.sort_order, models.HousePlotRoom.id))).scalars().all()
 
-    house = models.House(plot_id=plot.id, owner_character_id=body.character_id, name=plot.name,
+    house = models.House(plot_id=plot.id, owner_character_id=character_id, name=plot.name,
                          description=plot.description, image_url=plot.image_url,
                          tax_paid_through=(await _tax_period(db))["period"])
     db.add(house)
@@ -772,13 +788,91 @@ async def buy_house(
                                 is_open=t.room_type == "hall", sort_order=i, cell_id=t.cell_id,
                                 workshop_profession_id=professions.get(t.room_type)))
     await db.flush()
-    house_id = house.id
+    return house.id
+
+
+@router.post("/plots/{plot_id}/buy")
+async def buy_house(
+    plot_id: int,
+    body: CharacterIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_current_user_via_http),
+):
+    character = await _own_character(db, body.character_id, user)
+    plot = await _plot(db, plot_id)
+    await _require_plot_takeable(db, character, plot)
+    await _require_plot_reputation(db, body.character_id, plot)
+    house_id = await _occupy_plot(db, plot, body.character_id)
     # FEAT-181: the payment goes to the plot's region treasury in the same transaction as the
     # house; without enough gold nothing is committed and the house stays for sale.
     balance = await _charge(db, body.character_id, plot.price, plot, "house_purchase",
                             {"plot_id": plot.id, "house_id": house_id})
     await db.commit()
     return {"house_id": house_id, "gold": balance}
+
+
+# ---------------------------------------------------------------------------
+# FEAT-205: house vouchers (faction rank rewards) — a free house / plot in a location
+# ---------------------------------------------------------------------------
+
+VOUCHER_UNCLAIMED = "unclaimed"
+VOUCHER_CLAIMED = "claimed"
+
+
+@router.post("/plots/{plot_id}/claim")
+async def claim_plot(
+    plot_id: int,
+    body: ClaimIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_current_user_via_http),
+):
+    """Take a free plot by a voucher: the same rules as buying, the price is waived (no ledger charge)."""
+    character = await _own_character(db, body.character_id, user)
+    plot = await _plot(db, plot_id)
+    await _require_plot_takeable(db, character, plot)
+    voucher = await db.get(models.HouseVoucher, body.voucher_id)
+    if voucher is None or voucher.character_id != body.character_id:
+        raise HTTPException(404, "Право на дом не найдено")
+    if voucher.status != VOUCHER_UNCLAIMED:
+        raise HTTPException(409, "Это право уже использовано")
+    if int(voucher.location_id) != int(plot.location_id) or voucher.kind != plot.kind:
+        raise HTTPException(409, "Право не подходит к этому участку")
+    await _require_plot_reputation(db, body.character_id, plot)
+    house_id = await _occupy_plot(db, plot, body.character_id)
+    # the voucher flips in the same transaction as the house; a concurrent claim finds it claimed
+    flipped = await db.execute(
+        update(models.HouseVoucher)
+        .where(models.HouseVoucher.id == voucher.id, models.HouseVoucher.status == VOUCHER_UNCLAIMED)
+        .values(status=VOUCHER_CLAIMED, claimed_house_id=house_id, claimed_at=datetime.utcnow())
+        .execution_options(synchronize_session=False)
+    )
+    if flipped.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(409, "Это право уже использовано")
+    await db.commit()
+    return {"house_id": house_id}
+
+
+@router.get("/vouchers")
+async def my_vouchers(
+    character_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_current_user_via_http),
+):
+    """The character's house / plot rights, unclaimed first."""
+    await _own_character(db, character_id, user)
+    vouchers = (await db.execute(
+        select(models.HouseVoucher).where(models.HouseVoucher.character_id == character_id)
+        .order_by(models.HouseVoucher.status.desc(), models.HouseVoucher.id))).scalars().all()
+    names = await _location_names(db, [v.location_id for v in vouchers])
+    return [{
+        "id": v.id,
+        "location": {"id": v.location_id, "name": names.get(v.location_id)},
+        "kind": v.kind,
+        "source_text": v.source_text,
+        "status": v.status,
+        "claimed_house_id": v.claimed_house_id,
+    } for v in vouchers]
 
 
 # ---------------------------------------------------------------------------
@@ -2345,8 +2439,40 @@ async def character_deleted(
     await db.execute(delete(models.HouseResident).where(models.HouseResident.character_id == character_id))
     await db.execute(delete(models.HouseGuest).where(models.HouseGuest.character_id == character_id))
     await db.execute(delete(models.HouseBuff).where(models.HouseBuff.character_id == character_id))
+    # FEAT-205: its house / plot rights go with it
+    await db.execute(delete(models.HouseVoucher).where(models.HouseVoucher.character_id == character_id))
     await db.commit()
     return {"houses": [h.id for h in owned]}
+
+
+@router.post("/internal/vouchers")
+async def grant_voucher(
+    body: VoucherIn,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """FEAT-205: character-service grants a house (ready) / plot (empty) right in a location.
+    Idempotent by `source_key`: a repeat returns the existing voucher with `duplicate: true`."""
+    existing = (await db.execute(select(models.HouseVoucher.id).where(
+        models.HouseVoucher.source_key == body.source_key))).scalar_one_or_none()
+    if existing is not None:
+        return {"voucher_id": existing, "duplicate": True}
+    if await db.get(models.Location, body.location_id) is None:
+        raise HTTPException(404, "Локация не найдена")
+    voucher = models.HouseVoucher(character_id=body.character_id, location_id=body.location_id, kind=body.kind,
+                                  source_key=body.source_key, source_text=body.source_text,
+                                  status=VOUCHER_UNCLAIMED)
+    db.add(voucher)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = (await db.execute(select(models.HouseVoucher.id).where(
+            models.HouseVoucher.source_key == body.source_key))).scalar_one_or_none()
+        if existing is None:
+            raise
+        return {"voucher_id": existing, "duplicate": True}
+    return {"voucher_id": voucher.id, "duplicate": False}
 
 
 @router.get("/admin/settings")

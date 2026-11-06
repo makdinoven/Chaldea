@@ -2,7 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { DoorOpen, Home, Snowflake, Tag } from 'lucide-react';
-import { buyPlot, enterHouse, myHouses, plotsAtLocation, type Plot } from '../../../api/houses';
+import {
+  buyPlot,
+  claimPlot,
+  enterHouse,
+  getHouseVouchers,
+  myHouses,
+  plotsAtLocation,
+  type HouseVoucher,
+  type Plot,
+} from '../../../api/houses';
 import { apiErrorMessage } from '../../../api/errors';
 import { useAppDispatch } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
@@ -32,6 +41,9 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
   // Stage 7: houses the current character belongs to (owner, resident, guest) — it may step inside.
   const [memberOf, setMemberOf] = useState<Set<number>>(new Set());
   const [entering, setEntering] = useState<number | null>(null);
+  // FEAT-205: unclaimed house / plot rights of the character in THIS location.
+  const [vouchers, setVouchers] = useState<HouseVoucher[]>([]);
+  const [claiming, setClaiming] = useState<{ plot: Plot; voucher: HouseVoucher } | null>(null);
 
   const load = useCallback(() => {
     plotsAtLocation(locationId)
@@ -50,6 +62,38 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
       .then((list) => setMemberOf(new Set(list.filter((h) => h.character?.id === characterId).map((h) => h.id))))
       .catch((e) => toast.error(apiErrorMessage(e, 'Не удалось загрузить ваши дома')));
   }, [characterId]);
+
+  const loadVouchers = useCallback(() => {
+    if (!characterId) {
+      setVouchers([]);
+      return;
+    }
+    getHouseVouchers(characterId)
+      .then((list) => setVouchers(list.filter((v) => v.status === 'unclaimed' && v.location.id === locationId)))
+      .catch((e) => toast.error(apiErrorMessage(e, 'Не удалось загрузить права на дом')));
+  }, [characterId, locationId]);
+
+  useEffect(loadVouchers, [loadVouchers]);
+
+  const voucherFor = (plot: Plot): HouseVoucher | undefined =>
+    vouchers.find((v) => v.location.id === plot.location_id && v.kind === plot.kind);
+
+  const claim = async (plot: Plot, voucher: HouseVoucher) => {
+    if (!characterId) return;
+    setClaiming(null);
+    setBusy(true);
+    try {
+      const { house_id } = await claimPlot(plot.id, characterId, voucher.id);
+      toast.success(plot.kind === 'empty' ? 'Участок получен по праву!' : 'Дом получен по праву!');
+      navigate(`/houses/${house_id}`);
+    } catch (e) {
+      toast.error(apiErrorMessage(e, 'Не удалось получить дом по праву'));
+      load();
+      loadVouchers();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const enter = async (houseId: number) => {
     if (!characterId) return;
@@ -172,13 +216,24 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
                   <>
                     <p className="text-gold text-xs">Свободен · {format(plot.price)}</p>
                     {characterId ? (
-                      <button type="button" disabled={!isCharacterHere || busy} onClick={() => setBuying(plot)}
-                        className="btn-blue !w-full !py-1.5 !text-xs mt-auto disabled:opacity-50">
-                        Купить за {plot.price.toLocaleString('ru-RU')}
-                      </button>
+                      <div className="mt-auto flex flex-col gap-1.5">
+                        {voucherFor(plot) && (
+                          <button type="button" disabled={!isCharacterHere || busy}
+                            onClick={() => setClaiming({ plot, voucher: voucherFor(plot)! })}
+                            className="btn-blue !w-full !py-1.5 !text-xs disabled:opacity-50">
+                            Получить по праву
+                          </button>
+                        )}
+                        <button type="button" disabled={!isCharacterHere || busy} onClick={() => setBuying(plot)}
+                          className={`${voucherFor(plot) ? 'btn-line' : 'btn-blue'} !w-full !py-1.5 !text-xs disabled:opacity-50`}>
+                          Купить за {plot.price.toLocaleString('ru-RU')}
+                        </button>
+                      </div>
                     ) : null}
                     {characterId && !isCharacterHere && (
-                      <p className="text-white/40 text-[11px]">Чтобы купить, персонаж должен быть в этой локации</p>
+                      <p className="text-white/40 text-[11px]">
+                        {voucherFor(plot) ? 'Чтобы купить или получить по праву' : 'Чтобы купить'}, персонаж должен быть в этой локации
+                      </p>
                     )}
                   </>
                 )}
@@ -189,6 +244,16 @@ const HousesSection = ({ locationId, characterId, isCharacterHere }: HousesSecti
       </div>
 
       {buyingHouse && <BuyListedHouseDialog house={buyingHouse} onClose={() => { setBuyingHouse(null); load(); }} />}
+
+      {claiming && (
+        <ConfirmDialog
+          title="Получение по праву"
+          message={`Получить «${claiming.plot.name}» бесплатно по праву${claiming.voucher.source_text ? ` (${claiming.voucher.source_text})` : ''}? Право будет использовано; сезонный налог дом платит как обычный.`}
+          confirmLabel="Получить"
+          onCancel={() => setClaiming(null)}
+          onConfirm={() => void claim(claiming.plot, claiming.voucher)}
+        />
+      )}
 
       {buying && (
         <ConfirmDialog

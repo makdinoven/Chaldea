@@ -113,13 +113,14 @@ const DungeonEntrance = ({ locationId, currentCharacterId }: DungeonEntranceProp
       });
   }, [currentCharacterId]);
 
-  // Fetch dungeons at this location
+  // Fetch dungeons at this location (FEAT-207: with the character — faction access marks for him)
+  const listArg = { locationId, characterId: currentCharacterId };
   useEffect(() => {
-    dispatch(fetchDungeonsAtLocation(locationId));
+    dispatch(fetchDungeonsAtLocation({ locationId, characterId: currentCharacterId }));
     return () => {
       dispatch(clearDungeonsAtLocation());
     };
-  }, [dispatch, locationId]);
+  }, [dispatch, locationId, currentCharacterId]);
 
   // Initialize cooldown timers
   useEffect(() => {
@@ -178,10 +179,10 @@ const DungeonEntrance = ({ locationId, currentCharacterId }: DungeonEntranceProp
   const onEntryFailed = useCallback(
     (dungeonId: number, message: string) => {
       setEntryErrors((prev) => ({ ...prev, [dungeonId]: message }));
-      // Occupancy / cooldown may have changed under us.
-      dispatch(fetchDungeonsAtLocation(locationId));
+      // Occupancy / cooldown / faction access may have changed under us.
+      dispatch(fetchDungeonsAtLocation({ locationId, characterId: currentCharacterId }));
     },
-    [dispatch, locationId],
+    [dispatch, locationId, currentCharacterId],
   );
 
   const handleSoloEntry = useCallback(
@@ -227,7 +228,7 @@ const DungeonEntrance = ({ locationId, currentCharacterId }: DungeonEntranceProp
       <div className="bg-site-bg backdrop-blur-sm rounded-card border border-site-red/30 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
         <p className="text-site-red text-sm flex-1">{listError}</p>
         <button
-          onClick={() => dispatch(fetchDungeonsAtLocation(locationId))}
+          onClick={() => dispatch(fetchDungeonsAtLocation(listArg))}
           className="btn-line text-sm px-4 py-1.5 self-start sm:self-auto"
         >
           Повторить
@@ -386,7 +387,9 @@ const DungeonCard = ({
 }: DungeonCardProps) => {
   const isOnCooldown = cooldownSeconds > 0;
   const isOccupied = dungeon.is_occupied;
-  const entryBlocked = isOnCooldown || isOccupied;
+  // FEAT-207: a faction dungeon this character may not enter (the server re-checks the whole party).
+  const accessDenied = dungeon.access_allowed === false;
+  const entryBlocked = isOnCooldown || isOccupied || accessDenied;
 
   return (
     <motion.div
@@ -432,6 +435,19 @@ const DungeonCard = ({
         )}
       </div>
 
+      {/* FEAT-207: faction territory */}
+      {dungeon.access_label && (
+        <div
+          className={`text-sm font-medium flex items-start gap-2 ${accessDenied ? 'text-site-red' : 'text-gold-light'}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <rect x="5" y="11" width="14" height="10" rx="2" />
+            <path strokeLinecap="round" d="M8 11V7a4 4 0 018 0v4" />
+          </svg>
+          <span className="break-words min-w-0">{dungeon.access_label}</span>
+        </div>
+      )}
+
       {/* Occupied by another group */}
       {isOccupied && !activeSessionId && (
         <div className="text-gold text-sm font-medium flex items-center gap-2">
@@ -469,6 +485,7 @@ const DungeonCard = ({
             <button
               onClick={() => onEnterClick(dungeon.id)}
               disabled={sessionLoading || entryBlocked}
+              title={accessDenied && dungeon.access_label ? dungeon.access_label : undefined}
               className="btn-blue text-sm px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {sessionLoading ? 'Вход...' : 'Войти'}

@@ -23,8 +23,10 @@ logger = logging.getLogger("character-service.economy")
 SOURCE_SERVICE = "character-service"
 
 # Admin emission may only go into a treasury or a region's population purse (FEAT-182).
+# FEAT-206: also into a faction treasury (start capital / «Заполнить по шаблону»).
 EMISSION_TARGET_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_COUNTRY_TREASURY,
-                                   core.KIND_WORLD_TREASURY, core.KIND_POPULATION_PURSE})
+                                   core.KIND_WORLD_TREASURY, core.KIND_POPULATION_PURSE,
+                                   core.KIND_FACTION_TREASURY})
 # Account kinds that belong to a region (name taken from Regions, operation tagged with region_id).
 REGION_ACCOUNT_KINDS = frozenset({core.KIND_REGION_TREASURY, core.KIND_POPULATION_PURSE,
                                   core.KIND_BANK, core.KIND_BANK_DEPOSITS})
@@ -173,6 +175,7 @@ def get_summary(db: Session) -> dict:
     banks = kind_sums.get(core.KIND_BANK, 0)
     vaults = kind_sums.get(core.KIND_BANK_DEPOSITS, 0)
     caravan_escrow = kind_sums.get(core.KIND_CARAVAN_ESCROW, 0)
+    factions_total = kind_sums.get(core.KIND_FACTION_TREASURY, 0)
     sources = sum(kind_sums.get(k, 0) for k in core.SOURCE_KINDS)
 
     held = players + npcs + sum(v for k, v in kind_sums.items() if k not in core.SOURCE_KINDS)
@@ -219,6 +222,7 @@ def get_summary(db: Session) -> dict:
             "auction_storage": storage, "region_treasuries": regions_total,
             "country_treasuries": countries_total, "world_treasury": world,
             "population_purses": purses, "banks": banks, "bank_deposits": vaults, "caravan_escrow": caravan_escrow,
+            "factions": factions_total,
         },
         "invariant": invariant,
         "countries": _treasury_tree(db),
@@ -440,7 +444,7 @@ def _region_of(ref: core.AccountRef) -> Optional[int]:
 def emit(db: Session, *, account_id: int, amount: int, comment: str, actor_user_id: Optional[int]) -> dict:
     ref, is_active = _load_account(db, account_id)
     if ref.kind not in EMISSION_TARGET_KINDS:
-        raise EconomyApiError(400, "Эмиссия возможна только в казну региона, страны, Казну Скитальцев или кошелёк жителей региона")
+        raise EconomyApiError(400, "Эмиссия возможна только в казну региона, страны, фракции, Казну Скитальцев или кошелёк жителей региона")
     if not is_active:
         raise EconomyApiError(400, "Счёт закрыт")
     result = econ_ledger.post_operation(

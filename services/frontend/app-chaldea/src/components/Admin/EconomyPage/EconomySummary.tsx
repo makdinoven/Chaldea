@@ -108,6 +108,8 @@ const EconomySummary = ({ summary, refreshing, onRefresh }: EconomySummaryProps)
   if (totals.bank_deposits !== undefined) cards.push({ label: 'Вклады игроков', value: totals.bank_deposits });
   // FEAT-192: money of caravans on the road (paid by buyers, released at arrival).
   if (totals.caravan_escrow !== undefined) cards.push({ label: 'Караваны в пути', value: totals.caravan_escrow });
+  // FEAT-206: all faction treasuries.
+  if (totals.factions !== undefined) cards.push({ label: 'Казны фракций', value: totals.factions });
 
   const hasBankCheck = invariant.bank_deposits_expected !== undefined && invariant.bank_deposits_actual !== undefined;
   const bankVaultOk = !hasBankCheck || invariant.bank_deposits_expected === invariant.bank_deposits_actual;

@@ -186,6 +186,23 @@ export interface PassportData {
    * the row is not drawn when absent (wizard, request, list card) or for an NPC.
    */
   fameTierName?: string | null;
+
+  /**
+   * FEAT-205: the character's NON-secret active factions with their rank
+   * (`GET /characters/{id}/factions/public`, fetched by the call site — the
+   * passport fetches nothing). Absent / empty → the block is not drawn.
+   */
+  factions?: PassportFaction[] | null;
+  /** FEAT-205: the factions request failed — a small inline note is drawn. */
+  factionsError?: string | null;
+}
+
+/** FEAT-205: one public faction row of the passport. */
+export interface PassportFaction {
+  id: number;
+  name: string;
+  rankName?: string | null;
+  emblemUrl?: string | null;
 }
 
 // ── Adapter inputs ──────────────────────────────────────────────────────────

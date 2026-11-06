@@ -16,6 +16,7 @@ import { LootTable } from './editor/PropertyPanel';
 import { EntityPicker } from './editor/pickers';
 import ThemePicker from './ThemePicker';
 import DungeonStatusControl from './DungeonStatusControl';
+import FactionAccessField from '../FactionsPage/FactionAccessField';
 import { isTheme, type DungeonTheme } from '../../DungeonBoard3D/dungeonThemes';
 
 interface FormData {
@@ -229,6 +230,9 @@ const AdminDungeonForm = () => {
             <DungeonStatusControl dungeonId={editingId} />
           </div>
         )}
+
+        {/* FEAT-207: faction dungeon (saved separately from the form) */}
+        {editingId && <FactionAccessField kind="dungeon" targetId={editingId} />}
 
         {/* Basic fields */}
         <div>

@@ -58,7 +58,8 @@ SHADOW_DDL = (
     "is_mask INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS equipment_slots (id INTEGER PRIMARY KEY AUTOINCREMENT, character_id INTEGER, "
     "slot_type VARCHAR(30), item_id INTEGER NULL)",
-    "CREATE TABLE IF NOT EXISTS tree_nodes (id INTEGER PRIMARY KEY, node_type VARCHAR(30), subclass_key VARCHAR(40))",
+    "CREATE TABLE IF NOT EXISTS tree_nodes (id INTEGER PRIMARY KEY, node_type VARCHAR(30), subclass_key VARCHAR(40), "
+    "name VARCHAR(100) NULL)",
     "CREATE TABLE IF NOT EXISTS character_tree_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, "
     "character_id INTEGER, node_id INTEGER)",
 )

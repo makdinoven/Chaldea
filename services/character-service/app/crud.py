@@ -1408,6 +1408,13 @@ def check_and_update_level(db: Session, character_id: int, passive_experience: i
         logger.info(f"Персонаж ID {character_id} обновлен после повышения уровня. Новый уровень: {character.level}, stat_points: {character.stat_points}")
         # FEAT-196: resource maximums grow with the level (by class).
         notify_level_changed(character_id)
+        # FEAT-205 §3.7: faction ranks with a level condition. Non-fatal: never breaks the caller.
+        try:
+            import faction_hooks  # late: faction modules import crud lazily
+            faction_hooks.after_level_up(db, character_id)
+        except Exception:
+            db.rollback()
+            logger.exception("faction rank re-check after level-up failed for character %s", character_id)
 
     return character
 
@@ -3027,6 +3034,25 @@ def _grant_title_xp(
         check_and_update_level(db, character_id, new_passive_xp)
 
 
+def add_passive_xp(db: Session, character_id: int, xp: int) -> Optional[int]:
+    """FEAT-205 §3.6: add passive XP in the caller's transaction (no commit, no level check — the caller runs
+    `check_and_update_level` after its commit). Returns the new total, None when the attributes row is missing."""
+    if xp <= 0:
+        return None
+    updated = db.execute(
+        sa_text("UPDATE character_attributes SET passive_experience = COALESCE(passive_experience, 0) + :xp "
+                "WHERE character_id = :cid"),
+        {"xp": int(xp), "cid": int(character_id)},
+    ).rowcount
+    if not updated:
+        return None
+    row = db.execute(
+        sa_text("SELECT passive_experience FROM character_attributes WHERE character_id = :cid"),
+        {"cid": int(character_id)},
+    ).first()
+    return int(row[0] or 0) if row is not None else None
+
+
 def create_title_full(db: Session, data):
     """Create title with all fields. Validates rarity enum."""
     rarity = getattr(data, "rarity", "common") or "common"
@@ -3755,8 +3781,12 @@ def teleport_lock_reasons(db: Session, character_id: int, source_npc_id: int, op
     npc_locked = reputation_crud.npc_gate_failure(db, character_id, source_npc_id, region_id)
     tiers = {link.id: link.min_reputation_tier for link in
              db.query(TeleportLink).filter(TeleportLink.from_npc_id == source_npc_id).all()}
+    import faction_territory  # local: FEAT-207 closed faction territories
+    ch = db.query(Character).filter(Character.id == character_id).first()
     for opt in options:
         opt["locked_reason"] = reputation_crud.gate_failure(db, character_id, region_id, tiers.get(opt["link_id"]))
+        if not opt["locked_reason"] and ch is not None:
+            opt["locked_reason"] = faction_territory.location_refusal(db, ch, opt.get("to_location_id"))
     return npc_locked
 
 
@@ -3824,6 +3854,12 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
                   or reputation_crud.gate_failure(db, character.id, rep_region, link.min_reputation_tier))
     if rep_locked:
         raise HTTPException(status_code=403, detail=rep_locked)
+
+    # FEAT-207: a closed faction territory at the target (before any charge)
+    import faction_territory  # local: faction modules import this module lazily
+    faction_refusal = faction_territory.location_refusal(db, character, target.current_location_id)
+    if faction_refusal:
+        raise HTTPException(status_code=403, detail=faction_refusal)
 
     cooldown = get_cooldown_seconds_remaining(character)
     if cooldown > 0:

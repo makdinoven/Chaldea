@@ -21,6 +21,7 @@ locations-service/app/
 ├── reputation_core.py # FEAT-197: байтовая копия чистой математики репутации (канон — character-service)
 ├── reputation_read.py # FEAT-197: чтение репутации SQL-ом, гейты, цены у торговцев (без HTTP)
 ├── fame_read.py       # FEAT-199: чтение славы SQL-ом (character_renown + renown_tiers), порог «Мин. слава»
+├── faction_read.py    # FEAT-205: чтение фракций SQL-ом (factions, faction_ranks, faction_members, faction_conditions)
 ├── config.py      # Настройки
 └── database.py    # Async SQLAlchemy
 ```
@@ -1252,3 +1253,55 @@ null (комната не раскрывается). Считает character-se
     `SELECT current_location_id`; работает прежнее правило «только пост на месте». Прочие ошибки пробрасываются.
 - Посторонние (без блокировки) ходят в район тюрьмы как в обычные локации. Рёбра соседства между локациями тюрьмы —
   админский контент.
+
+## Фракции: задания и права на дом (FEAT-205, миграция 058)
+
+Фракции принадлежат character-service (миграция `045_factions_core`, см. `docs/services/character-service.md`).
+locations-service **только читает** `factions`, `faction_ranks`, `faction_members`, `faction_conditions` сырым
+параметризованным SQL (`app/faction_read.py`). Отсутствующая таблица / ошибка SQL = «нет данных о фракциях» (warning в
+лог): фракционное задание при этом скрывается (fail closed), `in_any_faction` отвечает True.
+
+- **Миграция `058_quest_faction_vouchers`** (revises `057_country_prison_district`): `quests.faction_id` INT NULL
+  (индекс `ix_quests_faction`), `quests.min_faction_rank_id` INT NULL, `quests.faction_points_rewards` JSON NULL
+  (`[{faction_id, points}]`); таблица `house_vouchers` (`character_id`, `location_id` FK → `Locations.id` ON DELETE
+  CASCADE, `kind` ready|empty, `source_key` UNIQUE, `source_text`, `status` unclaimed|claimed, `claimed_house_id`,
+  `claimed_at`, `created_at`). Каждый шаг идемпотентен; откат удаляет таблицу, индекс и колонки.
+- **Схемы:** `QuestCreate` / `QuestUpdate` / `QuestRead` + три поля (в игроковом `QuestAvailableRead` их НЕТ — иначе утекают id и очки тайных фракций). `faction_points_rewards`:
+  ≤ 5, points ≠ 0 в −10000…10000, без повторов фракций (422). `crud.validate_quest_faction_fields` (422): фракции
+  существуют, звание принадлежит фракции задания, звание без фракции запрещено. Смена типа на `repeatable` и удаление
+  задания, на которое ссылается условие вступления (`faction_conditions.cond_type='quest'`) или звание
+  (`faction_ranks.required_quest_id`) → 409 «Задание используется как условие фракции».
+- **Гейт списка / принятия** (`faction_read.quest_faction_gates`, читается только если у какого-то задания есть
+  фракция): не-член тайной фракции — задание убрано из списка, принятие → 404 «Задание не найдено»; не-член обычной —
+  `locked_reason` «Только для членов фракции «X»» / 403; член ниже звания — «Нужно звание «Y» во фракции «X»» / 403.
+  Причина фракции идёт перед репутацией и славой. Уже принятые/выполненные задания не скрываются.
+- **После завершения** (`main._apply_quest_faction`): если у задания есть `faction_points_rewards` или персонаж состоит
+  хоть в одной фракции — `POST {CHARACTER_SERVICE_URL}/characters/internal/factions/quest-completed` с
+  `X-Internal-Token`, тело `{character_id, quest_id, cq_id, rewards: [{faction_id, points}]}` (идемпотентность — на
+  стороне character-service по `cq_id`). Таймаут 5 с, 2 попытки; провал только логируется.
+- **Права на дом** (`houses.py`): `POST /locations/houses/internal/vouchers` (`X-Internal-Token`,
+  `{character_id, location_id, kind, source_key ≤120, source_text ≤255}` → `{voucher_id, duplicate}`, 404 локации нет);
+  `GET /locations/houses/vouchers?character_id=` (JWT + свой персонаж); `POST /locations/houses/plots/{id}/claim`
+  `{character_id, voucher_id}` — те же проверки, что у покупки (на месте, не занят, не в бою, порог репутации участка,
+  участок свободен) + право своё, не использовано, та же локация и тот же `kind` (409 «Право не подходит к этому
+  участку»); дом создаётся без списания золота, право переворачивается условным UPDATE в той же транзакции. Налог
+  такие дома платят как обычные. Права удаляются в `/internal/character-deleted/{id}`.
+
+## Фракции: закрытые территории (FEAT-207, без миграции)
+
+Правила доступа живут в character-service (`faction_access_rules`, одна фракция на локацию / данж); locations-service
+только читает их параметризованным SQL в `app/faction_read.py` (зеркало `faction_core.access_decision`, паритет
+проверяется тестами). Любая ошибка чтения (нет таблицы, сбой, mock-сессия) = «нет отметок»: ходы не ломаются,
+авторитетная проверка всё равно идёт в character-service.
+
+- **Предпроверка хода** — `POST /locations/{dest}/move_and_post` и `/quick_move`: после проверки соседства и **до**
+  создания поста `faction_read.location_access` → 403 с русским текстом («Вход только для членов фракции «X»»,
+  «Нужно звание «Y» во фракции «X»», для тайной фракции — «Сюда вас не пускают»). Отказ character-service (409 из
+  `update_location`) по-прежнему пробрасывается игроку.
+- **Соседи** — `GET /locations/{id}/client/details?character_id=`: у соседей `access_label` / `access_allowed`
+  (`NeighborClient`, необязательные). С учётом зрителя — только если `character_id` принадлежит текущему
+  пользователю (`faction_read.owned_character`), иначе публичная метка («Закрыто: X» / «Закрыто») и
+  `access_allowed = null`. Одно пакетное чтение правил на всех соседей.
+- **Карта края** — `GET /locations/regions/{id}/details`: у `map_items` типа `location` поле `access_label`
+  (публичная форма).
+- Скрытая фракция (`is_active = 0`) свои территории не закрывает.

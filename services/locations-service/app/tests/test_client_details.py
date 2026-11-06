@@ -121,7 +121,8 @@ class TestNeighborClientSchema:
 
     def test_all_fields_present(self):
         """NeighborClient has all expected fields."""
-        expected_fields = {"id", "name", "recommended_level", "image_url", "energy_cost"}
+        expected_fields = {"id", "name", "recommended_level", "image_url", "energy_cost",
+                           "access_label", "access_allowed"}  # FEAT-207 optional closed-territory marks
         assert set(NeighborClient.__fields__.keys()) == expected_fields
 
 
@@ -311,7 +312,8 @@ class TestGetLocationClientDetails:
         assert response.status_code == 200
 
         neighbor = response.json()["neighbors"][0]
-        expected_neighbor_keys = {"id", "name", "recommended_level", "image_url", "energy_cost"}
+        expected_neighbor_keys = {"id", "name", "recommended_level", "image_url", "energy_cost",
+                                  "access_label", "access_allowed"}  # FEAT-207
         assert set(neighbor.keys()) == expected_neighbor_keys
 
     @patch("main.get_optional_user", return_value=None)

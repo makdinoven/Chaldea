@@ -21,6 +21,8 @@ export interface MapItem {
   paired_arrow_id?: number | null;
   paired_location_ids?: number[];
   rotation?: number | null;
+  /** FEAT-207: faction territory mark of a location (public form: «Закрыто: …» / «Закрыто»). */
+  access_label?: string | null;
 }
 
 interface ArrowEdge {
@@ -554,6 +556,7 @@ const RegionInteractiveMap = ({
               >
                 {/* Icon + label wrapper */}
                 <button
+                  title={item.type === 'location' && item.access_label ? `${item.name} — ${item.access_label}` : undefined}
                   onClick={() => handleItemClick(item)}
                   onMouseEnter={() => setHoveredId(key)}
                   onMouseLeave={() => setHoveredId(null)}
@@ -670,6 +673,19 @@ const RegionInteractiveMap = ({
                       </div>
                     )}
 
+                    {/* FEAT-207: closed faction territory */}
+                    {item.type === 'location' && item.access_label && (
+                      <div
+                        className="absolute -bottom-1 -left-1 w-5 h-5 sm:w-6 sm:h-6 bg-black/75 rounded-full flex items-center justify-center pointer-events-none border border-site-red/70"
+                        aria-label={item.access_label}
+                      >
+                        <svg viewBox="0 0 24 24" className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-site-red" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" aria-hidden>
+                          <rect x="5" y="11" width="14" height="10" rx="2" />
+                          <path d="M8 11V7a4 4 0 018 0v4" />
+                        </svg>
+                      </div>
+                    )}
+
                     {/* City map indicator for districts with map_image_url */}
                     {item.type === 'district' && item.map_image_url && (
                       <div className="absolute -bottom-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-amber-500/90 rounded-full flex items-center justify-center pointer-events-none border border-amber-300/50">
@@ -694,6 +710,13 @@ const RegionInteractiveMap = ({
                   >
                     {item.name}
                   </span>
+
+                  {/* FEAT-207: the territory label under the name while hovered */}
+                  {isHovered && item.type === 'location' && item.access_label && (
+                    <span className="text-[10px] sm:text-xs text-white bg-site-bg px-1.5 py-0.5 rounded-card border border-site-red/40 whitespace-nowrap max-w-[160px] truncate">
+                      {item.access_label}
+                    </span>
+                  )}
 
                   {/* "You are here" badge */}
                   {isCurrent && (

@@ -96,6 +96,50 @@ async def consume_dungeon_gate(character_id: int, location_id: int, dungeon_id: 
     return False
 
 
+FACTION_CHECK_UNAVAILABLE = "Не удалось проверить доступ к подземелью — попробуйте позже"
+
+
+async def check_faction_access(dungeon_id: int, character_ids: List[int]) -> dict:
+    """FEAT-207: POST character-service /characters/internal/factions/access/check (kind=dungeon) — the whole group
+    must pass. Fails CLOSED: any HTTP / connection error -> 503 with a Russian message."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/factions/access/check"
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                url,
+                json={"kind": "dungeon", "target_id": int(dungeon_id), "character_ids": [int(c) for c in character_ids]},
+                headers=_internal_token_headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except (httpx.HTTPError, ValueError) as e:
+        logger.error("faction access check of dungeon %d failed: %s", dungeon_id, e)
+        raise HTTPException(status_code=503, detail=FACTION_CHECK_UNAVAILABLE)
+
+
+async def faction_access_labels(dungeon_ids: List[int], character_id: Optional[int],
+                                user_id: Optional[int]) -> dict:
+    """FEAT-207: {dungeon_id: {access_label, access_allowed}} of closed dungeons. Soft-fail: {} (no marks)."""
+    if not dungeon_ids:
+        return {}
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/factions/access/labels"
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                url,
+                json={"kind": "dungeon", "target_ids": [int(d) for d in dungeon_ids][:200],
+                      "character_id": character_id, "user_id": user_id},
+                headers=_internal_token_headers(),
+            )
+            if resp.status_code != 200:
+                logger.warning("faction access labels: HTTP %s", resp.status_code)
+                return {}
+            return {int(i["target_id"]): i for i in resp.json().get("items", [])}
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        logger.warning("faction access labels failed: %s", e)
+        return {}
+
+
 async def get_characters_at_location(location_id: int) -> list:
     """
     GET /characters/by_location?location_id={id}

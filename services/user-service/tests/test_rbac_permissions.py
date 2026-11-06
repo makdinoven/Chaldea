@@ -1596,3 +1596,309 @@ class TestReputationPermissions:
                          role_id=3, role_str="moderator")
         # 4 base items:* + economy:read + reputation:read + reputation:manage = 7
         assert len(get_effective_permissions(db, mod)) == 7
+
+
+# ---------------------------------------------------------------------------
+# 14. FEAT-205: factions permissions (migration 0034)
+# ---------------------------------------------------------------------------
+#
+# Seeded explicitly (CLAUDE.md §10.13): TestAdminAutoPermissions works on this
+# file's synthetic seed and never reads the migration tree, so the five new
+# `permissions` rows are not covered by it automatically.
+
+FACTION_PERMISSIONS = [
+    ("factions", "read"),
+    ("factions", "edit"),
+    ("factions", "delete"),
+    ("factions", "manage"),
+    ("factions", "settings"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0034. Admin (4) is absent on purpose —
+# it receives every row of `permissions`. Editor (2) gets nothing;
+# factions:delete and factions:settings are admin-only (FEAT-205 §3.10).
+FACTION_ROLE_ACTIONS = {
+    3: ["read", "edit", "manage"],  # Moderator
+}
+
+
+def _seed_faction_permissions(db):
+    """Seed the 5 factions permissions and their role grants (mirrors 0034)."""
+    perm_objects = []
+    for module, action in FACTION_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Factions: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()
+
+    for perm in perm_objects:
+        for role_id, actions in FACTION_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_factions(rbac_db):
+    """Base RBAC seed + factions permissions from migration 0034."""
+    _seed_faction_permissions(rbac_db)
+    return rbac_db
+
+
+class TestFactionPermissions:
+    """FEAT-205: factions:read/edit/delete/manage/settings."""
+
+    def test_seed_mirrors_the_migration(self):
+        """The mirror above must match migration 0034 — otherwise this suite
+        tests a different permission set than production gets."""
+        import importlib.util
+        from pathlib import Path
+        path = (Path(__file__).resolve().parents[1] / "alembic" / "versions"
+                / "0034_faction_permissions.py")
+        spec = importlib.util.spec_from_file_location("mig_0034", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        assert [(m, a) for m, a, _ in mig.PERMISSIONS] == FACTION_PERMISSIONS
+        assert mig.ROLE_ACTIONS == FACTION_ROLE_ACTIONS
+        assert mig.revision == "0034" and mig.down_revision == "0033"
+        assert len(mig.revision) <= 32  # alembic_version column limit
+
+    def test_exactly_five_faction_permissions(self, rbac_db_with_factions):
+        db = rbac_db_with_factions
+        assert db.query(models.Permission).filter(
+            models.Permission.module == "factions").count() == 5
+
+    def test_admin_gets_all_five(self, rbac_db_with_factions):
+        db = rbac_db_with_factions
+        admin = _make_user(db, id=800, username="fcadmin", email="fcadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in FACTION_PERMISSIONS:
+            assert f"{module}:{action}" in perms
+        # 8 base + 5 factions = 13
+        assert len(perms) == 13
+
+    def test_moderator_gets_exactly_read_edit_manage(self, rbac_db_with_factions):
+        db = rbac_db_with_factions
+        mod = _make_user(db, id=801, username="fcmod", email="fcmod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert sorted(p for p in perms if p.startswith("factions:")) == \
+            ["factions:edit", "factions:manage", "factions:read"]
+        assert "factions:delete" not in perms
+        assert "factions:settings" not in perms
+        # 4 base items:* + 3 factions = 7
+        assert len(perms) == 7
+
+    def test_editor_gets_none(self, rbac_db_with_factions):
+        db = rbac_db_with_factions
+        editor = _make_user(db, id=802, username="fceditor", email="fceditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert not any(p.startswith("factions:") for p in perms)
+        assert len(perms) == 2  # base *:read, unchanged
+
+    def test_regular_user_gets_none(self, rbac_db_with_factions):
+        db = rbac_db_with_factions
+        user = _make_user(db, id=803, username="fcuser", email="fcuser@test.com",
+                          role_id=1, role_str="user")
+        assert get_effective_permissions(db, user) == []
+
+    def test_require_permission_matrix(self, rbac_db_with_factions):
+        """Admin passes all five; moderator read/edit/manage; editor/user nothing."""
+        db = rbac_db_with_factions
+        admin = _make_user(db, id=804, username="fcadmin2", email="fcadmin2@test.com",
+                           role_id=4, role_str="admin")
+        mod = _make_user(db, id=805, username="fcmod2", email="fcmod2@test.com",
+                         role_id=3, role_str="moderator")
+        editor = _make_user(db, id=806, username="fceditor2", email="fceditor2@test.com",
+                            role_id=2, role_str="editor")
+        user = _make_user(db, id=807, username="fcuser2", email="fcuser2@test.com",
+                          role_id=1, role_str="user")
+
+        for module, action in FACTION_PERMISSIONS:
+            perm = f"{module}:{action}"
+            require_permission(db, admin, perm)
+            if action in ("read", "edit", "manage"):
+                require_permission(db, mod, perm)
+            else:
+                with pytest.raises(HTTPException) as exc_info:
+                    require_permission(db, mod, perm)
+                assert exc_info.value.status_code == 403
+            for blocked in (editor, user):
+                with pytest.raises(HTTPException) as exc_info:
+                    require_permission(db, blocked, perm)
+                assert exc_info.value.status_code == 403
+
+    def test_settings_can_be_delegated_and_revoked(self, rbac_db_with_factions):
+        """factions:settings can be granted per person via user_permissions."""
+        db = rbac_db_with_factions
+        mod = _make_user(db, id=808, username="fcmod3", email="fcmod3@test.com",
+                         role_id=3, role_str="moderator")
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == "factions",
+            models.Permission.action == "settings",
+        ).one()
+        override = models.UserPermission(user_id=mod.id, permission_id=perm.id, granted=True)
+        db.add(override)
+        db.commit()
+        require_permission(db, mod, "factions:settings")  # must not raise
+        override.granted = False
+        db.commit()
+        assert "factions:settings" not in get_effective_permissions(db, mod)
+
+    def test_factions_with_reputation_and_economy(self, rbac_db_with_factions):
+        """All three module seeds at once: counts grow by exactly the module sizes."""
+        db = rbac_db_with_factions
+        _seed_economy_permissions(db)
+        _seed_reputation_permissions(db)
+        admin = _make_user(db, id=809, username="fcadmin3", email="fcadmin3@test.com",
+                           role_id=4, role_str="admin")
+        # 8 base + 4 economy + 3 reputation + 5 factions = 20
+        assert len(get_effective_permissions(db, admin)) == 20
+        mod = _make_user(db, id=810, username="fcmod4", email="fcmod4@test.com",
+                         role_id=3, role_str="moderator")
+        # 4 base items:* + economy:read + reputation:read/manage
+        # + factions:read/edit/manage = 10
+        assert len(get_effective_permissions(db, mod)) == 10
+
+
+# ---------------------------------------------------------------------------
+# 15. FEAT-206: factions:economy permission (migration 0035)
+# ---------------------------------------------------------------------------
+#
+# Seeded explicitly (CLAUDE.md §10.13): TestAdminAutoPermissions never reads
+# the migration tree, so the new `permissions` row is not covered by it.
+
+FACTION_ECONOMY_PERMISSIONS = [
+    ("factions", "economy"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0035. Admin (4) gets it automatically;
+# editor (2) gets nothing (FEAT-206 §3).
+FACTION_ECONOMY_ROLE_ACTIONS = {
+    3: ["economy"],  # Moderator
+}
+
+
+def _seed_faction_economy_permission(db):
+    """Seed factions:economy and its role grants (mirrors 0035)."""
+    perm_objects = []
+    for module, action in FACTION_ECONOMY_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Factions: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()
+
+    for perm in perm_objects:
+        for role_id, actions in FACTION_ECONOMY_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_faction_economy(rbac_db):
+    """Base RBAC seed + factions:* (0034) + factions:economy (0035)."""
+    _seed_faction_permissions(rbac_db)
+    _seed_faction_economy_permission(rbac_db)
+    return rbac_db
+
+
+class TestFactionEconomyPermission:
+    """FEAT-206: factions:economy."""
+
+    def test_seed_mirrors_the_migration(self):
+        """Migration 0035 lists exactly factions:economy, moderator only."""
+        import importlib.util
+        from pathlib import Path
+        path = (Path(__file__).resolve().parents[1] / "alembic" / "versions"
+                / "0035_faction_economy_perm.py")
+        spec = importlib.util.spec_from_file_location("mig_0035", path)
+        mig = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mig)
+        assert [(m, a) for m, a, _ in mig.PERMISSIONS] == FACTION_ECONOMY_PERMISSIONS
+        assert mig.ROLE_ACTIONS == FACTION_ECONOMY_ROLE_ACTIONS
+        assert mig.revision == "0035" and mig.down_revision == "0034"
+        assert len(mig.revision) <= 32  # alembic_version column limit
+
+    def test_factions_module_now_has_six(self, rbac_db_with_faction_economy):
+        db = rbac_db_with_faction_economy
+        assert db.query(models.Permission).filter(
+            models.Permission.module == "factions").count() == 6
+
+    def test_admin_gets_it(self, rbac_db_with_faction_economy):
+        db = rbac_db_with_faction_economy
+        admin = _make_user(db, id=820, username="feadmin", email="feadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        assert "factions:economy" in perms
+        # 8 base + 5 factions + 1 factions:economy = 14
+        assert len(perms) == 14
+
+    def test_moderator_gets_it(self, rbac_db_with_faction_economy):
+        db = rbac_db_with_faction_economy
+        mod = _make_user(db, id=821, username="femod", email="femod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert sorted(p for p in perms if p.startswith("factions:")) == \
+            ["factions:economy", "factions:edit", "factions:manage", "factions:read"]
+        # 4 base items:* + 3 factions + 1 factions:economy = 8
+        assert len(perms) == 8
+
+    def test_editor_and_user_do_not(self, rbac_db_with_faction_economy):
+        db = rbac_db_with_faction_economy
+        editor = _make_user(db, id=822, username="feeditor", email="feeditor@test.com",
+                            role_id=2, role_str="editor")
+        user = _make_user(db, id=823, username="feuser", email="feuser@test.com",
+                          role_id=1, role_str="user")
+        assert "factions:economy" not in get_effective_permissions(db, editor)
+        assert len(get_effective_permissions(db, editor)) == 2  # base *:read
+        assert get_effective_permissions(db, user) == []
+
+    def test_require_permission_matrix(self, rbac_db_with_faction_economy):
+        db = rbac_db_with_faction_economy
+        admin = _make_user(db, id=824, username="feadmin2", email="feadmin2@test.com",
+                           role_id=4, role_str="admin")
+        mod = _make_user(db, id=825, username="femod2", email="femod2@test.com",
+                         role_id=3, role_str="moderator")
+        editor = _make_user(db, id=826, username="feeditor2", email="feeditor2@test.com",
+                            role_id=2, role_str="editor")
+        user = _make_user(db, id=827, username="feuser2", email="feuser2@test.com",
+                          role_id=1, role_str="user")
+        require_permission(db, admin, "factions:economy")
+        require_permission(db, mod, "factions:economy")
+        for blocked in (editor, user):
+            with pytest.raises(HTTPException) as exc_info:
+                require_permission(db, blocked, "factions:economy")
+            assert exc_info.value.status_code == 403
+
+    def test_can_be_revoked_per_person(self, rbac_db_with_faction_economy):
+        db = rbac_db_with_faction_economy
+        mod = _make_user(db, id=828, username="femod3", email="femod3@test.com",
+                         role_id=3, role_str="moderator")
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == "factions",
+            models.Permission.action == "economy",
+        ).one()
+        db.add(models.UserPermission(user_id=mod.id, permission_id=perm.id, granted=False))
+        db.commit()
+        assert "factions:economy" not in get_effective_permissions(db, mod)
+
+    def test_with_economy_and_reputation(self, rbac_db_with_faction_economy):
+        """All module seeds at once: counts grow by exactly the module sizes."""
+        db = rbac_db_with_faction_economy
+        _seed_economy_permissions(db)
+        _seed_reputation_permissions(db)
+        admin = _make_user(db, id=829, username="feadmin3", email="feadmin3@test.com",
+                           role_id=4, role_str="admin")
+        # 8 base + 4 economy + 3 reputation + 5 factions + 1 factions:economy = 21
+        assert len(get_effective_permissions(db, admin)) == 21
+        mod = _make_user(db, id=830, username="femod4", email="femod4@test.com",
+                         role_id=3, role_str="moderator")
+        # 10 (see TestFactionPermissions) + factions:economy = 11
+        assert len(get_effective_permissions(db, mod)) == 11

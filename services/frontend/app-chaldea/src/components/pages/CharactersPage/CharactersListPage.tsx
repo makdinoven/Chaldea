@@ -13,6 +13,8 @@ import {
   fetchCharactersList,
 } from '../../../api/charactersPublic';
 import type { CharacterListItem, CharacterPublic } from '../../../api/charactersPublic';
+import { fetchPublicFactions } from '../../../api/factions';
+import type { FactionPublicMembership } from '../../../api/factions';
 import {
   NO_CHARACTER_LIMIT,
   fetchMyCharacterCount,
@@ -52,6 +54,9 @@ interface CharacterDetail {
   character: CharacterPublic;
   items: ItemBulk[];
   skills: SkillBulk[];
+  /** FEAT-205: non-secret factions; null when the request failed. */
+  factions: FactionPublicMembership[] | null;
+  factionsError: string | null;
 }
 
 const CharactersListPage = () => {
@@ -193,6 +198,14 @@ const CharactersListPage = () => {
     // The in-game year is only needed by the full passport («в строю N лет»).
     if (!gameTimeLoaded) dispatch(fetchGameTime());
     try {
+      // FEAT-205: the public factions load alongside; a failure only adds a note to the sheet.
+      const factionsRequest = fetchPublicFactions(charId).then(
+        (list) => ({ factions: list, factionsError: null as string | null }),
+        (err: unknown) => ({
+          factions: null,
+          factionsError: apiErrorMessage(err, 'Не удалось загрузить фракции персонажа'),
+        }),
+      );
       const character = await fetchCharacterPublic(charId);
       let items: ItemBulk[] = [];
       let skills: SkillBulk[] = [];
@@ -212,7 +225,8 @@ const CharactersListPage = () => {
           );
         }
       }
-      setDetail({ character, items, skills });
+      const factionState = await factionsRequest;
+      setDetail({ character, items, skills, ...factionState });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Не удалось загрузить анкету');
     } finally {
@@ -222,7 +236,7 @@ const CharactersListPage = () => {
 
   const detailPassport = useMemo(() => {
     if (!detail) return null;
-    return fromCharacterPublic(detail.character, {
+    const base = fromCharacterPublic(detail.character, {
       origins,
       typicalOriginIds: detail.character.id_subrace
         ? typicalBySubrace.get(detail.character.id_subrace) ?? null
@@ -233,6 +247,16 @@ const CharactersListPage = () => {
       items: detail.items,
       skills: detail.skills,
     });
+    return {
+      ...base,
+      factions: (detail.factions ?? []).map((f) => ({
+        id: f.faction_id,
+        name: f.name,
+        rankName: f.rank_name,
+        emblemUrl: f.emblem_url,
+      })),
+      factionsError: detail.factionsError,
+    };
   }, [detail, origins, typicalBySubrace]);
 
   const totalPages = Math.ceil(total / pageSize);

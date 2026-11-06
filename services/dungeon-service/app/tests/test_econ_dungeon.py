@@ -26,7 +26,7 @@ REGION, COUNTRY = 10, 1
 _REAL_CHARGE = gameplay._charge_gold
 _REAL_PAY = gameplay._pay_gold
 _ECON_TABLES = ("econ_postings", "econ_operations", "econ_accounts", "econ_settings",
-                "characters", "Districts", "Regions", "Countries")
+                "characters", "Districts", "Regions", "Countries", "factions")
 
 
 @pytest_asyncio.fixture()

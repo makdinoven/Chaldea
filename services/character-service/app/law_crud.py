@@ -24,7 +24,7 @@ from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import activity_lock
@@ -591,6 +591,27 @@ def guard_held(db: Session, npc_id: int, now: Optional[datetime] = None,
     return int(npc_id) in held_guards(db, [npc_id], now, settings)
 
 
+def _outlaw_membership(db: Session, character_id: int, region_id: int, now: datetime):
+    """FEAT-207: ``faction_territory.OutlawMembership`` or None (none / a membership crime within the cooldown /
+    faction tables unreadable — the guard check must never break a move)."""
+    import faction_territory  # local: faction modules import this module at module level
+    import faction_kills
+    try:
+        levels = load_levels(db)
+        fm = faction_territory.outlaw_membership(db, character_id, region_id,
+                                                 {lv.code: int(lv.sort_order) for lv in levels})
+        if fm is None:
+            return None
+        hours = faction_kills.load_territory_settings(db).outlaw_check_cooldown_hours
+        if faction_territory.membership_crime_recent(db, character_id, region_id, now, hours,
+                                                     lc.CRIME_FACTION_MEMBERSHIP):
+            return None
+        return fm
+    except SQLAlchemyError:
+        logger.warning("law: outlaw membership of character %s not read", character_id, exc_info=True)
+        return None
+
+
 def _check(db: Session, character: "models.Character", location_id, source: str,
            now: Optional[datetime] = None, *, from_location_id: Optional[int] = None,
            guard_id: Optional[int] = None) -> EntryResult:
@@ -616,16 +637,21 @@ def _check(db: Session, character: "models.Character", location_id, source: str,
     settings = load_settings(db)
     wanted = read_wanted(db, character.id, region_id, settings, now)
     outlaw = is_outlaw(db, character.id, region_id)
-    if wanted <= 0 and not outlaw:
+    # FEAT-207 §3.7: an active member of a faction outlawed in this region (no crime within the cooldown)
+    fm = _outlaw_membership(db, character.id, region_id, now)
+    if wanted <= 0 and not outlaw and fm is None:
         return _NO_ENTRY
     levels = load_levels(db)
     level = lc.level_for(wanted, levels)
     if outlaw:
         level = lc.level_at_least(level, settings.outlaw_min_level, levels)
+    if fm is not None:
+        level = lc.level_at_least(level, fm.level_code, levels)
     if level is None:
         return _NO_ENTRY
     chance_pct = roll_pct = None
-    if settings.detect_enabled:
+    # an open member is recognised without a roll; a secret one only on a successful detection roll (Q8)
+    if settings.detect_enabled and not (fm is not None and fm.open):
         chance_pct = detection_chance_for(db, character.id, location_id, len(guards), level, settings)
         detected, roll_pct = lc.roll_succeeds(chance_pct, detection_rng())
         if not detected:
@@ -636,6 +662,21 @@ def _check(db: Session, character: "models.Character", location_id, source: str,
                  reason=source, now=now)
             db.flush()
             return EntryResult(None, slipped=True, chance_pct=chance_pct, roll_pct=roll_pct)
+    if fm is not None:
+        # the crime carries no faction id / name (secrecy); wanted is lifted to the severity level's threshold
+        floor_level = lc.level_by_code(fm.level_code, levels)
+        register_crime(db, crime_type=lc.CRIME_FACTION_MEMBERSHIP, character_id=int(character.id),
+                       region_id=int(region_id), points=0,
+                       floor=int(floor_level.min_value) if floor_level is not None else None,
+                       event_key=f"law:fmember:{int(character.id)}:{int(region_id)}:{now:%Y%m%d%H%M%S%f}",
+                       location_id=location_id, now=now, settings=settings, levels=levels)
+        wanted = read_wanted(db, character.id, region_id, settings, now)
+        level = lc.level_for(wanted, levels)
+        if outlaw:
+            level = lc.level_at_least(level, settings.outlaw_min_level, levels)
+        level = lc.level_at_least(level, fm.level_code, levels)
+        if level is None:
+            return _NO_ENTRY
     has_jail = law_facility.resolve_jail(db, region_id, level.code, settings=settings, levels=levels) is not None
     enc = models.LawEncounter(
         character_id=int(character.id), region_id=int(region_id), location_id=location_id,

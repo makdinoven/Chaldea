@@ -19,6 +19,7 @@ export const NPC_ROLES = [
   { value: 'banker', label: 'Банкир' },
   { value: 'minter', label: 'Монетчик' },
   { value: 'guild', label: 'Гильдия торговцев' },
+  { value: 'quartermaster', label: 'Интендант' },
 ] as const;
 
 export const NPC_ROLE_LABELS: Record<string, string> = Object.fromEntries(
@@ -46,6 +47,7 @@ export const NPC_ROLE_ICONS: Record<string, string> = {
   banker: '🏦',
   minter: '⚒️',
   guild: '📜',
+  quartermaster: '🎖️',
 };
 
 export const NPC_SEXES = [

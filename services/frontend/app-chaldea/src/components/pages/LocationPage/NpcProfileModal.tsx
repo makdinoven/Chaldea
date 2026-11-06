@@ -12,6 +12,8 @@ import NpcAuctionModal from './NpcAuctionModal';
 import BankModal from './BankModal/BankModal';
 import MintModal from './MintModal/MintModal';
 import GuildModal from './GuildModal/GuildModal';
+import QuartermasterModal from './QuartermasterModal/QuartermasterModal';
+import { QM_SILENT_TEXT, probeQuartermaster, type QuartermasterProbeState } from '../../../api/factions';
 import TeleportMenu from './TeleportMenu';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
@@ -48,6 +50,10 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   const [bankOpen, setBankOpen] = useState(false);
   const [mintOpen, setMintOpen] = useState(false);
   const [guildOpen, setGuildOpen] = useState(false);
+  /** FEAT-206: faction quartermaster binding as seen by this character (none / silent / open). */
+  const [qmState, setQmState] = useState<QuartermasterProbeState>('none');
+  const [qmOpen, setQmOpen] = useState(false);
+  const [qmSilentShown, setQmSilentShown] = useState(false);
   /** The teleport dialog sits on top of this one and owns Escape while open. */
   const [teleportOpen, setTeleportOpen] = useState(false);
   const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
@@ -120,6 +126,26 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
     checkQuests();
   }, [npcId, characterId]);
 
+  // FEAT-206: is this NPC a faction quartermaster for this character? (secret factions answer «silent» or «none»)
+  useEffect(() => {
+    if (!characterId) {
+      setQmState('none');
+      return;
+    }
+    let alive = true;
+    probeQuartermaster(npcId, characterId)
+      .then((state) => {
+        if (alive) setQmState(state);
+      })
+      .catch(() => {
+        // No quartermaster button when the check fails — same as the other capability checks above.
+        if (alive) setQmState('none');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [npcId, characterId]);
+
   const roleLabel = npc?.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
 
   if (bankOpen && npc) {
@@ -151,6 +177,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
         npcName={npc.name}
         npcAvatar={npc.avatar}
         onClose={() => setGuildOpen(false)}
+      />
+    );
+  }
+
+  if (qmOpen && npc) {
+    return (
+      <QuartermasterModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setQmOpen(false)}
       />
     );
   }
@@ -396,6 +433,31 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
               </svg>
               Гильдия торговцев
             </button>
+          )}
+
+          {/* Quartermaster — a faction NPC (FEAT-206); a secret faction's one is silent to outsiders */}
+          {qmState !== 'none' && isCharacterHere && characterId && (
+            <>
+              <button
+                onClick={() => (qmState === 'open' ? setQmOpen(true) : setQmSilentShown(true))}
+                className="
+                  mt-2 w-full px-6 py-3 rounded-card
+                  border border-gold/50 bg-gold/10
+                  text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                  hover:bg-gold/20 hover:border-gold/80
+                  transition-all duration-200
+                  flex items-center justify-center gap-2
+                "
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 21V4m0 0h11l-2 4 2 4H5" />
+                </svg>
+                Интендант
+              </button>
+              {qmState === 'silent' && qmSilentShown && (
+                <p className="w-full -mt-1 text-center text-white/60 text-sm italic">{QM_SILENT_TEXT}</p>
+              )}
+            </>
           )}
 
           {/* Teleport button — only for teleport_master NPCs and present characters */}

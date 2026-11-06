@@ -117,13 +117,15 @@ const isServerAnswer = (err: unknown): boolean => !!responseOf(err)?.status;
 
 export const fetchDungeonsAtLocation = createAsyncThunk<
   DungeonAtLocation[],
-  number,
+  /** FEAT-207: with a character — faction access marks for that viewer. */
+  number | { locationId: number; characterId?: number | null },
   { rejectValue: string }
 >(
   'dungeon/fetchDungeonsAtLocation',
-  async (locationId, thunkAPI) => {
+  async (arg, thunkAPI) => {
+    const { locationId, characterId } = typeof arg === 'number' ? { locationId: arg, characterId: null } : arg;
     try {
-      return await api.fetchDungeonsAtLocation(locationId);
+      return await api.fetchDungeonsAtLocation(locationId, characterId);
     } catch (err: unknown) {
       return thunkAPI.rejectWithValue(getErrorMessage(err, 'Не удалось загрузить список подземелий'));
     }

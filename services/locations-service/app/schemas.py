@@ -673,6 +673,9 @@ class NeighborClient(BaseModel):
     recommended_level: int
     image_url: Optional[str] = None
     energy_cost: int
+    # FEAT-207: closed faction territory (None = open); allowed is viewer-aware only for the viewer's own character
+    access_label: Optional[str] = None
+    access_allowed: Optional[bool] = None
 
 class ClientPost(BaseModel):
     post_id: int
@@ -1246,6 +1249,34 @@ def validate_fame_tier_code(code: Optional[str]) -> Optional[str]:
     return code
 
 
+# FEAT-205: faction points for completing a quest — [{faction_id, points}]
+FACTION_POINTS_LIMIT = 10000
+FACTION_POINTS_MAX_ENTRIES = 5
+
+
+class QuestFactionPoints(BaseModel):
+    faction_id: int = Field(..., ge=1)
+    points: int = Field(..., ge=-FACTION_POINTS_LIMIT, le=FACTION_POINTS_LIMIT)
+
+    @validator("points")
+    def _not_zero(cls, value):
+        if value == 0:
+            raise ValueError("Очки фракции в награде не могут быть равны нулю")
+        return value
+
+
+def validate_faction_points_rewards(value):
+    """None / [] -> None; at most 5 entries, unique faction ids."""
+    if not value:
+        return None
+    if len(value) > FACTION_POINTS_MAX_ENTRIES:
+        raise ValueError(f"Не больше {FACTION_POINTS_MAX_ENTRIES} фракций в награде")
+    ids = [entry.faction_id for entry in value]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Фракция в награде указана дважды")
+    return value
+
+
 # -------------------------------
 #   QUEST SCHEMAS (Admin)
 # -------------------------------
@@ -1283,9 +1314,14 @@ class QuestCreate(BaseModel):
     min_reputation_tier: Optional[str] = None
     min_fame_tier: Optional[str] = None
     fame_reward: Optional[int] = Field(None, ge=0, le=FAME_REWARD_LIMIT)
+    # FEAT-205: faction quest, the rank needed, faction points for completing (existence checked in crud)
+    faction_id: Optional[int] = Field(None, ge=1)
+    min_faction_rank_id: Optional[int] = Field(None, ge=1)
+    faction_points_rewards: Optional[List[QuestFactionPoints]] = None
 
     _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(validate_tier_code)
     _fame_tier = validator("min_fame_tier", pre=True, allow_reuse=True)(validate_fame_tier_code)
+    _faction_points = validator("faction_points_rewards", allow_reuse=True)(validate_faction_points_rewards)
 
 class QuestUpdate(BaseModel):
     title: Optional[str] = None
@@ -1301,9 +1337,14 @@ class QuestUpdate(BaseModel):
     min_reputation_tier: Optional[str] = None
     min_fame_tier: Optional[str] = None
     fame_reward: Optional[int] = Field(None, ge=0, le=FAME_REWARD_LIMIT)
+    # FEAT-205: faction quest, the rank needed, faction points for completing (existence checked in crud)
+    faction_id: Optional[int] = Field(None, ge=1)
+    min_faction_rank_id: Optional[int] = Field(None, ge=1)
+    faction_points_rewards: Optional[List[QuestFactionPoints]] = None
 
     _tier = validator("min_reputation_tier", pre=True, allow_reuse=True)(validate_tier_code)
     _fame_tier = validator("min_fame_tier", pre=True, allow_reuse=True)(validate_fame_tier_code)
+    _faction_points = validator("faction_points_rewards", allow_reuse=True)(validate_faction_points_rewards)
 
 class QuestRead(BaseModel):
     id: int
@@ -1321,6 +1362,9 @@ class QuestRead(BaseModel):
     min_reputation_tier: Optional[str] = None
     min_fame_tier: Optional[str] = None
     fame_reward: Optional[int] = None
+    faction_id: Optional[int] = None
+    min_faction_rank_id: Optional[int] = None
+    faction_points_rewards: Optional[List[dict]] = None
     objectives: List[QuestObjectiveRead] = []
 
     class Config:
@@ -1412,6 +1456,8 @@ class QuestAvailableRead(BaseModel):
     player_status: str = 'available'  # available, active, completed
     min_reputation_tier: Optional[str] = None
     min_fame_tier: Optional[str] = None
+    # FEAT-205: faction_id / min_faction_rank_id / faction_points_rewards are deliberately NOT exposed here
+    # (they would leak secret factions' ids and points to every player); admins see them in QuestRead.
     # FEAT-197: «Нужна репутация: X» when the NPC or quest tier gate is not met (the quest cannot be taken)
     # FEAT-199: «Нужна слава: X» when the fame gate is not met (the reputation reason takes precedence)
     locked_reason: Optional[str] = None

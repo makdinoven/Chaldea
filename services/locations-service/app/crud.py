@@ -21,6 +21,7 @@ import econ_core
 import econ_ledger
 import reputation_read
 import fame_read
+import faction_read
 from econ_ledger import AccountRef, InsufficientFunds, Leg
 
 
@@ -757,8 +758,11 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
     # Build unified map_items list combining ALL locations and districts
     # (including those without coordinates — the frontend handles placed/unplaced separation)
     map_items = []
+    # FEAT-207: public closed marks (no viewer: «Закрыто: X» / «Закрыто» for a secret faction); tolerant
+    closed = await faction_read.access_marks(session, faction_read.ACCESS_LOCATION, [loc.id for loc in all_locations])
     for loc in all_locations:
         map_items.append({
+            "access_label": closed[loc.id].label if loc.id in closed else None,
             "id": loc.id,
             "name": loc.name,
             "type": "location",
@@ -2524,7 +2528,8 @@ async def delete_country(session: AsyncSession, country_id: int):
 
 
 logger = logging.getLogger("location-service.crud")
-async def get_client_location_details(session: AsyncSession, location_id: int, user_id: Optional[int] = None) -> Optional[dict]:
+async def get_client_location_details(session: AsyncSession, location_id: int, user_id: Optional[int] = None,
+                                      viewer_character_id: Optional[int] = None) -> Optional[dict]:
     """
     Собирает детальную информацию о локации для клиентской части:
       - Извлекает базовые данные локации (без children)
@@ -2587,6 +2592,14 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
                 "image_url": neighbor_loc.image_url,
                 "energy_cost": n.energy_cost
             })
+
+    # 2b. FEAT-207: closed faction territories among the neighbours (one batched read; tolerant)
+    marks = await faction_read.access_marks(
+        session, faction_read.ACCESS_LOCATION, [d["id"] for d in detailed_neighbors], viewer_character_id)
+    for d in detailed_neighbors:
+        mark = marks.get(int(d["id"]))
+        d["access_label"] = mark.label if mark is not None else None
+        d["access_allowed"] = mark.allowed if mark is not None else None
 
     # 3. Получаем список персонажей для локации через новый эндпоинт Character‑service
     players = await get_players_in_location(location_id)
@@ -5164,9 +5177,35 @@ async def get_item_name(session: AsyncSession, item_id: int) -> Optional[str]:
 # -------------------------------
 #   QUESTS (Admin CRUD)
 # -------------------------------
+QUEST_TYPE_REPEATABLE = "repeatable"
+
+
+async def validate_quest_faction_fields(session: AsyncSession, faction_id: Optional[int],
+                                        min_rank_id: Optional[int], rewards: Optional[list]) -> None:
+    """FEAT-205 §3.10: the faction / min rank / faction-points reward of a quest refer to real factions
+    (character-service tables, read via faction_read) and the rank belongs to the quest's faction. 422."""
+    if min_rank_id and not faction_id:
+        raise HTTPException(status_code=422, detail="Минимальное звание задаётся только вместе с фракцией")
+    reward_ids = [int(r["faction_id"]) for r in rewards or []]
+    wanted = set(reward_ids) | ({int(faction_id)} if faction_id else set())
+    if not wanted:
+        return
+    factions = await faction_read.factions_by_ids(session, wanted)
+    if faction_id and int(faction_id) not in factions:
+        raise HTTPException(status_code=422, detail="Фракция не найдена")
+    if any(fid not in factions for fid in reward_ids):
+        raise HTTPException(status_code=422, detail="Фракция из награды не найдена")
+    if min_rank_id:
+        rank = (await faction_read.ranks_by_ids(session, [min_rank_id])).get(int(min_rank_id))
+        if rank is None or rank.faction_id != int(faction_id):
+            raise HTTPException(status_code=422, detail="Звание не найдено или принадлежит другой фракции")
+
+
 async def create_quest(session: AsyncSession, data: dict) -> Quest:
     """Create a quest with objectives."""
     objectives_data = data.pop("objectives", [])
+    await validate_quest_faction_fields(
+        session, data.get("faction_id"), data.get("min_faction_rank_id"), data.get("faction_points_rewards"))
     quest = Quest(
         npc_id=data["npc_id"],
         title=data["title"],
@@ -5181,6 +5220,9 @@ async def create_quest(session: AsyncSession, data: dict) -> Quest:
         min_reputation_tier=data.get("min_reputation_tier"),
         min_fame_tier=data.get("min_fame_tier"),
         fame_reward=data.get("fame_reward"),
+        faction_id=data.get("faction_id"),
+        min_faction_rank_id=data.get("min_faction_rank_id"),
+        faction_points_rewards=data.get("faction_points_rewards") or None,
     )
     session.add(quest)
     await session.flush()
@@ -5245,6 +5287,19 @@ async def update_quest(session: AsyncSession, quest_id: int, data: dict) -> Opti
     if not quest:
         return None
 
+    # FEAT-205: the faction fields are validated as they will end up (explicit null clears a field)
+    if any(k in data for k in ("faction_id", "min_faction_rank_id", "faction_points_rewards")):
+        await validate_quest_faction_fields(
+            session,
+            data["faction_id"] if "faction_id" in data else quest.faction_id,
+            data["min_faction_rank_id"] if "min_faction_rank_id" in data else quest.min_faction_rank_id,
+            data["faction_points_rewards"] if "faction_points_rewards" in data else quest.faction_points_rewards,
+        )
+    # FEAT-205: a quest used as a faction entry / rank condition must stay non-repeatable
+    if (data.get("quest_type") == QUEST_TYPE_REPEATABLE and quest.quest_type != QUEST_TYPE_REPEATABLE
+            and await faction_read.quest_referenced(session, quest_id)):
+        raise HTTPException(status_code=409, detail=faction_read.MSG_QUEST_IN_USE)
+
     if "title" in data and data["title"] is not None:
         quest.title = data["title"]
     if "description" in data and data["description"] is not None:
@@ -5271,6 +5326,13 @@ async def update_quest(session: AsyncSession, quest_id: int, data: dict) -> Opti
         quest.min_fame_tier = data["min_fame_tier"]
     if "fame_reward" in data:
         quest.fame_reward = data["fame_reward"]
+    # FEAT-205: nullable, an explicit null clears
+    if "faction_id" in data:
+        quest.faction_id = data["faction_id"]
+    if "min_faction_rank_id" in data:
+        quest.min_faction_rank_id = data["min_faction_rank_id"]
+    if "faction_points_rewards" in data:
+        quest.faction_points_rewards = data["faction_points_rewards"] or None
 
     # Replace objectives if provided
     if "objectives" in data and data["objectives"] is not None:
@@ -5307,6 +5369,9 @@ async def delete_quest(session: AsyncSession, quest_id: int) -> bool:
     quest = result.scalars().first()
     if not quest:
         return False
+    # FEAT-205: a faction entry / rank condition cannot disappear
+    if await faction_read.quest_referenced(session, quest_id):
+        raise HTTPException(status_code=409, detail=faction_read.MSG_QUEST_IN_USE)
     await session.delete(quest)
     await session.commit()
     return True
@@ -5369,6 +5434,9 @@ async def get_available_quests_for_npc(
             session, character_id, npc_id, [q.min_reputation_tier for q in all_quests])
     # FEAT-199: fame gate — read only when some quest of the list has one
     fame_gates = await fame_read.quest_fame_gates(session, character_id, [q.min_fame_tier for q in all_quests])
+    # FEAT-205 §3.9: faction quests — read only when some quest of the list has a faction
+    faction_gates = await faction_read.quest_faction_gates(
+        session, character_id, [(q.faction_id, q.min_faction_rank_id) for q in all_quests])
 
     available = []
     for q in all_quests:
@@ -5378,6 +5446,9 @@ async def get_available_quests_for_npc(
             status = 'completed'
         else:
             status = 'available'
+        faction_gate = faction_gates.gate(q.faction_id, q.min_faction_rank_id)
+        if status == 'available' and faction_gate.hidden:
+            continue  # a secret faction's quest is invisible to non-members
         available.append({
             "id": q.id,
             "title": q.title,
@@ -5394,8 +5465,10 @@ async def get_available_quests_for_npc(
             "player_status": status,
             "min_reputation_tier": q.min_reputation_tier,
             "min_fame_tier": q.min_fame_tier,
+            # FEAT-205: no faction fields for players (secret factions' ids/points must not leak)
             "locked_reason": (
-                gates.reason(q.min_reputation_tier) or fame_gates.reason(q.min_fame_tier)
+                faction_gate.reason
+                or gates.reason(q.min_reputation_tier) or fame_gates.reason(q.min_fame_tier)
             ) if status == 'available' else None,
         })
 
@@ -5421,6 +5494,16 @@ async def accept_quest(
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if char_row[0] < quest.min_level:
         raise HTTPException(status_code=400, detail=f"Требуется уровень {quest.min_level}")
+
+    # FEAT-205 §3.9: faction quest — secret faction & non-member -> 404, else members (from the rank) only -> 403
+    if quest.faction_id:
+        faction_gates = await faction_read.quest_faction_gates(
+            session, character_id, [(quest.faction_id, quest.min_faction_rank_id)])
+        faction_gate = faction_gates.gate(quest.faction_id, quest.min_faction_rank_id)
+        if faction_gate.hidden:
+            raise HTTPException(status_code=faction_read.HIDDEN_STATUS, detail=faction_read.MSG_QUEST_NOT_FOUND)
+        if faction_gate.reason:
+            raise HTTPException(status_code=faction_read.GATE_STATUS, detail=faction_gate.reason)
 
     # FEAT-197: NPC tier gate and the quest's own gate, region of the quest giver (403)
     gates = await reputation_read.quest_gates(session, character_id, quest.npc_id, [quest.min_reputation_tier])

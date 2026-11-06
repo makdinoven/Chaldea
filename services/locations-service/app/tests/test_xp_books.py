@@ -95,6 +95,8 @@ class _FakeQuest:
         self.reputation_reward = None
         # FEAT-199: 0 = no fame call (keeps these tests about XP only)
         self.fame_reward = 0
+        # FEAT-205: no faction points (the membership read decides the faction call)
+        self.faction_points_rewards = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -99,6 +99,37 @@ plan tilts ``grant_deficit_share`` of each country pool toward regions below the
 the season quota by that deficit (nobody below the norm -> nothing posted, retried next tick); both read the stored
 ``wealth_norm`` / ``treasury_target`` and the balances without locks. Lock order unchanged.
 
+Faction economy (FEAT-206, 3.6) — the **faction pass** runs after the mint pass, before the banks (regions already
+ticked: fresh prices, purse after tax / wages, ``last_income``), in scheduled and manual runs alike. Plan (plain reads,
+own session): ticking factions = global switch on, faction active, its economy row enabled with a template, HQ set and
+resolving to a participating region; per HQ region the caps ``econ_purse_share_pct`` of the purse and
+``econ_treasury_share_pct`` of the positive treasury are split between its factions by their wants. Then one
+transaction per faction (ascending id, ``faction_econ_crud.faction_step``): ``econ_regions(hq)`` FOR UPDATE → the HQ
+goods rows the restock needs (ascending group code) → ``faction_economy`` (skipped when ``last_run_id`` is this run) →
+``faction_qm_items`` restock rows (asc id) → open ``faction_debts`` (asc id) → ``faction_econ.plan_faction_step`` → one
+``faction_tick`` op (purse / region → faction dues + profile, faction → purse wages + restock, faction → characters
+debt payouts; untaxed; key ``faction_tick:<run>:f<faction>``) → stocks, debts, economy row, history row → COMMIT.
+``DuplicateOperation`` → skipped (another runner did it); any other failure → rolled back alone, counted
+(``FACTION_ERROR_PREFIX``), retried next tick. Global lock order (FEAT-206 3.6, supersedes the FEAT-193 one):
+``econ_regions (asc region_id) → econ_region_goods (asc region_id, group_code) → econ_region_events → econ_caravans →
+econ_guild_orders → econ_guild_xp_days → econ_mint_seasons → npc_shop_items → econ_banks → bank_deposits → bank_loans →
+faction_members (asc id) → faction_economy (asc faction_id) → faction_qm_items (asc id) → faction_debts (asc id) →
+faction_donation_days → faction_qm_purchases → character_inventory → characters (asc id) → econ_accounts (asc id) →
+character_attributes``.
+
+Donated item sales (FEAT-207 3.8) — inside the same faction step: the plan splits ``econ_item_sale_share_pct`` of the
+HQ purse between the region's factions by the value of their ``faction_item_stock``; the step adds the stock's goods
+groups to the locked HQ goods rows, locks ``faction_item_stock`` rows (quantity > 0, asc item_id) right after the
+quartermaster rows, sells them at the wholesale price with the income (before wages) as one more ``purse(hq) ->
+faction`` leg of the same ``faction_tick`` op (no new op kind, econ_core unchanged), returns their units to the region
+stock and writes ``last_item_sales`` / history ``item_sales`` / ``items_sold``. Global lock order (FEAT-207 3.10,
+supersedes the FEAT-206 one): ``econ_regions (asc region_id) → econ_region_goods (asc region_id, group_code) →
+econ_region_events → econ_caravans → econ_guild_orders → econ_guild_xp_days → econ_mint_seasons → npc_shop_items →
+econ_banks → bank_deposits → bank_loans → faction_members (asc id) → faction_economy (asc faction_id) →
+faction_qm_items (asc id) → faction_item_stock (asc faction_id, item_id) → faction_debts (asc id) →
+faction_donation_days → faction_pvp_kills → faction_qm_purchases → character_inventory → characters (asc id) →
+econ_accounts (asc id) → character_attributes``.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -159,6 +190,8 @@ CARAVAN_ERROR_PREFIX = "караваны — ошибка: "
 # FEAT-193: regions whose guild step failed / a failed guild sweep (regions still ticked).
 GUILD_ERROR_PREFIX = "гильдия — ошибка в регионах: "
 GUILD_SWEEP_ERROR = "гильдия — ошибка закрытия заказов"
+# FEAT-206: factions whose tick step was rolled back
+FACTION_ERROR_PREFIX = "фракции — ошибка: "
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -238,6 +271,11 @@ class RunSummary:
     guild_failures: int = 0               # regions whose guild step was rolled back (the region still ticked)
     guild_failed_region_ids: List[int] = field(default_factory=list)
     guild_sweep_failed: bool = False
+    # FEAT-206 faction economy (3.6)
+    factions_done: int = 0                # factions stepped in this call
+    factions_failed: int = 0              # factions whose step was rolled back (retried next run)
+    faction_failed_ids: List[int] = field(default_factory=list)
+    faction_ops_posted: int = 0           # faction_tick operations posted
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -484,6 +522,11 @@ def purge_old(session: Session, params: econ_sim.SimParams, now: datetime) -> No
     """History older than the retention, runs beyond the newest KEEP_RUNS (the caller commits)."""
     cutoff = now - timedelta(days=max(1, int(params.history_retention_days)))
     session.execute(text("DELETE FROM econ_region_history WHERE created_at < :cutoff"), {"cutoff": cutoff})
+    try:                                    # FEAT-206: faction history (table absent before migration 046)
+        with session.begin_nested():
+            session.execute(text("DELETE FROM faction_econ_history WHERE created_at < :cutoff"), {"cutoff": cutoff})
+    except Exception:
+        logger.warning("economy tick: faction history not purged", exc_info=True)
     oldest_kept = session.execute(
         text("SELECT id FROM econ_tick_runs ORDER BY id DESC LIMIT 1 OFFSET :offset"), {"offset": KEEP_RUNS - 1}
     ).scalar()
@@ -1404,6 +1447,9 @@ def run_tick(
     # FEAT-191 (3.6): the court mint after the regions (stocks / norms are fresh), before the banks.
     _mint_pass(session_factory, run_id, summary, params, start)
 
+    # FEAT-206 (3.6): faction economy after the regions and the mint, before the banks.
+    _faction_econ_pass(session_factory, run_id, summary, params, start)
+
     # FEAT-184 (3.7): banks after the regions, own transactions (never inside a region transaction).
     _prepare_banks(session_factory, run_id, summary, tick_clock)
     # FEAT-187: bank panic / loan boom of the region's active events replace its bank params.
@@ -1442,6 +1488,8 @@ def run_tick(
             parts.append(GUILD_ERROR_PREFIX + ", ".join(str(r) for r in summary.guild_failed_region_ids))
         if summary.guild_sweep_failed:
             parts.append(GUILD_SWEEP_ERROR)
+        if summary.faction_failed_ids:
+            parts.append(FACTION_ERROR_PREFIX + ", ".join(str(f) for f in summary.faction_failed_ids))
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -1462,14 +1510,15 @@ def run_tick(
     log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures
                              or summary.events_failed or summary.mint_failures or summary.quota_failed
                              or summary.caravans_failed or summary.guild_failures
-                             or summary.guild_sweep_failed) \
+                             or summary.guild_sweep_failed or summary.factions_failed) \
         else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
         "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
         "%d failed, %d loans collected (%d), %d overdue, %d closed; events: %d ended, %d started, %d spread, "
         "%d chained, %d riots, %d applied, %d expense operations, %d failed; quota: %d issued%s; "
         "court mint: %d operations, %d marks, %d failed countries; caravans: %d sent (%d marks), %d delivered, "
-        "%d cancelled, %d failed; guild: %d opened, %d refreshed, %d closed, %d failed regions",
+        "%d cancelled, %d failed; guild: %d opened, %d refreshed, %d closed, %d failed regions; factions: %d done, "
+        "%d operations, %d failed",
         run_id, summary.status, summary.regions_done, summary.regions_total, summary.regions_failed,
         summary.operations_posted, summary.merchants_processed, summary.merchant_items_sold,
         summary.merchant_items_restocked, summary.merchant_ops_posted, summary.merchant_failures,
@@ -1480,7 +1529,8 @@ def run_tick(
         " (failed)" if summary.quota_failed else "", summary.mint_court_ops, summary.mint_court_marks,
         summary.mint_failures, summary.caravans_dispatched, summary.caravan_value, summary.caravans_delivered,
         summary.caravans_cancelled, summary.caravans_failed, summary.guild_opened, summary.guild_refreshed,
-        summary.guild_closed, summary.guild_failures)
+        summary.guild_closed, summary.guild_failures, summary.factions_done, summary.faction_ops_posted,
+        summary.factions_failed)
     return summary
 
 
@@ -1657,6 +1707,49 @@ def _mint_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary
         if result.marks > 0:
             summary.mint_court_ops += 1
             summary.mint_court_marks += result.marks
+
+
+# --------------------------------------------------------------------------------------------- factions (FEAT-206)
+
+def _faction_econ_pass(session_factory: SessionFactory, run_id: int, summary: RunSummary,
+                       params: econ_sim.SimParams, now: datetime) -> None:
+    """Faction economy (3.6): plan from plain reads, then one transaction per faction (ascending id), best effort."""
+    import faction_econ_crud
+    import faction_notify
+    session = session_factory()
+    try:
+        jobs = faction_econ_crud.plan_pass(session)
+    except Exception as exc:
+        logger.warning("economy tick run %s: faction pass unavailable (%s), skipped", run_id, type(exc).__name__)
+        return
+    finally:
+        session.rollback()
+        session.close()
+    for job in jobs:
+        session = session_factory()
+        try:
+            outcome = faction_econ_crud.faction_step(session, job, run_id=run_id, now=now,
+                                                     wholesale_share=params.merchant_wholesale_share,
+                                                     load_item_markets=load_item_markets)
+            session.commit()
+        except core.DuplicateOperation:
+            session.rollback()      # another runner stepped this faction in this run
+            continue
+        except Exception as exc:
+            session.rollback()
+            summary.factions_failed += 1
+            summary.faction_failed_ids.append(job.faction_id)
+            logger.error("economy tick run %s: faction %s step failed (%s), will be retried next tick", run_id,
+                         job.faction_id, type(exc).__name__, exc_info=True)
+            continue
+        finally:
+            session.close()
+        if outcome.status == "done":
+            summary.factions_done += 1
+            if outcome.posted:
+                summary.faction_ops_posted += 1
+        if outcome.notices:
+            faction_notify.publish(outcome.notices)
 
 
 # --------------------------------------------------------------------------------------------- banks (FEAT-184)

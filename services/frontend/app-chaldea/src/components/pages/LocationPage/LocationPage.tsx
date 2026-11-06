@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import axios from 'axios';
@@ -163,14 +163,21 @@ const LocationPage = () => {
   const [artOnly, setArtOnly] = useState(false);
   useBodyBackground(location?.image_url, !artOnly);
 
+  // FEAT-207: the active character makes the neighbour marks viewer-aware (closed faction territory).
+  const viewerCharacterId = character?.id ?? null;
+  // A refetch for the same location (the character arrived later) keeps the page instead of a spinner.
+  const loadedLocationIdRef = useRef<string | null>(null);
+
   const fetchLocationData = useCallback(async () => {
     if (!locationId) return;
-    setLoading(true);
+    if (loadedLocationIdRef.current !== locationId) setLoading(true);
     setError(null);
     try {
       const res = await axios.get<LocationData>(
-        `${BASE_URL}/locations/${locationId}/client/details`
+        `${BASE_URL}/locations/${locationId}/client/details`,
+        { params: viewerCharacterId ? { character_id: viewerCharacterId } : undefined },
       );
+      loadedLocationIdRef.current = locationId;
       setLocation(res.data);
     } catch (err) {
       const message =
@@ -182,7 +189,7 @@ const LocationPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [locationId]);
+  }, [locationId, viewerCharacterId]);
 
   useEffect(() => {
     fetchLocationData();

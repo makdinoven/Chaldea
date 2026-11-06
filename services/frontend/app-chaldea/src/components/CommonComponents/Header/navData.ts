@@ -45,6 +45,7 @@ export const navItems: NavItem[] = [
           { label: 'Персонажи', path: '/characters' },
           { label: 'Карта мира', path: '/world' },
           { label: 'Вестник', path: '/herald' },
+          { label: 'Фракции', path: '/factions' },
         ],
       },
       {

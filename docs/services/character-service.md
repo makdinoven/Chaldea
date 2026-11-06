@@ -2467,3 +2467,245 @@ FEAT-203 как есть: кулдаун бегства в этой локаци
 - battle-service не менялся: стражник, ушедший до старта боя, даёт прежний 409 → прежний откат в `pending`.
 - Тесты: `tests/test_guard_patrols.py` (мир с таблицей `LocationNeighbors`; точки подмены `patrol_rng`,
   `detection_rng`).
+
+## Фракции — этап 1, ядро (FEAT-205)
+
+Лорные фракции, которые создаёт админ (контракт: `features/FEAT-205-factions-core.md` §3). Модули: `faction_core.py`
+(чистые правила: условия вступления, лестница званий, очки/штраф/сгорание), `faction_crud.py` (чтения + потоки игрока
+и внутренний хук квеста), `faction_admin_crud.py` (админка), `faction_rewards.py` (outbox наград за звание),
+`faction_hooks.py` (диспетчер после коммита + хук повышения уровня), `faction_pass.py` (периодический проход),
+`faction_notify.py` (RabbitMQ `general_notifications`, `ws_type=faction`), `faction_api.py` (роутер, подключён до
+основного).
+
+### Миграция `045_factions_core` (revises `044_guard_patrols`; шаги защищены `information_schema`)
+`factions`, `faction_ranks`, `faction_conditions`, `faction_hostilities` (a_id < b_id), `faction_members` (строка на пару
+персонаж-фракция, переживает выход), `faction_applications` (`pending_key` UNIQUE пока заявка висит),
+`faction_rank_grants` (UNIQUE персонаж+звание — награда навсегда один раз), `faction_reward_deliveries` (outbox),
+`faction_log` (журнал, UNIQUE(event_key, faction_id) — идемпотентность), `faction_settings` (строка id=1: 3 д / 7 д /
+50 % / 50 % / 24 ч + `pass_last_run_at`). FK на `characters` — ON DELETE CASCADE. Без ENUM.
+
+### Правила
+- Условия вступления (И): `region_reputation`, `fame`/`infamy` (по ступеням, числа не раскрываются), `level`, `class`,
+  `subclass`, `race`, `quest` (только неповторяемые), `not_in_faction`; непримиримая пара — неявное условие. Тайная
+  фракция игроку не называется («Не состоит в некоторых тайных организациях»). Подкласс в тексте условия — название из `tree_nodes` (`subclass_choice`), без него — ключ.
+- Звания: низшее — вступительное (без условий); повышение автоматическое (очки/уровень/квест), без понижения.
+- Очки ≥ 0; прирост за квест снимает `hostile_penalty_pct` % у каждой враждебной фракции, где персонаж активен.
+  Ручное начисление админом штраф не вызывает.
+- Выход/исключение: сгорает `leave_burn_pct` %, повторно — через `rejoin_cooldown_days`; звание при возвращении
+  пересчитывается с вступительного, награды повторно не выдаются.
+
+### Награды (outbox)
+Грант + строки выдачи пишутся в транзакции повышения; после коммита `deliver_pending`: `xp` (атомарно с отметкой
+`done`, затем `check_and_update_level`), `title` (`crud.grant_title`), `item` (HTTP в inventory; неоднозначная ошибка —
+`failed`/`uncertain`, без авто-повтора, кнопка «Повторить» в админке), `voucher` (HTTP
+`POST /locations/houses/internal/vouchers`, идемпотентно по `source_key`). Хук повышения уровня в
+`crud.check_and_update_level` (несмертельный) перепроверяет звания; во время выдачи только записывает (ContextVar),
+рекурсии нет.
+
+### Периодический проход (`econ_scheduler.run_faction_pass`, раз в 5 мин, claim по `faction_settings`)
+Предупреждение → снятие → исключение через `warning_days`; повтор выдачи наград и «зависших» `sending`.
+
+### API (префикс `/characters`)
+Игрок: `GET factions/catalog?character_id=`, `GET factions/{fid}/public`, `GET {cid}/factions` (приватно),
+`GET {cid}/factions/history`, `GET {cid}/factions/public`, `POST {cid}/factions/{fid}/join|apply|leave`,
+`DELETE {cid}/factions/applications/{aid}`. Админ (`factions:read/edit/delete/manage/settings`):
+`/admin/factions[...]` — CRUD фракций/званий/условий/враждебности, заявки, участники (очки/исключение), карточка
+персонажа, повтор выдачи, настройки. Внутренний: `POST /internal/factions/quest-completed` (идемпотентно по `cq_id`).
+
+## Фракции — этап 2, экономика фракций (FEAT-206)
+
+Контракт: `features/FEAT-206-faction-economy.md` §3. Модули: `faction_econ.py` (чистая математика: параметры шаблонов
+с белым списком и границами, богатство 0–100 и слова, план шага тика, очки за пожертвования, цена интенданта),
+`faction_econ_crud.py` (строки экономики, очередь долгов, пожертвования, шаг тика, админка экономики/шаблонов),
+`faction_qm_crud.py` (интендант: probe/просмотр/покупка, outbox выдачи предметов, возвраты, админка интендантов и
+ассортимента). Роуты — в `faction_api.py`.
+
+### Общая книга (копии `econ_core.py` ×4 + `tests/econ_contract_cases.py` ×4)
+Новый тип счёта `faction_treasury` (ref_id = `factions.id`, в `REF_KINDS`; НЕ отрицательный, НЕ источник налога, НЕ
+источник денег), `AccountRef.faction(fid)`, имя — `SELECT name FROM factions`. Операции `FACTION_OP_TYPES` (все без
+налога, без комментария, не трогают эмиссию/корректировки):
+`faction_tick` (шаг тика: кошелёк/казна края → фракция; фракция → кошелёк жалованье и закупки; фракция → персонажи
+выплаты долгов), `faction_donation` (персонаж → фракция), `faction_qm_sale` (персонаж → фракция), `faction_qm_refund`
+(фракция → персонаж), `faction_payout` (фракция → персонажи, очередь долгов). Стартовый капитал — существующий
+`admin_emission` (`EMISSION_TARGET_KINDS` включает `faction_treasury`); корректировка админом разрешена. В сводке
+(`GET /admin/economy/summary`) — итог `totals.factions`. Боевой пропуск: марки за звания/возвраты — «заработано»,
+пожертвования и покупки у интенданта — «потрачено» (`LEDGER_EXCLUDED_OP_TYPES` не менялся).
+
+### Миграция `046_faction_economy` (revises `045_factions_core`; шаги защищены `information_schema`, без ENUM)
+- `faction_ranks` + `reward_marks` (0..1 000 000), `qm_discount_pct` (0..50);
+- `faction_settings` + `donation_marks_per_point` (10), `donation_points_daily_cap` (50), `econ_enabled` (1),
+  `econ_purse_share_pct` (2), `econ_treasury_share_pct` (1), `members_leave_pct` (5), `members_grow_pct` (1),
+  `qm_take_share_pct` (5);
+- `faction_econ_templates` (сид: `order` «Орден», `merchants_guild` «Гильдия торговцев», `dark_guild` «Тёмная
+  гильдия», `temple` «Храм», `academy` «Академия»; `params` JSON, дробные — строками);
+- `faction_economy` (1:1 с `factions`, бэкфилл; шаблон + `overrides`, участники + дробный остаток, границы,
+  `payout_seq`, `last_run_id` и последние цифры шага), `faction_econ_history` (UNIQUE run+фракция),
+  `faction_debts` (очередь выплат: `rank:g<grant>` / `refund:p<purchase>`, UNIQUE `source_key`),
+  `faction_donation_days` (PK персонаж+фракция+день UTC), `faction_quartermasters` (NPC ↔ фракция),
+  `faction_qm_items` (ассортимент, UNIQUE фракция+предмет, `min_rank_id` RESTRICT), `faction_qm_purchases`
+  (журнал + outbox выдачи, UNIQUE `op_key`).
+Удаление звания из ассортимента → 409; удаление фракции с деньгами в казне или с любым долгом → 409.
+
+### Правила (`faction_econ.py`)
+- Параметры: код ← `template.params` ← `overrides` (неизвестный ключ/выход за границы → 422 при записи; битое
+  хранимое значение игнорируется с предупреждением).
+- Богатство `clamp(0..100, round(50 × казна / норма))`, норма = `max(1, участники × norm_per_member)`; слова:
+  ≥75 «Процветает», 40–74 «Держится», 15–39 «В затруднении», <15 «Бедствует». Игроку — только слова (у тайной
+  фракции — только участникам), числа — только админке.
+- Шаг: взносы + доход по профилю (`members_purse` / `income_share` — из кошелька края штаба, `treasury_share` — из
+  положительной казны края) ограничены долей края на все фракции (`econ_purse_share_pct` / `econ_treasury_share_pct`,
+  делится пропорционально желаниям) и балансом → жалованье → долги FIFO (частично) → закупки интенданта с рынка края
+  штаба (только товары рынка; бюджет `floor(max(0, доступно − 0.5×норма) × qm_budget_share)`, цена — оптовая,
+  деньги — в кошелёк жителей, товар — из запаса края, не больше `qm_take_share_pct` % запаса группы) → участники
+  (недоплата жалованья: до −`members_leave_pct` %, богатство ≥ 50: до +`members_grow_pct` %, дробный остаток копится,
+  границы `members_min..members_max`).
+
+### Шаг в 6-часовом тике (`econ_tick._faction_econ_pass`, после чеканки, до банков)
+Тикают: глобальный переключатель включён, фракция активна, экономика фракции включена, шаблон выбран, штаб задан и
+лежит в симулируемом крае. Одна транзакция на фракцию: `econ_regions(штаб)` → товары края (по коду группы) →
+`faction_economy` (пропуск, если `last_run_id` = этот прогон) → строки ассортимента → открытые долги → одна операция
+`faction_tick` (ключ `faction_tick:<run>:f<fid>`) → запасы, долги, строка экономики, история → COMMIT.
+`DuplicateOperation` → пропуск; иная ошибка → откат только этой фракции, «фракции — ошибка: …» в ошибке прогона.
+Скрытая фракция / без штаба / без шаблона не тикает, но пожертвования, продажи интенданта и выплаты долгов работают.
+
+Глобальный порядок блокировок: `econ_regions → econ_region_goods → econ_region_events → econ_caravans →
+econ_guild_orders → econ_guild_xp_days → econ_mint_seasons → npc_shop_items → econ_banks → bank_deposits → bank_loans →
+faction_members → faction_economy → faction_qm_items → faction_debts → faction_donation_days → faction_qm_purchases →
+character_inventory → characters → econ_accounts → character_attributes`. Каждое списание с казны фракции сначала
+блокирует `faction_economy` (сериализация с тиком и выплатами). HTTP внутри транзакций нет.
+
+### Очередь долгов (марки за звания)
+`grant_rank` при `reward_marks > 0` пишет строку `faction_debts` (один раз за грант, задним числом не платим).
+`settle_debts` (своя транзакция: `faction_economy` FOR UPDATE → открытые долги по id → одна `faction_payout`, ключ
+`faction_payout:f<fid>:s<payout_seq+1>`) вызывается после коммита: после повышения (`deliver_pending`), пожертвования,
+покупки, «Заполнить по шаблону», эмиссии в казну фракции, в 5-минутном проходе и внутри шага тика. Долг переживает
+выход/исключение/скрытие фракции. Уведомления: «записаны в долг» (один раз), «выплатила долг» (если было
+уведомление о долге); частичные выплаты молча.
+
+### Пожертвования (`POST /characters/{cid}/factions/{fid}/donate`, владелец, активный участник)
+`{amount 1..1 000 000, request_id}`; ключ `faction_donation:c<cid>:<request_id>` (повтор → 409 «Это пожертвование уже
+выполнено»), нехватка → 400. Очки: `floor((марки за день) / donation_marks_per_point)`, не больше дневного лимита
+(UTC-день); марки сверх лимита просто идут в казну. Очки считаются заработанными: штраф враждебным фракциям как за
+квест. В журнале — событие `donation`. Порядок в транзакции: участники → строка дня → очки/журнал → проверка званий
+(новая строка `faction_debts` за звание с марками) → проводка `faction_donation` **последней** (блокирует
+`characters` → счета); нехватка марок откатывает всё.
+
+### Интендант (`faction_qm_crud.py`)
+Привязка — `faction_quartermasters`; роль `quartermaster` — только видимая метка. Не торговец `npc_shop_items`.
+- `GET /characters/factions/quartermaster/npc/{npc_id}/probe?character_id=` → `none | silent | open`.
+- `GET /characters/factions/quartermaster/npc/{npc_id}?character_id=` — владелец, NPC привязан (404); не-участник
+  тайной фракции → 403 «Этот человек с вами не разговаривает», если роль NPC «Интендант» (probe = `silent`), иначе
+  ровно ответ обычного NPC — 404 «Интендант не найден» (probe = `none`); эта проверка идёт до «жив» (409), «та же
+  локация» (400) и блокировки активности, чтобы ответ не выдавал тайного интенданта. Так же отвечает `…/buy`.
+- `POST …/buy {character_id, qm_item_id, quantity 1..99, request_id}` — + блокировка активности, диалоговый гейт
+  FEAT-145; одна транзакция: участник → строка ассортимента → списание запаса → покупка `pending` → `faction_qm_sale`
+  (проводка последней);
+  после коммита выдача через inventory (claim до HTTP; неоднозначная ошибка → `failed`/`uncertain`; 5 явных неудач →
+  авто-возврат; возврат при пустой казне → долг `refund`).
+
+### Админка (`factions:read` / `factions:economy`; «Заполнить» — ещё и `economy:emit`)
+`GET/PUT /admin/factions/{fid}/economy` (PUT частичный: не переданные поля, в том числе `template_code` /
+`overrides`, сохраняются; явный `null` очищает), `POST …/economy/fill` (повторный клик — в том числе одновременный
+двойной — эмитирует 0),
+`GET …/economy/history`, `GET …/economy/operations`, `GET /admin/factions/{fid}/debts`,
+`GET/POST/PUT/DELETE /admin/factions/econ-templates[/{code}]`, `GET/PUT /admin/factions/{fid}/quartermasters`,
+`GET/POST /admin/factions/{fid}/qm-items`, `PUT/DELETE /admin/factions/qm-items/{id}` (предмет вне рынка с нормой
+запаса → 422), `GET /admin/factions/{fid}/qm-purchases`, `POST /admin/factions/qm-purchases/{id}/retry|refund`;
+настройки и звания — новые поля в существующих эндпоинтах; карточка персонажа — `debts`, `qm_purchases`.
+
+
+## Фракции — этап 3: территории, пассивки, враги, запрет (FEAT-207)
+
+Контракт: `features/FEAT-207-factions-territory-crime.md` §3. Модули: `faction_core.py` (чистые правила: решение о
+доступе и тексты, словарь ключей пассивок и валидация, суммирование пассивок, очки за победы), `faction_territory.py`
+(правила доступа, ворота перемещения, внутренние проверки для данжей, выдворение, чтение «вне закона»),
+`faction_kills.py` (пассивки для боя, колбэк конца боя → очки, админка врагов и краёв вне закона), `faction_items.py`
+(пожертвование предметов, склад фракции, цены края штаба), `faction_econ.py` / `faction_econ_crud.py` (продажа склада
+в шаге тика). `econ_core.py` ×4 не менялся.
+
+### Миграция `047_faction_territory` (revises `046_faction_economy`; шаги защищены `information_schema`, без ENUM)
+- `faction_access_rules` (kind `location|dungeon`, target_id, faction_id CASCADE, `min_rank_id` RESTRICT; UNIQUE
+  kind+target — одна фракция на территорию);
+- `faction_ranks` + `passive_name`, `passive_description`, `passive_modifiers` (JSON `{ключ: int}`);
+- `faction_enemies` (kind `mob` = шаблон моба / `npc` = конкретный NPC (не моб) / `hostile` = открытые участники
+  враждебных фракций, points 1..10000; UNIQUE фракция+kind+ref), `factions.kill_points_daily_cap` (NULL = общий),
+  `faction_donation_days.kill_points` (свой дневной счётчик), `faction_pvp_kills` (правило «тот же противник — раз в N ч»);
+- `faction_outlaw_regions` (фракция+край, `level_code` — уровень шкалы закона);
+- `faction_item_stock` (PK фракция+предмет — пожертвованные предметы до продажи);
+- `faction_settings` + `kill_points_daily_cap` (50), `pvp_kill_repeat_hours` (24), `outlaw_check_cooldown_hours` (24),
+  `econ_item_sale_share_pct` (2); `faction_economy.last_item_sales`, `faction_econ_history.item_sales` / `items_sold`.
+Удаление звания, которое стоит условием доступа к территории → 409; удаление фракции, у которой на складе остались
+предметы → 409 (правила/враги/края/склад удаляются вместе с фракцией). Новых прав нет (`factions:read|edit|settings`).
+
+### Закрытые локации и данжи
+- Решение (`faction_core.access_decision`): нет правила или фракция **скрыта** → открыто; активный участник
+  (и звание ≥ нужного, если задано) → проходит («Территория фракции «X»»); иначе закрыто. Тайная фракция не называется
+  не-участникам: метка «Закрыто», отказ «Сюда вас не пускают». Тексты: «Вход только для членов фракции «X»», «Нужно
+  звание «Y» во фракции «X»». NPC (патрули, стража) не проверяются. Обхода для админов нет.
+- Авторитетная проверка: `PUT /characters/internal/{id}/update_location` → 409 с текстом (locations-service отдаёт его
+  игроку); мастер телепорта → 403 до списания платы, в списке направлений — `locked_reason`. Принудительные переносы
+  (админ, тюрьма, возврат после бегства, свиток дома, возврат из данжа) не проверяются — их догоняет выдворение.
+- Выдворение (`faction_territory.eject`): соседняя открытая локация (по возрастанию id) → штаб фракции правила →
+  пост стражи края; персонаж в бою / в забеге / под любой блокировкой активности пропускается и повторяется в
+  5-минутном проходе (`faction_pass.run_pass`, шаг 3). После коммита — сразу после выхода, исключения админом и
+  сохранения правила на локацию. Запись в журнал персонажа (`faction_eject`) и в журнал фракции `ejected` (только если
+  у персонажа есть строка членства — не раскрываем тайную фракцию), уведомление «Вас выдворили из «A» в «B»: …».
+
+### Пассивки званий (только в бою)
+Набор модификаторов звания (≤10 ключей, значения −100..100, не 0; ключи — 5 боевых первичных, урон, уклонение,
+сопротивление эффектам, 12 `res_*`, крит. шанс/урон, 12 `vul_*`). Действуют накопительно: все звания лестницы до
+текущего включительно, всех активных членств (в том числе скрытых фракций). battle-service на старте боя берёт сумму
+`GET /characters/internal/factions/{cid}/passive-modifiers` и вшивает в снимок атрибутов; в `character_attributes`
+ничего не пишется (в профиле не видны, на скрытность не влияют).
+
+### Очки за победы над врагами (`POST /characters/internal/factions/battle-result`)
+battle-service после каждого боя с победителем шлёт `{battle_id, battle_type, winner_team, participants[{character_id,
+team, alive, mob_template_id}]}` (3 попытки). Победители — игроки команды-победителя (живые и павшие); побеждённые —
+все из других команд. Враги фракции A: мобы шаблона из списка, NPC из списка, в `pvp_death` / `pvp_attack` (не
+тренировочные) — открытые участники фракций, враждебных A (тайные не считаются), не чаще раза в
+`pvp_kill_repeat_hours` за одного противника. Дневной лимит (UTC) — `factions.kill_points_daily_cap` или общий;
+штраф враждебным фракциям — как за любые очки. Идемпотентно: ключ `faction:kill:b<battle>:c<cid>` в `faction_log`.
+Одна транзакция на победителя: участники → строки дня → `faction_pvp_kills` (+ гранты званий). Журнал «Победа над
+врагами фракции «X»: +N очков» (жертвы не называются); 0 из-за лимита — запись «лимит на сегодня исчерпан» без
+уведомления.
+
+### Членство как преступление (`law_crud._check`)
+Если у персонажа есть активное членство во фракции, объявленной вне закона в этом крае, и за последние
+`outlaw_check_cooldown_hours` не было правонарушения `faction_membership` в этом крае: открытый участник узнаётся
+стражей без броска, тайный — только при удачном броске обнаружения (скрытность FEAT-201; проскользнул → ничего).
+Правонарушение `faction_membership` (без id/имени фракции; минимальный прирост слухов, как у любого
+правонарушения) поднимает розыск до порога выбранного уровня, дальше — обычная встреча со стражей / тюрьма страны.
+Работает при входе, телепорте и патрулях; фильтр патрулей (`patrol_crud._SQL_SUSPECTS`) включает таких участников
+даже без розыска. Чтение недоступно → проверка членства пропускается (ход не ломается).
+
+### Пожертвование предметов (`GET/POST /characters/{cid}/factions/{fid}/donate-items`, владелец, активный участник)
+Только если экономика фракции тикает (иначе 409 «Фракция сейчас не принимает предметы: <причина>»). Принимаются
+только обычные стопки (без заточки, камней, прочности), не квестовые, торгуемые на рынке края штаба; ценность —
+оптовая цена края штаба × количество; марки-эквивалент идут в ту же строку дня, что и пожертвование марок (тот же
+курс и лимит 50 очков). `request_id` — идемпотентность (`faction:donate_items:c<cid>:<id>`, повтор → 409). Денег при
+сдаче нет: предметы уходят со склада персонажа (прямые записи в `character_inventory`) в `faction_item_stock`.
+Порядок блокировок: участники → склад фракции → строка дня → инвентарь. В шаге тика склад продаётся на рынок края
+штаба (доля `econ_item_sale_share_pct` кошелька жителей на все фракции края, делится по стоимости складов) — нога
+`purse(штаб) → фракция` той же операции `faction_tick`; единицы товара возвращаются в запас края. Нельзя продать
+сейчас — строка остаётся (видна в админке экономики: `item_stock`).
+
+Глобальный порядок блокировок (заменяет этап 2): `econ_regions → econ_region_goods → econ_region_events →
+econ_caravans → econ_guild_orders → econ_guild_xp_days → econ_mint_seasons → npc_shop_items → econ_banks →
+bank_deposits → bank_loans → faction_members → faction_economy → faction_qm_items → faction_item_stock →
+faction_debts → faction_donation_days → faction_pvp_kills → faction_qm_purchases → character_inventory → characters
+→ econ_accounts → character_attributes`. Пути закона (`update_location`, патрули) блокируют `characters` первыми и
+таблицы фракций только читают.
+
+### API (префикс `/characters`)
+- Внутренние (`X-Internal-Token`): `POST /internal/factions/access/check` `{kind, target_id, character_ids ≤20}` →
+  `{rule, allowed, failed_character_ids, detail}`; `POST /internal/factions/access/labels` `{kind, target_ids ≤200,
+  character_id, user_id}` → `{items[{target_id, access_label, access_allowed}]}` (с учётом зрителя — только если
+  персонаж принадлежит `user_id`); `GET /internal/factions/{cid}/passive-modifiers` → `{modifiers}`;
+  `POST /internal/factions/battle-result`.
+- Игрок: `GET /{cid}/factions` (+ у активных членств `passives`, `outlaw_regions`, в `donation` —
+  `items_enabled` / `items_disabled_reason`; сверху — `passive_total`), каталог и `GET /factions/{fid}/public`
+  (+ у званий `passive`, у фракции `outlaw_regions`), `GET|POST /{cid}/factions/{fid}/donate-items`.
+- Админ: `GET|PUT|DELETE /admin/factions/access/{kind}/{target_id}` (read / edit), `GET /admin/factions/{fid}/territory`,
+  `GET|PUT /admin/factions/{fid}/enemies` (`{enemies[{kind, ref_id, points}] ≤50, kill_points_daily_cap}`),
+  `GET|PUT /admin/factions/{fid}/outlaw-regions` (`{regions[{region_id, level_code}] ≤50}`); звания — поля пассивки;
+  настройки — 4 новых поля; экономика — `item_stock`, `last.item_sales`, история — `item_sales` / `items_sold`.

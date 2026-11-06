@@ -15,6 +15,7 @@ import {
 import { selectLocationEdit } from '../../../../redux/selectors/locationSelectors';
 import LocationNeighborsEditor from './LocationNeighborsEditor/LocationNeighborsEditor';
 import GatheringNodesEditor from './GatheringNodesEditor/GatheringNodesEditor';
+import FactionAccessField from '../../../Admin/FactionsPage/FactionAccessField';
 import type { AppDispatch } from '../../../../redux/store';
 
 interface Neighbor {
@@ -499,6 +500,13 @@ const EditLocationForm = ({
           <div className="mb-6">
             <h3 className="text-white mb-4 pb-2 border-b border-white/10">Ноды добычи</h3>
             <GatheringNodesEditor locationId={locationId} />
+          </div>
+        )}
+
+        {/* FEAT-207: closed faction territory (saved separately from the form) */}
+        {locationId !== 'new' && typeof locationId === 'number' && (
+          <div className="mb-6">
+            <FactionAccessField kind="location" targetId={locationId} />
           </div>
         )}
 

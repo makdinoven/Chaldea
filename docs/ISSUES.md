@@ -387,6 +387,10 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## MEDIUM
 
+### ~~Тесты: `test_econ_dungeon*.py` в dungeon-service падают на подготовке со второго теста — таблица `factions` не удаляется~~ DONE (FEAT-207, 2026-11-06)
+**Сервис:** dungeon-service (только тесты)
+**Исправлено:** `factions` добавлена в `_ECON_TABLES` фикстуры `econ` в `app/tests/test_econ_dungeon.py` (её же импортирует `test_econ_dungeon_flows.py`) — teardown теперь удаляет таблицу, весь набор dungeon-service зелёный.
+
 ### ~~Баг: подтипы яда «Снижение характеристик» и «Снижение защит» в бою ничего не делают~~ DONE (2026-11-05)
 **Сервисы:** battle-service, autobattle-service, frontend (редактор навыков)
 **Было:** яд с этими подтипами накладывался, но `aggregate_modifiers` клал силу в ключи `stat_reduction` / `defense_reduction`, которые формулы не читают.

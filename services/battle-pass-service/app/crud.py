@@ -409,6 +409,9 @@ async def _progress_visit_locations(
 # never touch a character account, so they are never counted.
 # FEAT-193: guild_order is deliberately NOT excluded — filling guild orders
 # counts as earned gold (user decision).
+# FEAT-206: faction ops are deliberately NOT excluded (user decision) - rank
+# marks (faction_payout, faction_tick debt legs) and faction_qm_refund count
+# as earned; faction_donation and faction_qm_sale count as spent.
 LEDGER_CHARACTER_KIND = "character"
 LEDGER_EXCLUDED_OP_TYPES = (
     "genesis",

@@ -1871,6 +1871,7 @@ class EconTotals(BaseModel):
     banks: int = 0                           # FEAT-184: own money of all banks (`bank` accounts)
     bank_deposits: int = 0                   # FEAT-184: vaults of player deposits (`bank_deposits` accounts)
     caravan_escrow: int = 0                  # FEAT-192: money of caravans on the road («Караваны в пути»)
+    factions: int = 0                        # FEAT-206: all faction treasuries (`faction_treasury` accounts)
 
 
 class EconDriftingCharacter(BaseModel):
@@ -4281,3 +4282,237 @@ class PatrolStepOut(BaseModel):
     encounters: int = 0
     slipped: int = 0
     patrol: PatrolOut
+
+
+# ========== FEAT-205: factions ==========
+# Types only (+ hard abuse bounds); the domain bounds with Russian messages live in faction_admin_crud / faction_crud
+# (422 / 409 with {"detail": "<текст>"}). Responses are plain dicts (contract: features/FEAT-205 §3.10).
+
+FACTION_TEXT_MAX = 5000
+FACTION_LIST_MAX = 100
+
+
+class FactionApplyIn(BaseModel):
+    message: Optional[str] = Field(None, max_length=500)
+
+
+class FactionQuestRewardIn(BaseModel):
+    faction_id: int = Field(..., ge=1)
+    points: int = Field(..., ge=-10000, le=10000)
+
+
+class FactionQuestCompletedIn(BaseModel):
+    character_id: int = Field(..., ge=1)
+    quest_id: int = Field(..., ge=1)
+    cq_id: int = Field(..., ge=1)
+    rewards: List[FactionQuestRewardIn] = Field(default_factory=list, max_items=5)
+
+
+class FactionIn(BaseModel):
+    name: str = Field(..., max_length=200)
+    description: Optional[str] = Field(None, max_length=FACTION_TEXT_MAX * 2)
+    emblem_url: Optional[str] = Field(None, max_length=1024)
+    hq_location_id: Optional[int] = None
+    leader_npc_ids: Optional[List[int]] = Field(None, max_items=FACTION_LIST_MAX)
+    member_limit: Optional[int] = None
+    is_invite_only: bool = False
+    is_secret: bool = False
+    is_active: bool = False
+    sort_order: int = 0
+
+
+class FactionRankItemIn(BaseModel):
+    item_id: int
+    quantity: int = 1
+
+
+class FactionRankIn(BaseModel):
+    name: str = Field(..., max_length=200)
+    description: Optional[str] = Field(None, max_length=FACTION_TEXT_MAX * 2)
+    min_points: int = 0
+    min_level: int = 0
+    required_quest_id: Optional[int] = None
+    reward_xp: int = 0
+    reward_title_id: Optional[int] = None
+    reward_items: Optional[List[FactionRankItemIn]] = Field(None, max_items=FACTION_LIST_MAX)
+    reward_house_location_id: Optional[int] = None
+    reward_plot_location_id: Optional[int] = None
+    # FEAT-206: optional (omitted = default 0 on create, kept on update)
+    reward_marks: Optional[int] = None
+    qm_discount_pct: Optional[int] = None
+    # FEAT-207: battle-time passive (omitted on update = keep; on create = none)
+    passive_name: Optional[str] = Field(None, max_length=200)
+    passive_description: Optional[str] = Field(None, max_length=1000)
+    passive_modifiers: Optional[Dict[str, Any]] = None
+
+
+class FactionRankOrderIn(BaseModel):
+    rank_ids: List[int] = Field(..., max_items=FACTION_LIST_MAX)
+
+
+class FactionConditionIn(BaseModel):
+    type: str = Field(..., max_length=30)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FactionConditionsIn(BaseModel):
+    conditions: List[FactionConditionIn] = Field(..., max_items=FACTION_LIST_MAX)
+
+
+class FactionHostilityIn(BaseModel):
+    faction_a_id: int
+    faction_b_id: int
+    irreconcilable: bool = False
+
+
+class FactionRejectIn(BaseModel):
+    reason: Optional[str] = Field(None, max_length=1000)
+
+
+class FactionPointsIn(BaseModel):
+    delta: int
+    reason: str = Field(..., max_length=1000)
+
+
+class FactionExpelIn(BaseModel):
+    reason: str = Field(..., max_length=1000)
+
+
+class FactionSettingsIn(BaseModel):
+    warning_days: int
+    rejoin_cooldown_days: int
+    leave_burn_pct: int
+    hostile_penalty_pct: int
+    reapply_cooldown_hours: int
+    # FEAT-206 (optional: omitted = keep the stored value)
+    donation_marks_per_point: Optional[int] = None
+    donation_points_daily_cap: Optional[int] = None
+    econ_enabled: Optional[bool] = None
+    econ_purse_share_pct: Optional[int] = None
+    econ_treasury_share_pct: Optional[int] = None
+    members_leave_pct: Optional[int] = None
+    members_grow_pct: Optional[int] = None
+    qm_take_share_pct: Optional[int] = None
+    # FEAT-207 (optional: omitted = keep the stored value)
+    kill_points_daily_cap: Optional[int] = None
+    pvp_kill_repeat_hours: Optional[int] = None
+    outlaw_check_cooldown_hours: Optional[int] = None
+    econ_item_sale_share_pct: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------------------- FEAT-206 faction economy
+
+_FACTION_REQ_ID = constr(regex=r"^[A-Za-z0-9-]{8,64}$")
+
+
+class FactionDonateIn(BaseModel):
+    amount: conint(strict=True, ge=1, le=1_000_000)
+    request_id: _FACTION_REQ_ID
+
+
+class FactionQmBuyIn(BaseModel):
+    character_id: conint(strict=True, ge=1)
+    qm_item_id: conint(strict=True, ge=1)
+    quantity: conint(strict=True, ge=1, le=99)
+    request_id: _FACTION_REQ_ID
+
+
+class FactionEconomyIn(BaseModel):
+    template_code: Optional[str] = Field(None, max_length=32)
+    overrides: Optional[Dict[str, Any]] = None
+    econ_enabled: Optional[bool] = None
+    members_count: Optional[int] = None
+    members_min: Optional[int] = None
+    members_max: Optional[int] = None
+
+
+class FactionFillIn(BaseModel):
+    comment: str = Field(..., max_length=1000)
+    set_members: bool = False
+
+
+class FactionEconTemplateIn(BaseModel):
+    code: Optional[str] = Field(None, max_length=32)
+    name: str = Field(..., max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    params: Dict[str, Any] = Field(default_factory=dict)
+    sort_order: int = 0
+
+
+class FactionQuartermastersIn(BaseModel):
+    npc_ids: List[int] = Field(..., max_items=10)
+
+
+class FactionQmItemIn(BaseModel):
+    item_id: int
+    price: int
+    min_rank_id: Optional[int] = None
+    stock: int = 0
+    restock_target: int = 0
+    is_active: bool = True
+    sort_order: int = 0
+
+
+# ---------------------------------------------------------------------------------------- FEAT-207 territory / crime
+
+
+class FactionAccessCheckIn(BaseModel):
+    kind: str = Field(..., max_length=10)
+    target_id: conint(strict=True, ge=1)
+    character_ids: List[conint(strict=True, ge=1)] = Field(..., min_items=1, max_items=20)
+
+
+class FactionAccessLabelsIn(BaseModel):
+    kind: str = Field(..., max_length=10)
+    target_ids: List[conint(strict=True, ge=1)] = Field(..., max_items=200)
+    character_id: Optional[conint(strict=True, ge=1)] = None
+    user_id: Optional[conint(strict=True, ge=1)] = None
+
+
+class FactionAccessRuleIn(BaseModel):
+    faction_id: conint(strict=True, ge=1)
+    min_rank_id: Optional[conint(strict=True, ge=1)] = None
+
+
+class FactionBattleParticipantIn(BaseModel):
+    character_id: conint(ge=1)
+    team: int
+    alive: bool = True
+    mob_template_id: Optional[int] = None
+
+
+class FactionBattleResultIn(BaseModel):
+    battle_id: conint(ge=1)
+    battle_type: str = Field(..., max_length=30)
+    winner_team: int
+    participants: List[FactionBattleParticipantIn] = Field(..., max_items=50)
+
+
+class FactionEnemyIn(BaseModel):
+    kind: str = Field(..., max_length=10)
+    ref_id: Optional[int] = None
+    points: int
+
+
+class FactionEnemiesIn(BaseModel):
+    enemies: List[FactionEnemyIn] = Field(..., max_items=50)
+    kill_points_daily_cap: Optional[int] = None
+
+
+class FactionOutlawRegionIn(BaseModel):
+    region_id: int
+    level_code: str = Field(..., max_length=16)
+
+
+class FactionOutlawRegionsIn(BaseModel):
+    regions: List[FactionOutlawRegionIn] = Field(..., max_items=50)
+
+
+class FactionDonateItemIn(BaseModel):
+    item_id: conint(strict=True, ge=1)
+    quantity: conint(strict=True, ge=1, le=9999)
+
+
+class FactionDonateItemsIn(BaseModel):
+    items: List[FactionDonateItemIn] = Field(..., min_items=1, max_items=20)
+    request_id: _FACTION_REQ_ID

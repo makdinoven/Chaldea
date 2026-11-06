@@ -364,6 +364,36 @@ const CharacterPassport = ({
               ) : null}
             </div>
 
+            {data.factions && data.factions.length > 0 ? (
+              <section className="flex flex-col gap-2">
+                <h3 className="lore-heading text-lg sm:text-xl">Фракции</h3>
+                <div className="flex flex-col gap-2">
+                  {data.factions.map((f) => (
+                    <Field
+                      key={f.id}
+                      label={f.name}
+                      value={
+                        <span className="inline-flex items-center gap-2">
+                          {f.rankName || 'без звания'}
+                          {usableImageSrc(f.emblemUrl) ? (
+                            <img
+                              src={usableImageSrc(f.emblemUrl) ?? undefined}
+                              alt=""
+                              className="h-5 w-5 shrink-0 object-contain"
+                              loading="lazy"
+                            />
+                          ) : null}
+                        </span>
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+            {data.factionsError ? (
+              <p className="lore-body text-sm text-ink-muted italic">{data.factionsError}</p>
+            ) : null}
+
             {data.status === 'rejected' && data.rejectionReason ? (
               <div className="rounded-card border border-[#8b1a1a]/40 bg-[#8b1a1a]/10 p-3">
                 <p className="passport-field-label">Причина отказа</p>

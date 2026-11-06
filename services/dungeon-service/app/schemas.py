@@ -327,6 +327,9 @@ class DungeonAtLocationResponse(BaseModel):
     # FEAT-175: one group per dungeon
     is_occupied: bool = False
     image_url: Optional[str] = None
+    # FEAT-207: closed faction dungeon (None = open); access_allowed is viewer-aware only for an own character
+    access_label: Optional[str] = None
+    access_allowed: Optional[bool] = None
 
     class Config:
         orm_mode = True

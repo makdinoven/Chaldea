@@ -26,6 +26,10 @@ This module never touches a database driver. It holds:
   * FEAT-193 guild orders: the `guild_order` op type (a player fills a region's order: purse, plus
     the region treasury for food -> character, untaxed) and the pure shop-row helpers shared by
     the player shop (locations-service) and the guild price cap (character-service, `econ_guild.py`);
+  * FEAT-206 faction economy: the `faction_treasury` account (ref_id = factions.id, never negative,
+    not a tax source) and the faction op types (6 h step, donation, quartermaster sale / refund,
+    debt payout; all untaxed, never touching the sources); the faction maths lives in
+    character-service (`faction_econ.py`);
   * a small TTL cache for the economy settings row.
 
 World invariant: the sum of all balances (characters.currency_balance plus
@@ -60,17 +64,19 @@ KIND_BANK = "bank"
 KIND_BANK_DEPOSITS = "bank_deposits"
 # FEAT-192: money of caravans on the road (paid by the buyer at dispatch, released at arrival). Never negative.
 KIND_CARAVAN_ESCROW = "caravan_escrow"
+# FEAT-206: a faction's treasury (ref_id = factions.id). Never negative. Not a tax source.
+KIND_FACTION_TREASURY = "faction_treasury"
 
 ACCOUNT_KINDS = frozenset({
     KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_WORLD_TREASURY,
     KIND_AUCTION_ESCROW, KIND_AUCTION_STORAGE, KIND_EMISSION, KIND_ADJUSTMENT,
-    KIND_POPULATION_PURSE, KIND_BANK, KIND_BANK_DEPOSITS, KIND_CARAVAN_ESCROW,
+    KIND_POPULATION_PURSE, KIND_BANK, KIND_BANK_DEPOSITS, KIND_CARAVAN_ESCROW, KIND_FACTION_TREASURY,
 })
 
 # Kinds identified by a foreign id (ref_id > 0); every other kind is a singleton (ref_id = 0).
 REF_KINDS = frozenset({
     KIND_CHARACTER, KIND_REGION_TREASURY, KIND_COUNTRY_TREASURY, KIND_POPULATION_PURSE,
-    KIND_BANK, KIND_BANK_DEPOSITS,
+    KIND_BANK, KIND_BANK_DEPOSITS, KIND_FACTION_TREASURY,
 })
 
 # Display names of singleton accounts (snapshotted into econ_accounts.name on creation).
@@ -158,6 +164,16 @@ GUILD_OP_TYPES = frozenset({OP_GUILD_ORDER})
 OP_LAW_FINE = "law_fine"
 OP_LAW_BAIL = "law_bail"
 LAW_OP_TYPES = frozenset({OP_LAW_FINE, OP_LAW_BAIL})
+# FEAT-206 faction economy (untaxed; never touch the sources)
+OP_FACTION_TICK = "faction_tick"            # 6 h step: purse/region -> faction (dues, profile), faction -> purse
+                                            # (wages, quartermaster restock), faction -> characters (debt payouts)
+OP_FACTION_DONATION = "faction_donation"    # character -> faction
+OP_FACTION_QM_SALE = "faction_qm_sale"      # character -> faction (quartermaster purchase)
+OP_FACTION_QM_REFUND = "faction_qm_refund"  # faction -> character (failed delivery compensation)
+OP_FACTION_PAYOUT = "faction_payout"        # faction -> characters (debt queue: rank marks, deferred refunds)
+FACTION_OP_TYPES = frozenset({
+    OP_FACTION_TICK, OP_FACTION_DONATION, OP_FACTION_QM_SALE, OP_FACTION_QM_REFUND, OP_FACTION_PAYOUT,
+})
 
 BANK_OP_TYPES = frozenset({
     OP_BANK_DEPOSIT, OP_BANK_WITHDRAW, OP_BANK_TRANSFER, OP_BANK_TICK, OP_BANK_CAPITAL,
@@ -172,7 +188,7 @@ OP_TYPES = frozenset({
     OP_HOUSE_PURCHASE, OP_HOUSE_BUILD, OP_HOUSE_TAX, OP_HOUSE_RESALE,
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
     OP_REGION_EVENT,
-}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES | GUILD_OP_TYPES | LAW_OP_TYPES
+}) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES | GUILD_OP_TYPES | LAW_OP_TYPES | FACTION_OP_TYPES
 
 # Only these operations may move money out of / into the source accounts.
 SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST}) | MINT_OP_TYPES
@@ -271,6 +287,10 @@ class AccountRef:
     @classmethod
     def bank_deposits(cls, region_id: int) -> "AccountRef":
         return cls(KIND_BANK_DEPOSITS, int(region_id))
+
+    @classmethod
+    def faction(cls, faction_id: int) -> "AccountRef":
+        return cls(KIND_FACTION_TREASURY, int(faction_id))
 
     @classmethod
     def world(cls) -> "AccountRef":
@@ -660,6 +680,7 @@ SQL_ACCOUNT_NAME = {
     KIND_POPULATION_PURSE: "SELECT name FROM Regions WHERE id = :ref_id",
     KIND_BANK: "SELECT name FROM Regions WHERE id = :ref_id",
     KIND_BANK_DEPOSITS: "SELECT name FROM Regions WHERE id = :ref_id",
+    KIND_FACTION_TREASURY: "SELECT name FROM factions WHERE id = :ref_id",
 }
 
 SQL_DEBIT_CHARACTER = (

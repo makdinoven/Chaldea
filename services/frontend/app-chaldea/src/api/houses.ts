@@ -792,6 +792,30 @@ export const getPlot = async (plotId: number) => (await axios.get<PlotDetail>(`$
 export const buyPlot = async (plotId: number, characterId: number) =>
   (await axios.post<{ house_id: number; gold: number }>(`${BASE}/plots/${plotId}/buy`, { character_id: characterId })).data;
 
+// --- FEAT-205: house / plot rights (faction rank rewards) ---
+
+export type HouseVoucherStatus = 'unclaimed' | 'claimed';
+
+/** A right to a free house (`ready`) or an empty plot (`empty`) in a location. */
+export interface HouseVoucher {
+  id: number;
+  location: { id: number; name: string | null };
+  kind: PlotKind;
+  source_text: string | null;
+  status: HouseVoucherStatus;
+  claimed_house_id: number | null;
+}
+
+/** The character's rights, unclaimed first (own character only). */
+export const getHouseVouchers = async (characterId: number) =>
+  (await axios.get<HouseVoucher[]>(`${BASE}/vouchers`, { params: { character_id: characterId } })).data;
+/** Take a free plot by a right: same rules as buying, the price is waived. */
+export const claimPlot = async (plotId: number, characterId: number, voucherId: number) =>
+  (await axios.post<{ house_id: number }>(`${BASE}/plots/${plotId}/claim`, {
+    character_id: characterId,
+    voucher_id: voucherId,
+  })).data;
+
 // --- Houses ---
 
 export const myHouses = async () => (await axios.get<MyHouse[]>(`${BASE}/my`)).data;

@@ -16,10 +16,11 @@ import AttributesTab from './tabs/AttributesTab';
 import InventoryTab from './tabs/InventoryTab';
 import SkillsTab from './tabs/SkillsTab';
 import ReputationTab from './tabs/ReputationTab';
+import FactionsTab from './tabs/FactionsTab';
 import { selectPermissions } from '../../../redux/slices/userSlice';
 import { hasPermission } from '../../../utils/permissions';
 
-type TabKey = 'general' | 'attributes' | 'inventory' | 'skills' | 'reputation';
+type TabKey = 'general' | 'attributes' | 'inventory' | 'skills' | 'reputation' | 'factions';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'general', label: 'Общее' },
@@ -27,6 +28,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'inventory', label: 'Инвентарь' },
   { key: 'skills', label: 'Навыки' },
   { key: 'reputation', label: 'Репутация' },
+  { key: 'factions', label: 'Фракции' },
 ];
 
 const AdminCharacterDetailPage = () => {
@@ -36,8 +38,13 @@ const AdminCharacterDetailPage = () => {
   const selectedCharacter = useAppSelector(selectSelectedCharacter);
   const [activeTab, setActiveTab] = useState<TabKey>('general');
   // FEAT-197: the reputation tab needs reputation:read (moderators and admins).
-  const canReadReputation = hasPermission(useAppSelector(selectPermissions), 'reputation:read');
-  const visibleTabs = TABS.filter((t) => t.key !== 'reputation' || canReadReputation);
+  const permissions = useAppSelector(selectPermissions);
+  const canReadReputation = hasPermission(permissions, 'reputation:read');
+  // FEAT-205: the factions tab needs factions:read.
+  const canReadFactions = hasPermission(permissions, 'factions:read');
+  const visibleTabs = TABS.filter(
+    (t) => (t.key !== 'reputation' || canReadReputation) && (t.key !== 'factions' || canReadFactions),
+  );
   const charId = Number(characterId);
 
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -156,6 +163,9 @@ const AdminCharacterDetailPage = () => {
         )}
         {activeTab === 'reputation' && canReadReputation && (
           <ReputationTab key="reputation" characterId={charId} />
+        )}
+        {activeTab === 'factions' && canReadFactions && (
+          <FactionsTab key="factions" characterId={charId} />
         )}
       </AnimatePresence>
     </div>

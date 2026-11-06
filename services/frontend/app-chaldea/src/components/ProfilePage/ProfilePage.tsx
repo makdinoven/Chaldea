@@ -21,6 +21,7 @@ import PostHistoryTab from './PostHistoryTab/PostHistoryTab';
 import TitlesTab from './TitlesTab/TitlesTab';
 import CraftTab from './CraftTab/CraftTab';
 import ReputationTab from './ReputationTab/ReputationTab';
+import FactionsTab from './FactionsTab/FactionsTab';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import EmptyState from './shared/EmptyState';
 import LoadingState from './shared/LoadingState';
@@ -94,6 +95,12 @@ const ProfilePage = () => {
         return (
           <ErrorBoundary>
             <ReputationTab characterId={characterId} />
+          </ErrorBoundary>
+        );
+      case 'factions':
+        return (
+          <ErrorBoundary>
+            <FactionsTab characterId={characterId} />
           </ErrorBoundary>
         );
       case 'titles':

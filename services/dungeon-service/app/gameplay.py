@@ -1076,6 +1076,12 @@ async def start_run(
             profiles[cid] = prof
             member_ids.append(cid)
 
+    # FEAT-207: a faction dungeon — the WHOLE assembled group must pass (no skipping); fails closed (503)
+    access = await http_clients.check_faction_access(dungeon_id, member_ids)
+    if access.get("allowed") is False:
+        raise HTTPException(status_code=403,
+                            detail=access.get("detail") or "Подземелье закрыто")
+
     entrance = (await db.execute(select(DungeonRoom).where(
         DungeonRoom.dungeon_id == dungeon_id, DungeonRoom.is_entrance == True,  # noqa: E712
     ).order_by(DungeonRoom.id).limit(1))).scalar_one_or_none()

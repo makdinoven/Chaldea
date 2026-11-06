@@ -52,6 +52,8 @@ export interface RegionMapItem {
   paired_arrow_id?: number | null;
   paired_location_ids?: number[];
   rotation?: number | null;
+  /** FEAT-207: faction territory mark of a location (public form). */
+  access_label?: string | null;
 }
 
 export interface RegionDetailsData {

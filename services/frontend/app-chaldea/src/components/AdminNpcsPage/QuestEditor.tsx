@@ -9,6 +9,9 @@ import { DEFAULT_QUEST_REPUTATION } from '../../api/reputationAdmin';
 import { QUEST_FAME_REWARD_DEFAULT, QUEST_FAME_REWARD_MAX } from '../../api/shadowAdmin';
 import { useFameTierOptions } from '../Admin/ReputationPage/useShadowRefs';
 import { EntityPicker } from '../Admin/DungeonsPage/editor/pickers';
+import { useFactionOptions } from '../Admin/FactionsPage/adminShared';
+import { FACTION_LIMITS, adminGetFaction, type FactionRankAdmin } from '../../api/factions';
+import { apiErrorMessage } from '../../api/errors';
 
 /* ── Types ── */
 
@@ -43,6 +46,12 @@ interface QuestFormData {
   fame_reward: string;
   /** FEAT-199: fame tier gate code, null = none */
   min_fame_tier: string | null;
+  /** FEAT-205: members-only quest of this faction (null = anyone) */
+  faction_id: number | null;
+  /** FEAT-205: the rank needed inside `faction_id` (null = any member) */
+  min_faction_rank_id: number | null;
+  /** FEAT-205: faction points for completing; points typed as text (±) */
+  faction_points_rewards: { faction_id: number | null; points: string }[];
 }
 
 interface QuestListItem {
@@ -82,6 +91,9 @@ const INITIAL_FORM: QuestFormData = {
   min_reputation_tier: null,
   fame_reward: '',
   min_fame_tier: null,
+  faction_id: null,
+  min_faction_rank_id: null,
+  faction_points_rewards: [],
 };
 
 const UNSIGNED_INT_RE = /^\d*$/;
@@ -142,6 +154,9 @@ const targetKind = (objectiveType: string): TargetKind | null => {
 const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   const { forms } = useCurrency();
   const fameTiers = useFameTierOptions();
+  // FEAT-205: faction fields (the list needs factions:read; without it the block explains why it is empty).
+  const { factions, error: factionsError } = useFactionOptions();
+  const [factionRanks, setFactionRanks] = useState<FactionRankAdmin[]>([]);
   const [quests, setQuests] = useState<QuestListItem[]>([]);
   const [loadingQuests, setLoadingQuests] = useState(true);
 
@@ -199,6 +214,25 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
     searchItems();
   }, [debouncedItemQuery]);
 
+  // Ranks of the chosen faction for the «Мин. звание» select.
+  useEffect(() => {
+    if (!form.faction_id) {
+      setFactionRanks([]);
+      return;
+    }
+    let cancelled = false;
+    adminGetFaction(form.faction_id)
+      .then((d) => {
+        if (!cancelled) setFactionRanks([...d.ranks].sort((a, b) => a.sort_order - b.sort_order));
+      })
+      .catch((e) => {
+        if (!cancelled) toast.error(apiErrorMessage(e, 'Не удалось загрузить звания фракции'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.faction_id]);
+
   const openCreateForm = () => {
     setEditingId(null);
     setForm(INITIAL_FORM);
@@ -232,6 +266,12 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
         min_reputation_tier: q.min_reputation_tier ?? null,
         fame_reward: q.fame_reward == null ? '' : String(q.fame_reward),
         min_fame_tier: q.min_fame_tier ?? null,
+        faction_id: q.faction_id ?? null,
+        min_faction_rank_id: q.min_faction_rank_id ?? null,
+        faction_points_rewards: (q.faction_points_rewards || []).map((r: { faction_id: number; points: number }) => ({
+          faction_id: r.faction_id,
+          points: String(r.points),
+        })),
       });
       setEditingId(questId);
       setEditorOpen(true);
@@ -365,6 +405,24 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       return;
     }
 
+    const factionPoints: { faction_id: number; points: number }[] = [];
+    for (const row of form.faction_points_rewards) {
+      if (row.faction_id == null) {
+        toast.error('Очки фракции: выберите фракцию в каждой строке');
+        return;
+      }
+      const pts = Number(row.points.trim());
+      if (row.points.trim() === '' || !Number.isInteger(pts) || pts === 0 || Math.abs(pts) > FACTION_LIMITS.questPointsMax) {
+        toast.error(`Очки фракции — целое число от −${FACTION_LIMITS.questPointsMax} до ${FACTION_LIMITS.questPointsMax}, не 0`);
+        return;
+      }
+      if (factionPoints.some((fp) => fp.faction_id === row.faction_id)) {
+        toast.error('Очки фракции: одна фракция указана дважды');
+        return;
+      }
+      factionPoints.push({ faction_id: row.faction_id, points: pts });
+    }
+
     const payload = {
       npc_id: npcId,
       title: form.title.trim(),
@@ -387,6 +445,9 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       min_reputation_tier: form.min_reputation_tier,
       fame_reward: fameReward,
       min_fame_tier: form.min_fame_tier,
+      faction_id: form.faction_id,
+      min_faction_rank_id: form.faction_id ? form.min_faction_rank_id : null,
+      faction_points_rewards: factionPoints.length ? factionPoints : null,
     };
 
     setSaving(true);
@@ -402,11 +463,8 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       setEditingId(null);
       fetchQuests();
     } catch (err) {
-      const message =
-        axios.isAxiosError(err) && err.response?.data?.detail
-          ? err.response.data.detail
-          : 'Не удалось сохранить квест';
-      toast.error(message);
+      // 422 validation comes as a list — apiErrorMessage handles both shapes.
+      toast.error(apiErrorMessage(err, 'Не удалось сохранить квест'));
     } finally {
       setSaving(false);
     }
@@ -596,6 +654,132 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
               </select>
               <span className="text-white/40 text-xs">Ниже этой ступени славы задание нельзя взять</span>
             </label>
+          </div>
+
+          {/* FEAT-205: faction quest + faction points */}
+          <div className="flex flex-col gap-3 bg-white/[0.03] rounded-card p-3 sm:p-4">
+            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Фракция</span>
+            {factionsError ? (
+              <p className="text-site-red text-xs">{factionsError}</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label className="flex flex-col gap-1 min-w-0">
+                    <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Только для членов фракции</span>
+                    <select
+                      value={form.faction_id ?? ''}
+                      onChange={(e) => {
+                        const id = e.target.value === '' ? null : Number(e.target.value);
+                        setForm((prev) => ({ ...prev, faction_id: id, min_faction_rank_id: null }));
+                      }}
+                      className="input-underline w-full"
+                    >
+                      <option value="" className="bg-site-dark text-white">— Для всех —</option>
+                      {factions.map((f) => (
+                        <option key={f.id} value={f.id} className="bg-site-dark text-white">
+                          {f.is_secret ? `${f.name} (тайная)` : f.name}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-white/40 text-xs">Не-члены видят задание закрытым; задания тайной фракции им не видны вовсе</span>
+                  </label>
+                  <label className="flex flex-col gap-1 min-w-0">
+                    <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Мин. звание</span>
+                    <select
+                      value={form.min_faction_rank_id ?? ''}
+                      disabled={!form.faction_id}
+                      onChange={(e) => {
+                        const id = e.target.value === '' ? null : Number(e.target.value);
+                        setForm((prev) => ({ ...prev, min_faction_rank_id: id }));
+                      }}
+                      className="input-underline w-full disabled:opacity-50"
+                    >
+                      <option value="" className="bg-site-dark text-white">Любой участник</option>
+                      {factionRanks.map((r, i) => (
+                        <option key={r.id} value={r.id} className="bg-site-dark text-white">
+                          {i + 1}. {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+                    Очки фракций за выполнение ({form.faction_points_rewards.length}/{FACTION_LIMITS.questRewardsMax})
+                  </span>
+                  {form.faction_points_rewards.map((row, idx) => (
+                    <div key={idx} className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <select
+                        value={row.faction_id ?? ''}
+                        onChange={(e) => {
+                          const id = e.target.value === '' ? null : Number(e.target.value);
+                          setForm((prev) => ({
+                            ...prev,
+                            faction_points_rewards: prev.faction_points_rewards.map((r, i) => (i === idx ? { ...r, faction_id: id } : r)),
+                          }));
+                        }}
+                        className="input-underline !text-sm flex-1 min-w-0"
+                      >
+                        <option value="" className="bg-site-dark text-white">— Фракция —</option>
+                        {factions.map((f) => (
+                          <option key={f.id} value={f.id} className="bg-site-dark text-white">{f.name}</option>
+                        ))}
+                      </select>
+                      <div className="flex items-center gap-2">
+                        <input
+                          inputMode="numeric"
+                          value={row.points}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (!SIGNED_INT_RE.test(v)) return;
+                            setForm((prev) => ({
+                              ...prev,
+                              faction_points_rewards: prev.faction_points_rewards.map((r, i) => (i === idx ? { ...r, points: v } : r)),
+                            }));
+                          }}
+                          placeholder="±очки"
+                          className="input-underline !text-sm w-24"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              faction_points_rewards: prev.faction_points_rewards.filter((_, i) => i !== idx),
+                            }))
+                          }
+                          className="text-site-red hover:text-white transition-colors p-1"
+                          title="Убрать"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {form.faction_points_rewards.length < FACTION_LIMITS.questRewardsMax && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          faction_points_rewards: [...prev.faction_points_rewards, { faction_id: null, points: '' }],
+                        }))
+                      }
+                      className="text-sm text-site-blue hover:text-white transition-colors self-start"
+                    >
+                      + Добавить очки фракции
+                    </button>
+                  )}
+                  <span className="text-white/40 text-xs">
+                    Начисляются только тем, кто состоит во фракции; минус — штраф. Получив очки, персонаж теряет часть очков
+                    во враждебных фракциях.
+                  </span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Description */}
