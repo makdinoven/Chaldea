@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchCharacters } from "../../../api/characters";
+import { fetchCharactersList } from "../../../api/charactersPublic";
 import { fetchTitles, grantTitle } from "../../../api/titles";
 import useDebounce from "../../../hooks/useDebounce";
 import toast from "react-hot-toast";
@@ -7,6 +7,9 @@ import ModalShell from "../../CommonComponents/ModalShell/ModalShell";
 import type { Title } from "../../../types/titles";
 
 /* ── Types ── */
+
+/** `/characters/list` is paginated (max 100 per page): search by name on the server. */
+const CHARACTER_SEARCH_LIMIT = 100;
 
 interface Character {
   id: number;
@@ -45,12 +48,12 @@ const GrantTitleModal = ({ open, onClose }: GrantTitleModalProps) => {
   /* Fetch characters */
   useEffect(() => {
     if (!open) return;
-    fetchCharacters()
-      .then(setChars)
+    fetchCharactersList({ q: debChar.trim() || undefined, page_size: CHARACTER_SEARCH_LIMIT })
+      .then((res) => setChars(res.items))
       .catch((e: Error) =>
         toast.error(e.message || "Не удалось загрузить персонажей"),
       );
-  }, [open]);
+  }, [open, debChar]);
 
   /* Reset on close */
   useEffect(() => {

@@ -9,7 +9,7 @@ import {
   deleteProfessionRank,
   adminSetRank,
 } from "../../../api/professions";
-import { fetchCharacters } from "../../../api/characters";
+import { fetchCharactersList } from "../../../api/charactersPublic";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "motion/react";
 import useDebounce from "../../../hooks/useDebounce";
@@ -24,6 +24,9 @@ import type {
 } from "../../../types/professions";
 
 /* ── Helpers ── */
+
+/** `/characters/list` is paginated (max 100 per page): search by name on the server. */
+const CHARACTER_SEARCH_LIMIT = 100;
 
 interface Character {
   id: number;
@@ -110,10 +113,10 @@ const ProfessionsAdminPage = () => {
 
   useEffect(() => {
     if (!setRankOpen) return;
-    fetchCharacters()
-      .then(setCharacters)
+    fetchCharactersList({ q: debouncedCharQuery.trim() || undefined, page_size: CHARACTER_SEARCH_LIMIT })
+      .then((res) => setCharacters(res.items))
       .catch((e: Error) => toast.error(e.message || "Не удалось загрузить персонажей"));
-  }, [setRankOpen]);
+  }, [setRankOpen, debouncedCharQuery]);
 
   const filteredChars = characters.filter((c) =>
     c.name.toLowerCase().includes(debouncedCharQuery.toLowerCase()),
