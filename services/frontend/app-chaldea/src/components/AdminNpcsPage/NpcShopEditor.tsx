@@ -12,6 +12,7 @@ import { useAppSelector } from '../../redux/store';
 import { selectPermissions } from '../../redux/slices/userSlice';
 import { hasPermission } from '../../utils/permissions';
 import { shownRarity } from '../../constants/items';
+import { useDirtyReport } from '../Admin/ExpandableList/useDirtyReport';
 
 /* ── Types ── */
 
@@ -64,7 +65,11 @@ interface GameItem {
 interface NpcShopEditorProps {
   npcId: number;
   npcName: string;
-  onClose: () => void;
+  onClose?: () => void;
+  /** FEAT-208: rendered inside the NPC panel — no own title / back link */
+  embedded?: boolean;
+  /** FEAT-208: reports a half-filled add form or an edited row */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Numeric fields are kept as strings so the admin can clear an input while typing. */
@@ -167,7 +172,7 @@ const StatusPill = ({ active }: { active: boolean }) => (
 
 /* ── Component ── */
 
-const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
+const NpcShopEditor = ({ npcId, npcName, onClose, embedded = false, onDirtyChange }: NpcShopEditorProps) => {
   const { format } = useCurrency();
   const permissions = useAppSelector(selectPermissions);
   const canReadEconomy = hasPermission(permissions, 'economy:read');
@@ -193,6 +198,11 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<RowForm>(INITIAL_ADD_FORM);
   const [editActive, setEditActive] = useState(true);
+
+  const editedRow = editingId === null ? null : shopItems.find((si) => si.id === editingId) ?? null;
+  const rowDirty = editedRow !== null
+    && (JSON.stringify(toForm(editedRow)) !== JSON.stringify(editForm) || editedRow.is_active !== editActive);
+  useDirtyReport((addFormOpen && selectedItem !== null) || rowDirty, onDirtyChange);
 
   const fetchShopItems = useCallback(async () => {
     try {
@@ -563,18 +573,22 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
     <div className="w-full flex flex-col gap-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <button
-          onClick={onClose}
-          className="text-sm text-white/50 hover:text-white transition-colors flex items-center gap-1"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-          Назад к НПС
-        </button>
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em] break-words">
-          Магазин: {npcName}
-        </h2>
+        {!embedded && (
+          <>
+            <button
+              onClick={onClose}
+              className="text-sm text-white/50 hover:text-white transition-colors flex items-center gap-1"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+              Назад к НПС
+            </button>
+            <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em] break-words">
+              Магазин: {npcName}
+            </h2>
+          </>
+        )}
         <button onClick={openAddForm} className="btn-blue !text-sm !px-5 !py-1.5 sm:ml-auto">
           Добавить товар
         </button>

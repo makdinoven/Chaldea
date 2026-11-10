@@ -10,7 +10,9 @@ import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 interface NpcEquipmentEditorProps {
   npcId: number;
   npcName: string;
-  onClose: () => void;
+  onClose?: () => void;
+  /** FEAT-208: rendered inside the NPC panel — no own title / back button */
+  embedded?: boolean;
 }
 
 interface ItemData {
@@ -84,7 +86,7 @@ const RARITY_LABELS: Record<string, string> = {
 
 /* ── Component ── */
 
-const NpcEquipmentEditor = ({ npcId, npcName, onClose }: NpcEquipmentEditorProps) => {
+const NpcEquipmentEditor = ({ npcId, npcName, onClose, embedded = false }: NpcEquipmentEditorProps) => {
   const [slots, setSlots] = useState<EquipmentSlotData[]>([]);
   const [loading, setLoading] = useState(true);
   const [pickerSlot, setPickerSlot] = useState<string | null>(null);
@@ -218,14 +220,16 @@ const NpcEquipmentEditor = ({ npcId, npcName, onClose }: NpcEquipmentEditorProps
   return (
     <div className="gray-bg p-4 sm:p-6 flex flex-col gap-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
-          Экипировка: {npcName}
-        </h2>
-        <button onClick={onClose} className="btn-line !w-auto !px-6">
-          Назад
-        </button>
-      </div>
+      {!embedded && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
+            Экипировка: {npcName}
+          </h2>
+          <button onClick={onClose} className="btn-line !w-auto !px-6">
+            Назад
+          </button>
+        </div>
+      )}
 
       {/* Loading */}
       {loading ? (

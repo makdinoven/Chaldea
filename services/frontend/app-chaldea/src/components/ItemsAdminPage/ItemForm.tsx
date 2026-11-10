@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   createItem,
@@ -71,6 +71,9 @@ import {
   type ItemEffect,
   type ItemXpBuff,
 } from "../../utils/itemEffects";
+import PanelTabs from "../Admin/ExpandableList/PanelTabs";
+import { useDirtyReport } from "../Admin/ExpandableList/useDirtyReport";
+import { ITEM_TAB_LABELS, isItemTabKey, itemTabsFor, type ItemTabKey } from "./itemTabKeys";
 
 /* ── State ── */
 
@@ -201,14 +204,38 @@ interface ItemFormProps {
   selected?: number;
   /** Type preselected for a new item (from the category being browsed) */
   defaultType?: string;
-  onSuccess: () => void;
+  /** FEAT-210: tab from the URL (null = absent / garbage); unavailable tabs fall back to «Основное» */
+  urlTab: ItemTabKey | null;
+  /** Switch the tab (pushes the URL; not dirty-guarded — sections stay mounted) */
+  onTabSelect: (tab: ItemTabKey) => void;
+  /** Silent URL fix (replace) once the tab set is known */
+  onTabNormalize: (tab: ItemTabKey) => void;
+  /** After a successful save; the page remounts the form (fresh load) or opens the created item */
+  onSaved: (id: number, created: boolean, tab: ItemTabKey) => void;
   onCancel: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /* ── Component ── */
 
-const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemFormProps) => {
+const ItemForm = ({
+  selected,
+  defaultType = "head",
+  urlTab,
+  onTabSelect,
+  onTabNormalize,
+  onSaved,
+  onCancel,
+  onDirtyChange,
+}: ItemFormProps) => {
   const [item, setItem] = useState<ItemFormState>(() => initialState(defaultType));
+  /** JSON of the loaded item (or of the blank create state) — the dirty baseline */
+  const [snapshot, setSnapshot] = useState<string | null>(() =>
+    selected ? null : JSON.stringify(initialState(defaultType)),
+  );
+  /** Set right after a successful save: the page remounts / reopens the form */
+  const [justSaved, setJustSaved] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   /** Id of an item created in this form whose refining config failed to save */
   const [createdId, setCreatedId] = useState<number | null>(null);
@@ -237,10 +264,10 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
   useEffect(() => {
     if (!selected) return;
     fetchItem(selected)
-      .then((loaded: ItemFormState) =>
+      .then((loaded: ItemFormState) => {
         // A payload from before FEAT-168 has no effect lists at all: fill them in
         // so the editor never reads an undefined array.
-        setItem({
+        const next: ItemFormState = {
           ...initialState(String(loaded.item_type)),
           ...loaded,
           effects: Array.isArray(loaded.effects) ? loaded.effects : [],
@@ -248,9 +275,15 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
           // An item saved before §3.9-bis has no rows but may carry the legacy
           // single buff — show it as one row so editing it does not drop it.
           xp_buffs: resolveXpBuffs(loaded as ItemBattleConfig),
-        }),
-      )
-      .catch((e: Error) => toast.error(e.message || "Не удалось загрузить предмет"));
+        };
+        setItem(next);
+        setSnapshot(JSON.stringify(next));
+      })
+      .catch((e: Error) => {
+        const msg = e.message || "Не удалось загрузить предмет";
+        toast.error(msg);
+        setLoadError(msg);
+      });
   }, [selected]);
 
   // Object URL for previewing a freshly picked file; revoked when replaced
@@ -355,30 +388,73 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       : null;
   const showConversions = conversionsSubcategory !== null;
 
+  /* ── Tabs (FEAT-210): sections of this one form, the set follows the LIVE type ── */
+
+  const tabs = itemTabsFor(item.item_type, Boolean(item.is_food), showConversions);
+  const activeTab: ItemTabKey = urlTab && tabs.includes(urlTab) ? urlTab : "general";
+  // The set is final once the item is loaded and (for resources) the refining rules are known
+  const tabsSettled =
+    snapshot !== null && (!needsRefiningRules || refiningRules !== null || refiningRulesError !== null);
+
+  useEffect(() => {
+    if (tabsSettled && urlTab !== activeTab) onTabNormalize(activeTab);
+  }, [tabsSettled, urlTab, activeTab, onTabNormalize]);
+
+  /** Validation failure: toast + jump to the tab of the offending section */
+  const failOn = (tab: ItemTabKey, message: string) => {
+    toast.error(message);
+    if (tab !== activeTab && tabs.includes(tab)) onTabSelect(tab);
+  };
+
+  // A hidden required control can't show the browser bubble: switch to its tab (once per submit)
+  const invalidHandledRef = useRef(false);
+  const handleInvalidCapture = (e: React.FormEvent<HTMLFormElement>) => {
+    if (invalidHandledRef.current) return;
+    invalidHandledRef.current = true;
+    window.setTimeout(() => {
+      invalidHandledRef.current = false;
+    }, 0);
+    const key = (e.target as HTMLElement).closest("[data-item-tab]")?.getAttribute("data-item-tab") ?? null;
+    if (isItemTabKey(key) && key !== activeTab) {
+      onTabSelect(key);
+      toast.error(`Заполните обязательные поля на вкладке «${ITEM_TAB_LABELS[key]}»`);
+    }
+  };
+
+  /* ── Unsaved changes (FEAT-210) ── */
+
+  const dirty =
+    !justSaved &&
+    ((snapshot !== null && JSON.stringify(item) !== snapshot) ||
+      Boolean(imgFile) ||
+      (recropping && crop !== null) ||
+      Boolean(showConversions && conversionsDraft?.dirty));
+  useDirtyReport(dirty, onDirtyChange);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rarityAllowed) {
-      toast.error(RARITY_CAP_MESSAGE);
+      failOn("general", RARITY_CAP_MESSAGE);
       return;
     }
     if (rules.furniture && !item.furniture_room_type) {
-      toast.error("Выберите, для какой комнаты эта мебель");
+      failOn("props", "Выберите, для какой комнаты эта мебель");
       return;
     }
     const seedError = rules.resource ? validateSeed(item, targetId) : null;
     if (seedError) {
-      toast.error(seedError);
+      failOn("props", seedError);
       return;
     }
     const houseFlagError = validateHouseFlags(item);
     if (houseFlagError) {
-      toast.error(houseFlagError);
+      failOn("props", houseFlagError);
       return;
     }
     if (rules.battleEffects) {
       const battleError = validateBattleConfig(item);
       if (battleError) {
-        toast.error(battleError);
+        failOn("effects", battleError);
         return;
       }
     }
@@ -388,12 +464,12 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       Boolean(item.is_food),
     );
     if (xpError) {
-      toast.error(xpError);
+      failOn("xp", xpError);
       return;
     }
     const draft = showConversions ? conversionsDraft : null;
     if (draft?.invalid) {
-      toast.error(draft.invalid);
+      failOn("conversions", draft.invalid);
       return;
     }
     setSaving(true);
@@ -433,7 +509,8 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
 
     toast.success(editMode ? "Предмет сохранён" : "Предмет создан");
     setSaving(false);
-    onSuccess();
+    setJustSaved(true);
+    onSaved(saved.id, !selected, activeTab);
   };
 
   /* ── Type select: grouped by category; recipe items come from the recipe editor ── */
@@ -483,12 +560,34 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
     </fieldset>
   );
 
-  return (
-    <form className="gray-bg p-4 sm:p-6 flex flex-col gap-6" onSubmit={handleSubmit}>
-      <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
-        {editMode ? "Редактирование предмета" : "Создание предмета"}
-      </h2>
+  /** A tab's sections. Inactive panes stay mounted (state, conversions draft) — only hidden. */
+  const pane = (key: ItemTabKey, children: React.ReactNode) => (
+    <div data-item-tab={key} className={activeTab === key ? "flex flex-col gap-6 min-w-0" : "hidden"}>
+      {children}
+    </div>
+  );
 
+  if (selected && snapshot === null) {
+    if (loadError) return <p className="text-site-red text-sm py-6">{loadError}</p>;
+    return (
+      <div className="flex items-center gap-2 py-6 text-white/50 text-sm">
+        <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+        Загрузка предмета...
+      </div>
+    );
+  }
+
+  return (
+    <form className="flex flex-col gap-6 min-w-0" onSubmit={handleSubmit} onInvalidCapture={handleInvalidCapture}>
+      <PanelTabs
+        tabs={tabs}
+        labels={ITEM_TAB_LABELS}
+        active={activeTab}
+        onSelect={onTabSelect}
+        layoutId="item-panel-tab"
+      />
+
+      {pane("general", <>
       {/* ── Base ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
         <Field label="Название">
@@ -579,6 +678,52 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
         </p>
       )}
 
+      {/* ── Image upload + icon framing ── */}
+      <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] flex flex-col gap-4 min-w-0">
+        <legend className={`${labelText} px-2`}>Изображение</legend>
+
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          onChange={handleFileChange}
+          className="text-white text-sm max-w-full file:mr-4 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:font-medium file:bg-white/[0.07] file:text-white hover:file:bg-white/[0.12] file:cursor-pointer file:transition-colors"
+        />
+
+        {cropperSrc ? (
+          <ItemImageCropper key={cropperSrc} src={cropperSrc} onCropChange={setCrop} />
+        ) : (
+          item.image && (
+            <div className="flex flex-wrap items-center gap-4">
+              <img src={item.image} alt={item.name} className="w-16 h-16 rounded-card object-cover bg-white/5" />
+              {item.full_image ? (
+                <button type="button" onClick={() => setRecropping(true)} className="btn-line !w-auto !px-6">
+                  Изменить область иконки
+                </button>
+              ) : (
+                <p className="text-white/40 text-xs flex-1 min-w-[12rem]">
+                  Исходная картинка не сохранена — загрузите файл заново, чтобы выбрать область иконки.
+                </p>
+              )}
+            </div>
+          )
+        )}
+
+        {recropping && !imgFile && (
+          <button
+            type="button"
+            onClick={() => {
+              setRecropping(false);
+              setCrop(null);
+            }}
+            className="text-white/50 hover:text-site-blue text-sm self-start transition-colors"
+          >
+            Оставить иконку как есть
+          </button>
+        )}
+      </fieldset>
+      </>)}
+
+      {pane("props", <>
       {/* ── Equipment / weapon specifics ── */}
       {(rules.armorSubclass || rules.weaponFields || rules.durability || rules.sockets || rules.fastSlotBonus) &&
         !rules.gatheringTool && (
@@ -710,37 +855,6 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
             <Field key={key} label={label}>{numberInput(key, { min: 0 })}</Field>
           ))}
         </Section>
-      )}
-
-      {/* ── Battle effects (FEAT-168) ── */}
-      {rules.battleEffects && (
-        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
-          <legend className={`${labelText} px-2`}>Боевые эффекты</legend>
-          <div className="mt-2">
-            <ItemEffectSections
-              effects={(item.effects as ItemEffect[] | undefined) ?? []}
-              damageEntries={(item.damage_entries as ItemDamageEntry[] | undefined) ?? []}
-              action={normalizeAction(item.consumable_action as string | null)}
-              coatingTurns={item.coating_turns == null ? null : Number(item.coating_turns)}
-              coatingBonusDamage={
-                item.coating_bonus_damage == null ? null : Number(item.coating_bonus_damage)
-              }
-              onFieldChange={setField}
-            />
-          </div>
-        </fieldset>
-      )}
-
-      {rules.buff && (
-        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
-          <legend className={`${labelText} px-2`}>Ускорение опыта</legend>
-          <div className="mt-2">
-            <ItemXpBuffsEditor
-              rows={(item.xp_buffs as ItemXpBuff[] | undefined) ?? []}
-              onChange={(rows) => setField("xp_buffs", rows)}
-            />
-          </div>
-        </fieldset>
       )}
 
       {/* ── Home teleport scroll (FEAT-180 stage 6b) ── */}
@@ -876,17 +990,6 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
 
       {rules.resource && <SeedSection item={item} ownId={targetId} setField={setField} />}
 
-      {conversionsSubcategory && (
-        <ItemConversionsEditor
-          itemId={selected}
-          subcategory={conversionsSubcategory}
-          rules={refiningRules}
-          rulesError={refiningRulesError}
-          onChange={handleConversionsChange}
-          saveError={conversionsError}
-        />
-      )}
-
       {/* ── Gathering tools ── */}
       {rules.gatheringTool && (
         <Section
@@ -955,8 +1058,10 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
         </Section>
       )}
 
+      </>)}
+
       {/* ── Modifiers ── */}
-      {rules.modifiers && (
+      {pane("modifiers", rules.modifiers && (
         <>
           {(item.item_type === "gem" || item.item_type === "rune") && (
             <p className="text-white/40 text-xs -mb-3">
@@ -970,54 +1075,52 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
           {renderModGroup("Сопротивления", RES_MODS)}
           {renderModGroup("Уязвимости", VUL_MODS)}
         </>
-      )}
+      ))}
 
-      {/* ── Image upload + icon framing ── */}
-      <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] flex flex-col gap-4 min-w-0">
-        <legend className={`${labelText} px-2`}>Изображение</legend>
+      {/* ── Battle effects (FEAT-168) ── */}
+      {pane("effects", rules.battleEffects && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Боевые эффекты</legend>
+          <div className="mt-2">
+            <ItemEffectSections
+              effects={(item.effects as ItemEffect[] | undefined) ?? []}
+              damageEntries={(item.damage_entries as ItemDamageEntry[] | undefined) ?? []}
+              action={normalizeAction(item.consumable_action as string | null)}
+              coatingTurns={item.coating_turns == null ? null : Number(item.coating_turns)}
+              coatingBonusDamage={
+                item.coating_bonus_damage == null ? null : Number(item.coating_bonus_damage)
+              }
+              onFieldChange={setField}
+            />
+          </div>
+        </fieldset>
+      ))}
 
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/gif"
-          onChange={handleFileChange}
-          className="text-white text-sm max-w-full file:mr-4 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:font-medium file:bg-white/[0.07] file:text-white hover:file:bg-white/[0.12] file:cursor-pointer file:transition-colors"
+      {pane("xp", rules.buff && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Ускорение опыта</legend>
+          <div className="mt-2">
+            <ItemXpBuffsEditor
+              rows={(item.xp_buffs as ItemXpBuff[] | undefined) ?? []}
+              onChange={(rows) => setField("xp_buffs", rows)}
+            />
+          </div>
+        </fieldset>
+      ))}
+
+      {pane("conversions", conversionsSubcategory && (
+        <ItemConversionsEditor
+          itemId={selected}
+          subcategory={conversionsSubcategory}
+          rules={refiningRules}
+          rulesError={refiningRulesError}
+          onChange={handleConversionsChange}
+          saveError={conversionsError}
         />
+      ))}
 
-        {cropperSrc ? (
-          <ItemImageCropper key={cropperSrc} src={cropperSrc} onCropChange={setCrop} />
-        ) : (
-          item.image && (
-            <div className="flex flex-wrap items-center gap-4">
-              <img src={item.image} alt={item.name} className="w-16 h-16 rounded-card object-cover bg-white/5" />
-              {item.full_image ? (
-                <button type="button" onClick={() => setRecropping(true)} className="btn-line !w-auto !px-6">
-                  Изменить область иконки
-                </button>
-              ) : (
-                <p className="text-white/40 text-xs flex-1 min-w-[12rem]">
-                  Исходная картинка не сохранена — загрузите файл заново, чтобы выбрать область иконки.
-                </p>
-              )}
-            </div>
-          )
-        )}
-
-        {recropping && !imgFile && (
-          <button
-            type="button"
-            onClick={() => {
-              setRecropping(false);
-              setCrop(null);
-            }}
-            className="text-white/50 hover:text-site-blue text-sm self-start transition-colors"
-          >
-            Оставить иконку как есть
-          </button>
-        )}
-      </fieldset>
-
-      {/* ── Buttons ── */}
-      <div className="flex flex-wrap gap-4 pt-2">
+      {/* ── Buttons (one footer for every tab) ── */}
+      <div className="flex flex-wrap gap-4 pt-2 border-t border-white/10">
         <button type="submit" disabled={saving} className="btn-blue !text-base !px-8 !py-2 disabled:opacity-50">
           {saving ? "Сохранение…" : editMode ? "Сохранить" : "Создать"}
         </button>

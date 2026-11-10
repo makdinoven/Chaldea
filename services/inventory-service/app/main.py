@@ -322,6 +322,74 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
     return schemas.public_item_card(_get_item_core(db, item_id))
 
 
+# FEAT-210: must stay declared before `GET /{character_id}/items`, otherwise
+# "admin" is matched as character_id → 422.
+_ITEM_ADMIN_LIST_COLUMNS = (
+    models.Items.id,
+    models.Items.name,
+    models.Items.image,
+    models.Items.item_type,
+    models.Items.item_rarity,
+    models.Items.item_level,
+    models.Items.armor_subclass,
+    models.Items.weapon_subclass,
+    models.Items.resource_subcategory,
+    models.Items.admin_ready,
+    models.Items.admin_ready_at,
+    models.Items.admin_ready_by,
+)
+
+
+@router.get("/admin/items", response_model=List[schemas.ItemAdminListRow])
+def list_items_admin(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:read")),
+):
+    """Весь каталог предметов тонкими строками для админки (FEAT-210 §3.3 A).
+
+    Только колонки, без связей (эффекты, урон, книги опыта не грузятся).
+    Единственное место списка, где видна отметка «Готов».
+    """
+    try:
+        return db.query(*_ITEM_ADMIN_LIST_COLUMNS).order_by(models.Items.id).all()
+    except Exception:
+        logger.exception("Admin items list failed")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.put("/admin/items/{item_id}/ready", response_model=schemas.ItemReadyResponse)
+def set_item_admin_ready(
+    item_id: int,
+    payload: schemas.ItemReadyUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:update")),
+):
+    """Поставить / снять отметку «Готов» (FEAT-210 §3.3 B).
+
+    Идемпотентно: повторное «готов» не меняет исходные кто/когда.
+    """
+    item = db.query(models.Items).filter(models.Items.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    try:
+        if payload.ready:
+            if not item.admin_ready:
+                item.admin_ready = True
+                item.admin_ready_at = datetime.utcnow()
+                item.admin_ready_by = current_user.username
+        else:
+            item.admin_ready = False
+            item.admin_ready_at = None
+            item.admin_ready_by = None
+        db.commit()
+        db.refresh(item)
+    except Exception:
+        db.rollback()
+        logger.exception("Setting admin ready mark for item %s failed", item_id)
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+    return item
+
+
 @router.get("/admin/items/{item_id}", response_model=schemas.Item)
 def get_item_admin(
     item_id: int,

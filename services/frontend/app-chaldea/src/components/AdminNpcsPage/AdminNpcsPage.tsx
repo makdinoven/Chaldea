@@ -1,129 +1,111 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
-import { NPC_ROLES, NPC_ROLE_LABELS, NPC_SEXES, NPC_CLASSES, NPC_RACES } from '../../constants/npc';
-import DialogueEditor from './DialogueEditor';
-import NpcShopEditor from './NpcShopEditor';
-import QuestEditor from './QuestEditor';
-import NpcStatsEditor from './NpcStatsEditor';
-import NpcEquipmentEditor from './NpcEquipmentEditor';
-import TeleportLinksPanel from './TeleportLinksPanel';
-import GuardPatrolPanel from './GuardPatrolPanel';
+import { NPC_ROLES } from '../../constants/npc';
 import AdminPagination from '../Admin/AdminPagination/AdminPagination';
-import ReputationTierSelect from '../Admin/ReputationPage/ReputationTierSelect';
-import { roleKillWeight, useReputationRoleWeights } from '../Admin/ReputationPage/useReputationRefs';
+import ConfirmationModal from '../ui/ConfirmationModal';
+import NpcRow, { type NpcListItem } from './NpcRow';
+import NpcExpandedPanel from './NpcExpandedPanel';
+import type { RaceWithSubraces } from './NpcGeneralForm';
+import { availableTabs, isNpcTabKey, type NpcTabKey } from './npcTabKeys';
+import { setNpcReady } from '../../api/npcAdmin';
+import { usePanelUrlState } from '../Admin/ExpandableList/usePanelUrlState';
+import { useDirtyGuard } from '../Admin/ExpandableList/useDirtyGuard';
+import { useGeoFilter } from '../Admin/ExpandableList/useGeoFilter';
+import { useReadyFilterUrlState } from '../Admin/ExpandableList/useReadyFilterUrlState';
+import GeoFilterSelects from '../Admin/ExpandableList/GeoFilterSelects';
+import ReadyFilterSelect from '../Admin/ExpandableList/ReadyFilterSelect';
 
-/* ── Types ── */
+/* FEAT-208: NPC list as expandable plates; the open NPC + tab live in `?npc=&tab=`.
+   FEAT-209: country / region / ready filters live in `?country=&region=&ready=`. */
 
-interface NpcListItem {
+interface NpcDetailResponse {
   id: number;
   name: string;
   avatar: string | null;
   level: number;
   npc_role: string | null;
-  location_name: string | null;
-  location_id: number | null;
   npc_status: string | null;
-}
-
-interface NpcFormData {
-  name: string;
-  npc_role: string;
-  id_class: number;
-  id_race: number;
-  id_subrace: number;
-  level: number;
-  avatar: string;
-  biography: string;
-  personality: string;
-  appearance: string;
-  sex: string;
-  age: number;
-  weight: string;
-  height: string;
   current_location_id: number | null;
-  currency_balance: number;
-  /** FEAT-197: NPC gate (tier code, null = none) */
-  reputation_min_tier: string | null;
-  /** FEAT-197: typed kill weight; '' = the role weight */
-  reputation_kill_points: string;
+  npc_ready?: boolean;
+  npc_ready_at?: string | null;
+  npc_ready_by?: string | null;
 }
 
-interface LocationOption {
-  id: number;
-  name: string;
+/** A row of GET /characters/admin/npcs (location_name is filled by the list endpoint). */
+interface NpcApiItem extends NpcDetailResponse {
+  location_name?: string | null;
 }
 
-interface SubraceOption {
-  id_subrace: number;
-  name: string;
-  stat_preset: Record<string, number> | null;
-}
+const PAGE_SIZE = 20;
 
-interface RaceWithSubraces {
-  id_race: number;
-  name: string;
-  subraces: SubraceOption[];
-}
+const readyFields = (d: Pick<NpcDetailResponse, 'npc_ready' | 'npc_ready_at' | 'npc_ready_by'>) => ({
+  npc_ready: !!d.npc_ready,
+  npc_ready_at: d.npc_ready_at ?? null,
+  npc_ready_by: d.npc_ready_by ?? null,
+});
 
-const INITIAL_FORM: NpcFormData = {
-  name: '',
-  npc_role: 'merchant',
-  id_class: 1,
-  id_race: 1,
-  id_subrace: 1,
-  level: 1,
-  avatar: '',
-  biography: '',
-  personality: '',
-  appearance: '',
-  sex: 'male',
-  age: 25,
-  weight: '70',
-  height: '170',
-  current_location_id: null,
-  currency_balance: 0,
-  reputation_min_tier: null,
-  reputation_kill_points: '',
+const errorDetail = (err: unknown): string | null => {
+  if (!axios.isAxiosError(err)) return null;
+  const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail;
+  return typeof detail === 'string' && detail.trim() ? detail : null;
 };
 
-const KILL_POINTS_LIMIT = 1000;
-const SIGNED_INT_RE = /^-?\d*$/;
+const detailToListItem = (d: NpcDetailResponse): NpcListItem => ({
+  id: d.id,
+  name: d.name,
+  avatar: d.avatar,
+  level: d.level,
+  npc_role: d.npc_role,
+  npc_status: d.npc_status,
+  location_id: d.current_location_id,
+  // The detail endpoint has no location name — the plate shows «Локация #id».
+  location_name: null,
+  ...readyFields(d),
+});
 
 /* ── Component ── */
 
 const AdminNpcsPage = () => {
   const [npcs, setNpcs] = useState<NpcListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listLoaded, setListLoaded] = useState(false);
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const debouncedQuery = useDebounce(query);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(20);
   const [total, setTotal] = useState(0);
-
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState<NpcFormData>(INITIAL_FORM);
-  const roleWeights = useReputationRoleWeights();
-  const [saving, setSaving] = useState(false);
-  const [locations, setLocations] = useState<LocationOption[]>([]);
-  const [locationSearchQuery, setLocationSearchQuery] = useState('');
-  const debouncedLocationQuery = useDebounce(locationSearchQuery);
-  const [locationSearchLoading, setLocationSearchLoading] = useState(false);
-  const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
-  const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
-  const [questNpc, setQuestNpc] = useState<{ id: number; name: string } | null>(null);
-  const [statsNpc, setStatsNpc] = useState<{ id: number; name: string; level: number } | null>(null);
-  const [equipmentNpc, setEquipmentNpc] = useState<{ id: number; name: string } | null>(null);
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [racesData, setRacesData] = useState<RaceWithSubraces[]>([]);
-  const [subraceOptions, setSubraceOptions] = useState<SubraceOption[]>([]);
 
+  const {
+    target: openTarget,
+    tab: urlTab,
+    rawTarget: rawNpc,
+    open: openNpc,
+    setTab,
+    close,
+    normalize,
+  } = usePanelUrlState('npc', isNpcTabKey, 'general');
+  const [pinned, setPinned] = useState<NpcListItem | null>(null);
+  const { onDirtyChange: handleDirtyChange, guard, pendingLeave, confirmLeave, cancelLeave, resetDirty } =
+    useDirtyGuard(openTarget !== null);
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  const [resurrecting, setResurrecting] = useState(false);
+  const openRowRef = useRef<HTMLDivElement>(null);
+  const [readyPending, setReadyPending] = useState(false);
+
+  /* ── Country / region / ready filters (URL) ── */
+
+  const resetPage = useCallback(() => setPage(1), []);
+  const { countryId, regionId, settled: filtersSettled, selectProps: geoSelectProps } = useGeoFilter({
+    onChanged: resetPage,
+  });
+  const { ready: readyFilter, setReady } = useReadyFilterUrlState();
+
+  // The list is requested only once the URL filters are validated (no request / toast for a reset filter)
   const fetchNpcs = useCallback(async () => {
     setLoading(true);
     try {
@@ -131,308 +113,199 @@ const AdminNpcsPage = () => {
       if (debouncedQuery) params.q = debouncedQuery;
       if (roleFilter) params.npc_role = roleFilter;
       if (statusFilter) params.npc_status = statusFilter;
+      if (countryId !== null) params.country_id = String(countryId);
+      if (regionId !== null) params.region_id = String(regionId);
+      if (readyFilter !== null) params.ready = readyFilter ? '1' : '0';
       params.page = String(page);
-      params.page_size = String(pageSize);
+      params.page_size = String(PAGE_SIZE);
       const res = await axios.get(`${BASE_URL}/characters/admin/npcs`, { params });
       const data = res.data;
-      setNpcs(Array.isArray(data) ? data : (data.items ?? []));
+      const rows: NpcApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
+      setNpcs(
+        rows.map((r) => ({
+          ...r,
+          location_id: r.current_location_id,
+          location_name: r.location_name ?? null,
+          ...readyFields(r),
+        })),
+      );
       setTotal(data.total ?? 0);
     } catch {
       toast.error('Не удалось загрузить список НПС');
     } finally {
       setLoading(false);
+      setListLoaded(true);
     }
-  }, [debouncedQuery, roleFilter, statusFilter, page, pageSize]);
+  }, [debouncedQuery, roleFilter, statusFilter, countryId, regionId, readyFilter, page]);
 
   useEffect(() => {
-    fetchNpcs();
-  }, [fetchNpcs]);
+    if (filtersSettled) fetchNpcs();
+  }, [fetchNpcs, filtersSettled]);
 
+  // Races with subraces — shared by the «Основное» form and the stats editor
   useEffect(() => {
-    setLocationSearchLoading(true);
-    const params: Record<string, string> = {};
-    if (debouncedLocationQuery) params.q = debouncedLocationQuery;
     axios
-      .get<LocationOption[]>(`${BASE_URL}/locations/locations/lookup`, { params })
-      .then((res) => setLocations(Array.isArray(res.data) ? res.data : []))
-      .catch(() => toast.error('Не удалось загрузить список локаций'))
-      .finally(() => setLocationSearchLoading(false));
-  }, [debouncedLocationQuery]);
+      .get<RaceWithSubraces[]>(`${BASE_URL}/characters/races`)
+      .then((res) => setRacesData(res.data))
+      .catch(() => toast.error('Не удалось загрузить список рас и подрас'));
+  }, []);
 
-  // Fetch all races with subraces once on mount
-  const fetchRacesData = useCallback(async () => {
+  /* ── Open NPC resolution ── */
+
+  const openId = typeof openTarget === 'number' ? openTarget : null;
+  const inList = openId !== null ? npcs.find((n) => n.id === openId) ?? null : null;
+  const pinnedItem = openId !== null && !inList && pinned?.id === openId ? pinned : null;
+  const openItem = inList ?? pinnedItem;
+  const isNew = openTarget === 'new';
+
+  const fetchPinned = useCallback(async (id: number): Promise<boolean> => {
     try {
-      const res = await axios.get<RaceWithSubraces[]>(`${BASE_URL}/characters/races`);
-      setRacesData(res.data);
-    } catch {
-      toast.error('Не удалось загрузить список рас и подрас');
+      const res = await axios.get<NpcDetailResponse>(`${BASE_URL}/characters/admin/npcs/${id}`);
+      setPinned(detailToListItem(res.data));
+      return true;
+    } catch (err) {
+      const notFound = axios.isAxiosError(err) && err.response?.status === 404;
+      toast.error(notFound ? 'НПС не найден' : 'Не удалось загрузить данные НПС');
+      return false;
     }
   }, []);
 
+  // Deep link / NPC that left the current page → load it as a pinned plate
+  const needPinned = openId !== null && listLoaded && !inList && pinned?.id !== openId;
   useEffect(() => {
-    fetchRacesData();
-  }, [fetchRacesData]);
+    if (!needPinned || openId === null) return;
+    let cancelled = false;
+    fetchPinned(openId).then((ok) => {
+      if (!ok && !cancelled) normalize(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [needPinned, openId, fetchPinned, normalize]);
 
-  // Update subrace options when race changes or racesData loads
-  const updateSubraceOptions = useCallback((raceId: number) => {
-    const race = racesData.find((r) => r.id_race === raceId);
-    setSubraceOptions(race?.subraces ?? []);
-  }, [racesData]);
+  const tabs = availableTabs(openItem?.npc_role ?? null, isNew);
+  const activeTab: NpcTabKey = urlTab && tabs.includes(urlTab) ? urlTab : 'general';
 
+  // URL normalisation (replace): garbage `npc`, invalid / unavailable tab
   useEffect(() => {
-    if (racesData.length > 0) {
-      updateSubraceOptions(form.id_race);
+    if (rawNpc !== null && openTarget === null) {
+      normalize(null);
+      return;
     }
-  }, [form.id_race, racesData, updateSubraceOptions]);
+    if (isNew && urlTab !== 'general') {
+      normalize('new', 'general');
+      return;
+    }
+    if (openItem && urlTab !== activeTab) {
+      normalize(openItem.id, activeTab);
+    }
+  }, [rawNpc, openTarget, isNew, urlTab, activeTab, openItem, normalize]);
 
-  const openCreateForm = () => {
-    setEditingId(null);
-    setForm(INITIAL_FORM);
-    setAvatarFile(null);
-    setAvatarPreview(null);
-    setFormOpen(true);
+  /* ── Actions ── */
+
+  const toggleRow = (id: number) => {
+    if (openId === id) guard(close);
+    else guard(() => openNpc(id));
   };
 
-  const openEditForm = async (id: number) => {
-    try {
-      const res = await axios.get(`${BASE_URL}/characters/admin/npcs/${id}`);
-      const npc = res.data;
-      setForm({
-        name: npc.name || '',
-        npc_role: npc.npc_role || 'merchant',
-        id_class: npc.id_class || 1,
-        id_race: npc.id_race || 1,
-        id_subrace: npc.id_subrace || 1,
-        level: npc.level || 1,
-        avatar: npc.avatar || '',
-        biography: npc.biography || '',
-        personality: npc.personality || '',
-        appearance: npc.appearance || '',
-        sex: npc.sex || 'male',
-        age: npc.age || 25,
-        weight: npc.weight || '70',
-        height: npc.height || '170',
-        current_location_id: npc.current_location_id ?? null,
-        currency_balance: npc.currency_balance || 0,
-        reputation_min_tier: npc.reputation_min_tier ?? null,
-        reputation_kill_points: npc.reputation_kill_points == null ? '' : String(npc.reputation_kill_points),
-      });
-      setEditingId(id);
-      setAvatarFile(null);
-      setAvatarPreview(null);
-      setFormOpen(true);
-    } catch {
-      toast.error('Не удалось загрузить данные НПС');
+  const handleSaved = (id: number, created: boolean) => {
+    if (created) {
+      normalize(id, 'general');
+    } else if (pinnedItem?.id === id) {
+      fetchPinned(id);
     }
+    fetchNpcs();
   };
 
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('Удалить НПС? Это действие нельзя отменить.')) return;
+  const handleDelete = async () => {
+    const id = deleteTarget;
+    setDeleteTarget(null);
+    if (id === null) return;
     try {
       await axios.delete(`${BASE_URL}/characters/admin/npcs/${id}`);
       toast.success('НПС удалён');
       setNpcs((prev) => prev.filter((n) => n.id !== id));
-      if (editingId === id) {
-        setFormOpen(false);
-        setEditingId(null);
-      }
+      setPinned((prev) => (prev?.id === id ? null : prev));
+      resetDirty();
+      if (openId === id) normalize(null);
+      fetchNpcs();
     } catch {
       toast.error('Не удалось удалить НПС');
     }
   };
 
   const handleResurrect = async (id: number) => {
+    setResurrecting(true);
     try {
       await axios.put(`${BASE_URL}/characters/admin/npcs/${id}`, { npc_status: 'alive' });
       toast.success('НПС воскрешён');
+      if (pinnedItem?.id === id) fetchPinned(id);
       fetchNpcs();
     } catch {
       toast.error('Не удалось воскресить НПС');
-    }
-  };
-
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>,
-  ) => {
-    const { name, value, type } = e.target;
-    if (name === 'id_race') {
-      const newRaceId = Number(value);
-      const race = racesData.find((r) => r.id_race === newRaceId);
-      const firstSubrace = race?.subraces?.[0]?.id_subrace ?? 0;
-      setForm((prev) => ({
-        ...prev,
-        id_race: newRaceId,
-        id_subrace: firstSubrace,
-      }));
-      return;
-    }
-    const numericFields = ['id_class', 'id_subrace', 'level', 'age', 'currency_balance'];
-    setForm((prev) => ({
-      ...prev,
-      [name]: type === 'number' || numericFields.includes(name)
-        ? (value === '' ? 0 : Number(value))
-        : value,
-    }));
-  };
-
-  const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setAvatarFile(file);
-    setAvatarPreview(URL.createObjectURL(file));
-  };
-
-  const uploadNpcAvatar = async (npcId: number, file: File) => {
-    const formData = new FormData();
-    formData.append('character_id', String(npcId));
-    formData.append('file', file);
-    const res = await axios.post(`${BASE_URL}/photo/change_npc_avatar`, formData);
-    return res.data.avatar_url as string;
-  };
-
-  const handleLocationSelect = (locationId: number | null) => {
-    setForm((prev) => ({
-      ...prev,
-      current_location_id: locationId,
-    }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!form.name.trim()) {
-      toast.error('Имя НПС обязательно');
-      return;
-    }
-    const killText = form.reputation_kill_points.trim();
-    const killPoints = killText === '' ? null : Number(killText);
-    if (killPoints !== null && (!Number.isInteger(killPoints) || Math.abs(killPoints) > KILL_POINTS_LIMIT)) {
-      toast.error(`Репутация за убийство — целое число от −${KILL_POINTS_LIMIT} до ${KILL_POINTS_LIMIT}`);
-      return;
-    }
-    setSaving(true);
-    try {
-      let npcId = editingId;
-      // Exclude avatar from payload — it's handled separately via photo-service
-      const { avatar: _avatar, reputation_kill_points: _killText, ...rest } = form;
-      const payload = { ...rest, reputation_kill_points: killPoints };
-      if (editingId) {
-        await axios.put(`${BASE_URL}/characters/admin/npcs/${editingId}`, payload);
-        toast.success('НПС обновлён');
-      } else {
-        const res = await axios.post(`${BASE_URL}/characters/admin/npcs`, payload);
-        npcId = res.data.id;
-        toast.success('НПС создан');
-      }
-      if (avatarFile && npcId) {
-        try {
-          await uploadNpcAvatar(npcId, avatarFile);
-        } catch {
-          toast.error('НПС сохранён, но не удалось загрузить аватар');
-        }
-      }
-      setAvatarFile(null);
-      setAvatarPreview(null);
-      setFormOpen(false);
-      setEditingId(null);
-      fetchNpcs();
-    } catch (err) {
-      let message = 'Не удалось сохранить НПС';
-      if (axios.isAxiosError(err) && err.response?.data?.detail) {
-        const detail = err.response.data.detail;
-        if (typeof detail === 'string') {
-          message = detail;
-        } else if (Array.isArray(detail)) {
-          message = detail.map((d: { msg?: string }) => d.msg || String(d)).join('; ');
-        }
-      }
-      toast.error(message);
     } finally {
-      setSaving(false);
+      setResurrecting(false);
     }
   };
 
-  const filteredNpcs = npcs;
+  const handleToggleReady = async (item: NpcListItem) => {
+    setReadyPending(true);
+    try {
+      const res = await setNpcReady(item.id, !item.npc_ready);
+      const patchRow = (n: NpcListItem): NpcListItem => (n.id === res.id ? { ...n, ...readyFields(res) } : n);
+      setNpcs((prev) => prev.map(patchRow));
+      setPinned((prev) => (prev ? patchRow(prev) : prev));
+      toast.success(res.npc_ready ? 'НПС отмечен готовым' : 'Отметка «Готов» снята');
+      // The NPC may leave the filtered set — it then stays open as a pinned plate
+      if (readyFilter !== null) fetchNpcs();
+    } catch (err) {
+      const detail = errorDetail(err);
+      toast.error(`Не удалось изменить отметку «Готов»${detail ? `: ${detail}` : ''}`);
+    } finally {
+      setReadyPending(false);
+    }
+  };
 
   /* ── Render ── */
 
-  if (statsNpc) {
-    return (
-      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
-        <NpcStatsEditor
-          npcId={statsNpc.id}
-          npcName={statsNpc.name}
-          npcLevel={statsNpc.level}
-          racesData={racesData}
-          onClose={() => setStatsNpc(null)}
-        />
-      </div>
-    );
-  }
+  const renderPanel = (item: NpcListItem | null) => (
+    <NpcExpandedPanel
+      key="panel"
+      npc={item}
+      tabs={tabs}
+      activeTab={activeTab}
+      onTabSelect={(t) => guard(() => setTab(t))}
+      racesData={racesData}
+      onSaved={handleSaved}
+      onCancel={() => guard(close)}
+      onDirtyChange={handleDirtyChange}
+      onDeleteRequest={() => item && setDeleteTarget(item.id)}
+      onResurrect={() => item && handleResurrect(item.id)}
+      resurrecting={resurrecting}
+      onToggleReady={() => item && handleToggleReady(item)}
+      readyPending={readyPending}
+      scrollTargetRef={openRowRef}
+    />
+  );
 
-  if (equipmentNpc) {
-    return (
-      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
-        <NpcEquipmentEditor
-          npcId={equipmentNpc.id}
-          npcName={equipmentNpc.name}
-          onClose={() => setEquipmentNpc(null)}
-        />
-      </div>
-    );
-  }
-
-  if (questNpc) {
-    return (
-      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
-        <QuestEditor
-          npcId={questNpc.id}
-          npcName={questNpc.name}
-          onClose={() => setQuestNpc(null)}
-        />
-      </div>
-    );
-  }
-
-  if (shopNpc) {
-    return (
-      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
-        <NpcShopEditor
-          npcId={shopNpc.id}
-          npcName={shopNpc.name}
-          onClose={() => setShopNpc(null)}
-        />
-      </div>
-    );
-  }
-
-  if (dialogueNpc) {
-    return (
-      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
-        <DialogueEditor
-          npcId={dialogueNpc.id}
-          npcName={dialogueNpc.name}
-          onClose={() => setDialogueNpc(null)}
-        />
-      </div>
-    );
-  }
+  const showPinnedLoader = openId !== null && !openItem;
 
   return (
     <div className="w-full max-w-container mx-auto flex flex-col gap-6">
-      <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em]">
+      <h1 className="gold-text text-2xl sm:text-3xl font-semibold uppercase tracking-[0.06em]">
         Управление НПС
       </h1>
 
       {/* Search + Filter + Create */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
         <input
-          className="input-underline flex-1 max-w-[320px]"
+          className="input-underline flex-1 sm:min-w-[200px] sm:max-w-[320px]"
           placeholder="Поиск по имени..."
           value={query}
           onChange={(e) => { setQuery(e.target.value); setPage(1); }}
         />
         <select
-          className="input-underline max-w-[200px]"
+          className="input-underline sm:max-w-[200px]"
           value={roleFilter}
           onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }}
         >
@@ -444,7 +317,7 @@ const AdminNpcsPage = () => {
           ))}
         </select>
         <select
-          className="input-underline max-w-[200px]"
+          className="input-underline sm:max-w-[200px]"
           value={statusFilter}
           onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
         >
@@ -452,500 +325,103 @@ const AdminNpcsPage = () => {
           <option value="alive" className="bg-site-dark text-white">Жив</option>
           <option value="dead" className="bg-site-dark text-white">Мёртв</option>
         </select>
-        <button className="btn-blue !text-base !px-6 !py-2 sm:ml-auto" onClick={openCreateForm}>
+        <GeoFilterSelects {...geoSelectProps} />
+        <ReadyFilterSelect
+          value={readyFilter}
+          onChange={(value) => {
+            setReady(value);
+            setPage(1);
+          }}
+        />
+        <button
+          className="btn-blue !text-base !px-6 !py-2 sm:ml-auto"
+          onClick={() => guard(() => openNpc('new'))}
+        >
           Создать НПС
         </button>
       </div>
 
-      {/* Form */}
-      {formOpen && (
-        <form className="gray-bg p-4 sm:p-6 flex flex-col gap-5" onSubmit={handleSubmit}>
-          <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
-            {editingId ? 'Редактирование НПС' : 'Создание НПС'}
-          </h2>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-            {/* Name */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Имя</span>
-              <input name="name" value={form.name} onChange={handleChange} required className="input-underline" />
-            </label>
-
-            {/* Role */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Роль</span>
-              <select name="npc_role" value={form.npc_role} onChange={handleChange} className="input-underline">
-                {NPC_ROLES.map((r) => (
-                  <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
-                ))}
-              </select>
-            </label>
-
-            {/* FEAT-197: reputation gate + kill weight */}
-            <ReputationTierSelect
-              value={form.reputation_min_tier}
-              onChange={(code) => setForm((prev) => ({ ...prev, reputation_min_tier: code }))}
-              hint="Ниже этой ступени НПС не разговаривает и не оказывает услуг"
-            />
-
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Репутация за убийство</span>
-              <input
-                inputMode="numeric"
-                value={form.reputation_kill_points}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (SIGNED_INT_RE.test(v)) setForm((prev) => ({ ...prev, reputation_kill_points: v }));
-                }}
-                placeholder={(() => {
-                  const w = roleKillWeight(roleWeights, form.npc_role);
-                  return w == null ? 'по умолчанию: вес роли' : `по умолчанию: ${w > 0 ? `+${w}` : w} (вес роли)`;
-                })()}
-                className="input-underline"
-              />
-              <span className="text-white/40 text-xs">Каждому победителю, в регионе НПС; пусто — вес роли</span>
-            </label>
-
-            {/* Class */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Класс</span>
-              <select name="id_class" value={form.id_class} onChange={handleChange} className="input-underline">
-                {NPC_CLASSES.map((c) => (
-                  <option key={c.value} value={c.value} className="bg-site-dark text-white">{c.label}</option>
-                ))}
-              </select>
-            </label>
-
-            {/* Race */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Раса</span>
-              <select name="id_race" value={form.id_race} onChange={handleChange} className="input-underline">
-                {racesData.length > 0
-                  ? racesData.map((r) => (
-                      <option key={r.id_race} value={r.id_race} className="bg-site-dark text-white">{r.name}</option>
-                    ))
-                  : NPC_RACES.map((r) => (
-                      <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
-                    ))
-                }
-              </select>
-            </label>
-
-            {/* Subrace */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Подраса</span>
-              <select
-                name="id_subrace"
-                value={form.id_subrace}
-                onChange={handleChange}
-                className="input-underline"
-                disabled={subraceOptions.length === 0}
-              >
-                {subraceOptions.length === 0 ? (
-                  <option value={0} className="bg-site-dark text-white">
-                    {racesData.length === 0 ? 'Загрузка...' : 'Нет подрас'}
-                  </option>
-                ) : (
-                  subraceOptions.map((s) => (
-                    <option key={s.id_subrace} value={s.id_subrace} className="bg-site-dark text-white">
-                      {s.name}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-
-            {/* Level */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Уровень</span>
-              <input type="number" name="level" value={form.level} onChange={handleChange} min={1} className="input-underline" />
-            </label>
-
-            {/* Sex */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Пол</span>
-              <select name="sex" value={form.sex} onChange={handleChange} className="input-underline">
-                {NPC_SEXES.map((s) => (
-                  <option key={s.value} value={s.value} className="bg-site-dark text-white">{s.label}</option>
-                ))}
-              </select>
-            </label>
-
-            {/* Age */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Возраст</span>
-              <input type="number" name="age" value={form.age} onChange={handleChange} min={0} className="input-underline" />
-            </label>
-
-            {/* Weight */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Вес (кг)</span>
-              <input type="number" name="weight" value={form.weight} onChange={handleChange} min={0} className="input-underline" />
-            </label>
-
-            {/* Height */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Рост (см)</span>
-              <input type="number" name="height" value={form.height} onChange={handleChange} min={0} className="input-underline" />
-            </label>
-
-            {/* Currency */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Валюта</span>
-              <input type="number" name="currency_balance" value={form.currency_balance} onChange={handleChange} min={0} className="input-underline" />
-            </label>
-
-            {/* Location */}
-            <div className="flex flex-col gap-1 sm:col-span-2 lg:col-span-3">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Локация</span>
-              <div className="flex flex-wrap items-center gap-2 mb-2">
-                <span className="text-white/50 text-xs">Выбрано:</span>
-                {form.current_location_id != null ? (
-                  <div className="flex items-center gap-2 bg-white/[0.07] rounded-full px-3 py-1">
-                    <span className="text-white text-sm">
-                      {locations.find((l) => l.id === form.current_location_id)?.name
-                        ?? `Локация #${form.current_location_id}`}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleLocationSelect(null)}
-                      className="text-site-red hover:text-white text-xs transition-colors"
-                      title="Убрать локацию"
-                    >
-                      &times;
-                    </button>
-                  </div>
-                ) : (
-                  <span className="text-white/40 text-sm">Без локации</span>
-                )}
-              </div>
-              <input
-                type="text"
-                className="input-underline w-full max-w-[320px] mb-2"
-                placeholder="Поиск локации по названию или ID..."
-                value={locationSearchQuery}
-                onChange={(e) => setLocationSearchQuery(e.target.value)}
-              />
-              {locationSearchLoading && (
-                <div className="flex items-center gap-2 text-white/50 text-sm">
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
-                  Поиск...
-                </div>
-              )}
-              {!locationSearchLoading && locations.length > 0 && (
-                <div className="flex flex-col gap-1 max-h-[240px] overflow-y-auto gold-scrollbar">
-                  {locations.map((loc) => {
-                    const selected = form.current_location_id === loc.id;
-                    return (
-                      <button
-                        key={loc.id}
-                        type="button"
-                        onClick={() => handleLocationSelect(loc.id)}
-                        className={`flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
-                          selected ? 'bg-white/[0.12]' : 'hover:bg-white/[0.07]'
-                        }`}
-                      >
-                        <span className="text-white text-sm flex-1 truncate">{loc.name}</span>
-                        <span className="text-white/30 text-xs">#{loc.id}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {!locationSearchLoading && locations.length === 0 && (
-                <span className="text-white/50 text-sm">Локации не найдены</span>
-              )}
-            </div>
-
-            {/* Avatar upload */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Аватар</span>
-              <div className="flex items-center gap-3">
-                {(avatarPreview || form.avatar) && (
-                  <img
-                    src={avatarPreview || form.avatar}
-                    alt="Превью"
-                    className="w-12 h-12 rounded-full object-cover shrink-0 border border-white/20"
-                  />
-                )}
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleAvatarFile}
-                  className="text-sm text-white/70 file:mr-3 file:py-1.5 file:px-4 file:rounded file:border-0 file:text-sm file:bg-white/10 file:text-white/70 hover:file:bg-white/20 file:cursor-pointer"
-                />
-              </div>
-            </label>
-          </div>
-
-          {/* Textareas */}
-          <label className="flex flex-col gap-1">
-            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Биография</span>
-            <textarea name="biography" value={form.biography} onChange={handleChange} rows={3} className="textarea-bordered" />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Характер</span>
-            <textarea name="personality" value={form.personality} onChange={handleChange} rows={3} className="textarea-bordered" />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Внешность</span>
-            <textarea name="appearance" value={form.appearance} onChange={handleChange} rows={3} className="textarea-bordered" />
-          </label>
-
-          {/* Buttons */}
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 pt-2">
-            <button type="submit" disabled={saving} className="btn-blue !text-base !px-8 !py-2 disabled:opacity-50">
-              {saving ? 'Сохранение...' : editingId ? 'Сохранить' : 'Создать'}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setFormOpen(false); setEditingId(null); }}
-              className="btn-line !w-auto !px-8"
+      {/* NPC list */}
+      <div className="gray-bg">
+        <div className="flex flex-col gap-1 p-2 sm:p-3">
+          {/* Pinned: create panel / NPC opened by link or off the current page */}
+          {isNew && (
+            <NpcRow npc={null} open onToggle={() => guard(close)} rowRef={openRowRef}>
+              {renderPanel(null)}
+            </NpcRow>
+          )}
+          {pinnedItem && (
+            <NpcRow
+              key={`pinned-${pinnedItem.id}`}
+              npc={pinnedItem}
+              open
+              onToggle={() => toggleRow(pinnedItem.id)}
+              badge="Открыт по ссылке"
+              rowRef={openRowRef}
             >
-              Отмена
-            </button>
-          </div>
-        </form>
-      )}
-
-      {formOpen && editingId != null && form.npc_role === 'teleport_master' && (
-        <TeleportLinksPanel npcId={editingId} />
-      )}
-
-      {formOpen && editingId != null && form.npc_role === 'guard' && (
-        <GuardPatrolPanel npcId={editingId} />
-      )}
-
-      {/* NPC Table */}
-      <div className="gray-bg overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
-          </div>
-        ) : (
-          <>
-            {/* Desktop table */}
-            <div className="hidden sm:block">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-white/10">
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">ID</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Аватар</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Имя</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Уровень</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Роль</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Локация</th>
-                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Статус</th>
-                    <th className="text-right text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredNpcs.map((npc) => (
-                    <tr key={npc.id} className="border-b border-white/5 hover:bg-white/[0.05] transition-colors duration-200">
-                      <td className="px-4 py-3 text-sm text-white/70">{npc.id}</td>
-                      <td className="px-4 py-3">
-                        {npc.avatar ? (
-                          <img src={npc.avatar} alt={npc.name} className="w-10 h-10 rounded-full object-cover" />
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-white/[0.05] flex items-center justify-center text-white/20 text-xs">
-                            НПС
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-white">{npc.name}</td>
-                      <td className="px-4 py-3 text-sm text-white/70">{npc.level}</td>
-                      <td className="px-4 py-3">
-                        {npc.npc_role && (
-                          <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-xs font-medium">
-                            {NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-white/70">{npc.location_name || '—'}</td>
-                      <td className="px-4 py-3">
-                        {npc.npc_status === 'dead' ? (
-                          <span className="px-2 py-0.5 rounded-full bg-site-red/20 text-site-red text-xs">
-                            Мёртв
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs">
-                            Жив
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col items-end gap-1.5">
-                          <button
-                            onClick={() => openEditForm(npc.id)}
-                            className="text-sm text-white hover:text-site-blue transition-colors duration-200"
-                          >
-                            Редактировать
-                          </button>
-                          <button
-                            onClick={() => setStatsNpc({ id: npc.id, name: npc.name, level: npc.level })}
-                            className="text-sm text-green-400 hover:text-green-300 transition-colors duration-200"
-                          >
-                            Статы и навыки
-                          </button>
-                          <button
-                            onClick={() => setEquipmentNpc({ id: npc.id, name: npc.name })}
-                            className="text-sm text-site-blue hover:text-white transition-colors duration-200"
-                          >
-                            Экипировка
-                          </button>
-                          <button
-                            onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
-                            className="text-sm text-gold hover:text-gold-light transition-colors duration-200"
-                          >
-                            Диалоги
-                          </button>
-                          <button
-                            onClick={() => setQuestNpc({ id: npc.id, name: npc.name })}
-                            className="text-sm text-gold hover:text-gold-light transition-colors duration-200"
-                          >
-                            Квесты
-                          </button>
-                          {npc.npc_role === 'merchant' && (
-                            <button
-                              onClick={() => setShopNpc({ id: npc.id, name: npc.name })}
-                              className="text-sm text-site-blue hover:text-white transition-colors duration-200"
-                            >
-                              Магазин
-                            </button>
-                          )}
-                          {npc.npc_status === 'dead' && (
-                            <button
-                              onClick={() => handleResurrect(npc.id)}
-                              className="text-sm text-green-400 hover:text-green-300 transition-colors duration-200"
-                            >
-                              Воскресить
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDelete(npc.id)}
-                            className="text-sm text-site-red hover:text-white transition-colors duration-200"
-                          >
-                            Удалить
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {renderPanel(pinnedItem)}
+            </NpcRow>
+          )}
+          {showPinnedLoader && (
+            <div className="flex items-center gap-2 px-4 py-3 text-white/50 text-sm">
+              <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+              Загрузка НПС...
             </div>
+          )}
 
-            {/* Mobile cards */}
-            <div className="sm:hidden flex flex-col gap-3 p-3">
-              {filteredNpcs.map((npc) => (
-                <div key={npc.id} className="bg-white/[0.03] rounded-card p-4 flex flex-col gap-3">
-                  <div className="flex items-center gap-3">
-                    {npc.avatar ? (
-                      <img src={npc.avatar} alt={npc.name} className="w-12 h-12 rounded-full object-cover shrink-0" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-white/[0.05] flex items-center justify-center text-white/20 text-xs shrink-0">
-                        НПС
-                      </div>
-                    )}
-                    <div className="flex flex-col gap-1 min-w-0">
-                      <span className="text-white text-sm font-medium truncate">{npc.name}</span>
-                      <span className="text-white/50 text-xs">LVL {npc.level}</span>
-                    </div>
-                    {npc.npc_role && (
-                      <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-[10px] font-medium ml-auto shrink-0">
-                        {NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-white/50 text-xs">
-                    <span>Локация: {npc.location_name || '—'}</span>
-                    <span className="mx-1">|</span>
-                    {npc.npc_status === 'dead' ? (
-                      <span className="px-2 py-0.5 rounded-full bg-site-red/20 text-site-red text-[10px]">
-                        Мёртв
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-[10px]">
-                        Жив
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex gap-3 flex-wrap">
-                    <button
-                      onClick={() => openEditForm(npc.id)}
-                      className="text-sm text-white hover:text-site-blue transition-colors"
-                    >
-                      Редактировать
-                    </button>
-                    <button
-                      onClick={() => setStatsNpc({ id: npc.id, name: npc.name, level: npc.level })}
-                      className="text-sm text-green-400 hover:text-green-300 transition-colors"
-                    >
-                      Статы
-                    </button>
-                    <button
-                      onClick={() => setEquipmentNpc({ id: npc.id, name: npc.name })}
-                      className="text-sm text-site-blue hover:text-white transition-colors"
-                    >
-                      Экипировка
-                    </button>
-                    <button
-                      onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
-                      className="text-sm text-gold hover:text-gold-light transition-colors"
-                    >
-                      Диалоги
-                    </button>
-                    <button
-                      onClick={() => setQuestNpc({ id: npc.id, name: npc.name })}
-                      className="text-sm text-gold hover:text-gold-light transition-colors"
-                    >
-                      Задания
-                    </button>
-                    {npc.npc_role === 'merchant' && (
-                      <button
-                        onClick={() => setShopNpc({ id: npc.id, name: npc.name })}
-                        className="text-sm text-site-blue hover:text-white transition-colors"
-                      >
-                        Магазин
-                      </button>
-                    )}
-                    {npc.npc_status === 'dead' && (
-                      <button
-                        onClick={() => handleResurrect(npc.id)}
-                        className="text-sm text-green-400 hover:text-green-300 transition-colors"
-                      >
-                        Воскресить
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleDelete(npc.id)}
-                      className="text-sm text-site-red hover:text-white transition-colors"
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                </div>
-              ))}
+          {loading && npcs.length === 0 ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
             </div>
+          ) : (
+            <div className={`flex flex-col gap-1 transition-opacity duration-200 ${loading ? 'opacity-60' : ''}`}>
+              {npcs.map((npc) => {
+                const isOpen = openId === npc.id;
+                return (
+                  <NpcRow
+                    key={npc.id}
+                    npc={npc}
+                    open={isOpen}
+                    onToggle={() => toggleRow(npc.id)}
+                    rowRef={isOpen ? openRowRef : undefined}
+                  >
+                    {isOpen && renderPanel(npc)}
+                  </NpcRow>
+                );
+              })}
+              {!loading && npcs.length === 0 && (
+                <p className="text-center text-white/50 text-sm py-8">НПС не найдены</p>
+              )}
+            </div>
+          )}
+        </div>
 
-            {filteredNpcs.length === 0 && (
-              <p className="text-center text-white/50 text-sm py-8">НПС не найдены</p>
-            )}
-
-            {/* Pagination */}
-            <AdminPagination
-              page={page}
-              totalPages={Math.max(1, Math.ceil(total / pageSize))}
-              onPageChange={(p) => setPage(p)}
-              total={total}
-              pageSize={pageSize}
-              className="px-4 py-3 border-t border-white/10"
-            />
-          </>
-        )}
+        {/* Pagination */}
+        <AdminPagination
+          page={page}
+          totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+          onPageChange={(p) => setPage(p)}
+          total={total}
+          pageSize={PAGE_SIZE}
+          className="px-4 py-3 border-t border-white/10"
+        />
       </div>
+
+      <ConfirmationModal
+        isOpen={pendingLeave}
+        title="Несохранённые изменения"
+        message="Есть несохранённые изменения. Уйти без сохранения?"
+        onConfirm={confirmLeave}
+        onCancel={cancelLeave}
+      />
+
+      <ConfirmationModal
+        isOpen={deleteTarget !== null}
+        title="Удаление НПС"
+        message="Удалить НПС? Это действие нельзя отменить."
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 };

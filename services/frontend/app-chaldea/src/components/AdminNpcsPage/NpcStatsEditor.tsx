@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
+import { useDirtyReport } from '../Admin/ExpandableList/useDirtyReport';
 
 interface SubraceOptionWithPreset {
   id_subrace: number;
@@ -21,7 +22,11 @@ interface NpcStatsEditorProps {
   npcName: string;
   npcLevel: number;
   racesData: RaceWithSubracesData[];
-  onClose: () => void;
+  onClose?: () => void;
+  /** FEAT-208: rendered inside the NPC panel — no own title / back button */
+  embedded?: boolean;
+  /** FEAT-208: reports unsaved stats / skills changes */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface Attributes {
@@ -124,8 +129,11 @@ const READONLY_STATS = ['max_health', 'max_mana', 'max_energy', 'max_stamina'];
 const POINT_STATS = [...PRIMARY_STATS, ...BASE_RESOURCE_STATS];
 const POINTS_PER_LEVEL = 10;
 
-const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcStatsEditorProps) => {
+const NpcStatsEditor = ({
+  npcId, npcName, npcLevel, racesData, onClose, embedded = false, onDirtyChange,
+}: NpcStatsEditorProps) => {
   const [attributes, setAttributes] = useState<Attributes | null>(null);
+  const [savedAttributes, setSavedAttributes] = useState<Attributes | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'stats' | 'skills'>('stats');
@@ -152,6 +160,7 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
       ]);
       if (attrRes.status === 'fulfilled') {
         setAttributes(attrRes.value.data);
+        setSavedAttributes(attrRes.value.data);
       }
       if (skillsRes.status === 'fulfilled') {
         const skillData: SkillAssignment[] = Array.isArray(skillsRes.value.data) ? skillsRes.value.data : [];
@@ -233,6 +242,9 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
     return origSet.some((v, i) => v !== currSet[i]);
   })();
 
+  const hasStatChanges = JSON.stringify(attributes) !== JSON.stringify(savedAttributes);
+  useDirtyReport(hasStatChanges || hasSkillChanges, onDirtyChange);
+
   const handleSaveSkills = async () => {
     setSavingSkills(true);
     try {
@@ -284,6 +296,7 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
     if (!attributes) return false;
     try {
       await axios.put(`${BASE_URL}/attributes/admin/${npcId}`, attributes);
+      setSavedAttributes(attributes);
       return true;
     } catch (err) {
       let message = 'Не удалось сохранить статы';
@@ -485,17 +498,19 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
   return (
     <div className="gray-bg p-4 sm:p-6 flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="gold-text text-2xl font-semibold uppercase tracking-wide">
-            Статы и навыки
-          </h2>
-          <p className="text-white/50 text-sm mt-1">НПС: {npcName}</p>
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="gold-text text-2xl font-semibold uppercase tracking-wide">
+              Статы и навыки
+            </h2>
+            <p className="text-white/50 text-sm mt-1">НПС: {npcName}</p>
+          </div>
+          <button onClick={onClose} className="btn-line !px-6">
+            Назад к НПС
+          </button>
         </div>
-        <button onClick={onClose} className="btn-line !px-6">
-          Назад к НПС
-        </button>
-      </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-4 border-b border-white/10 pb-2">
@@ -560,7 +575,7 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
               <div className="gradient-divider-h relative pb-1" />
               {renderStatGroup('Сопротивления', RESISTANCE_STATS)}
 
-              <div className="flex gap-3 pt-4">
+              <div className="flex flex-wrap gap-3 pt-4">
                 <button
                   onClick={handleSaveStats}
                   disabled={saving}

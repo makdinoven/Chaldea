@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import { getCurrencyForms } from '../../utils/currency';
+import { useDirtyReport, useOpenSnapshotDirty } from '../Admin/ExpandableList/useDirtyReport';
 
 /* ── Types ── */
 
@@ -56,7 +57,11 @@ interface ApiDialogueTree {
 interface DialogueEditorProps {
   npcId: number;
   npcName: string;
-  onClose: () => void;
+  onClose?: () => void;
+  /** FEAT-208: rendered inside the NPC panel — no own title / back link */
+  embedded?: boolean;
+  /** FEAT-208: reports an open tree editor with unsaved changes */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const ACTION_TYPES = [
@@ -93,7 +98,7 @@ const apiTreeToForm = (tree: ApiDialogueTree): { title: string; nodes: DialogueN
 
 /* ── Component ── */
 
-const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
+const DialogueEditor = ({ npcId, npcName, onClose, embedded = false, onDirtyChange }: DialogueEditorProps) => {
   const [trees, setTrees] = useState<DialogueTreeSummary[]>([]);
   const [loadingTrees, setLoadingTrees] = useState(true);
 
@@ -102,8 +107,11 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
   const [title, setTitle] = useState('');
   const [nodes, setNodes] = useState<DialogueNodeForm[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [openSeq, setOpenSeq] = useState(0);
   const [saving, setSaving] = useState(false);
   const [npcQuests, setNpcQuests] = useState<QuestOption[]>([]);
+
+  useDirtyReport(useOpenSnapshotDirty(editorOpen, { title, nodes }, openSeq), onDirtyChange);
 
   const fetchTrees = useCallback(async () => {
     setLoadingTrees(true);
@@ -153,6 +161,7 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
       },
     ]);
     setEditorOpen(true);
+    setOpenSeq((n) => n + 1);
   };
 
   const openEditTree = async (treeId: number) => {
@@ -163,6 +172,7 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
       setTitle(t);
       setNodes(n);
       setEditorOpen(true);
+      setOpenSeq((n) => n + 1);
     } catch {
       toast.error('Не удалось загрузить дерево диалога');
     }
@@ -334,18 +344,22 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
     <div className="flex flex-col gap-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <button
-          onClick={onClose}
-          className="text-white/50 hover:text-white transition-colors flex items-center gap-1 text-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-          Назад к НПС
-        </button>
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
-          Диалоги: {npcName}
-        </h2>
+        {!embedded && (
+          <>
+            <button
+              onClick={onClose}
+              className="text-white/50 hover:text-white transition-colors flex items-center gap-1 text-sm"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+              Назад к НПС
+            </button>
+            <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
+              Диалоги: {npcName}
+            </h2>
+          </>
+        )}
         <button className="btn-blue !text-sm !px-5 !py-2 sm:ml-auto" onClick={openNewTree}>
           Создать дерево
         </button>

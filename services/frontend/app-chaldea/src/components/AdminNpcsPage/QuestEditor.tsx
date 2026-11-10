@@ -10,6 +10,7 @@ import { QUEST_FAME_REWARD_DEFAULT, QUEST_FAME_REWARD_MAX } from '../../api/shad
 import { useFameTierOptions } from '../Admin/ReputationPage/useShadowRefs';
 import { EntityPicker } from '../Admin/DungeonsPage/editor/pickers';
 import { useFactionOptions } from '../Admin/FactionsPage/adminShared';
+import { useDirtyReport, useOpenSnapshotDirty } from '../Admin/ExpandableList/useDirtyReport';
 import { FACTION_LIMITS, adminGetFaction, type FactionRankAdmin } from '../../api/factions';
 import { apiErrorMessage } from '../../api/errors';
 
@@ -74,7 +75,11 @@ interface GameItem {
 interface QuestEditorProps {
   npcId: number;
   npcName: string;
-  onClose: () => void;
+  onClose?: () => void;
+  /** FEAT-208: rendered inside the NPC panel — no own title / back link */
+  embedded?: boolean;
+  /** FEAT-208: reports an open quest form with unsaved changes */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const INITIAL_FORM: QuestFormData = {
@@ -151,7 +156,7 @@ const targetKind = (objectiveType: string): TargetKind | null => {
 
 /* ── Component ── */
 
-const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
+const QuestEditor = ({ npcId, npcName, onClose, embedded = false, onDirtyChange }: QuestEditorProps) => {
   const { forms } = useCurrency();
   const fameTiers = useFameTierOptions();
   // FEAT-205: faction fields (the list needs factions:read; without it the block explains why it is empty).
@@ -164,7 +169,10 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<QuestFormData>(INITIAL_FORM);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [openSeq, setOpenSeq] = useState(0);
   const [saving, setSaving] = useState(false);
+
+  useDirtyReport(useOpenSnapshotDirty(editorOpen, form, openSeq), onDirtyChange);
 
   // Item search for rewards
   const [itemSearchQuery, setItemSearchQuery] = useState('');
@@ -237,6 +245,7 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
     setEditingId(null);
     setForm(INITIAL_FORM);
     setEditorOpen(true);
+    setOpenSeq((n) => n + 1);
   };
 
   const openEditForm = async (questId: number) => {
@@ -275,6 +284,7 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
       });
       setEditingId(questId);
       setEditorOpen(true);
+      setOpenSeq((n) => n + 1);
     } catch {
       toast.error('Не удалось загрузить данные квеста');
     }
@@ -476,18 +486,22 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
     <div className="flex flex-col gap-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <button
-          onClick={onClose}
-          className="text-white/50 hover:text-white transition-colors flex items-center gap-1 text-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-          Назад к НПС
-        </button>
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
-          Квесты: {npcName}
-        </h2>
+        {!embedded && (
+          <>
+            <button
+              onClick={onClose}
+              className="text-white/50 hover:text-white transition-colors flex items-center gap-1 text-sm"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+              Назад к НПС
+            </button>
+            <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
+              Квесты: {npcName}
+            </h2>
+          </>
+        )}
         <button className="btn-blue !text-sm !px-5 !py-2 sm:ml-auto" onClick={openCreateForm}>
           Создать квест
         </button>

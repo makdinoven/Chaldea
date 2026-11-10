@@ -110,6 +110,11 @@ class Character(Base):
     # FEAT-202 (042): the country-prison district snapshot of the serving term (NULL for a station term) — a jailed
     # character may move only inside its subtree; consulted only while the lock reason is `jail`.
     jail_district_id = Column(Integer, nullable=True, default=None)
+    # FEAT-209 (048, NPC only, admin-only — never add to public schemas): the «Готов» mark of the NPC admin page;
+    # `npc_ready_at` is UTC naive, `npc_ready_by` a username snapshot of the admin who set it.
+    npc_ready = Column(Boolean, nullable=False, default=False, server_default='0')
+    npc_ready_at = Column(DateTime, nullable=True, default=None)
+    npc_ready_by = Column(String(255), nullable=True, default=None)
 
     # character_titles.character_id входит в составной первичный ключ, поэтому
     # ORM по умолчанию пытается занулить его при удалении персонажа и падает с
@@ -249,6 +254,11 @@ class MobTemplate(Base):
     # Respawn configuration
     respawn_enabled = Column(Boolean, nullable=False, default=False)
     respawn_seconds = Column(Integer, nullable=True)
+    # FEAT-210: admin-only «Готов» mark (never exposed by public schemas, not part of create/update payloads).
+    # `admin_ready_at` is UTC naive, `admin_ready_by` a username snapshot of the admin who set it.
+    admin_ready = Column(Boolean, nullable=False, default=False, server_default='0')
+    admin_ready_at = Column(DateTime, nullable=True, default=None)
+    admin_ready_by = Column(String(255), nullable=True, default=None)
     # Metadata
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())

@@ -40,7 +40,7 @@ from auth_http import (
     UserRead,
 )
 from visibility import can_view_private, require_private_access
-from sqlalchemy import text, or_
+from sqlalchemy import bindparam, text, or_
 import logging
 
 # Universal subrace skill applied to all subraces (1-16)
@@ -3006,13 +3006,22 @@ def admin_list_npcs(
     npc_role: Optional[str] = Query(None, description="Filter by NPC role"),
     location_id: Optional[int] = Query(None, description="Filter by location"),
     npc_status: Optional[str] = Query(None, description="Filter by NPC status (alive/dead)"),
+    country_id: Optional[int] = Query(None, ge=1, description="FEAT-209: NPCs in locations of this country"),
+    region_id: Optional[int] = Query(None, ge=1, description="FEAT-209: NPCs in locations of this region"),
+    ready: Optional[bool] = Query(None, description="FEAT-209: filter by the admin «Готов» mark"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("npcs:read")),
 ):
     """Paginated list of all NPCs with search and filters. Admin only."""
+    empty = schemas.NpcListResponse(items=[], total=0, page=page, page_size=page_size)
     try:
+        # FEAT-209 §3.2 (shared with the mob list, FEAT-210 §3.4): None = no geo filter, [] = empty scope.
+        geo_location_ids = reputation_crud.admin_geo_location_ids(db, country_id, region_id)
+        if geo_location_ids is not None and not geo_location_ids:
+            return empty
+
         query = db.query(models.Character).filter(
             models.Character.is_npc == True,
             # NULL npc_role is a regular NPC (SQL `NULL != 'mob'` is NULL)
@@ -3027,10 +3036,26 @@ def admin_list_npcs(
             query = query.filter(models.Character.current_location_id == location_id)
         if npc_status is not None:
             query = query.filter(models.Character.npc_status == npc_status)
+        if geo_location_ids is not None:
+            query = query.filter(models.Character.current_location_id.in_(geo_location_ids))
+        if ready is not None:
+            query = query.filter(models.Character.npc_ready == ready)
 
         total = query.count()
         offset = (page - 1) * page_size
-        items = query.order_by(models.Character.id).offset(offset).limit(page_size).all()
+        rows = query.order_by(models.Character.id).offset(offset).limit(page_size).all()
+        location_ids = sorted({r.current_location_id for r in rows if r.current_location_id is not None})
+        names = {}
+        if location_ids:
+            names = {int(lid): name for lid, name in db.execute(
+                text("SELECT id, name FROM Locations WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
+                {"ids": location_ids},
+            ).fetchall()}
+        items = []
+        for r in rows:
+            item = schemas.NpcListItem.from_orm(r)
+            item.location_name = names.get(r.current_location_id)
+            items.append(item)
 
         return schemas.NpcListResponse(
             items=items,
@@ -3170,7 +3195,50 @@ def admin_get_npc(
         "npc_status": npc.npc_status,
         "reputation_min_tier": npc.reputation_min_tier,
         "reputation_kill_points": npc.reputation_kill_points,
+        # FEAT-209: admin-only «Готов» mark
+        "npc_ready": bool(npc.npc_ready),
+        "npc_ready_at": npc.npc_ready_at,
+        "npc_ready_by": npc.npc_ready_by,
     }
+
+
+@router.put("/admin/npcs/{npc_id}/ready", response_model=schemas.NpcReadyResponse)
+def admin_set_npc_ready(
+    npc_id: int,
+    data: schemas.NpcReadyUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:update")),
+):
+    """FEAT-209 §3.4: toggle the admin «Готов» mark. Idempotent — re-setting keeps the original who/when."""
+    npc = db.query(models.Character).filter(
+        models.Character.id == npc_id,
+        models.Character.is_npc == True,
+        or_(models.Character.npc_role.is_(None), models.Character.npc_role != 'mob'),
+    ).first()
+    if not npc:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+    try:
+        if data.ready:
+            if not npc.npc_ready:
+                npc.npc_ready = True
+                npc.npc_ready_at = datetime.utcnow()
+                npc.npc_ready_by = current_user.username
+        else:
+            npc.npc_ready = False
+            npc.npc_ready_at = None
+            npc.npc_ready_by = None
+        db.commit()
+        db.refresh(npc)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error setting ready mark for NPC {npc_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+    return schemas.NpcReadyResponse(
+        id=npc.id,
+        npc_ready=bool(npc.npc_ready),
+        npc_ready_at=npc.npc_ready_at,
+        npc_ready_by=npc.npc_ready_by,
+    )
 
 
 @router.put("/admin/npcs/{npc_id}")
@@ -3381,14 +3449,27 @@ def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
 def admin_list_mob_templates(
     q: str = Query("", description="Поиск по имени моба"),
     tier: Optional[str] = Query(None, description="Фильтр по типу: normal, elite, boss"),
+    country_id: Optional[int] = Query(None, ge=1, description="FEAT-210: mobs spawning in locations of this country"),
+    region_id: Optional[int] = Query(None, ge=1, description="FEAT-210: mobs spawning in locations of this region"),
+    ready: Optional[bool] = Query(None, description="FEAT-210: filter by the admin «Готов» mark"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("mobs:manage")),
 ):
-    """Paginated list of mob templates with search and tier filter. Admin only."""
+    """Paginated list of mob templates with search, tier, geo (via spawn locations) and ready filters. Admin only."""
     try:
-        items, total = crud.get_mob_templates(db, q=q, tier=tier, page=page, page_size=page_size)
+        geo_location_ids = reputation_crud.admin_geo_location_ids(db, country_id, region_id)
+        if geo_location_ids is not None and not geo_location_ids:
+            return schemas.MobTemplateListResponse(items=[], total=0, page=page, page_size=page_size)
+        rows, total = crud.get_mob_templates(db, q=q, tier=tier, page=page, page_size=page_size,
+                                             location_ids=geo_location_ids, ready=ready)
+        spawn_counts = crud.mob_template_spawn_counts(db, [r.id for r in rows])
+        items = []
+        for r in rows:
+            item = schemas.MobTemplateResponse.from_orm(r)
+            item.spawn_count = spawn_counts.get(r.id, 0)
+            items.append(item)
         return schemas.MobTemplateListResponse(
             items=items,
             total=total,
@@ -3494,6 +3575,41 @@ def admin_get_mob_template(
     if not template:
         raise HTTPException(status_code=404, detail="Шаблон моба не найден")
     return template
+
+
+@router.put("/admin/mob-templates/{template_id}/ready", response_model=schemas.MobReadyResponse)
+def admin_set_mob_ready(
+    template_id: int,
+    data: schemas.NpcReadyUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """FEAT-210 §3.4: toggle the admin «Готов» mark. Idempotent — re-setting keeps the original who/when."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+    try:
+        if data.ready:
+            if not template.admin_ready:
+                template.admin_ready = True
+                template.admin_ready_at = datetime.utcnow()
+                template.admin_ready_by = current_user.username
+        else:
+            template.admin_ready = False
+            template.admin_ready_at = None
+            template.admin_ready_by = None
+        db.commit()
+        db.refresh(template)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error setting ready mark for mob template {template_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+    return schemas.MobReadyResponse(
+        id=template.id,
+        admin_ready=bool(template.admin_ready),
+        admin_ready_at=template.admin_ready_at,
+        admin_ready_by=template.admin_ready_by,
+    )
 
 
 @router.put("/admin/mob-templates/{template_id}")

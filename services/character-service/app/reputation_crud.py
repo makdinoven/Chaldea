@@ -18,10 +18,11 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+import econ_core
 import econ_ledger
 import law_core
 import models
@@ -165,6 +166,54 @@ def country_region_ids(db: Session, country_id: Optional[int]) -> List[int]:
         return []
     rows = db.execute(text("SELECT id FROM Regions WHERE country_id = :c ORDER BY id"), {"c": int(country_id)})
     return [int(r[0]) for r in rows.fetchall()]
+
+
+# FEAT-209: top-down mirror of econ_core.SQL_RESOLVE_LOCATION — locations whose own COALESCE(district region,
+# location region) is in the set, plus descendants via parent_id that have no own region (nearest-ancestor rule).
+# Nested districts need no recursion: every Districts row carries its own region_id.
+SQL_REGION_LOCATION_IDS = """
+WITH RECURSIVE scope (id, depth) AS (
+  SELECT l.id, 0 FROM Locations l LEFT JOIN Districts d ON d.id = l.district_id
+  WHERE COALESCE(d.region_id, l.region_id) IN :region_ids
+  UNION ALL
+  SELECT l.id, s.depth + 1 FROM Locations l JOIN scope s ON l.parent_id = s.id
+  LEFT JOIN Districts d ON d.id = l.district_id
+  WHERE COALESCE(d.region_id, l.region_id) IS NULL AND s.depth < :max_depth
+)
+SELECT DISTINCT id FROM scope
+"""
+
+
+def region_location_ids(db: Session, region_ids: Sequence[int]) -> List[int]:
+    """Ids of all locations that resolve (like `location_region`) to any of `region_ids`."""
+    ids = sorted({int(r) for r in region_ids})
+    if not ids:
+        return []
+    rows = db.execute(
+        text(SQL_REGION_LOCATION_IDS).bindparams(bindparam("region_ids", expanding=True)),
+        {"region_ids": ids, "max_depth": econ_core.LOCATION_PARENT_DEPTH},
+    ).fetchall()
+    return sorted(int(r[0]) for r in rows)
+
+
+def admin_geo_location_ids(db: Session, country_id: Optional[int], region_id: Optional[int]) -> Optional[List[int]]:
+    """FEAT-209 §3.2 / FEAT-210 §3.4: location scope of the admin country/region list filter.
+
+    ``None`` when neither is given (no geo filter). Otherwise the region (checked against the country when both are
+    given — a foreign region yields an empty scope) or all regions of the country, expanded via
+    ``region_location_ids``; ``[]`` for an empty scope.
+    """
+    if country_id is None and region_id is None:
+        return None
+    if region_id is not None:
+        if country_id is not None:
+            owner = db.execute(text("SELECT country_id FROM Regions WHERE id = :r"), {"r": int(region_id)}).scalar()
+            region_ids = [int(region_id)] if owner is not None and int(owner) == int(country_id) else []
+        else:
+            region_ids = [int(region_id)]
+    else:
+        region_ids = country_region_ids(db, country_id)
+    return region_location_ids(db, region_ids) if region_ids else []
 
 
 def location_region(db: Session, location_id: Optional[int]) -> Optional[int]:

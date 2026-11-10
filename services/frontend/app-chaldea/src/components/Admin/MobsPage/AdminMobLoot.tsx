@@ -1,15 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { updateMobLoot, selectMobsSaving } from '../../../redux/slices/mobsSlice';
 import type { MobLootEntry } from '../../../api/mobs';
 import useDebounce from '../../../hooks/useDebounce';
+import { useDirtyReport } from '../ExpandableList/useDirtyReport';
 
 interface AdminMobLootProps {
   templateId: number;
   lootTable: MobLootEntry[];
   onUpdate: () => void;
+  /** FEAT-210: unsaved-changes flag for the panel guard */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface ItemSearchResult {
@@ -26,19 +29,24 @@ interface LootFormEntry {
   max_quantity: number;
 }
 
-const AdminMobLoot = ({ templateId, lootTable, onUpdate }: AdminMobLootProps) => {
+const toLootEntries = (lootTable: MobLootEntry[]): LootFormEntry[] =>
+  lootTable.map((e) => ({
+    item_id: e.item_id,
+    item_name: e.item_name || `Предмет #${e.item_id}`,
+    drop_chance: e.drop_chance,
+    min_quantity: e.min_quantity,
+    max_quantity: e.max_quantity,
+  }));
+
+const AdminMobLoot = ({ templateId, lootTable, onUpdate, onDirtyChange }: AdminMobLootProps) => {
   const dispatch = useAppDispatch();
   const saving = useAppSelector(selectMobsSaving);
 
-  const [entries, setEntries] = useState<LootFormEntry[]>(
-    lootTable.map((e) => ({
-      item_id: e.item_id,
-      item_name: e.item_name || `Предмет #${e.item_id}`,
-      drop_chance: e.drop_chance,
-      min_quantity: e.min_quantity,
-      max_quantity: e.max_quantity,
-    })),
-  );
+  const [entries, setEntries] = useState<LootFormEntry[]>(() => toLootEntries(lootTable));
+
+  // FEAT-210: dirty = entries differ from the saved loot table
+  const savedJson = useMemo(() => JSON.stringify(toLootEntries(lootTable)), [lootTable]);
+  useDirtyReport(JSON.stringify(entries) !== savedJson, onDirtyChange);
 
   // Item search
   const [searchQuery, setSearchQuery] = useState('');
@@ -47,15 +55,7 @@ const AdminMobLoot = ({ templateId, lootTable, onUpdate }: AdminMobLootProps) =>
   const [searchLoading, setSearchLoading] = useState(false);
 
   useEffect(() => {
-    setEntries(
-      lootTable.map((e) => ({
-        item_id: e.item_id,
-        item_name: e.item_name || `Предмет #${e.item_id}`,
-        drop_chance: e.drop_chance,
-        min_quantity: e.min_quantity,
-        max_quantity: e.max_quantity,
-      })),
-    );
+    setEntries(toLootEntries(lootTable));
   }, [lootTable]);
 
   useEffect(() => {

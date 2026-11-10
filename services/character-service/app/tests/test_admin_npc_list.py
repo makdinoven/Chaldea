@@ -332,6 +332,20 @@ class TestAdminNpcListSearchAndFilters:
         assert body["total"] == 1
         assert body["items"][0]["name"] == "НПС-лок1"
 
+    def test_items_carry_location_name(self, npc_client, create_npc, db_session):
+        """FEAT-208: each item has the name of its current location (None if unknown or unset)."""
+        from sqlalchemy import text
+        db_session.execute(text("INSERT INTO Locations (id, name) VALUES (10, 'Рыночная площадь')"))
+        db_session.commit()
+        create_npc(name="НПС-с-локацией", location_id=10)
+        create_npc(name="НПС-без-локации", location_id=None)
+        create_npc(name="НПС-неизвестная", location_id=999)
+
+        resp = npc_client.get("/characters/admin/npcs")
+        assert resp.status_code == 200
+        names = {i["name"]: i["location_name"] for i in resp.json()["items"]}
+        assert names == {"НПС-с-локацией": "Рыночная площадь", "НПС-без-локации": None, "НПС-неизвестная": None}
+
     def test_empty_result_with_filters(self, npc_client, create_npc):
         """No matches should return empty items with total=0."""
         create_npc(name="НПС", npc_role="merchant")

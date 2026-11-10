@@ -32,6 +32,20 @@ export interface MobTemplateListItem {
   gold_reward: number;
   respawn_enabled: boolean;
   respawn_seconds: number | null;
+  /** FEAT-210: number of configured spawn places (enabled or not) */
+  spawn_count: number;
+  /** FEAT-210: admin «Готов» mark (admin list only; UTC-naive datetime) */
+  admin_ready: boolean;
+  admin_ready_at: string | null;
+  admin_ready_by: string | null;
+}
+
+/** FEAT-210: response of PUT /characters/admin/mob-templates/{id}/ready */
+export interface MobReadyResponse {
+  id: number;
+  admin_ready: boolean;
+  admin_ready_at: string | null;
+  admin_ready_by: string | null;
 }
 
 export interface MobTemplateListResponse {
@@ -45,6 +59,10 @@ export interface MobTemplateDetail extends MobTemplate {
   skills: MobSkillEntry[];
   loot_entries: MobLootEntry[];
   spawn_locations: LocationMobSpawn[];
+  /** FEAT-210: admin «Готов» mark */
+  admin_ready?: boolean;
+  admin_ready_at?: string | null;
+  admin_ready_by?: string | null;
 }
 
 export interface MobSkillEntry {
@@ -182,12 +200,20 @@ export const createPartyMobBattle = async (
 export const fetchMobTemplates = async (params: {
   q?: string;
   tier?: string;
+  /** FEAT-210: mobs with at least one spawn place in the country / region */
+  country_id?: number | null;
+  region_id?: number | null;
+  /** FEAT-210: admin «Готов» filter (null / undefined = all) */
+  ready?: boolean | null;
   page?: number;
   page_size?: number;
 }): Promise<MobTemplateListResponse> => {
   const cleanParams: Record<string, string | number> = {};
   if (params.q) cleanParams.q = params.q;
   if (params.tier) cleanParams.tier = params.tier;
+  if (params.country_id != null) cleanParams.country_id = params.country_id;
+  if (params.region_id != null) cleanParams.region_id = params.region_id;
+  if (params.ready != null) cleanParams.ready = params.ready ? 'true' : 'false';
   if (params.page != null) cleanParams.page = params.page;
   if (params.page_size != null) cleanParams.page_size = params.page_size;
 
@@ -228,6 +254,15 @@ export const updateMobTemplate = async (
   const { data } = await axios.put<MobTemplate>(
     `/characters/admin/mob-templates/${id}`,
     payload,
+  );
+  return data;
+};
+
+/** FEAT-210: set / clear the admin «Готов» mark (idempotent; keeps who/when when already set). */
+export const setMobReady = async (id: number, ready: boolean): Promise<MobReadyResponse> => {
+  const { data } = await axios.put<MobReadyResponse>(
+    `/characters/admin/mob-templates/${id}/ready`,
+    { ready },
   );
   return data;
 };

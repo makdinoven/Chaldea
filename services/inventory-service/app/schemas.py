@@ -2396,3 +2396,39 @@ class EquipmentModifiersRequest(BaseModel):
 class EquipmentModifiersResponse(BaseModel):
     # {"<character_id>": {"strength": 15, "res_fire": 4.0}} — empty dict = nothing worn
     modifiers: Dict[str, Dict[str, float]]
+
+
+# FEAT-210: admin items list (slim rows) and the «Готов» mark toggle.
+class ItemAdminListRow(BaseModel):
+    id: int
+    name: str
+    image: Optional[str] = None
+    item_type: str
+    item_rarity: Optional[str] = None
+    item_level: int = 0
+    armor_subclass: Optional[str] = None
+    weapon_subclass: Optional[str] = None
+    resource_subcategory: Optional[str] = None
+    admin_ready: bool = False
+    admin_ready_at: Optional[datetime] = None
+    admin_ready_by: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class ItemReadyUpdate(BaseModel):
+    ready: bool
+
+    class Config:
+        extra = "forbid"
+
+
+class ItemReadyResponse(BaseModel):
+    id: int
+    admin_ready: bool
+    admin_ready_at: Optional[datetime] = None
+    admin_ready_by: Optional[str] = None
+
+    class Config:
+        orm_mode = True

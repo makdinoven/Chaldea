@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { apiErrorMessage } from '../../api/errors';
+import { useDirtyReport } from '../Admin/ExpandableList/useDirtyReport';
 import {
   fetchGuardPatrol,
   saveGuardPatrol,
@@ -35,6 +36,8 @@ import { formatServerDateTime } from '../../utils/serverDate';
 
 interface GuardPatrolPanelProps {
   npcId: number;
+  /** FEAT-208: forwards the unsaved-patrol flag to the NPC panel */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface RoutePoint {
@@ -189,7 +192,7 @@ const Segmented = <T extends string>({
   </div>
 );
 
-const GuardPatrolPanel = ({ npcId }: GuardPatrolPanelProps) => {
+const GuardPatrolPanel = ({ npcId, onDirtyChange }: GuardPatrolPanelProps) => {
   const [patrol, setPatrol] = useState<PatrolOut | null>(null);
   const [form, setForm] = useState<PatrolForm | null>(null);
   const [loading, setLoading] = useState(true);
@@ -220,6 +223,7 @@ const GuardPatrolPanel = ({ npcId }: GuardPatrolPanelProps) => {
   }, [load]);
 
   const dirty = useMemo(() => !!(patrol && form && !sameForm(form, formFrom(patrol))), [patrol, form]);
+  useDirtyReport(dirty, onDirtyChange);
 
   const update = (patch: Partial<PatrolForm>) => {
     setForm((f) => (f ? { ...f, ...patch } : f));

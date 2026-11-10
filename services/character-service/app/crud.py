@@ -1688,17 +1688,41 @@ def get_mob_templates(
     tier: str = None,
     page: int = 1,
     page_size: int = 20,
+    location_ids: Optional[list] = None,
+    ready: Optional[bool] = None,
 ):
-    """Paginated list of mob templates with optional search and tier filter."""
+    """Paginated list of mob templates with optional search, tier, spawn-location scope and ready filters.
+
+    FEAT-210: ``location_ids`` (not None) keeps templates with at least one ``location_mob_spawns`` row (enabled or
+    not) in those locations; templates without spawns never match.
+    """
     query = db.query(MobTemplate)
     if q:
         query = query.filter(MobTemplate.name.ilike(f"%{q}%"))
     if tier:
         query = query.filter(MobTemplate.tier == tier)
+    if location_ids is not None:
+        spawn_scope = db.query(models.LocationMobSpawn.mob_template_id).filter(
+            models.LocationMobSpawn.location_id.in_(location_ids)
+        )
+        query = query.filter(MobTemplate.id.in_(spawn_scope))
+    if ready is not None:
+        query = query.filter(MobTemplate.admin_ready == ready)
     total = query.count()
     offset = (page - 1) * page_size
     items = query.order_by(MobTemplate.id).offset(offset).limit(page_size).all()
     return items, total
+
+
+def mob_template_spawn_counts(db: Session, template_ids: list) -> dict:
+    """FEAT-210: {template_id: number of location_mob_spawns rows (enabled or not)} in one grouped query."""
+    from sqlalchemy import func as sa_func
+    if not template_ids:
+        return {}
+    rows = db.query(models.LocationMobSpawn.mob_template_id, sa_func.count(models.LocationMobSpawn.id)).filter(
+        models.LocationMobSpawn.mob_template_id.in_(template_ids)
+    ).group_by(models.LocationMobSpawn.mob_template_id).all()
+    return {int(tid): int(cnt) for tid, cnt in rows}
 
 
 def get_mob_template_by_id(db: Session, template_id: int):

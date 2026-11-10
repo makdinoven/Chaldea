@@ -11,10 +11,15 @@ import { NPC_CLASSES, NPC_SEXES } from '../../../constants/npc';
 import type { MobTemplateCreatePayload } from '../../../api/mobs';
 import { effectiveStat, STAT_CAP_SHORT } from '../../../utils/statCaps';
 import { classGrowthText, levelResourceBonus } from '../../../utils/resourceGrowth';
+import { useDirtyReport } from '../ExpandableList/useDirtyReport';
 
 interface AdminMobTemplateFormProps {
   editingId: number | null;
-  onClose: () => void;
+  /** FEAT-210: called after a successful save (the form stays open after an update) */
+  onSaved: (id: number, created: boolean) => void;
+  onCancel: () => void;
+  /** FEAT-210: unsaved-changes flag for the panel guard */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const STAT_KEYS = [
@@ -139,7 +144,7 @@ const computeDerivedStats = (base: Record<string, number>, level: number, classI
   };
 };
 
-const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps) => {
+const AdminMobTemplateForm = ({ editingId, onSaved, onCancel, onDirtyChange }: AdminMobTemplateFormProps) => {
   const dispatch = useAppDispatch();
   const saving = useAppSelector(selectMobsSaving);
 
@@ -147,6 +152,11 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  // FEAT-210: baseline for the unsaved-changes check (loaded template / empty create form)
+  const [snapshot, setSnapshot] = useState<string>(JSON.stringify(INITIAL_FORM));
+
+  const isDirty = !loadingDetail && (JSON.stringify(form) !== snapshot || avatarFile !== null);
+  useDirtyReport(isDirty, onDirtyChange);
 
   const derivedStats = useMemo(
     () => computeDerivedStats(form.base_attributes, Number(form.level) || 0, Number(form.id_class)),
@@ -191,7 +201,7 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
       axios.get(`/characters/admin/mob-templates/${editingId}`)
         .then((res) => {
           const t = res.data;
-          setForm({
+          const loaded: FormData = {
             name: t.name || '',
             description: t.description || '',
             tier: t.tier || 'normal',
@@ -203,7 +213,9 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
             gold_reward: t.gold_reward || 0,
             respawn_enabled: t.respawn_enabled ?? false,
             respawn_seconds: t.respawn_seconds ?? null,
-          });
+          };
+          setForm(loaded);
+          setSnapshot(JSON.stringify(loaded));
           if (t.avatar) {
             setAvatarPreview(t.avatar);
           }
@@ -293,7 +305,10 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
         }
       }
 
-      onClose();
+      // Re-baseline: the form stays open after an update
+      setSnapshot(JSON.stringify(form));
+      setAvatarFile(null);
+      if (templateId) onSaved(templateId, !editingId);
     } catch {
       // Error already shown by thunk
     }
@@ -308,11 +323,7 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
   }
 
   return (
-    <form className="gray-bg p-4 sm:p-6 flex flex-col gap-5" onSubmit={handleSubmit}>
-      <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase tracking-[0.06em]">
-        {editingId ? 'Редактирование шаблона моба' : 'Создание шаблона моба'}
-      </h2>
-
+    <form className="gray-bg p-4 sm:p-6 flex flex-col gap-5 min-w-0" onSubmit={handleSubmit}>
       {/* Basic fields */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
         <label className="flex flex-col gap-1">
@@ -488,7 +499,7 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
         </button>
         <button
           type="button"
-          onClick={onClose}
+          onClick={onCancel}
           className="btn-line !w-auto !px-8"
         >
           Отмена

@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import { BASE_URL } from '../../api/api';
+import { useDirtyReport } from '../Admin/ExpandableList/useDirtyReport';
 import { useAppDispatch } from '../../redux/store';
 import type { RootState } from '../../redux/store';
 import {
@@ -34,12 +35,14 @@ interface AdminNpcListItem {
 
 interface TeleportLinksPanelProps {
   npcId: number;
+  /** FEAT-208: reports a half-filled new link or an open inline edit */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const TOOLTIP_TEXT =
   'Изменение стоимости одной стороны не обновляет обратную связь автоматически';
 
-const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
+const TeleportLinksPanel = ({ npcId, onDirtyChange }: TeleportLinksPanelProps) => {
   const { forms, format } = useCurrency();
   const dispatch = useAppDispatch();
   const links = useSelector((state: RootState) => selectAdminTeleportLinks(npcId)(state)) ?? [];
@@ -59,6 +62,8 @@ const TeleportLinksPanel = ({ npcId }: TeleportLinksPanelProps) => {
   const [editingLinkId, setEditingLinkId] = useState<number | null>(null);
   const [editingCost, setEditingCost] = useState<number>(0);
   const [editingTier, setEditingTier] = useState<string | null>(null);
+
+  useDirtyReport(selectedTarget !== null || editingLinkId !== null, onDirtyChange);
 
   // Cache: target NPC info for already-known links (for showing names)
   const [targetCache, setTargetCache] = useState<Record<number, TeleportMasterOption>>({});

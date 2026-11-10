@@ -1,14 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { updateMobSpawns, selectMobsSaving } from '../../../redux/slices/mobsSlice';
 import type { LocationMobSpawn } from '../../../api/mobs';
+import { useDirtyReport } from '../ExpandableList/useDirtyReport';
 
 interface AdminMobSpawnsProps {
   templateId: number;
   spawns: LocationMobSpawn[];
   onUpdate: () => void;
+  /** FEAT-210: unsaved-changes flag for the panel guard */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface LocationOption {
@@ -24,19 +27,24 @@ interface SpawnFormEntry {
   is_enabled: boolean;
 }
 
-const AdminMobSpawns = ({ templateId, spawns, onUpdate }: AdminMobSpawnsProps) => {
+const toSpawnEntries = (spawns: LocationMobSpawn[]): SpawnFormEntry[] =>
+  spawns.map((s) => ({
+    location_id: s.location_id,
+    location_name: s.location_name || `Локация #${s.location_id}`,
+    spawn_chance: s.spawn_chance,
+    max_active: s.max_active,
+    is_enabled: s.is_enabled,
+  }));
+
+const AdminMobSpawns = ({ templateId, spawns, onUpdate, onDirtyChange }: AdminMobSpawnsProps) => {
   const dispatch = useAppDispatch();
   const saving = useAppSelector(selectMobsSaving);
 
-  const [entries, setEntries] = useState<SpawnFormEntry[]>(
-    spawns.map((s) => ({
-      location_id: s.location_id,
-      location_name: s.location_name || `Локация #${s.location_id}`,
-      spawn_chance: s.spawn_chance,
-      max_active: s.max_active,
-      is_enabled: s.is_enabled,
-    })),
-  );
+  const [entries, setEntries] = useState<SpawnFormEntry[]>(() => toSpawnEntries(spawns));
+
+  // FEAT-210: dirty = entries differ from the saved spawn config
+  const savedJson = useMemo(() => JSON.stringify(toSpawnEntries(spawns)), [spawns]);
+  useDirtyReport(JSON.stringify(entries) !== savedJson, onDirtyChange);
 
   const [locations, setLocations] = useState<LocationOption[]>([]);
 
@@ -45,7 +53,7 @@ const AdminMobSpawns = ({ templateId, spawns, onUpdate }: AdminMobSpawnsProps) =
       const res = await axios.get<LocationOption[]>('/locations/locations/lookup');
       setLocations(res.data);
     } catch {
-      // Not critical
+      toast.error('Не удалось загрузить список локаций');
     }
   }, []);
 
@@ -54,15 +62,7 @@ const AdminMobSpawns = ({ templateId, spawns, onUpdate }: AdminMobSpawnsProps) =
   }, [fetchLocations]);
 
   useEffect(() => {
-    setEntries(
-      spawns.map((s) => ({
-        location_id: s.location_id,
-        location_name: s.location_name || `Локация #${s.location_id}`,
-        spawn_chance: s.spawn_chance,
-        max_active: s.max_active,
-        is_enabled: s.is_enabled,
-      })),
-    );
+    setEntries(toSpawnEntries(spawns));
   }, [spawns]);
 
   const handleAddLocation = (e: React.ChangeEvent<HTMLSelectElement>) => {

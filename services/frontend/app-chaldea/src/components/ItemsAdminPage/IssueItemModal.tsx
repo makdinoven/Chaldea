@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import { fetchCharacters } from "../../api/characters";
+import { fetchCharactersList } from "../../api/charactersPublic";
 import { fetchItems, issueItem } from "../../api/items";
 import useDebounce from "../../hooks/useDebounce";
 import toast from "react-hot-toast";
 import { itemGrantErrorMessage } from "../../api/errors";
 import ModalShell from "../CommonComponents/ModalShell/ModalShell";
-import type { ItemData } from "./ItemsAdminPage";
+/** The modal only needs the id and name of an item (FEAT-210: list rows are slim). */
+interface IssuableItem {
+  id: number;
+  name: string;
+}
 
 /* ── Types ── */
 
@@ -17,17 +21,20 @@ interface Character {
 interface IssueItemModalProps {
   open: boolean;
   onClose: () => void;
-  initialItem?: ItemData;
+  initialItem?: IssuableItem | null;
 }
+
+/** Max characters per search (the list endpoint caps page_size at 100) */
+const CHARACTER_SEARCH_LIMIT = 100;
 
 /* ── Component ── */
 
 const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => {
   const [itemQ, setItemQ] = useState("");
   const [charQ, setCharQ] = useState("");
-  const [items, setItems] = useState<ItemData[]>([]);
+  const [items, setItems] = useState<IssuableItem[]>([]);
   const [chars, setChars] = useState<Character[]>([]);
-  const [selectedItem, setSelectedItem] = useState<ItemData | null>(initialItem || null);
+  const [selectedItem, setSelectedItem] = useState<IssuableItem | null>(initialItem || null);
   const [selectedChar, setSelectedChar] = useState<Character | null>(null);
   const [qty, setQty] = useState(1);
   const [issuing, setIssuing] = useState(false);
@@ -45,18 +52,20 @@ const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => 
       .catch((e: Error) => toast.error(e.message || "Не удалось загрузить предметы"));
   }, [debItem, open]);
 
-  /* Fetch characters */
+  /* Preselected item */
   useEffect(() => {
-    if (!open) return;
-    setSelectedItem(initialItem || null);
-    fetchCharacters()
-      .then(setChars)
-      .catch((e: Error) => toast.error(e.message || "Не удалось загрузить персонажей"));
+    if (open) setSelectedItem(initialItem || null);
   }, [open, initialItem]);
 
-  const visibleChars = chars.filter((c) =>
-    c.name.toLowerCase().includes(debChar.toLowerCase()),
-  );
+  /* Fetch characters — `/characters/list` is paginated: search by name on the server */
+  useEffect(() => {
+    if (!open) return;
+    fetchCharactersList({ q: debChar.trim() || undefined, page_size: CHARACTER_SEARCH_LIMIT })
+      .then((res) => setChars(res.items))
+      .catch((e: Error) => toast.error(e.message || "Не удалось загрузить персонажей"));
+  }, [open, debChar]);
+
+  const visibleChars = chars;
 
   const give = async () => {
     if (!selectedChar || !selectedItem) return;

@@ -53,6 +53,8 @@ inventory-service/app/
 | GET | `/inventory/admin/items/{id}` | **FEAT-171 (ревью #1):** полная `Item` по JWT с правом `items:read` — для редактора предметов (`ItemsAdminPage/ItemForm`) и экрана рецептов. Тело идентично internal-двойнику и тому, что `GET /inventory/items/{id}` отдавал до FEAT-171. Нужен отдельно от internal-двойника, потому что nginx закрывает префикс `/inventory/internal/` снаружи и браузер туда не попадёт. Форма читает предмет отсюда и потом шлёт `PUT /inventory/items/{id}`: на тонком теле PUT записал бы обратно значения по умолчанию и затёр бы данные предмета |
 | PUT | `/inventory/items/{id}` | Обновить предмет (FEAT-165: настройки переработки, переставшие подходить к подкатегории предмета, удаляются в той же транзакции — и как у сырья, и как у результата); FEAT-168: `effects` / `damage_entries` заменяются целиком, но только если клиент их прислал) |
 | GET / PUT | `/inventory/admin/items/{id}/conversions` | FEAT-165: настройки переработки сырья (`items:read` / `items:update`), PUT заменяет весь набор |
+| GET | `/inventory/admin/items` | **FEAT-210:** весь каталог тонкими строками `ItemAdminListRow` (`id, name, image, item_type, item_rarity, item_level, armor_subclass, weapon_subclass, resource_subcategory, admin_ready, admin_ready_at, admin_ready_by`), по id, без связей; `items:read`. Объявлен **до** `GET /{character_id}/items`, иначе `admin` ловится как `character_id` (422) |
+| PUT | `/inventory/admin/items/{id}/ready` | **FEAT-210:** отметка «Готов», тело `{ready: bool}` (лишние поля — 422), `items:update`; ответ `ItemReadyResponse {id, admin_ready, admin_ready_at, admin_ready_by}`; 404 «Предмет не найден». Идемпотентно: повторное `true` не меняет кто/когда, `false` обнуляет всё |
 | DELETE | `/inventory/items/{id}` | Удалить предмет |
 | GET | `/inventory/{id}/items?item_type=gathering_tool&category=pickaxe` | Фильтр по типу + tool_category (FEAT-128, для модалки выбора инструмента) |
 | GET | `/inventory/items/bulk?ids=1,2,3` | Массовый резолв предметов (FEAT-154). **FEAT-171:** отдаёт `PublicItemCard`; поведение и тело не изменились |
@@ -282,6 +284,14 @@ FEAT-171 §3.4 D9).
 - `build_modifiers_dict` отдаёт ключ `"stealth"` (если модификатор ненулевой) — значит экипировка/снятие,
   `/internal/equipment-modifiers` и еда (`eat-food` → сытость) двигают `character_attributes.stealth`.
 - `GATHERING_TOOL_FORBIDDEN_STAT_FIELDS` += `stealth_modifier` — инструмент сбора со скрытностью отклоняется (422).
+
+## Отметка «Готов» в админке (FEAT-210, миграция 036)
+
+- **Миграция `036_item_admin_ready`** (revises `035_item_stealth_modifier`): `items.admin_ready TINYINT(1) NOT NULL DEFAULT 0`,
+  `admin_ready_at DATETIME NULL` (UTC), `admin_ready_by VARCHAR(255) NULL` (username). Обычные колонки, ENUM не трогается.
+  Откат = downgrade до 035 (отметки теряются).
+- Отметка только для админки: видна в `GET /inventory/admin/items` и в ответе `PUT /inventory/admin/items/{id}/ready`.
+  Её нет в `Item`, `PublicItemCard`, internal/admin-карточке и в `ItemCreate` — обычное сохранение предмета её не трогает.
 
 ## Походный рюкзак (FEAT-178, миграция 028)
 

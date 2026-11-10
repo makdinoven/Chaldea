@@ -142,3 +142,41 @@ export const issueItem = async (characterId: number, itemId: number, quantity: n
     quantity,
   } as IssueItemPayload);
 };
+
+/* ── FEAT-210: admin list + «Готов» mark ── */
+
+/** A row of `GET /inventory/admin/items` (slim, whole catalogue, `items:read`). */
+export interface ItemAdminListRow {
+  id: number;
+  name: string;
+  image: string | null;
+  item_type: string;
+  item_rarity: string | null;
+  item_level: number;
+  armor_subclass: string | null;
+  weapon_subclass: string | null;
+  resource_subcategory: string | null;
+  admin_ready: boolean;
+  /** UTC-naive server datetime */
+  admin_ready_at: string | null;
+  admin_ready_by: string | null;
+}
+
+export interface ItemReadyResponse {
+  id: number;
+  admin_ready: boolean;
+  admin_ready_at: string | null;
+  admin_ready_by: string | null;
+}
+
+/** The whole catalogue as slim admin rows, ordered by id. */
+export const fetchAdminItemList = async (): Promise<ItemAdminListRow[]> => {
+  const { data } = await client.get<ItemAdminListRow[]>("/admin/items");
+  return Array.isArray(data) ? data : [];
+};
+
+/** Sets / clears the admin «Готов» mark (`items:update`). */
+export const setItemReady = async (id: number, ready: boolean): Promise<ItemReadyResponse> => {
+  const { data } = await client.put<ItemReadyResponse>(`/admin/items/${id}/ready`, { ready });
+  return data;
+};

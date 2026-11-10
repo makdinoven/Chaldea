@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { updateMobSkills, selectMobsSaving } from '../../../redux/slices/mobsSlice';
 import { fetchMobTemplates, fetchMobTemplate, type MobSkillEntry } from '../../../api/mobs';
+import { useDirtyReport } from '../ExpandableList/useDirtyReport';
 
 /**
  * Every mob skill is listed up front, grouped by type.
@@ -19,6 +20,8 @@ interface AdminMobSkillsProps {
   templateId: number;
   skills: MobSkillEntry[];
   onUpdate: () => void;
+  /** FEAT-210: unsaved-changes flag for the panel guard */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface SkillInfo {
@@ -41,7 +44,7 @@ const groupLabelOf = (skillType: string): string => {
   return group?.label ?? 'Прочее';
 };
 
-const AdminMobSkills = ({ templateId, skills, onUpdate }: AdminMobSkillsProps) => {
+const AdminMobSkills = ({ templateId, skills, onUpdate, onDirtyChange }: AdminMobSkillsProps) => {
   const dispatch = useAppDispatch();
   const saving = useAppSelector(selectMobsSaving);
 
@@ -143,6 +146,7 @@ const AdminMobSkills = ({ templateId, skills, onUpdate }: AdminMobSkillsProps) =
     if (original.length !== current.length) return true;
     return original.some((v, i) => v !== current[i]);
   })();
+  useDirtyReport(hasChanges, onDirtyChange);
 
   const nameOf = (skillId: number) =>
     allSkills.find((s) => s.id === skillId)?.name

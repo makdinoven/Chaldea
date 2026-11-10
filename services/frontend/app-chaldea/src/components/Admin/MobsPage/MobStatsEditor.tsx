@@ -2,12 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { fetchActiveMobs, type ActiveMob } from '../../../api/mobs';
+import { useDirtyReport } from '../ExpandableList/useDirtyReport';
 
 interface MobStatsEditorProps {
   templateId: number;
-  templateName: string;
   idClass: number;
   baseAttributes: Record<string, number>;
+  /** FEAT-210: unsaved-changes flag for the panel guard */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface Attributes {
@@ -70,7 +72,7 @@ const BASE_ATTR_KEYS = ['strength', 'agility', 'intelligence', 'endurance', 'hea
 const POINT_STATS = [...PRIMARY_STATS, ...BASE_RESOURCE_STATS];
 const POINTS_PER_LEVEL = 10;
 
-const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: MobStatsEditorProps) => {
+const MobStatsEditor = ({ templateId, idClass, baseAttributes, onDirtyChange }: MobStatsEditorProps) => {
   const [activeMobs, setActiveMobs] = useState<ActiveMob[]>([]);
   const [mobsLoading, setMobsLoading] = useState(false);
   const [selectedMob, setSelectedMob] = useState<ActiveMob | null>(null);
@@ -78,6 +80,11 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
   const [attributes, setAttributes] = useState<Attributes | null>(null);
   const [attrLoading, setAttrLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // FEAT-210: attributes as loaded / last saved — dirty = edited since then
+  const [attrSnapshot, setAttrSnapshot] = useState<string | null>(null);
+
+  const isDirty = attributes !== null && attrSnapshot !== null && JSON.stringify(attributes) !== attrSnapshot;
+  useDirtyReport(isDirty, onDirtyChange);
 
   const loadActiveMobs = useCallback(async () => {
     setMobsLoading(true);
@@ -100,9 +107,11 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
     try {
       const res = await axios.get(`/attributes/${characterId}`);
       setAttributes(res.data);
+      setAttrSnapshot(JSON.stringify(res.data));
     } catch {
       toast.error('Не удалось загрузить атрибуты моба');
       setAttributes(null);
+      setAttrSnapshot(null);
     } finally {
       setAttrLoading(false);
     }
@@ -122,6 +131,7 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
     setSaving(true);
     try {
       await axios.put(`/attributes/admin/${selectedMob.character_id}`, attributes);
+      setAttrSnapshot(JSON.stringify(attributes));
       toast.success('Статы моба обновлены');
     } catch (err) {
       let message = 'Не удалось сохранить статы';
@@ -234,7 +244,7 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
           </div>
         ) : activeMobs.length === 0 ? (
           <p className="text-white/50 text-sm">
-            Нет активных экземпляров этого моба. Заспавните моба во вкладке «Спавн», затем выберите его здесь для просмотра статов.
+            Нет активных экземпляров этого моба. Заспавните моба на странице «Активные мобы», затем выберите его здесь для просмотра статов.
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">

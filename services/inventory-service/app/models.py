@@ -104,6 +104,12 @@ class Items(Base):
     # house trophy hall; a home teleport scroll carries its reader to a return circle.
     is_elite_trophy = Column(Boolean, nullable=False, default=False, server_default="0")
     is_home_teleport = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-210: admin-only «Готов» mark (flag + when + who). Never exposed in
+    # public/internal item responses and not part of ItemCreate — regular edits
+    # keep it; only PUT /inventory/admin/items/{id}/ready changes it.
+    admin_ready = Column(Boolean, nullable=False, default=False, server_default="0")
+    admin_ready_at = Column(DateTime, nullable=True)
+    admin_ready_by = Column(String(255), nullable=True)
 
     # FEAT-168: how a consumable is used in battle.
     # NULL / 'instant' — applied immediately; 'weapon_coating' — poison on the

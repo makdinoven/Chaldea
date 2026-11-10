@@ -838,7 +838,12 @@ class NpcListItem(BaseModel):
     npc_role: Optional[str] = None
     avatar: Optional[str] = None
     current_location_id: Optional[int] = None
+    location_name: Optional[str] = None
     npc_status: Optional[str] = None
+    # FEAT-209: admin-only «Готов» mark
+    npc_ready: bool = False
+    npc_ready_at: Optional[datetime] = None
+    npc_ready_by: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -849,6 +854,21 @@ class NpcListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class NpcReadyUpdate(BaseModel):
+    """FEAT-209: body of PUT /characters/admin/npcs/{npc_id}/ready."""
+    ready: bool
+
+    class Config:
+        extra = "forbid"
+
+
+class NpcReadyResponse(BaseModel):
+    id: int
+    npc_ready: bool
+    npc_ready_at: Optional[datetime] = None
+    npc_ready_by: Optional[str] = None
 
 
 class NpcInLocation(BaseModel):
@@ -945,6 +965,11 @@ class MobTemplateResponse(BaseModel):
     gold_reward: int
     respawn_enabled: bool
     respawn_seconds: Optional[int] = None
+    # FEAT-210: admin list only — number of location_mob_spawns rows (enabled or not) + «Готов» mark
+    spawn_count: int = 0
+    admin_ready: bool = False
+    admin_ready_at: Optional[datetime] = None
+    admin_ready_by: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -1006,9 +1031,21 @@ class MobTemplateDetailResponse(BaseModel):
     skills: List[MobSkillResponse] = []
     loot_entries: List[MobLootEntryResponse] = []
     spawn_locations: List[MobSpawnResponse] = []
+    # FEAT-210: admin-only «Готов» mark
+    admin_ready: bool = False
+    admin_ready_at: Optional[datetime] = None
+    admin_ready_by: Optional[str] = None
 
     class Config:
         orm_mode = True
+
+
+class MobReadyResponse(BaseModel):
+    """FEAT-210: response of PUT /characters/admin/mob-templates/{template_id}/ready."""
+    id: int
+    admin_ready: bool
+    admin_ready_at: Optional[datetime] = None
+    admin_ready_by: Optional[str] = None
 
 
 class MobSkillsUpdate(BaseModel):

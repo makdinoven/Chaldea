@@ -144,6 +144,13 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## HIGH
 
+### ~~Баг: окна «Выдать перк/титул» и выбор персонажа в профессиях роняют админку (`chars.filter is not a function`)~~ DONE (FEAT-210, 2026-11-10)
+~~- **Сервис:** frontend~~
+~~- **Файлы:** `components/Admin/PerksPage/GrantPerkModal.tsx:48,65`, `components/Admin/TitlesPage/GrantTitleModal.tsx:48,65`, `components/Admin/ProfessionsAdminPage/ProfessionsAdminPage.tsx:113,118`, `api/characters.js` (`fetchCharacters`)~~
+~~- **Описание:** `GET /characters/list` стал постраничным (`{items, total, page, page_size}`, 20 по умолчанию), а `fetchCharacters()` отдаёт ответ как есть и вызывающие кладут объект в state массива → при открытии окна React падает целиком (белый экран). То же было в «Выдать предмет» — там исправлено в FEAT-210 (переход на `fetchCharactersList` с серверным поиском `q`, `page_size=100`). Остальным трём местам нужно то же самое.~~
+~~- **Найдено:** FEAT-210, 2026-11-10~~
+**Исправлено:** все три места переведены на `fetchCharactersList` с серверным поиском `q` и `page_size=100`, как «Выдать предмет».
+
 ### ~~Уязвимость: посты на стене профиля рендерятся вообще без санитайзера~~ DONE (2026-09-20)
 ~~**Сервис:** frontend~~
 ~~**Файлы:** `UserProfilePage/WallSection.tsx:173`, `ProfilePage/PostHistoryTab/PostHistoryTab.tsx:79`~~

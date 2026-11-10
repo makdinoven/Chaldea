@@ -162,6 +162,8 @@ PUT заменяет таблицу целиком (уровни подряд с
 - FEAT-202 (миграция `042_country_prison`): 3 настройки тюрьмы страны в `law_settings`, `law_jail_terms.facility` / `country_id` / `district_id`, `characters.jail_district_id` — см. «Тюрьма страны и отделение стражи (FEAT-202)» в конце
 - FEAT-203 (миграция `043_guard_detection`): 10 настроек обнаружения в `law_settings` (`detect_*`) и `law_levels.detect_pct` — см. «Стража замечает не всегда (FEAT-203)» в конце
 - **guard_patrols**, **guard_patrol_points** + `law_settings.patrols_enabled` / `patrol_encounter_hold_min`, индекс `law_encounters.ix_law_enc_guard` — патрули стражи (FEAT-204, миграция `044_guard_patrols`), см. «Патрули стражи (FEAT-204)» в конце
+- FEAT-209 (миграция `048_npc_admin_ready`): `characters.npc_ready` TINYINT(1) NOT NULL DEFAULT 0, `npc_ready_at` DATETIME NULL (UTC), `npc_ready_by` VARCHAR(255) NULL (логин админа) — отметка «Готов» админки НПС, только в админских ответах; см. «Админка НПС: фильтр по стране/региону и «Готов» (FEAT-209)» в конце
+- FEAT-210 (миграция `049_mob_admin_ready`): `mob_templates.admin_ready` TINYINT(1) NOT NULL DEFAULT 0, `admin_ready_at` DATETIME NULL (UTC), `admin_ready_by` VARCHAR(255) NULL — отметка «Готов» админки мобов, только в админских ответах; см. «Админка мобов: фильтр по стране/региону, спавны и «Готов» (FEAT-210)» в конце
 
 ### Колонки, добавленные FEAT-154
 
@@ -2709,3 +2711,40 @@ faction_debts → faction_donation_days → faction_pvp_kills → faction_qm_pur
   `GET|PUT /admin/factions/{fid}/enemies` (`{enemies[{kind, ref_id, points}] ≤50, kill_points_daily_cap}`),
   `GET|PUT /admin/factions/{fid}/outlaw-regions` (`{regions[{region_id, level_code}] ≤50}`); звания — поля пассивки;
   настройки — 4 новых поля; экономика — `item_stock`, `last.item_sales`, история — `item_sales` / `items_sold`.
+
+## Админка НПС: фильтр по стране/региону и «Готов» (FEAT-209)
+
+| Метод | Путь | Права | Описание |
+|-------|------|-------|----------|
+| GET | `/characters/admin/npcs` | `npcs:read` | Список НПС (без мобов): `q, npc_role, location_id, npc_status, page, page_size ≤100` + FEAT-209 `country_id ≥1`, `region_id ≥1`, `ready` (bool). `NpcListItem` дополнен `location_name` (FEAT-208) и `npc_ready`, `npc_ready_at`, `npc_ready_by` |
+| GET | `/characters/admin/npcs/{id}` | `npcs:read` | Детали НПС; FEAT-209 — те же три ключа `npc_ready*` |
+| PUT | `/characters/admin/npcs/{id}/ready` | `npcs:update` | `NpcReadyUpdate {ready: bool}` (лишние поля → 422) → `NpcReadyResponse {id, npc_ready, npc_ready_at, npc_ready_by}`. Моб / не-НПС / нет такого → 404 «NPC не найден». Идемпотентно: повторное `true` сохраняет исходные «кто/когда»; `true` ставит `at = utcnow()`, `by = username` админа; `false` обнуляет все три |
+
+**Гео-фильтр.** `region_id` (при заданной `country_id` — только если регион принадлежит этой стране, иначе пустой
+ответ) или все регионы страны (`reputation_crud.country_region_ids`). Локации — `reputation_crud.region_location_ids`
+(`SQL_REGION_LOCATION_IDS`): рекурсивный CTE «сверху вниз», зеркальный `econ_core.SQL_RESOLVE_LOCATION` — локация
+входит, если её `COALESCE(Districts.region_id, Locations.region_id)` в наборе; дочерние по `parent_id` без своего
+региона наследуют (глубина ≤ `LOCATION_PARENT_DEPTH`), дочерняя со своим другим регионом — нет. Вложенные районы
+рекурсии не требуют (у каждого района свой `region_id`). Нет регионов / локаций → `{items: [], total: 0}`; НПС без
+локации при гео-фильтре не попадают. Все фильтры сочетаются между собой и с пагинацией.
+
+**Отметка «Готов»** (миграция `048_npc_admin_ready`) видна только в этих админских ответах; публичные схемы НПС
+перечисляют поля явно и её не содержат.
+Разрешение гео-области вынесено в `reputation_crud.admin_geo_location_ids(db, country_id, region_id)` (FEAT-210):
+`None` — фильтра нет, `[]` — пустая область; им же пользуется список шаблонов мобов.
+
+## Админка мобов: фильтр по стране/региону, спавны и «Готов» (FEAT-210)
+
+| Метод | Путь | Права | Описание |
+|-------|------|-------|----------|
+| GET | `/characters/admin/mob-templates` | `mobs:manage` | `q, tier, page, page_size ≤100` + FEAT-210 `country_id ≥1`, `region_id ≥1`, `ready` (bool). `MobTemplateResponse` дополнен `spawn_count` (число строк `location_mob_spawns` шаблона, включённых и нет; один сгруппированный запрос по странице) и `admin_ready`, `admin_ready_at`, `admin_ready_by` |
+| GET | `/characters/admin/mob-templates/{id}` | `mobs:manage` | Детали; FEAT-210 — те же три ключа `admin_ready*` |
+| PUT | `/characters/admin/mob-templates/{id}/ready` | `mobs:manage` | `NpcReadyUpdate {ready: bool}` (лишние поля → 422) → `MobReadyResponse {id, admin_ready, admin_ready_at, admin_ready_by}`. Нет шаблона → 404 «Шаблон моба не найден». Идемпотентность — как у НПС |
+
+**Гео-фильтр** — та же семантика, что у НПС (`admin_geo_location_ids`), но по местам спавна: шаблон попадает, если
+хоть одна его строка `location_mob_spawns` (в т.ч. выключенная) стоит в локации области
+(`mob_templates.id IN (SELECT mob_template_id FROM location_mob_spawns WHERE location_id IN …)`). Шаблоны без спавнов
+при гео-фильтре не попадают. Фильтры сочетаются с `q`, `tier` и пагинацией (`crud.get_mob_templates`).
+
+**Отметка «Готов»** (миграция `049_mob_admin_ready`) не входит в `MobTemplateCreate`/`MobTemplateUpdate` (обычное
+сохранение её не трогает) и не попадает в публичные ответы (`/mobs/by_location` → `MobInLocation` и др.).
