@@ -95,7 +95,7 @@ DEFAULT_ACTIONS: Tuple[Tuple[str, str, int, Optional[int], bool, int], ...] = (
     (ACTION_GUILD, "Поставка по заказу гильдии", 2, 20, True, 20),
     (ACTION_NPC_KILL, "Убийство жителя", 0, None, True, 30),
     (ACTION_REGION_EVENT, "Помощь краю", 5, None, False, 40),
-    (ACTION_CARAVAN, "Нападение на караван", -100, None, False, 50),
+    (ACTION_CARAVAN, "Нападение на караван", -100, None, True, 50),
     (ACTION_CRIME, "Преступление", -50, None, False, 60),
     (ACTION_ADMIN, "Решение властей", 0, None, False, 70),
 )

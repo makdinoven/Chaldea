@@ -591,6 +591,25 @@ export interface EconSimParams {
   caravan_travel_foreign: number;
   caravan_min_value: number;
   caravan_max_per_run: number;
+  /* FEAT-211 physical caravans and raids (feature file 3.14) — older backends may not send them yet */
+  caravan_physical_enabled: number;
+  caravan_physical_min_value: number;
+  caravan_physical_small_chance: number;
+  caravan_physical_max_active: number;
+  caravan_step_minutes: number;
+  caravan_route_max_steps: number;
+  caravan_post_hold_max_min: number;
+  caravan_raid_battle_max_hours: number;
+  caravan_raid_marks_share: number;
+  caravan_raid_goods_share: number;
+  caravan_guard_count_base: number;
+  caravan_guard_value_per_extra: number;
+  caravan_guard_count_max: number;
+  caravan_guard_mult_per_1000: number;
+  caravan_guard_mult_max: number;
+  caravan_guard_mult_dangerous: number;
+  caravan_rep_trade_share: number;
+  fence_purse_share: number;
   /* FEAT-193 guild orders (feature file 3.4) — older backends may not send them yet */
   guild_enabled: number;
   guild_markup_pct: number;
@@ -1283,6 +1302,25 @@ export interface CaravanParams {
   caravan_travel_foreign: number;
   caravan_min_value: number;
   caravan_max_per_run: number;
+  /* FEAT-211 (feature file 3.14) — optional: an older backend does not send them */
+  caravan_physical_enabled?: number;
+  caravan_physical_min_value?: number;
+  caravan_physical_small_chance?: number;
+  caravan_physical_max_active?: number;
+  caravan_step_minutes?: number;
+  caravan_route_max_steps?: number;
+  caravan_post_hold_max_min?: number;
+  caravan_raid_battle_max_hours?: number;
+  caravan_raid_marks_share?: number;
+  caravan_raid_goods_share?: number;
+  caravan_guard_count_base?: number;
+  caravan_guard_value_per_extra?: number;
+  caravan_guard_count_max?: number;
+  caravan_guard_mult_per_1000?: number;
+  caravan_guard_mult_max?: number;
+  caravan_guard_mult_dangerous?: number;
+  caravan_rep_trade_share?: number;
+  fence_purse_share?: number;
 }
 
 export interface CaravanCountry {
@@ -1346,6 +1384,19 @@ export interface CaravanRow {
   goods_returned: boolean | null;
   created_at: string;
   finished_at: string | null;
+  /* FEAT-211 physical caravans (A4) — optional: absent on an older backend */
+  is_physical?: boolean;
+  current_location_id?: number | null;
+  current_location_name?: string | null;
+  route_index?: number;
+  route_len?: number;
+  next_move_at?: string | null;
+  arrived_at?: string | null;
+  hold_started_at?: string | null;
+  guard_count?: number;
+  stolen_units?: number;
+  raid_paid?: number;
+  raid_status?: CaravanRaidStatus | null;
 }
 
 export interface CaravanList {
@@ -1355,10 +1406,101 @@ export interface CaravanList {
 
 export interface CaravanListQuery {
   status?: CaravanStatusFilter;
+  /** FEAT-211: physical / abstract / all */
+  kind?: CaravanKindFilter;
   region_id?: number;
   group_code?: string;
   limit?: number;
   offset?: number;
+}
+
+/* ============================================================================ FEAT-211 physical caravans (3.13) */
+
+export type CaravanKindFilter = 'all' | 'physical' | 'abstract';
+
+export type CaravanRaidStatus = 'starting' | 'fighting' | 'won' | 'repelled' | 'aborted' | 'expired';
+
+export interface CaravanRoutePoint {
+  index: number;
+  location_id: number;
+  name: string | null;
+  region_id: number | null;
+  region_name: string | null;
+}
+
+export interface CaravanRaidAttacker {
+  id: number;
+  name: string | null;
+  marks: number;
+  bales: number;
+}
+
+export interface CaravanRaidAdmin {
+  id: number;
+  status: CaravanRaidStatus;
+  leader_id: number;
+  leader_name: string | null;
+  is_group: boolean;
+  battle_id: number | null;
+  attackers: CaravanRaidAttacker[];
+  marks: number;
+  stolen_units: number;
+  stolen_value: number;
+  bales: number;
+  guard_template_id: number | null;
+  guard_template_name: string | null;
+  guard_mult: number | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+/** A5 — one caravan with its route and raid. */
+export interface CaravanDetail extends CaravanRow {
+  route: CaravanRoutePoint[];
+  held_by: 'post' | 'raid' | null;
+  raid: CaravanRaidAdmin | null;
+}
+
+export type CaravanGateSource = 'override' | 'station' | 'none';
+
+export interface CaravanRoadRegion {
+  region_id: number;
+  name: string | null;
+  country_name: string | null;
+  station_location_id: number | null;
+  station_location_name: string | null;
+  gate_override_id: number | null;
+  gate_override_name: string | null;
+  gate_location_id: number | null;
+  gate_location_name: string | null;
+  gate_source: CaravanGateSource;
+}
+
+export type CaravanNoRoadReason = 'no_gate' | 'no_path' | 'too_long';
+
+export interface CaravanNoRoad {
+  from_region_id: number;
+  from_name: string | null;
+  to_region_id: number;
+  to_name: string | null;
+  reason: CaravanNoRoadReason;
+}
+
+/** A6 — trade gates of the participating regions and the pairs with no road. */
+export interface CaravanRoads {
+  regions: CaravanRoadRegion[];
+  no_road: CaravanNoRoad[];
+}
+
+export interface CaravanGuardTemplate {
+  mob_template_id: number;
+  name: string | null;
+  level: number | null;
+}
+
+/** A8/A9 — pool of mob templates that guard caravans. */
+export interface CaravanGuards {
+  templates: CaravanGuardTemplate[];
 }
 
 /* ============================================================================ FEAT-193 guild orders (3.10) */

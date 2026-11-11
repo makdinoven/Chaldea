@@ -93,8 +93,8 @@ services/<service>/app/
 ### Граф HTTP-зависимостей
 
 ```
-character-service ──> inventory-service, skills-service, character-attributes-service, user-service, locations-service
-locations-service ──> character-service, character-attributes-service
+character-service ──> inventory-service, skills-service, character-attributes-service, user-service, locations-service, battle-service
+locations-service ──> character-service, character-attributes-service, inventory-service
 inventory-service ──> character-attributes-service
 battle-service ──> character-attributes-service, character-service, skills-service, inventory-service
 autobattle-service ──> battle-service

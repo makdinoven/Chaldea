@@ -37,6 +37,7 @@ FEAT-192 (NPC caravans) appends caravan ledger CASES (`caravan_escrow` = the sin
 money on the road; dispatch purse/treasury -> escrow, delivery escrow -> purse + escrow -> country
 duty, cancel escrow -> payers; untaxed, never negative, no sources) and CARAVAN_OP_TYPE_NAMES /
 CARAVAN_ESCROW_KIND_NAME, which a runner checks against econ_core's constants directly.
+FEAT-211 (physical caravans) adds `caravan_raid` (escrow -> raiders, untaxed) to those caravan CASES.
 
 FEAT-193 (guild orders) appends `guild_order` ledger CASES (purse + region treasury -> character, no
 comment, untaxed, no sources) and GUILD_OP_TYPE_NAMES, plus PRICING_CASES for the shop-row helpers
@@ -840,7 +841,8 @@ CASES += [
 
 # a runner checks == CARAVAN_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES and
 # COMMENT_REQUIRED_OP_TYPES
-CARAVAN_OP_TYPE_NAMES: Tuple[str, ...] = ("caravan_dispatch", "caravan_delivery", "caravan_cancel")
+CARAVAN_OP_TYPE_NAMES: Tuple[str, ...] = ("caravan_dispatch", "caravan_delivery", "caravan_cancel",
+                                          "caravan_raid")
 # a runner checks: in ACCOUNT_KINDS, singleton, not in NEGATIVE_ALLOWED_KINDS / TAX_SOURCE_KINDS / SOURCE_KINDS
 CARAVAN_ESCROW_KIND_NAME = "caravan_escrow"
 
@@ -894,6 +896,29 @@ CASES += [
                Step("caravan_delivery", [Leg(CARAVAN_ESCROW, P20, 50)], {"apply_tax": False})],
         expected_accounts={("population_purse", 10): 0, ("population_purse", 20): 50, ("caravan_escrow", 0): 0},
         expected_operations=3, expected_postings=3, expected_tax_legs=0,
+    ),
+    # FEAT-211 raid: escrow -> raiders (two characters), untaxed, no sources, never negative; the rest of
+    # the escrow is then delivered to the seller as usual
+    ContractCase(
+        name="caravan_raid_pays_raiders_from_escrow_untaxed",
+        steps=[_fund((P20, 300)),
+               Step("caravan_dispatch", [Leg(P20, CARAVAN_ESCROW, 200)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c3:pay"}),
+               Step("caravan_raid", [Leg(CARAVAN_ESCROW, C1, 25), Leg(CARAVAN_ESCROW, C2, 15)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c3:raid",
+                     "metadata": {"caravan_id": 3, "raid_id": 1}}),
+               Step("caravan_raid", [Leg(CARAVAN_ESCROW, C1, 25)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c3:raid"},
+                    error="DuplicateOperation"),
+               Step("caravan_raid", [Leg(CARAVAN_ESCROW, C3, 161)], {"apply_tax": False},
+                    error="InsufficientFunds"),
+               Step("caravan_raid", [Leg(EMISSION, C3, 5)], {"apply_tax": False}, error="EconomyError"),
+               Step("caravan_delivery", [Leg(CARAVAN_ESCROW, P10, 160)],
+                    {"region_id": 20, "apply_tax": False, "idempotency_key": "caravan:c3:done"})],
+        expected_characters={1: 25, 2: 15, 3: 0},
+        expected_accounts={("population_purse", 20): 100, ("caravan_escrow", 0): 0,
+                           ("population_purse", 10): 160},
+        expected_operations=4, expected_postings=5, expected_tax_legs=0,
     ),
 ]
 

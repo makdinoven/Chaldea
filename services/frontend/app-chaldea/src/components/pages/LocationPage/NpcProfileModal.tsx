@@ -11,6 +11,7 @@ import NpcQuestsModal from './NpcQuestsModal';
 import NpcAuctionModal from './NpcAuctionModal';
 import BankModal from './BankModal/BankModal';
 import MintModal from './MintModal/MintModal';
+import FenceModal from './FenceModal/FenceModal';
 import GuildModal from './GuildModal/GuildModal';
 import QuartermasterModal from './QuartermasterModal/QuartermasterModal';
 import { QM_SILENT_TEXT, probeQuartermaster, type QuartermasterProbeState } from '../../../api/factions';
@@ -49,6 +50,7 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   const [auctionOpen, setAuctionOpen] = useState(false);
   const [bankOpen, setBankOpen] = useState(false);
   const [mintOpen, setMintOpen] = useState(false);
+  const [fenceOpen, setFenceOpen] = useState(false);
   const [guildOpen, setGuildOpen] = useState(false);
   /** FEAT-206: faction quartermaster binding as seen by this character (none / silent / open). */
   const [qmState, setQmState] = useState<QuartermasterProbeState>('none');
@@ -166,6 +168,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
         npcName={npc.name}
         npcAvatar={npc.avatar}
         onClose={() => setMintOpen(false)}
+      />
+    );
+  }
+
+  if (fenceOpen && npc) {
+    return (
+      <FenceModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setFenceOpen(false)}
       />
     );
   }
@@ -412,6 +425,26 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v8m-2.5-6.5h3.75a1.75 1.75 0 010 3.5h-2.5a1.75 1.75 0 000 3.5H14.5" />
               </svg>
               Монетный двор
+            </button>
+          )}
+
+          {/* Fence button — «Скупщик» NPCs buy stolen bales, character in the same location (FEAT-211) */}
+          {npc.npc_role === 'fence' && isCharacterHere && characterId && (
+            <button
+              onClick={() => setFenceOpen(true)}
+              className="
+                mt-2 w-full px-6 py-3 rounded-card
+                border border-gold/50 bg-gold/10
+                text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                hover:bg-gold/20 hover:border-gold/80
+                transition-all duration-200
+                flex items-center justify-center gap-2
+              "
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 8l8-4 8 4v8l-8 4-8-4V8zm0 0l8 4m0 0l8-4m-8 4v8" />
+              </svg>
+              Сбыть краденое
             </button>
           )}
 

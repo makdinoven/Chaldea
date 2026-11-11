@@ -11,6 +11,7 @@ import QuestEditor from './QuestEditor';
 import NpcShopEditor from './NpcShopEditor';
 import TeleportLinksPanel from './TeleportLinksPanel';
 import GuardPatrolPanel from './GuardPatrolPanel';
+import FenceSettingsPanel from './FenceSettingsPanel';
 import { NPC_TAB_LABELS, type NpcTabKey } from './npcTabKeys';
 import type { NpcListItem } from './NpcRow';
 
@@ -88,6 +89,8 @@ const NpcExpandedPanel = ({
         return <TeleportLinksPanel npcId={npc.id} onDirtyChange={onDirtyChange} />;
       case 'patrol':
         return <GuardPatrolPanel npcId={npc.id} onDirtyChange={onDirtyChange} />;
+      case 'fence':
+        return <FenceSettingsPanel npcId={npc.id} onDirtyChange={onDirtyChange} />;
       default:
         return null;
     }

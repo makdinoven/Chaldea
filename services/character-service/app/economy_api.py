@@ -1024,13 +1024,15 @@ def list_caravans(
     status: str = Query("all", pattern=schemas.CARAVAN_STATUS_RE),
     region_id: Optional[int] = Query(None, ge=1),
     group_code: Optional[str] = Query(None, max_length=32),
+    kind: str = Query("all", pattern=schemas.CARAVAN_KIND_RE),       # FEAT-211 A4
     limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=schemas.CARAVAN_LIST_MAX_LIMIT),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: UserRead = Depends(require_permission("economy:read")),
 ):
     return _read_or_error(db, lambda: economy_caravan_crud.list_caravans(
-        db, status=status, region_id=region_id, group_code=group_code or None, limit=limit, offset=offset))
+        db, status=status, region_id=region_id, group_code=group_code or None, limit=limit, offset=offset,
+        kind=kind))
 
 
 # ---------------------------------------------------------------------------

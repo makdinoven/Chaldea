@@ -110,6 +110,12 @@ class Items(Base):
     admin_ready = Column(Boolean, nullable=False, default=False, server_default="0")
     admin_ready_at = Column(DateTime, nullable=True)
     admin_ready_by = Column(String(255), nullable=True)
+    # FEAT-211: stolen caravan bale. Item-level mark (stacks are keyed by item_id),
+    # set only by migration 037 — not part of ItemCreate, so admin edits keep it.
+    # The auction refuses such items; only a fence (locations-service) buys them.
+    is_stolen = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Goods group code the bale stands for (VARCHAR, not ENUM — no table lock)
+    bale_group = Column(String(32), nullable=True)
 
     # FEAT-168: how a consumable is used in battle.
     # NULL / 'instant' — applied immediately; 'weapon_coating' — poison on the

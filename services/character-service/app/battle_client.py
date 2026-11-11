@@ -1,7 +1,8 @@
 """Small HTTP client to battle-service (FEAT-198 guard battles).
 
 * :func:`create_guard_battle` — ``POST /battles/internal/guard`` (async; the encounter choice «драться»);
-* :func:`get_battle_result`   — ``GET /battles/internal/{id}/result`` (sync; the law pass polls lost callbacks).
+* :func:`get_battle_result`   — ``GET /battles/internal/{id}/result`` (sync; the law pass polls lost callbacks);
+* :func:`create_caravan_raid_battle` — ``POST /battles/internal/caravan-raid`` (async; FEAT-211 raid start, B1).
 
 Both send ``X-Internal-Token``. Errors are raised as :class:`BattleServiceError` (the caller decides what the player
 sees); a 404 battle is reported as :data:`BATTLE_NOT_FOUND`.
@@ -63,6 +64,32 @@ async def create_guard_battle(law_encounter_id: int, character_id: int, guard_np
         raise BattleServiceError("guard battle refused", response.status_code, _detail(response))
     try:
         return int(response.json()["battle_id"])
+    except Exception as e:
+        raise BattleServiceError("bad battle-service answer", response.status_code) from e
+
+
+async def create_caravan_raid_battle(caravan_raid_id: int, caravan_id: int, leader_character_id: int, group: bool,
+                                     guard_character_ids, location_id: int) -> dict:
+    """FEAT-211 B1: start the raid fight (team 0 raiders, team 1 guards). Returns
+    ``{"battle_id": int, "attacker_character_ids": [int]}``. Raises :class:`BattleServiceError`."""
+    url = f"{_base_url()}/battles/internal/caravan-raid"
+    payload = {"caravan_raid_id": int(caravan_raid_id), "caravan_id": int(caravan_id),
+               "leader_character_id": int(leader_character_id), "group": bool(group),
+               "guard_character_ids": [int(g) for g in guard_character_ids], "location_id": int(location_id)}
+    try:
+        async with httpx.AsyncClient(timeout=BATTLE_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=payload, headers=_internal_headers())
+    except Exception as e:
+        logger.error("caravan raid battle create failed (raid %s): %s", caravan_raid_id, e)
+        raise BattleServiceError("battle-service unavailable") from e
+    if response.status_code >= 400:
+        logger.warning("caravan raid battle create refused (raid %s): %s %s", caravan_raid_id,
+                       response.status_code, response.text[:200])
+        raise BattleServiceError("caravan raid battle refused", response.status_code, _detail(response))
+    try:
+        data = response.json()
+        return {"battle_id": int(data["battle_id"]),
+                "attacker_character_ids": [int(a) for a in (data.get("attacker_character_ids") or [])]}
     except Exception as e:
         raise BattleServiceError("bad battle-service answer", response.status_code) from e
 

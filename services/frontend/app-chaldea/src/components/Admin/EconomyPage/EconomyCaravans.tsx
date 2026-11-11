@@ -12,6 +12,7 @@ import {
 import { apiErrorMessage } from '../../../api/errors';
 import { useCurrency } from '../../../hooks/useCurrency';
 import type {
+  CaravanKindFilter,
   CaravanList,
   CaravanOverview,
   CaravanParams,
@@ -25,6 +26,9 @@ import type {
 } from '../../../types/economy';
 import { formatDateTime, formatDecimal, formatQty } from './economyLabels';
 import { FieldHint, SimParamHint } from './ParamHint';
+import CaravanDetail, { RaidBadge } from './CaravanDetail';
+import CaravanRoadsCard from './CaravanRoadsCard';
+import CaravanGuardsCard from './CaravanGuardsCard';
 
 /* ------------------------------------------------------------------------------------- constants */
 
@@ -38,6 +42,8 @@ interface CaravanParamDef {
   min: number;
   max: number;
   integer?: boolean;
+  /** 0/1 flag shown as a checkbox */
+  toggle?: boolean;
 }
 
 const CARAVAN_PARAMS: CaravanParamDef[] = [
@@ -48,6 +54,36 @@ const CARAVAN_PARAMS: CaravanParamDef[] = [
   { key: 'caravan_travel_foreign', label: 'В пути между странами, пересчётов', def: 2, min: 1, max: 8, integer: true },
   { key: 'caravan_min_value', label: 'Минимальная сделка, денег', def: 10, min: 1, max: 1_000_000, integer: true },
   { key: 'caravan_max_per_run', label: 'Предел караванов за пересчёт', def: 200, min: 1, max: 5000, integer: true },
+];
+
+/** FEAT-211 — «Физические караваны и налёты» (feature file 3.14; bounds mirror `schemas.py`). */
+const PHYSICAL_PARAMS: CaravanParamDef[] = [
+  { key: 'caravan_physical_enabled', label: 'Караваны по дорогам', def: 1, min: 0, max: 1, integer: true, toggle: true },
+  { key: 'caravan_physical_min_value', label: 'Порог «крупного» каравана, денег', def: 1000, min: 1, max: 10_000_000, integer: true },
+  { key: 'caravan_physical_small_chance', label: 'Шанс для мелкого каравана', def: 0.1, min: 0, max: 1 },
+  { key: 'caravan_physical_max_active', label: 'Предел физических караванов в пути', def: 30, min: 0, max: 1000, integer: true },
+  { key: 'caravan_step_minutes', label: 'Минут на локацию', def: 18, min: 5, max: 120, integer: true },
+  { key: 'caravan_route_max_steps', label: 'Самый длинный маршрут, переходов', def: 40, min: 2, max: 200, integer: true },
+  { key: 'caravan_post_hold_max_min', label: 'Ожидание боевого поста, мин', def: 120, min: 0, max: 1440, integer: true },
+  { key: 'caravan_raid_battle_max_hours', label: 'Предел боя налёта, часов', def: 48, min: 1, max: 336, integer: true },
+  { key: 'caravan_raid_marks_share', label: 'Доля денег налётчикам', def: 0.2, min: 0, max: 1 },
+  { key: 'caravan_raid_goods_share', label: 'Доля товара налётчикам', def: 0.3, min: 0, max: 1 },
+  { key: 'caravan_guard_count_base', label: 'Стражей у дешёвого каравана', def: 2, min: 1, max: 5, integer: true },
+  { key: 'caravan_guard_value_per_extra', label: '+1 страж за каждые, денег', def: 1000, min: 1, max: 10_000_000, integer: true },
+  { key: 'caravan_guard_count_max', label: 'Максимум стражей', def: 5, min: 1, max: 5, integer: true },
+  { key: 'caravan_guard_mult_per_1000', label: 'Рост силы стражей за 1000', def: 0.1, min: 0, max: 5 },
+  { key: 'caravan_guard_mult_max', label: 'Предел силы стражей', def: 2, min: 1, max: 10 },
+  { key: 'caravan_guard_mult_dangerous', label: 'Сила стражей в опасных локациях', def: 1.25, min: 1, max: 5 },
+  { key: 'caravan_rep_trade_share', label: 'Доля потери репутации у продавца и покупателя', def: 0.5, min: 0, max: 1 },
+  { key: 'fence_purse_share', label: 'Доля кошелька жителей на кассы скупщиков', def: 0.1, min: 0, max: 1 },
+];
+
+const ALL_PARAMS: CaravanParamDef[] = [...CARAVAN_PARAMS, ...PHYSICAL_PARAMS];
+
+const KIND_TABS: { id: CaravanKindFilter; label: string }[] = [
+  { id: 'all', label: 'Все' },
+  { id: 'physical', label: 'Физические' },
+  { id: 'abstract', label: 'Абстрактные' },
 ];
 
 const ENABLED_DEF = { def: 1, min: 0, max: 1 };
@@ -195,7 +231,7 @@ interface ParamsCardProps {
 
 const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
   const toForm = (p: CaravanParams) =>
-    Object.fromEntries(CARAVAN_PARAMS.map((d) => [d.key, fmtNum(p[d.key] ?? d.def)])) as Record<CaravanParamKey, string>;
+    Object.fromEntries(ALL_PARAMS.map((d) => [d.key, fmtNum(p[d.key] ?? d.def)])) as Record<CaravanParamKey, string>;
   const [form, setForm] = useState(() => toForm(params));
   const [enabled, setEnabled] = useState((params.caravans_enabled ?? ENABLED_DEF.def) === 1);
   const [saving, setSaving] = useState(false);
@@ -205,13 +241,13 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
     setEnabled((params.caravans_enabled ?? ENABLED_DEF.def) === 1);
   }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const errors = Object.fromEntries(CARAVAN_PARAMS.map((d) => [d.key, paramError(d, form[d.key])])) as Record<
+  const errors = Object.fromEntries(ALL_PARAMS.map((d) => [d.key, paramError(d, form[d.key])])) as Record<
     CaravanParamKey,
     string | null
   >;
-  const changed = CARAVAN_PARAMS.filter((d) => parseNum(form[d.key]) !== (params[d.key] ?? d.def));
+  const changed = ALL_PARAMS.filter((d) => parseNum(form[d.key]) !== (params[d.key] ?? d.def));
   const enabledChanged = (enabled ? 1 : 0) !== (params.caravans_enabled ?? ENABLED_DEF.def);
-  const valid = CARAVAN_PARAMS.every((d) => errors[d.key] === null);
+  const valid = ALL_PARAMS.every((d) => errors[d.key] === null);
 
   const save = async () => {
     setSaving(true);
@@ -230,6 +266,54 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
       setSaving(false);
     }
   };
+
+  const renderField = (d: CaravanParamDef) => {
+    if (d.toggle) {
+      const on = parseNum(form[d.key]) === 1;
+      return (
+        <div key={d.key} className="flex flex-col gap-1 min-w-0">
+          <span className="flex items-center gap-1 min-w-0">
+            <span className="text-white/60 text-xs uppercase tracking-[0.06em]">{d.label}</span>
+            <SimParamHint param={d.key} label={d.label} numbers={{ def: d.def, min: d.min, max: d.max }} />
+          </span>
+          <label className="flex items-center gap-2 text-sm text-white cursor-pointer py-1.5 self-start">
+            <input
+              type="checkbox"
+              className="accent-gold w-4 h-4"
+              checked={on}
+              disabled={!canEdit || saving}
+              onChange={(e) => setForm({ ...form, [d.key]: e.target.checked ? '1' : '0' })}
+            />
+            {on ? 'Включены' : 'Выключены (все новые — абстрактные)'}
+          </label>
+        </div>
+      );
+    }
+    return (
+      <div key={d.key} className="flex flex-col gap-1 min-w-0">
+        <span className="flex items-center gap-1 min-w-0">
+          <label htmlFor={`caravan-param-${d.key}`} className="text-white/60 text-xs uppercase tracking-[0.06em]">
+            {d.label}
+          </label>
+          <SimParamHint param={d.key} label={d.label} numbers={{ def: d.def, min: d.min, max: d.max }} />
+        </span>
+        <input
+          id={`caravan-param-${d.key}`}
+          type="text"
+          inputMode={d.integer ? 'numeric' : 'decimal'}
+          className="input-underline w-full"
+          value={form[d.key]}
+          disabled={!canEdit || saving}
+          onChange={(e) => setForm({ ...form, [d.key]: e.target.value })}
+        />
+        {errors[d.key] && <p className="text-site-red text-xs">{errors[d.key]}</p>}
+      </div>
+    );
+  };
+
+  const renderGrid = (defs: CaravanParamDef[]) => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">{defs.map(renderField)}</div>
+  );
 
   return (
     <Card>
@@ -253,28 +337,15 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
           {enabled ? 'Отправляются' : 'Новые не отправляются (идущие доезжают)'}
         </label>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {CARAVAN_PARAMS.map((d) => (
-          <div key={d.key} className="flex flex-col gap-1 min-w-0">
-            <span className="flex items-center gap-1 min-w-0">
-              <label htmlFor={`caravan-param-${d.key}`} className="text-white/60 text-xs uppercase tracking-[0.06em]">
-                {d.label}
-              </label>
-              <SimParamHint param={d.key} label={d.label} numbers={{ def: d.def, min: d.min, max: d.max }} />
-            </span>
-            <input
-              id={`caravan-param-${d.key}`}
-              type="text"
-              inputMode={d.integer ? 'numeric' : 'decimal'}
-              className="input-underline w-full"
-              value={form[d.key]}
-              disabled={!canEdit || saving}
-              onChange={(e) => setForm({ ...form, [d.key]: e.target.value })}
-            />
-            {errors[d.key] && <p className="text-site-red text-xs">{errors[d.key]}</p>}
-          </div>
-        ))}
+      {renderGrid(CARAVAN_PARAMS)}
+      <div className="flex flex-col gap-1 border-t border-white/10 pt-4">
+        <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">Физические караваны и налёты</h3>
+        <p className="text-white/50 text-xs">
+          Крупные и межстрановые караваны едут по локациям, на них можно напасть. Действуют на новые караваны и на
+          следующий шаг идущих.
+        </p>
       </div>
+      {renderGrid(PHYSICAL_PARAMS)}
       {canEdit ? (
         <button
           type="button"
@@ -507,10 +578,17 @@ const resultText = (c: CaravanRow): string => {
 
 const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => string }) => {
   const route = routeText(c);
+  const [open, setOpen] = useState(false);
   return (
     <li className="flex flex-col gap-2 rounded-card border border-white/10 bg-white/[0.03] p-3 min-w-0">
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={c.status} />
+        {c.is_physical && (
+          <span className="inline-flex rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold whitespace-nowrap">
+            по дорогам
+          </span>
+        )}
+        {c.raid_status && <RaidBadge status={c.raid_status} />}
         <span className="text-white text-sm font-medium">{c.group_name ?? c.group_code}</span>
         <span className="text-white/60 text-sm">{formatQty(c.units)} ед.</span>
         <span className="text-white/40 text-xs ml-auto">
@@ -540,16 +618,41 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
           В пути: {c.travel_runs} пересч. · отправлен в №{c.dispatch_run_id}
         </span>
       </div>
+      {c.is_physical && c.status === 'in_transit' && (
+        <p className="text-xs text-white/60 break-words">
+          Сейчас:{' '}
+          <span className="text-white">
+            {c.current_location_name ?? (c.current_location_id ? `#${c.current_location_id}` : '—')}
+          </span>
+          {c.route_len ? ` (${(c.route_index ?? 0) + 1} из ${c.route_len})` : ''}
+          {c.arrived_at && <span className="text-stat-energy"> · прибыл, ждёт расчёта</span>}
+        </p>
+      )}
+      {(c.stolen_units ?? 0) > 0 && (
+        <p className="text-xs text-site-red">
+          Украдено: {formatQty(c.stolen_units ?? 0)} ед., денег {format(c.raid_paid ?? 0)}
+        </p>
+      )}
       <p className={`text-xs ${c.status === 'cancelled' ? 'text-site-red' : 'text-white/50'}`}>
-        {resultText(c)}
+        {c.is_physical && c.status === 'in_transit' ? 'едет по дорогам' : resultText(c)}
         {c.finished_at && ` · ${formatDateTime(c.finished_at)}`}
       </p>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="self-start text-xs text-site-blue hover:text-white transition-colors duration-200"
+      >
+        {open ? 'Свернуть' : c.is_physical ? 'Маршрут и налёт' : 'Подробнее'}
+      </button>
+      {open && <CaravanDetail caravanId={c.id} format={format} />}
     </li>
   );
 };
 
 const CaravansCard = ({ format, reloadKey }: { format: (n: number) => string; reloadKey: number }) => {
   const [status, setStatus] = useState<CaravanStatusFilter>('in_transit');
+  const [kind, setKind] = useState<CaravanKindFilter>('all');
   const [regionId, setRegionId] = useState('');
   const [group, setGroup] = useState('');
   const [offset, setOffset] = useState(0);
@@ -578,6 +681,7 @@ const CaravansCard = ({ format, reloadKey }: { format: (n: number) => string; re
     setLoading(true);
     fetchCaravans({
       status,
+      kind: kind === 'all' ? undefined : kind,
       region_id: regionId === '' ? undefined : Number(regionId),
       group_code: group || undefined,
       limit: LIST_PAGE,
@@ -600,7 +704,7 @@ const CaravansCard = ({ format, reloadKey }: { format: (n: number) => string; re
     return () => {
       cancelled = true;
     };
-  }, [status, regionId, group, offset, reloadKey]);
+  }, [status, kind, regionId, group, offset, reloadKey]);
 
   const changeFilter = (fn: () => void) => {
     fn();
@@ -630,6 +734,18 @@ const CaravansCard = ({ format, reloadKey }: { format: (n: number) => string; re
             className={`px-3 py-2 -mb-px border-b-2 text-xs sm:text-sm uppercase tracking-[0.06em] whitespace-nowrap transition-colors duration-200 ease-site ${
               t.id === status ? 'border-gold text-gold' : 'border-transparent text-white/50 hover:text-white'
             }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {KIND_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => changeFilter(() => setKind(t.id))}
+            className={`chip-outline rounded-full px-3 py-1 text-xs ${t.id === kind ? 'chip-outline-active' : ''}`}
           >
             {t.label}
           </button>
@@ -786,6 +902,8 @@ const EconomyCaravans = ({ canSettings }: { canSettings: boolean }) => {
       <ParamsCard params={data.params} canEdit={canSettings} onSaved={load} />
       <PairsCard data={data} canEdit={canSettings} onSaved={replacePair} />
       <CaravansCard format={fmt} reloadKey={reloadKey} />
+      <CaravanRoadsCard canEdit={canSettings} reloadKey={reloadKey} />
+      <CaravanGuardsCard canEdit={canSettings} />
     </div>
   );
 };

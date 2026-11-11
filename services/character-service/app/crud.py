@@ -1814,6 +1814,25 @@ def replace_mob_spawns(db: Session, template_id: int, spawns: list):
 # Mob Spawning & Lifecycle (Phase 3)
 # ============================================================
 
+def despawn_dungeon_mobs(db: Session, character_ids) -> int:
+    """FEAT-175 (extracted by FEAT-211): remove the ``spawn_type='dungeon'`` active-mob rows of these characters
+    (dungeon fights, caravan guards) and commit. The hidden ``npc_role='mob'`` character rows stay (battle history
+    and logs still point at them). Idempotent; returns the number of rows removed."""
+    ids = [int(c) for c in (character_ids or [])]
+    if not ids:
+        return 0
+    removed = (
+        db.query(models.ActiveMob)
+        .filter(
+            models.ActiveMob.character_id.in_(ids),
+            models.ActiveMob.spawn_type == "dungeon",
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return removed
+
+
 def spawn_mob_from_template(
     db: Session,
     template_id: int,

@@ -45,6 +45,7 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   caravan_dispatch: 'Караван: оплата',
   caravan_delivery: 'Караван: доставка',
   caravan_cancel: 'Караван: возврат',
+  caravan_raid: 'Караван: налёт',
   guild_order: 'Заказ гильдии',
   faction_tick: 'Жизнь фракции',
   faction_donation: 'Пожертвование фракции',

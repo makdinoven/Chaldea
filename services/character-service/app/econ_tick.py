@@ -130,6 +130,20 @@ faction_qm_items (asc id) → faction_item_stock (asc faction_id, item_id) → f
 faction_donation_days → faction_pvp_kills → faction_qm_purchases → character_inventory → characters (asc id) →
 econ_accounts (asc id) → character_attributes``.
 
+Physical caravans (FEAT-211 3.2): the caravan pass builds one ``economy_caravan_crud.RoutePlanner`` (location graph +
+region trade gates + physical caravans on the road) before the dispatch loop; ``dispatch`` may send a caravan by road
+(route stored on the row). Physical caravans are stepped and delivered by ``caravan_pass`` (scheduler, every ~55 s),
+never by the tick; the tick's arrival phase handles abstract caravans only. Global lock order (FEAT-211 3.16,
+supersedes the FEAT-207 one): ``econ_regions → econ_region_goods → econ_region_events → econ_caravans (asc id) →
+econ_caravan_raids (asc id) → econ_caravan_raid_shares → econ_guild_orders → … (the FEAT-207 chain above) … →
+character_inventory → characters (asc id) → econ_accounts (asc id) → character_attributes``.
+
+Fences (FEAT-211 3.11) — the **fence pass** runs after the faction pass, before the banks: per participating region
+with active fences (NPC role ``fence``, alive, ``econ_fences.is_active``) one transaction ``econ_regions(row) → fence
+``characters`` (asc id) → econ_accounts``; each fence is topped up to its ``cash_target`` from at most
+``floor(purse × fence_purse_share)``: one ``merchant_trade`` op ``population_purse -> character`` (untaxed, key
+``fence:<run>:r<region>`` = idempotent per run). Best effort (``FENCE_ERROR_PREFIX``), retried next tick.
+
 Pure math lives in ``econ_sim`` / ``econ_merchant`` / ``econ_events``; this module only loads, stores and posts. The scheduler thread is
 ``econ_scheduler``.
 """
@@ -192,6 +206,8 @@ GUILD_ERROR_PREFIX = "гильдия — ошибка в регионах: "
 GUILD_SWEEP_ERROR = "гильдия — ошибка закрытия заказов"
 # FEAT-206: factions whose tick step was rolled back
 FACTION_ERROR_PREFIX = "фракции — ошибка: "
+# FEAT-211: regions whose fence refill was rolled back (retried next tick)
+FENCE_ERROR_PREFIX = "скупщики — ошибка в регионах: "
 
 # Column scales of econ_regions / econ_region_goods (Numeric(p, s)) — values are rounded before storing.
 _SCALE_STOCK = 3
@@ -276,6 +292,10 @@ class RunSummary:
     factions_failed: int = 0              # factions whose step was rolled back (retried next run)
     faction_failed_ids: List[int] = field(default_factory=list)
     faction_ops_posted: int = 0           # faction_tick operations posted
+    # FEAT-211 fence refill (3.11)
+    fences_refilled: int = 0              # fences that received money in this call
+    fence_cash_added: int = 0             # Σ marks moved purse -> fences in this call
+    fence_failed_region_ids: List[int] = field(default_factory=list)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
 
@@ -1450,6 +1470,9 @@ def run_tick(
     # FEAT-206 (3.6): faction economy after the regions and the mint, before the banks.
     _faction_econ_pass(session_factory, run_id, summary, params, start)
 
+    # FEAT-211 (3.11): fences topped up from their region purse after the regions (purse after tax / wages).
+    _fence_pass(session_factory, run_id, params, summary)
+
     # FEAT-184 (3.7): banks after the regions, own transactions (never inside a region transaction).
     _prepare_banks(session_factory, run_id, summary, tick_clock)
     # FEAT-187: bank panic / loan boom of the region's active events replace its bank params.
@@ -1490,6 +1513,8 @@ def run_tick(
             parts.append(GUILD_SWEEP_ERROR)
         if summary.faction_failed_ids:
             parts.append(FACTION_ERROR_PREFIX + ", ".join(str(f) for f in summary.faction_failed_ids))
+        if summary.fence_failed_region_ids:
+            parts.append(FENCE_ERROR_PREFIX + ", ".join(str(r) for r in summary.fence_failed_region_ids))
         error = "; ".join(parts)[:MAX_ERROR_LEN] or None
         session.execute(
             text("UPDATE econ_tick_runs SET status = :status, regions_done = :done, regions_failed = :failed, "
@@ -1510,7 +1535,8 @@ def run_tick(
     log = logger.warning if (summary.regions_failed or summary.merchant_failures or summary.bank_failures
                              or summary.events_failed or summary.mint_failures or summary.quota_failed
                              or summary.caravans_failed or summary.guild_failures
-                             or summary.guild_sweep_failed or summary.factions_failed) \
+                             or summary.guild_sweep_failed or summary.factions_failed
+                             or summary.fence_failed_region_ids) \
         else logger.info
     log("economy tick run %s finished: %s, %d/%d regions done, %d failed, %d operations posted; merchants: %d "
         "processed, %d sold, %d restocked, %d operations, %d failed regions; banks: %d processed, %d operations, "
@@ -1629,9 +1655,23 @@ def _caravan_pass(session_factory: SessionFactory, run_id: int, summary: RunSumm
         session.rollback()
         session.close()
     plans = econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params)
+    planner = None
+    if plans and int(params.caravan_physical_enabled):
+        # FEAT-211 3.2: one route planner per pass; a failure only keeps this run's caravans abstract
+        session = session_factory()
+        try:
+            planner = caravan_crud.build_planner(session, params)
+        except Exception as exc:
+            logger.warning("economy tick run %s: caravan road planner unavailable (%s), caravans stay abstract",
+                           run_id, type(exc).__name__)
+            planner = None
+        finally:
+            session.rollback()
+            session.close()
     for plan in plans:
         try:
-            result = caravan_crud.dispatch_tx(session_factory, plan, run_id=run_id, params=params, now=now)
+            result = caravan_crud.dispatch_tx(session_factory, plan, run_id=run_id, params=params, now=now,
+                                              planner=planner)
         except Exception as exc:
             summary.caravans_failed += 1
             logger.error("economy tick run %s: caravan %s -> %s (%s) failed (%s), rolled back", run_id,
@@ -1750,6 +1790,48 @@ def _faction_econ_pass(session_factory: SessionFactory, run_id: int, summary: Ru
                 summary.faction_ops_posted += 1
         if outcome.notices:
             faction_notify.publish(outcome.notices)
+
+
+# --------------------------------------------------------------------------------------------- fences (FEAT-211)
+
+def _fence_pass(session_factory: SessionFactory, run_id: int, params: econ_sim.SimParams,
+                summary: Optional[RunSummary] = None) -> None:
+    """Fence refill (3.11): plan from plain reads, then one transaction per region (ascending id): ``econ_regions(row)``
+    FOR UPDATE → fence ``characters`` (asc) → ``econ_accounts``; one ``merchant_trade`` op ``purse -> fences`` keyed
+    ``fence:<run>:r<region>`` (idempotent per run). Best effort: a failing region is rolled back, counted, retried
+    next tick; a missing ``econ_fences`` table (before migration 050) skips the pass."""
+    import fence_crud
+    session = session_factory()
+    try:
+        plan = fence_crud.plan_refill(session)
+    except Exception as exc:
+        logger.warning("economy tick run %s: fence pass unavailable (%s), skipped", run_id, type(exc).__name__)
+        return
+    finally:
+        session.rollback()
+        session.close()
+    share = getattr(params, "fence_purse_share", 0.0)
+    for region_id, npc_ids in plan.items():
+        session = session_factory()
+        try:
+            outcome = fence_crud.refill_region(session, run_id=run_id, region_id=region_id, npc_ids=npc_ids,
+                                               share=share)
+            session.commit()
+        except core.DuplicateOperation:
+            session.rollback()      # this run already refilled the region (resumed run / another runner)
+            continue
+        except Exception as exc:
+            session.rollback()
+            if summary is not None:
+                summary.fence_failed_region_ids.append(region_id)
+            logger.error("economy tick run %s: fence refill of region %s failed (%s), will be retried next tick",
+                         run_id, region_id, type(exc).__name__, exc_info=True)
+            continue
+        finally:
+            session.close()
+        if summary is not None and outcome.status == "done":
+            summary.fences_refilled += outcome.fences
+            summary.fence_cash_added += outcome.amount
 
 
 # --------------------------------------------------------------------------------------------- banks (FEAT-184)

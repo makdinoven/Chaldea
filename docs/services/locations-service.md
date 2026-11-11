@@ -231,7 +231,7 @@ PUT /locations/admin/moderation/gate-requests/{id}/review require_permission("mo
 
 ##### `targets_resolved` — показываем, а не блокируем
 
-`crud._resolve_gate_targets` (`crud.py:3314`) дополняет каждую заявку картой `{action_type: [{"id", "name", "state"}]}`: имя цели и её состояние («моб, жив, в этой локации», «НПС», «игрок, в другой локации», «узел сбора, отключён», «цель не найдена»). Тип цели определяется по `action_type` через `_GATE_TARGET_KIND` (`crud.py:3305`): `combat` / `pvp` / `npc_dialogue` -> `characters` (+ `active_mobs` для живости моба), `gathering` -> `gathering_nodes`, `dungeon` -> `dungeons`.
+`crud._resolve_gate_targets` (`crud.py:3314`) дополняет каждую заявку картой `{action_type: [{"id", "name", "state"}]}`: имя цели и её состояние («моб, жив, в этой локации», «НПС», «игрок, в другой локации», «узел сбора, отключён», «цель не найдена»). Тип цели определяется по `action_type` через `_GATE_TARGET_KIND` (`crud.py:3305`): `combat` / `pvp` / `npc_dialogue` -> `characters` (+ `active_mobs` для живости моба), `gathering` -> `gathering_nodes`, `dungeon` -> `dungeons`, `caravan` -> `econ_caravans` (FEAT-211).
 
 Это **обогащение, а не валидация**: каждый батч-запрос обёрнут в `try/except` с `rollback`, при сбое цель деградирует до голого id с состоянием «цель не найдена», заявка при этом **не отклоняется** и список **не падает в 500**. Моб, легитимно убитый между подачей и рассмотрением, не должен автоматически «завалить» честную заявку.
 
@@ -700,6 +700,46 @@ inventory → коммит (снимок чтения закрыт, через H
 
 **FEAT-197:** цены и скупка учитывают репутацию в регионе торговца (`price_reasons`, наценка, срез скупки, 409 «Вне
 закона», гейт NPC на покупке / продаже / `sell-offers`) — см. «Региональная репутация».
+
+## Физические караваны: пост «налёт», краденое, скупщик (FEAT-211, без миграции)
+
+Своих таблиц нет: читаются таблицы character-service (`econ_caravans`, `econ_fences`, `econ_goods_groups`) и
+inventory-service (`items.is_stolen`, `items.bale_group`, миграция IS 037) по общей БД, без блокировок.
+
+### Гейт поста `caravan`
+- `GATED_POST_TYPES += "caravan"`, `GATE_SYMBOL_COST["caravan"] = 500`, `GATE_LABELS["caravan"] = "налёта на караван"`.
+  Цель гейта — `econ_caravans.id`; сам гейт расходует battle-service (`POST /battles/internal/caravan-raid`),
+  а character-service по открытому гейту / заявке держит караван на месте (не дольше `caravan_post_hold_max_min`).
+- `crud.validate_caravan_targets(session, gate_list, location_id)`: каждая цель `caravan` — строка `econ_caravans`
+  с `is_physical = 1`, `status = 'in_transit'`, `arrived_at IS NULL` и `current_location_id` = локация поста,
+  иначе **400 «Каравана нет в этой локации»**. Вызывается в `POST /posts/` (локация поста), `move_and_post`
+  (локация назначения) и в заявке на ретро-гейт `edit_post` (локация поста). Без гейта `caravan` запроса нет.
+- Очередь модерации заявок: `targets_resolved` для `caravan` — «Караван: <группа>», «караван в пути / уже не в
+  пути» + где он относительно локации поста.
+
+### Обычные торговцы не берут краденое
+- `crud.stolen_item_ids(session, ids)` (`items.is_stolen = 1`). `quote_bids` выбрасывает краденое для всех —
+  значит и `sell-offers`, и `POST .../shop/sell` (400 «Этот NPC не покупает данный предмет»), даже при явной строке лавки.
+- Админ: `POST /locations/admin/npc-shop/{npc_id}/items` и `PUT /locations/admin/npc-shop/items/{id}` для краденого
+  предмета → **400 «Краденое нельзя продавать в магазине»** (строку краденого можно только удалить).
+
+### Скупщик (роль НПС `fence`)
+Настройки — `econ_fences` (character-service, A11/A12; нет строки = активен, 40 %, все группы).
+`crud.fence_terms` → `None` (**404 «Скупщик не найден»**), если НПС не `npc_role = 'fence'`, мёртв, без локации
+или `is_active = 0`. Цена тюка: `floor(items.price × price_mult × price_pct / 100)`, `price_mult` — из
+`econ_region_goods` региона скупщика по `bale_group` (1, если регион не симулируется или строки нет); < 1 = не берёт.
+Берёт только `is_stolen = 1` с `bale_group` из `accepted_groups` (пусто = все 12). Репутационного среза и отказа
+«Вне закона» нет — скупщик работает с преступниками; гейт «Диалог с НПС» и гейт ступени НПС — как у любой торговли.
+
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/locations/npcs/{npc_id}/fence/offers?character_id=` | JWT + владелец, блокировка активности, 404, гейт НПС (403), та же локация (400). `[{item_id, item_name, item_image, group_code, group_name, unit_price, max_quantity}]` — краденое из сумки, которое он купит сейчас; касса не раскрывается |
+| POST | `/locations/npcs/{npc_id}/fence/sell` | `{character_id, item_id, quantity 1..999}` → `ShopTransactionResponse`. 400 «Скупщик это не берёт», **409 «У скупщика сейчас нет денег»** (до снятия предмета или при пустой кассе на зачислении — тогда предмет возвращён), 500 «Не удалось завершить продажу» (предмет возвращён), 503 «Сервис инвентаря недоступен» |
+
+Поток продажи как у `sell_to_npc`: снятие предмета через inventory-service с JWT игрока → в одной транзакции
+`pay_player_from_merchant` (касса скупщика → игрок, операция `npc_shop_sell`, metadata `fence: true`); тюки
+уничтожаются (в лавку не попадают). Касса скупщика пополняется в тике экономики character-service
+(`_fence_pass`, `merchant_trade` из кошелька жителей) — инвариант суммы денег соблюдается.
 
 ## Региональная репутация (FEAT-197, миграция 054)
 

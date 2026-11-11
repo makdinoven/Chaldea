@@ -27,6 +27,22 @@ class GuardBattleCreate(BaseModel):
     guard_npc_id: int
 
 
+class CaravanRaidBattleCreate(BaseModel):
+    """FEAT-211: internal create used by character-service only (caravan raid).
+    Team 0 = the raider (or their co-located squad), team 1 = the guards."""
+    caravan_raid_id: int
+    caravan_id: int
+    leader_character_id: int
+    group: bool = False
+    guard_character_ids: List[int] = Field(..., min_items=1, max_items=5)
+    location_id: int
+
+
+class CaravanRaidBattleCreated(BattleCreated):
+    """FEAT-211: B1 response — BattleCreated + the attackers actually pulled in."""
+    attacker_character_ids: List[int]
+
+
 class BattleCreate(BaseModel):
     players: List[PlayerIn]
     battle_type: Optional[str] = None

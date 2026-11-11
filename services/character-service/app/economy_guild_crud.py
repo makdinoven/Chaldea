@@ -191,9 +191,9 @@ def lock_open_orders(session: Session, region_id: int, for_update: bool) -> List
 
 
 def inbound_units(session: Session, region_id: int) -> Dict[str, float]:
-    """{group_code: units} of caravans on the road to the region (decision 6)."""
+    """{group_code: units} of caravans on the road to the region (decision 6); FEAT-211: minus raided units."""
     rows = session.execute(text(
-        "SELECT group_code, SUM(units) FROM econ_caravans WHERE status = 'in_transit' AND to_region_id = :r "
+        "SELECT group_code, SUM(units - stolen_units) FROM econ_caravans WHERE status = 'in_transit' AND to_region_id = :r "
         "GROUP BY group_code"), {"r": int(region_id)}).fetchall()
     return {r[0]: _f(r[1]) for r in rows}
 

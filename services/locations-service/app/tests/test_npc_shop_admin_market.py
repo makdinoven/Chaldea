@@ -32,6 +32,8 @@ def _build_world(path):
     with eng.begin() as conn:
         for ddl in cc.MERCHANT_SQLITE_DDL:
             conn.execute(text(ddl))
+        # FEAT-211: inventory-service 037 stolen-goods flag (quote_bids / admin rows refuse stolen items)
+        conn.execute(text("ALTER TABLE items ADD COLUMN is_stolen INTEGER NOT NULL DEFAULT 0"))
         for sql, params in cc.MERCHANT_SEED_SQL:
             conn.execute(text(sql), params)
     eng.dispose()

@@ -4358,18 +4358,7 @@ def despawn_dungeon_mobs_endpoint(
     linger (or respawn) on the surface. Only `spawn_type='dungeon'` rows are
     touched; the hidden `npc_role='mob'` character rows stay (battle history
     and logs still point at them). Idempotent."""
-    if not req.character_ids:
-        return {"removed": 0}
-    removed = (
-        db.query(models.ActiveMob)
-        .filter(
-            models.ActiveMob.character_id.in_(req.character_ids),
-            models.ActiveMob.spawn_type == "dungeon",
-        )
-        .delete(synchronize_session=False)
-    )
-    db.commit()
-    return {"removed": removed}
+    return {"removed": crud.despawn_dungeon_mobs(db, req.character_ids)}
 
 
 # ============================================================
@@ -4877,11 +4866,15 @@ from law_api import router as law_router  # noqa: E402
 from shadow_api import router as shadow_router  # noqa: E402
 from patrol_api import router as patrol_router  # noqa: E402
 from faction_api import router as faction_router  # noqa: E402
+from caravan_api import router as caravan_router  # noqa: E402
+from fence_api import router as fence_router  # noqa: E402
 app.include_router(economy_router)
+app.include_router(caravan_router)      # FEAT-211; after the economy router (its /admin/economy/caravans/overview)
 app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
 app.include_router(law_router)          # FEAT-198; before the main router (static /law/..., /admin/law/... paths)
 app.include_router(shadow_router)       # FEAT-199; before the main router (static /renown/..., /admin/shadow/... paths)
 app.include_router(patrol_router)       # FEAT-204; /admin/npcs/{id}/patrol[/step]
+app.include_router(fence_router)        # FEAT-211; /admin/npcs/{id}/fence
 app.include_router(faction_router)      # FEAT-205; before the main router (static /factions/..., /admin/factions/...)
 app.include_router(router)
 

@@ -19,7 +19,7 @@ Money is int (floored), units are 3-decimal floats (``econ_region_goods.stock`` 
 
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from econ_sim import GroupDef, SimParams
 
@@ -306,3 +306,110 @@ def clamp_dispatch(plan: CaravanPlan, seller_stock, seller_norm, purse_balance, 
     if parts is None:
         return None
     return replace(plan, units=units, value=value, duty=duty, paid_purse=parts[0], paid_treasury=parts[1])
+
+
+# --------------------------------------------------------------------------------------------- FEAT-211 physical
+
+def physical_roll(run_id: int, from_region_id: int, to_region_id: int, group_code: str) -> float:
+    """Deterministic ``u`` in [0, 1) of one dispatch (stable across a resumed run): sha256 of the dispatch key."""
+    import hashlib
+    key = f"{int(run_id)}:{int(from_region_id)}:{int(to_region_id)}:{group_code}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(key).digest()[:8], "big") / float(1 << 64)
+
+
+def choose_physical(value: int, from_country: Optional[int], to_country: Optional[int], has_route: bool,
+                    active_physical: int, params: SimParams, u: float) -> bool:
+    """§3.2 rule: off / no road / cap reached -> abstract; large or foreign -> physical; else by the small chance."""
+    if not int(params.caravan_physical_enabled):
+        return False
+    if not has_route:
+        return False
+    if int(active_physical) >= max(0, int(params.caravan_physical_max_active)):
+        return False
+    if int(value) >= max(1, int(params.caravan_physical_min_value)):
+        return True
+    if from_country is not None and to_country is not None and int(from_country) != int(to_country):
+        return True
+    return float(u) < float(params.caravan_physical_small_chance)
+
+
+def guard_count(value: int, params: SimParams) -> int:
+    """``clamp(base + floor(value / per_extra), 1, max)``."""
+    per_extra = max(1, int(params.caravan_guard_value_per_extra))
+    count = int(params.caravan_guard_count_base) + max(0, int(value)) // per_extra
+    return max(1, min(max(1, int(params.caravan_guard_count_max)), count))
+
+
+def guard_multiplier(value: int, marker_type: Optional[str], params: SimParams) -> float:
+    """``min(mult_max, 1 + per_1000 x value / 1000) x (dangerous factor on a dangerous location)``, 3 decimals."""
+    base = Decimal(1) + _dec(params.caravan_guard_mult_per_1000) * _dec(max(0, int(value))) / Decimal(1000)
+    mult = min(_dec(params.caravan_guard_mult_max), base)
+    if marker_type == "dangerous":
+        mult *= _dec(params.caravan_guard_mult_dangerous)
+    return float(max(Decimal(1), mult).quantize(_THOUSANDTH, rounding=ROUND_HALF_UP))
+
+
+def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int) -> Tuple[int, int]:
+    """Delivery after a raid (§3.3): the rest of the escrow ``R = paid_total - raid_paid`` goes to the seller and the
+    duty; ``duty' = floor(duty x R / (value + duty))`` (the full duty when nothing was raided). ``(seller, duty)``."""
+    rest = max(0, int(paid_total) - max(0, int(raid_paid)))
+    duty = max(0, int(duty))
+    cost = max(0, int(value)) + duty
+    if int(raid_paid) <= 0:
+        duty_part = min(duty, rest)
+    elif cost <= 0:
+        duty_part = 0
+    else:
+        duty_part = (duty * rest) // cost
+    return rest - duty_part, duty_part
+
+
+def refund_split(paid_purse: int, paid_treasury: int, raid_paid: int) -> Tuple[int, int]:
+    """Cancel after a raid (§3.3): ``(purse_back, treasury_back)``; the raid takes from both payers pro rata."""
+    paid_purse, paid_treasury = max(0, int(paid_purse)), max(0, int(paid_treasury))
+    total = paid_purse + paid_treasury
+    raid = min(max(0, int(raid_paid)), total)
+    if total <= 0:
+        return 0, 0
+    purse_back = paid_purse - (raid * paid_purse) // total
+    return purse_back, total - raid - purse_back
+
+
+def stolen(units, price, share) -> Tuple[float, int]:
+    """A won raid takes ``floor3(units x share)`` units worth ``floor(units x price)`` marks."""
+    taken = floor3(_dec(max(0.0, float(units or 0))) * max(Decimal(0), _dec(share)))
+    if taken <= 0:
+        return 0.0, 0
+    value = int((_dec(taken) * max(Decimal(0), _dec(price))).to_integral_value(rounding=ROUND_FLOOR))
+    return taken, max(0, value)
+
+
+def bale_count(stolen_value: int, bale_price) -> int:
+    """Bales for the stolen value: ``round_half_up(value / bale price)``; no bale / price <= 0 -> 0."""
+    price = _dec(bale_price)
+    if price <= 0 or int(stolen_value) <= 0:
+        return 0
+    return int((_dec(int(stolen_value)) / price).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def split_loot(marks: int, bales: int, attacker_ids: Sequence[int], leader_id: Optional[int]) -> Dict[int, Tuple[int, int]]:
+    """``{character_id: (marks, bales)}``: marks equal, the remainder to the leader; bales round-robin starting with
+    the leader. Order: the leader first (when among the attackers), then the others as given (duplicates dropped)."""
+    order: List[int] = []
+    for cid in attacker_ids or ():
+        cid = int(cid)
+        if cid not in order:
+            order.append(cid)
+    if not order:
+        return {}
+    if leader_id is not None and int(leader_id) in order:
+        order.remove(int(leader_id))
+        order.insert(0, int(leader_id))
+    n = len(order)
+    marks, bales = max(0, int(marks)), max(0, int(bales))
+    each, rest = divmod(marks, n)
+    out = {cid: [each, 0] for cid in order}
+    out[order[0]][0] += rest
+    for i in range(bales):
+        out[order[i % n]][1] += 1
+    return {cid: (m, b) for cid, (m, b) in out.items()}

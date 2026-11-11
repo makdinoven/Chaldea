@@ -155,6 +155,25 @@ class SimParams:
     caravan_travel_foreign: int = 2           # recounts on the road between countries
     caravan_min_value: int = 10               # smaller deals are not sent
     caravan_max_per_run: int = 200            # hard cap of dispatches per recount
+    # FEAT-211 physical caravans and raids (3.14). Not in a seed either.
+    caravan_physical_enabled: int = 1         # 0 = new caravans stay abstract (those on the road keep moving)
+    caravan_physical_min_value: int = 1000    # «крупный» caravan: value (marks) from which it always goes by road
+    caravan_physical_small_chance: float = 0.1  # chance that a smaller domestic caravan goes by road too
+    caravan_physical_max_active: int = 30     # cap of physical caravans on the road at once
+    caravan_step_minutes: int = 18            # minutes per location (±25 % jitter)
+    caravan_route_max_steps: int = 40         # a longer shortest path = «no road»
+    caravan_post_hold_max_min: int = 120      # max wait for a raid post (one window per caravan)
+    caravan_raid_battle_max_hours: int = 48   # a raid battle running longer is ignored (no loot)
+    caravan_raid_marks_share: float = 0.2     # share of the escrow money of a caravan taken by a won raid
+    caravan_raid_goods_share: float = 0.3     # share of the units taken by a won raid (-> bales)
+    caravan_guard_count_base: int = 2         # guards of a cheap caravan
+    caravan_guard_value_per_extra: int = 1000  # +1 guard per this value
+    caravan_guard_count_max: int = 5          # guard cap (battle team size)
+    caravan_guard_mult_per_1000: float = 0.1  # guard stat multiplier growth per 1000 marks of value
+    caravan_guard_mult_max: float = 2.0       # cap of the value part of the multiplier
+    caravan_guard_mult_dangerous: float = 1.25  # extra factor on `dangerous` locations
+    caravan_rep_trade_share: float = 0.5      # seller / buyer region reputation loss vs the raid region
+    fence_purse_share: float = 0.1            # share of a region purse its fences may refill from per recount
     # FEAT-193 guild orders (3.4). Not in a seed either.
     guild_enabled: int = 1                    # 0 = no orders (open ones close on the next recount)
     guild_markup_pct: float = 20.0            # markup over the local price

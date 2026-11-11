@@ -23,6 +23,8 @@ import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
 import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
 import EnemiesSection from './EnemiesSection';
+import CaravanSection from './CaravanSection';
+import type { CaravanHere } from '../../../types/caravans';
 import { fetchMobsByLocation } from '../../../api/mobs';
 import { fetchMobPacksByLocation } from '../../../api/mobPacks';
 import { getPartiesOnLocation, type PartyOnLocation } from '../../../api/squads';
@@ -550,6 +552,9 @@ const LocationPage = () => {
     [fetchLocationData, refetchGates]
   );
 
+  // FEAT-211: physical caravans standing here (reported by CaravanSection) — «Налёт на караван» post targets.
+  const [caravansHere, setCaravansHere] = useState<CaravanHere[]>([]);
+
   // Gate targets available on this location for the post editor (FEAT-145 v2).
   const dungeonsAtLocation = useAppSelector(selectDungeonsAtLocation);
   const gateOptions = useMemo(
@@ -558,8 +563,11 @@ const LocationPage = () => {
       npc_dialogue: (location?.npcs ?? []).map((n) => ({ id: n.id, name: n.name })),
       gathering: (location?.gathering_nodes ?? []).map((g) => ({ id: g.id, name: g.node_name })),
       dungeon: (dungeonsAtLocation ?? []).map((d) => ({ id: d.id, name: d.name })),
+      caravan: caravansHere
+        .filter((c) => c.state !== 'raided')
+        .map((c) => ({ id: c.id, name: `Караван: ${c.group_name || c.group_code}` })),
     }),
-    [combatTargets, location, dungeonsAtLocation],
+    [combatTargets, location, dungeonsAtLocation, caravansHere],
   );
 
   const handleSubmitPost = useCallback(
@@ -875,6 +883,17 @@ const LocationPage = () => {
           </div>
         )}
       </div>
+
+      {/* FEAT-211: physical trade caravans standing here — only group and guards, never the route.
+          Hidden when there are none; dimmed while the character is locked. */}
+      <CaravanSection
+        locationId={location.id}
+        characterId={isCharacterHere ? (character?.id ?? null) : null}
+        gatedCaravanIds={(gateStatus.caravan as number[]) ?? []}
+        locked={actionsLocked}
+        onCaravansChange={setCaravansHere}
+        onGatesStale={refetchGates}
+      />
 
       {/* Active battles — full width. Rendered unconditionally on purpose:
           the visibility guard lives inside the component, which owns the 10s

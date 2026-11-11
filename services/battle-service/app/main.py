@@ -14,6 +14,7 @@ from schemas import (
     BattleCreated, BattleCreate, DungeonBattleCreate, GuardBattleCreate, ActionResponse, ActionRequest, LogResponse,
     BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
     PackAttack, PartyPackAttack,
+    CaravanRaidBattleCreate, CaravanRaidBattleCreated,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
     CancelInvitationResponse, InBattleResponse,
@@ -944,7 +945,7 @@ async def _is_activity_locked(db, character_id: int) -> bool:
 
 
 async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dungeon_session_id=None,
-                          law_encounter_id=None):
+                          law_encounter_id=None, caravan_raid_id=None):
     """Create the Battle + participants, init Redis state, register NPCs.
 
     Shared by the public create endpoint and the party-start flow. Validation
@@ -953,6 +954,9 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dung
     """
     # FEAT-198: the guard-battle tag is passed only when set (older call shapes stay unchanged).
     tag = {"law_encounter_id": law_encounter_id} if law_encounter_id is not None else {}
+    # FEAT-211: the caravan-raid tag, same rule.
+    if caravan_raid_id is not None:
+        tag["caravan_raid_id"] = caravan_raid_id
     battle_obj, participant_objs = await create_battle(
         db, player_ids, teams, battle_type=battle_type, location_id=location_id,
         dungeon_session_id=dungeon_session_id, **tag,
@@ -1118,9 +1122,14 @@ async def create_battle_endpoint(
     )
 
 
-async def _consume_combat_gate(character_id: int, location_id: int, mob_character_id: int) -> bool:
-    """Consume the attacker's combat action-gate for this mob (FEAT-145). Returns
-    True if a gate was consumed (attack allowed)."""
+COMBAT_GATE_TYPE = "combat"
+CARAVAN_GATE_TYPE = "caravan"  # FEAT-211: post gate naming a caravan (target_ref = caravan id)
+
+
+async def _consume_action_gate(character_id: int, location_id: int, action_type: str, target_ref: int) -> bool:
+    """Consume the attacker's post action-gate of `action_type` naming `target_ref`
+    at this location (FEAT-145; generalised in FEAT-211). Returns True if a gate was
+    consumed (action allowed). Any failure = not consumed."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
@@ -1128,16 +1137,22 @@ async def _consume_combat_gate(character_id: int, location_id: int, mob_characte
                 json={
                     "character_id": character_id,
                     "location_id": location_id,
-                    "action_type": "combat",
-                    "target_ref": mob_character_id,
+                    "action_type": action_type,
+                    "target_ref": target_ref,
                 },
                 headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return bool(resp.json().get("consumed"))
     except Exception as e:
-        logger.warning(f"combat gate consume failed: {e}")
+        logger.warning(f"{action_type} gate consume failed: {e}")
     return False
+
+
+async def _consume_combat_gate(character_id: int, location_id: int, mob_character_id: int) -> bool:
+    """Consume the attacker's combat action-gate for this mob (FEAT-145). Returns
+    True if a gate was consumed (attack allowed)."""
+    return await _consume_action_gate(character_id, location_id, COMBAT_GATE_TYPE, mob_character_id)
 
 
 async def _validate_location_mob(db, mob_character_id: int, location_id: int):
@@ -1193,6 +1208,73 @@ async def mob_attack(
     )
 
 
+async def _squad_roster(leader_id: int, location_id: int) -> list:
+    """Co-located squad roster of the leader from party-service (FEAT-144 Ф3).
+    400 when not in a party / nobody at the location, 503 when party-service is down."""
+    data = {}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
+                params={"character_id": leader_id, "location_id": location_id},
+                headers=_internal_token_headers(),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+    except Exception as e:
+        logger.error(f"party active-members failed: {e}")
+        raise HTTPException(503, "Сервис отрядов недоступен")
+
+    if not data.get("party_id"):
+        raise HTTPException(400, "Вы не состоите в отряде")
+    members = data.get("member_character_ids", [])
+    if not members:
+        raise HTTPException(400, "Нет соотрядцев на этой локации")
+    return members
+
+
+async def _free_squadmates(db, leader_id: int, location_id: int, members: list | None = None) -> list:
+    """The leader's co-located squadmates who are free to fight, capped at the team size
+    (shared by the party mob attack and the FEAT-211 caravan raid).
+
+    `members` = an already fetched `_squad_roster` (the party mob attack validates its target
+    between the two steps, so its error order stays as before); fetched here when omitted.
+    Busy squadmates — actively gathering (FEAT-144 Ф3), already in a battle or activity-locked —
+    are skipped; the fight proceeds with whoever is free. The leader must be free."""
+    if members is None:
+        members = await _squad_roster(leader_id, location_id)
+
+    gathering = set()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            gresp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
+                json={"character_ids": members},
+                headers=_internal_token_headers(),
+            )
+            if gresp.status_code == 200:
+                gathering = set(gresp.json().get("gathering_character_ids", []))
+    except Exception as e:
+        logger.warning(f"gathering-status check failed: {e}")
+
+    await _ensure_not_activity_locked(db, leader_id)
+    available = []
+    for cid in members:
+        if cid in gathering:
+            continue
+        if await get_active_battle_for_character(db, cid):
+            continue
+        if await _is_activity_locked(db, cid):  # FEAT-175: dungeon / knocked out
+            continue
+        available.append(cid)
+
+    if leader_id not in available:
+        raise HTTPException(400, "Вы сейчас заняты (сбор или бой)")
+    if len(available) > settings.BATTLE_MAX_TEAM_SIZE:
+        available = available[: settings.BATTLE_MAX_TEAM_SIZE]
+    return available
+
+
 @router.post("/party/mob-attack", response_model=BattleCreated, status_code=201)
 async def party_mob_attack(
     req: PartyMobAttack,
@@ -1212,25 +1294,7 @@ async def party_mob_attack(
         raise HTTPException(400, "Персонаж не находится в локации")
 
     # Co-located squad roster from party-service.
-    data = {}
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
-                params={"character_id": req.leader_character_id, "location_id": loc},
-                headers=_internal_token_headers(),
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-    except Exception as e:
-        logger.error(f"party active-members failed: {e}")
-        raise HTTPException(503, "Сервис отрядов недоступен")
-
-    if not data.get("party_id"):
-        raise HTTPException(400, "Вы не состоите в отряде")
-    members = data.get("member_character_ids", [])
-    if not members:
-        raise HTTPException(400, "Нет соотрядцев на этой локации")
+    members = await _squad_roster(req.leader_character_id, loc)
 
     # Validate the mob: it must be an NPC on the leader's location.
     mob_row = (await db.execute(
@@ -1245,37 +1309,7 @@ async def party_mob_attack(
         raise HTTPException(400, "Моб находится в другой локации")
     await _ensure_npc_available(db, req.mob_character_id)  # FEAT-198: no dead / knocked-out targets
 
-    # Exclude squadmates who are busy — actively gathering (FEAT-144 Ф3) or
-    # already in a battle. The fight proceeds with whoever is free; a gatherer
-    # simply won't be pulled in. The leader must be free.
-    gathering = set()
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            gresp = await client.post(
-                f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
-                json={"character_ids": members},
-                headers=_internal_token_headers(),
-            )
-            if gresp.status_code == 200:
-                gathering = set(gresp.json().get("gathering_character_ids", []))
-    except Exception as e:
-        logger.warning(f"gathering-status check failed: {e}")
-
-    await _ensure_not_activity_locked(db, req.leader_character_id)
-    available = []
-    for cid in members:
-        if cid in gathering:
-            continue
-        if await get_active_battle_for_character(db, cid):
-            continue
-        if await _is_activity_locked(db, cid):  # FEAT-175: dungeon / knocked out
-            continue
-        available.append(cid)
-
-    if req.leader_character_id not in available:
-        raise HTTPException(400, "Вы сейчас заняты (сбор или бой)")
-    if len(available) > settings.BATTLE_MAX_TEAM_SIZE:
-        available = available[: settings.BATTLE_MAX_TEAM_SIZE]
+    available = await _free_squadmates(db, req.leader_character_id, loc, members=members)
 
     # GATE (FEAT-145): the initiator's combat post must have named this mob.
     if not await _consume_combat_gate(req.leader_character_id, loc, req.mob_character_id):
@@ -1813,6 +1847,152 @@ async def _notify_law_battle_end(db, battle_id: int, winner_team, aborted: bool 
     asyncio.create_task(_post_law_callback(payload))
 
 
+# ---------------------------------------------------------------------------
+# FEAT-211: caravan raid battles. character-service creates the raid row and spawns the
+# guards, then asks battle-service for the fight; the end is reported back.
+# ---------------------------------------------------------------------------
+CARAVAN_RAIDER_TEAM = 0
+CARAVAN_GUARD_TEAM = 1
+CARAVAN_NOT_HERE = "Каравана нет в вашей локации"
+CARAVAN_GUARDS_UNAVAILABLE = "Охрана каравана недоступна"
+CARAVAN_GATE_REQUIRED = "Нужен боевой пост с этим караваном, чтобы напасть"
+CARAVAN_JOIN_FORBIDDEN = "К налёту на караван нельзя присоединиться"
+
+
+async def _ensure_caravan_guards(db, guard_ids: list, location_id: int) -> None:
+    """Every guard must be an NPC at the raid location, alive, not knocked out, not in a
+    battle and not activity-locked; ids must be distinct. Otherwise 409."""
+    if len(set(guard_ids)) != len(guard_ids):
+        raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+    for gid in guard_ids:
+        row = (await db.execute(
+            text(
+                "SELECT is_npc, npc_status, unconscious_until, current_location_id "
+                "FROM characters WHERE id = :gid"
+            ),
+            {"gid": gid},
+        )).fetchone()
+        if not row or row[0] not in (1, True):
+            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+        if row[1] == "dead" or _is_ko(row[2]) or row[3] != location_id:
+            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+        if await get_active_battle_for_character(db, gid):
+            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+        if await _is_activity_locked(db, gid):
+            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+
+
+@router.post(
+    "/internal/caravan-raid",
+    response_model=CaravanRaidBattleCreated,
+    status_code=201,
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_create_caravan_raid_battle(
+    body: CaravanRaidBattleCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-211 §3.7 (B1): a caravan raid fight (character-service only).
+
+    Team 0 = the leader (solo) or the leader's free co-located squad (`group`, same roster
+    rules as the party mob attack); team 1 = the caravan guards (NPCs spawned by
+    character-service at the location). Requires consuming the leader's post gate of type
+    `caravan` naming this caravan. The battle is `pve`, tagged with `caravan_raid_id`, so its
+    end is reported to character-service (`_notify_caravan_battle_end`)."""
+    if len(body.guard_character_ids) > settings.BATTLE_MAX_TEAM_SIZE:
+        raise HTTPException(
+            400,
+            f"В одной команде не может быть больше {settings.BATTLE_MAX_TEAM_SIZE} участников",
+        )
+    leader_id = body.leader_character_id
+    leader_row = (await db.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid"),
+        {"cid": leader_id},
+    )).fetchone()
+    if not leader_row:
+        raise HTTPException(404, "Персонаж не найден")
+    loc = body.location_id
+    if leader_row[0] is None or leader_row[0] != loc:
+        raise HTTPException(400, CARAVAN_NOT_HERE)
+    if await get_active_battle_for_character(db, leader_id):
+        raise HTTPException(409, "Персонаж уже в бою")
+    await _ensure_not_activity_locked(db, leader_id)
+
+    guard_ids = list(body.guard_character_ids)
+    await _ensure_caravan_guards(db, guard_ids, loc)
+
+    if body.group:
+        attackers = await _free_squadmates(db, leader_id, loc)
+    else:
+        attackers = [leader_id]
+
+    # GATE (FEAT-145 / FEAT-211): the leader's post must have named this caravan.
+    if not await _consume_action_gate(leader_id, loc, CARAVAN_GATE_TYPE, body.caravan_id):
+        raise HTTPException(403, CARAVAN_GATE_REQUIRED)
+
+    player_ids = attackers + guard_ids
+    teams = [CARAVAN_RAIDER_TEAM] * len(attackers) + [CARAVAN_GUARD_TEAM] * len(guard_ids)
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", loc, caravan_raid_id=body.caravan_raid_id,
+    )
+    return CaravanRaidBattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+        attacker_character_ids=attackers,
+    )
+
+
+async def _get_caravan_raid_id(db, battle_id: int):
+    row = (await db.execute(
+        text("SELECT caravan_raid_id FROM battles WHERE id = :bid"),
+        {"bid": battle_id},
+    )).fetchone()
+    value = row[0] if row else None
+    return value if isinstance(value, int) else None
+
+
+async def _post_caravan_callback(payload: dict) -> None:
+    """Fire-and-forget POST to character-service with 3 retries. A miss is not fatal: the
+    caravan pass polls GET /battles/internal/{id}/result for `fighting` raids."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/caravans/raid-result"
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=payload, headers=_internal_token_headers())
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Caravan callback for battle %s answered %s: %s",
+                        payload.get("battle_id"), resp.status_code, resp.text[:200],
+                    )
+                return
+        except httpx.RequestError as e:
+            logger.warning("Caravan callback for battle %s failed: %s", payload.get("battle_id"), e)
+        await asyncio.sleep(1 + attempt * 2)
+    logger.error("Caravan callback for battle %s gave up after retries", payload.get("battle_id"))
+
+
+async def _notify_caravan_battle_end(db, battle_id: int, winner_team, aborted: bool = False) -> None:
+    """FEAT-211: if this is a caravan raid battle, report the outcome to character-service.
+    No-op for every battle without the `caravan_raid_id` tag."""
+    try:
+        raid_id = await _get_caravan_raid_id(db, battle_id)
+    except Exception as e:  # never break the battle ending over the callback
+        logger.error("Caravan callback lookup failed for battle %s: %s", battle_id, e)
+        return
+    if raid_id is None:
+        return
+    payload = {
+        "battle_id": battle_id,
+        "caravan_raid_id": raid_id,
+        "winner_team": winner_team,
+        "aborted": aborted,
+    }
+    asyncio.create_task(_post_caravan_callback(payload))
+
+
 async def _post_faction_callback(payload: dict) -> None:
     """FEAT-207: fire-and-forget POST of a finished battle to character-service (kill points), 3 retries. A miss
     only loses the points of that battle (the endpoint is idempotent per battle, so retries are safe)."""
@@ -1951,11 +2131,14 @@ async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_
                 winner_team = team
     law_encounter_id = getattr(battle, "law_encounter_id", None)
     law_encounter_id = law_encounter_id if isinstance(law_encounter_id, int) else None
+    caravan_raid_id = getattr(battle, "caravan_raid_id", None)
+    caravan_raid_id = caravan_raid_id if isinstance(caravan_raid_id, int) else None
     return {
         "battle_id": battle_id,
         "status": status,
         "dungeon_session_id": battle.dungeon_session_id,
         "law_encounter_id": law_encounter_id,  # FEAT-198 (additive)
+        "caravan_raid_id": caravan_raid_id,  # FEAT-211 (additive)
         "winner_team": winner_team,
         # Finished without history = force-finished (admin / abandonment).
         "aborted": status in ("finished", "forfeit") and not has_history,
@@ -2823,6 +3006,8 @@ async def _finalize_battle(
     # FEAT-198: a guard battle reports its outcome to character-service AFTER the NPC-death loop
     # (the guard KO, reputation and wanted have already been applied through npc-status).
     await _notify_law_battle_end(db_session, battle_id, winner_team)
+    # FEAT-211: a caravan raid reports its outcome (loot / crime are settled by character-service).
+    await _notify_caravan_battle_end(db_session, battle_id, winner_team)
     # FEAT-207: faction kill points (fire-and-forget; character-service decides who gets what)
     if winner_team is not None:
         await _notify_faction_battle_end(db_session, battle_id, battle_state, winner_team)
@@ -5719,6 +5904,8 @@ async def _force_finish_battle(
     await _notify_dungeon_battle_end(db, battle_id, None, state, aborted=True)
     # FEAT-198: an aborted guard battle sends the encounter back to the player's choice.
     await _notify_law_battle_end(db, battle_id, None, aborted=True)
+    # FEAT-211: an aborted caravan raid releases the caravan (no loot).
+    await _notify_caravan_battle_end(db, battle_id, None, aborted=True)
 
     logger.info("Battle %s force-finished (reason=%s)", battle_id, reason)
 
@@ -6277,6 +6464,9 @@ async def create_join_request(
         battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
         if battle_status not in ("pending", "in_progress"):
             raise HTTPException(404, "Бой не активен")
+        # FEAT-211: the raid team is fixed at the start (the loot split relies on it).
+        if isinstance(getattr(battle, "caravan_raid_id", None), int):
+            raise HTTPException(400, CARAVAN_JOIN_FORBIDDEN)
 
         # 3. Character belongs to current user
         await verify_character_ownership(db, req.character_id, current_user.id)

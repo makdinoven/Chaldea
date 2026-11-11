@@ -49,6 +49,10 @@ import type {
   CaravanList,
   CaravanListQuery,
   CaravanOverview,
+  CaravanDetail,
+  CaravanGuards,
+  CaravanRoadRegion,
+  CaravanRoads,
   TradePair,
   TradePairIn,
 } from '../types/economy';
@@ -329,5 +333,37 @@ export const putTradePair = async (body: TradePairIn): Promise<TradePair> => {
 /** Caravans newest first; `region_id` matches from or to (`economy:read`). */
 export const fetchCaravans = async (query: CaravanListQuery = {}): Promise<CaravanList> => {
   const { data } = await axios.get<CaravanList>(CARAVANS, { params: clean(query) });
+  return data;
+};
+
+/* ---------------------------------------------------------------- FEAT-211 physical caravans (feature file 3.13) */
+
+/** One caravan with its route, hold and raid (`economy:read`, A5). */
+export const fetchCaravanDetail = async (caravanId: number): Promise<CaravanDetail> => {
+  const { data } = await axios.get<CaravanDetail>(`${CARAVANS}/${caravanId}`);
+  return data;
+};
+
+/** Trade gates of the participating regions and the pairs with no road (`economy:read`, A6). */
+export const fetchCaravanRoads = async (): Promise<CaravanRoads> => {
+  const { data } = await axios.get<CaravanRoads>(`${CARAVANS}/roads`);
+  return data;
+};
+
+/** Sets (or clears with `null`) the region's «Торговые ворота» override (`economy:settings`, A7). */
+export const putCaravanGate = async (regionId: number, locationId: number | null): Promise<CaravanRoadRegion> => {
+  const { data } = await axios.put<CaravanRoadRegion>(`${CARAVANS}/gates/${regionId}`, { location_id: locationId });
+  return data;
+};
+
+/** Pool of mob templates that guard caravans (`economy:read`, A8). */
+export const fetchCaravanGuards = async (): Promise<CaravanGuards> => {
+  const { data } = await axios.get<CaravanGuards>(`${CARAVANS}/guards`);
+  return data;
+};
+
+/** Replaces the guard pool, ≤ 20 unique templates (`economy:settings`, A9). */
+export const putCaravanGuards = async (mobTemplateIds: number[]): Promise<CaravanGuards> => {
+  const { data } = await axios.put<CaravanGuards>(`${CARAVANS}/guards`, { mob_template_ids: mobTemplateIds });
   return data;
 };

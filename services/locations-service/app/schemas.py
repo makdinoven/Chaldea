@@ -1201,6 +1201,17 @@ class ShopSellOfferRead(BaseModel):
     base_unit_price: Optional[int] = None
     price_reasons: List[PriceReason] = []
 
+class FenceOfferRead(BaseModel):
+    """FEAT-211 A13: a stolen bale of the bag this fence buys now (no reputation cut, no outlaw
+    refusal — the fence serves criminals)."""
+    item_id: int
+    item_name: Optional[str] = None
+    item_image: Optional[str] = None
+    group_code: str
+    group_name: str
+    unit_price: int
+    max_quantity: int
+
 class ShopTransactionResponse(BaseModel):
     success: bool
     message: str

@@ -264,9 +264,19 @@ def test_migration_tier_seeds_equal_code_defaults():
     assert rc.validate(rc.DEFAULT_SETTINGS, seeded) is None
 
 
+def _later_has_source_actions():
+    """FEAT-211 migration 050 flips has_source of the builtin actions listed in HAS_SOURCE_ACTIONS."""
+    path = os.path.join(os.path.dirname(_MIGRATION), "050_physical_caravans.py")
+    spec = importlib.util.spec_from_file_location("mig_050_physical_caravans", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return set(mod.HAS_SOURCE_ACTIONS)
+
+
 def test_migration_action_and_role_seeds_equal_code_defaults():
     mig = _migration()
-    assert [(c, n, p, cap, bool(src), o) for c, n, p, cap, src, o in mig.ACTIONS] == \
+    flipped = _later_has_source_actions()
+    assert [(c, n, p, cap, bool(src) or c in flipped, o) for c, n, p, cap, src, o in mig.ACTIONS] == \
         [(c, n, p, cap, bool(src), o) for c, n, p, cap, src, o in rc.DEFAULT_ACTIONS]
     assert dict(mig.ROLE_WEIGHTS) == rc.DEFAULT_NPC_ROLE_WEIGHTS
     assert len(mig.ROLE_WEIGHTS) == len(dict(mig.ROLE_WEIGHTS))      # no duplicate role rows

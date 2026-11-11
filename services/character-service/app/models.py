@@ -655,6 +655,8 @@ class EconRegion(Base):
     class_drich = Column(Numeric(9, 6), nullable=False, default=0, server_default="0")
     wealth_norm = Column(BigInteger, nullable=False, default=0, server_default="0")
     last_wealth_tax = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # FEAT-211: admin override of the region's trade gate (Locations.id, no FK); NULL = the guard station
+    trade_gate_location_id = Column(BigInteger, nullable=True)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -761,6 +763,7 @@ class EconSimSettings(Base):
     params = Column(JSON, nullable=False)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     updated_by_user_id = Column(Integer, nullable=True)
+    caravan_pass_last_run_at = Column(DateTime, nullable=True)   # FEAT-211: claim of the caravan pass
 
 
 # --------------------------------------------------------------------------- FEAT-184 banks (migration 031)
@@ -1056,6 +1059,18 @@ class EconCaravan(Base):
     created_at = Column(DateTime, nullable=False)
     finished_at = Column(DateTime, nullable=True)
     finished_run_id = Column(Integer, nullable=True)
+    # FEAT-211 physical caravans (migration 050): a route of Locations ids (start gate ... end gate), the position on
+    # it, the step clock, the one-time post-hold window and what a raid took (units / escrow marks)
+    is_physical = Column(Boolean, nullable=False, default=False, server_default="0")
+    route = Column(JSON, nullable=True)
+    route_index = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    current_location_id = Column(BigInteger, nullable=True)
+    next_move_at = Column(DateTime, nullable=True)
+    arrived_at = Column(DateTime, nullable=True)
+    hold_started_at = Column(DateTime, nullable=True)
+    guard_count = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    stolen_units = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    raid_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("dispatch_run_id", "from_region_id", "to_region_id", "group_code",
@@ -1064,7 +1079,89 @@ class EconCaravan(Base):
         Index("ix_econ_caravans_to", "to_region_id", "status"),
         Index("ix_econ_caravans_from", "from_region_id", "status"),
         Index("ix_econ_caravans_finished", "finished_at"),
+        Index("ix_econ_caravans_move", "is_physical", "status", "next_move_at"),
+        Index("ix_econ_caravans_loc", "current_location_id", "status"),
     )
+
+
+# --------------------------------------------------------------------------- FEAT-211 raids / guards / fences (050)
+
+class EconCaravanRaid(Base):
+    """One raid on a physical caravan (UNIQUE caravan_id = one raid per caravan). Locations / regions / battles:
+    no FK. status: starting | fighting | won | repelled | aborted | expired."""
+
+    __tablename__ = "econ_caravan_raids"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    caravan_id = Column(BigInteger, nullable=False)
+    leader_character_id = Column(Integer, nullable=False)
+    is_group = Column(Boolean, nullable=False, default=False, server_default="0")
+    location_id = Column(BigInteger, nullable=False)
+    region_id = Column(BigInteger, nullable=True)
+    status = Column(String(16), nullable=False)
+    battle_id = Column(Integer, nullable=True)
+    attacker_ids = Column(JSON, nullable=True)
+    guard_ids = Column(JSON, nullable=True)
+    guard_template_id = Column(Integer, nullable=True)
+    guard_mult = Column(Numeric(6, 3), nullable=True)
+    marks = Column(BigInteger, nullable=False, default=0, server_default="0")
+    stolen_units = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    stolen_value = Column(BigInteger, nullable=False, default=0, server_default="0")
+    bales = Column(Integer, nullable=False, default=0, server_default="0")
+    payout_op_id = Column(BigInteger, nullable=True)
+    law_done = Column(Boolean, nullable=False, default=False, server_default="0")
+    guards_despawned = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("caravan_id", name="uq_econ_caravan_raids_caravan"),
+        Index("ix_econ_caravan_raids_battle", "battle_id"),
+        Index("ix_econ_caravan_raids_status", "status", "id"),
+    )
+
+
+class EconCaravanRaidShare(Base):
+    """One raider's share of a won raid (marks paid by the raid op, bales delivered via inventory-service)."""
+
+    __tablename__ = "econ_caravan_raid_shares"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    raid_id = Column(BigInteger, nullable=False)
+    character_id = Column(Integer, nullable=False)
+    marks = Column(BigInteger, nullable=False, default=0, server_default="0")
+    bales = Column(Integer, nullable=False, default=0, server_default="0")
+    bale_item_id = Column(Integer, nullable=True)
+    bales_delivered_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("raid_id", "character_id", name="uq_econ_caravan_raid_shares"),
+    )
+
+
+class EconCaravanGuardTemplate(Base):
+    """The pool of mob templates caravan guards are spawned from (admin A8/A9)."""
+
+    __tablename__ = "econ_caravan_guard_templates"
+
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", name="fk_econ_caravan_guard_tpl",
+                                                 ondelete="CASCADE"), primary_key=True, autoincrement=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class EconFence(Base):
+    """Settings of a fence NPC (role ``fence``); no row = defaults. characters.id: no FK."""
+
+    __tablename__ = "econ_fences"
+
+    npc_id = Column(Integer, primary_key=True, autoincrement=False)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    price_pct = Column(SmallInteger, nullable=False, default=40, server_default="40")
+    accepted_groups = Column(JSON, nullable=True)
+    cash_target = Column(BigInteger, nullable=False, default=2000, server_default="2000")
+    updated_at = Column(DateTime, nullable=True)
+    updated_by = Column(Integer, nullable=True)
 
 
 # --------------------------------------------------------------------------- FEAT-193 guild orders (migration 036)

@@ -160,6 +160,7 @@ FEAT-171 §3.4 D9).
 - **Восстановление**: health/energy/mana/stamina_recovery
 - **Крит**: critical_hit_chance_modifier, critical_damage_modifier
 - **fast_slot_bonus** - доп. быстрые слоты от предмета
+- **is_stolen / bale_group** (FEAT-211, миграция 037): краденый тюк каравана и его группа товаров; только чтение (см. «Краденые тюки каравана»)
 - **buff_type / buff_value / buff_duration_minutes** — книги опыта, **устаревшая одиночная форма**. FEAT-168: `buff_type` больше не свободная строка, а белый список из 8 типов (см. «Книги опыта»); всё остальное → 422. FEAT-168 #6: настоящий источник — таблица `item_xp_buffs`, эти колонки читаются только у предметов без строк в ней
 - **consumable_action / coating_turns / coating_bonus_damage** (FEAT-168, миграция 024, все nullable): как расходник применяется в бою — NULL/`instant`, `weapon_coating` (яд на оружие, тогда `coating_turns` 1..50 и `coating_bonus_damage` 0..10000 обязательны), `cleanse`. VARCHAR, а не ENUM: изменение ENUM блокирует таблицу `items` (грабли FEAT-165)
 
@@ -292,6 +293,25 @@ FEAT-171 §3.4 D9).
   Откат = downgrade до 035 (отметки теряются).
 - Отметка только для админки: видна в `GET /inventory/admin/items` и в ответе `PUT /inventory/admin/items/{id}/ready`.
   Её нет в `Item`, `PublicItemCard`, internal/admin-карточке и в `ItemCreate` — обычное сохранение предмета её не трогает.
+
+## Краденые тюки каравана (FEAT-211, миграция 037)
+
+- **Миграция `037_stolen_bales`** (revises `036_item_admin_ready`): `items.is_stolen TINYINT(1) NOT NULL DEFAULT 0`,
+  `items.bale_group VARCHAR(32) NULL` (код группы товаров экономики; VARCHAR, ENUM не трогается). Отметка — на уровне
+  шаблона предмета (стопки в `character_inventory` по `item_id`), а не экземпляра.
+- Засевает 12 тюков (`misc`, common, стопка 999, цена 50 — админ правит потом; уже существующее имя пропускается),
+  описание «Краденый товар. Его купит только скупщик.»: food «Тюк зерна (краденое)», ore_metal «Слиток руды (краденое)»,
+  wood «Связка древесины (краденое)», herbs «Тюк трав (краденое)», hides_textiles «Тюк кож и тканей (краденое)»,
+  magic «Ящик магических материалов (краденое)», weapons «Ящик оружия (краденое)», armor «Тюк доспехов (краденое)»,
+  jewelry «Шкатулка украшений (краденое)», potions «Ящик зелий (краденое)», tools «Ящик инструментов (краденое)»,
+  household «Тюк утвари (краденое)». Выдаёт их character-service по итогам налёта (`POST /inventory/internal/characters/{id}/items`).
+- Откат: downgrade до 036 удаляет 12 тюков (строки, ссылающиеся на них через FK без CASCADE/SET NULL, например
+  `character_inventory`, удаляются или обнуляются — потеря данных до беты допустима) и обе колонки.
+- `is_stolen` / `bale_group` — только чтение: отдаются в схеме `Item` (`GET /inventory/internal/items/{id}`, `GET /inventory/admin/items/{id}`, `PUT /inventory/items/{id}` и т.д.), в `ItemCreate`
+  их нет — обычная правка предмета их сохраняет.
+- **Аукцион:** `POST /inventory/auction/storage/deposit` отказывает краденому → 400 «Краденое нельзя выставить на аукцион».
+  Передача между игроками разрешена. `misc` не входит ни в одну группу товаров (off-market) — автоскупка торговцев,
+  заказы гильдии и пожертвования фракции и так отказывают; продать можно только скупщику (locations-service, роль `fence`).
 
 ## Походный рюкзак (FEAT-178, миграция 028)
 

@@ -46,7 +46,7 @@ battle-service/app/
 ## Хранение данных
 
 ### MySQL (постоянное)
-- **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, `dungeon_session_id` (FEAT-175), `law_encounter_id` (FEAT-198, миграция `009_battle_law_encounter`), timestamps
+- **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, `dungeon_session_id` (FEAT-175), `law_encounter_id` (FEAT-198, миграция `009_battle_law_encounter`), `caravan_raid_id` (FEAT-211, миграция `010_battle_caravan_raid`), timestamps
 - **battle_participants** - battle_id, character_id, team, `dropped_out_at`, `joined_at` (FEAT-164, миграция `007_participant_joined_at`; ставится при создании боя и при одобрении заявки на вступление, NULL у старых строк)
 - **battle_turns** - battle_id, actor_id, turn_number, attack/defense/support_rank_id, item_id, deadline
 
@@ -309,12 +309,13 @@ battle-service/app/
 | character:8005 | POST `/characters/{id}/add_rewards` | Опыт и золото победителям PvE. **FEAT-169:** роут стал internal-only, обязателен `X-Internal-Token` (`main._internal_token_headers()`); ошибка только логируется |
 | character:8005 | PUT `/characters/internal/npc-status/{id}` | Смерть побеждённого NPC (не моба) в `_finalize_battle`, `X-Internal-Token`. **FEAT-197:** тело `{status: "dead", battle_id, killer_character_ids}` — `killer_character_ids` = отсортированные уникальные `character_id` **всех** участников победившей команды (живых и павших). character-service оставляет из них только игроков (`is_npc = 0`), начисляет каждому полный вес репутации за убийство в регионе NPC и делает это только при реальном переходе `alive → dead` (ключ `npc_kill:{npc}:{battle_id}:{killer}`), так что повторный отчёт ничего не добавляет; ответ `{ok, status, killed}`. Выборка NPC — `is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')`. Ошибка только логируется |
 | character:8005 | POST `/characters/internal/law/battle-result` | **FEAT-198:** итог боя со стражей (`_notify_law_battle_end`, только бои с `law_encounter_id`), `{battle_id, law_encounter_id, winner_team, aborted}`, `X-Internal-Token`, фоновая задача, 3 попытки при 5xx/сети. У стражника npc-status даёт нокаут вместо смерти — это решает character-service |
+| character:8005 | POST `/characters/internal/caravans/raid-result` | **FEAT-211:** итог налёта на караван (`_notify_caravan_battle_end`, только бои с `caravan_raid_id`), `{battle_id, caravan_raid_id, winner_team, aborted}`, `X-Internal-Token`, фоновая задача, 3 попытки при 5xx/сети. Добычу, преступление и деспаун охраны делает character-service |
 | party:8014 | POST `/party/internal/xp-bonus` | Отрядный бонус опыта за бой. **FEAT-169:** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
 | party:8014 | GET `/party/internal/active-members` | Состав отряда в локации (групповой PvE/PvP). **FEAT-169:** весь префикс `/party/internal/` закрыт токеном, заголовок обязателен на всех трёх вызовах (`main.py`) |
 | character-attributes:8002 | POST `/attributes/cumulative_stats/increment` | Кумулятивная статистика по итогам боя (`_track_cumulative_stats`). **FEAT-167 задача #17: роут стал internal-only** — обязателен `X-Internal-Token` (`main._internal_token_headers()`, читает env в момент вызова). Вызов fire-and-forget: ошибка логируется и глотается, поэтому потеря заголовка молча остановила бы учёт побед, убийств и разблокировку перков — покрыто тестами в `tests/test_cumulative_stats.py` |
 | autobattle:8011 | POST `/autobattle/internal/register` | Постановка моба/НПС под управление ИИ при создании PvE-боя (`main.py:801`). **FEAT-170 (волна 1):** вызов отправляет `X-Internal-Token` (`main._internal_token_headers()`). Ошибка глотается в WARNING — без заголовка мобы просто перестали бы ходить, поэтому заголовок проверяется тестом на самом вызове |
 | locations:8006 | POST `/locations/quests/internal/auto-progress` | Продвижение целей заданий за побеждённых врагов (`main.py:727`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
-| locations:8006 | POST `/locations/internal/action-gate/consume` | Трата лимита действия: PvE-атака (`_consume_combat_gate`) и PvP (`_consume_pvp_gate`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`. Обработка ошибки fail-closed — при сбое возвращается `False` и атака/PvP запрещаются, то есть потеря заголовка видна игроку сразу |
+| locations:8006 | POST `/locations/internal/action-gate/consume` | Трата лимита действия: PvE-атака (`_consume_combat_gate` → общий `_consume_action_gate(character_id, location_id, action_type, target_ref)`, тип `combat`), налёт на караван (тот же хелпер, тип `caravan`, FEAT-211) и PvP (`_consume_pvp_gate`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`. Обработка ошибки fail-closed — при сбое возвращается `False` и атака/PvP запрещаются, то есть потеря заголовка видна игроку сразу |
 | locations:8006 | POST `/locations/internal/gathering-status` | Кто из соотрядцев занят сбором — 3 вызова (`main.py:1029`, `:1197`, `_filter_available`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`; ошибка глотается, и без заголовка сборщиков молча затягивало бы в бой |
 
 ### FEAT-170: internal-токен
@@ -653,8 +654,8 @@ FEAT-171 объявила приватным.
   `POST /dungeons/internal/battle-callback` `{battle_id, session_id, winner_team, defeated_characters, aborted}`
   (фоновая задача, 3 попытки при 5xx/сетевой ошибке; промах подстрахован опросом).
 * `GET /battles/internal/{id}/result` (X-Internal-Token) — итог после истечения Redis-состояния:
-  `{battle_id, status, winner_team, aborted, dungeon_session_id, law_encounter_id}` (победитель — по
-  `battle_history`; `law_encounter_id` — FEAT-198, аддитивно).
+  `{battle_id, status, winner_team, aborted, dungeon_session_id, law_encounter_id, caravan_raid_id}` (победитель — по
+  `battle_history`; `law_encounter_id` — FEAT-198, `caravan_raid_id` — FEAT-211, аддитивно).
 * `_ensure_not_activity_locked` отказывает (409) во всех путях создания боя, PvP-вызовах/нападениях,
   лобби, заявках на вступление и их одобрении; заблокированные соотрядцы тихо исключаются из
   групповых атак (`_filter_available`, party mob/pack attack).
@@ -695,6 +696,38 @@ battle-service только проводит бой и сообщает итог
   409 «Этот персонаж сейчас недоступен для боя» (нет строки атрибутов — пропускается).
 * `app/activity_lock.py` (async-копия) знает причины `jail` и `law_encounter`; SELECT читает `jailed_until,
   law_encounter_id` с откатом на старый запрос, если колонок ещё нет.
+
+## Налёт на караван (FEAT-211)
+
+Караваны, налёты, добычу и закон ведёт character-service (см. `docs/services/character-service.md`).
+battle-service только проводит бой и сообщает итог — копия схемы боя со стражей.
+
+* **Миграция `010_battle_caravan_raid`:** `battles.caravan_raid_id` INT NULL + индекс
+  `ix_battles_caravan_raid_id` (без FK — строка налёта `econ_caravan_raids` принадлежит character-service).
+  `crud.create_battle(..., caravan_raid_id=None)`, `_assemble_battle(..., caravan_raid_id=None)` — метка
+  передаётся только когда задана.
+* **`POST /battles/internal/caravan-raid`** (X-Internal-Token) `CaravanRaidBattleCreate {caravan_raid_id, caravan_id,
+  leader_character_id, group, guard_character_ids (1..5), location_id}` → 201 `{battle_id, participants, next_actor,
+  deadline_at, attacker_character_ids}`. Проверки по порядку: охраны больше лимита команды → 400; лидер существует
+  (404 «Персонаж не найден») и стоит в `location_id` (400 «Каравана нет в вашей локации»); не в бою (409 «Персонаж уже
+  в бою»); `_ensure_not_activity_locked` (409 с текстом блокировки); охрана — разные NPC в этой локации, не мертвы,
+  не оглушены, не в бою, без блокировки (иначе 409 «Охрана каравана недоступна»); `group=true` → отряд через
+  `_free_squadmates` (те же правила, что у групповой атаки на моба: 400 «Вы не состоите в отряде» / «Нет соотрядцев
+  на этой локации» / «Вы сейчас заняты (сбор или бой)», 503 «Сервис отрядов недоступен», кап `BATTLE_MAX_TEAM_SIZE`);
+  затем трата гейта поста `action_type='caravan'`, `target_ref=caravan_id` (403 «Нужен боевой пост с этим караваном,
+  чтобы напасть»). Бой `pve`: команда 0 — налётчики, команда 1 — охрана (регистрируется в автобое).
+* **Общие хелперы (без изменения поведения атаки на мобов):** `_squad_roster(leader, loc)` (party-service) и
+  `_free_squadmates(db, leader, loc, members=None)` (сборщики/в бою/заблокированные пропускаются, лидер обязан быть
+  свободен, кап команды) — групповая атака на моба вызывает их с проверкой моба между шагами, как раньше;
+  `_consume_action_gate(...)` — `_consume_combat_gate` стал тонкой обёрткой над ним (тип `combat`).
+* **Колбэк:** `_finalize_battle` сразу после `_notify_law_battle_end` вызывает `_notify_caravan_battle_end`,
+  `_force_finish_battle` — с `aborted=True`. Для боя без метки — no-op. Фоновая задача шлёт
+  `POST /characters/internal/caravans/raid-result` `{battle_id, caravan_raid_id, winner_team, aborted}` с
+  `X-Internal-Token`, до 3 попыток при 5xx/сетевой ошибке. Промах страхует проход караванов character-service
+  (опрос `GET /battles/internal/{id}/result`, поле `caravan_raid_id`).
+* **Вступление в бой:** `POST /battles/{id}/join-request` для боя с `caravan_raid_id` → 400 «К налёту на караван
+  нельзя присоединиться» (состав налётчиков фиксирован — по нему делится добыча).
+* Награды за охрану — как за любых мобов (опыт, лут шаблона, бестиарий); шаблоны охраны выбирает админ.
 
 ## FEAT-188: пассивки подклассов
 

@@ -8,7 +8,8 @@ export type NpcTabKey =
   | 'quests'
   | 'shop'
   | 'teleports'
-  | 'patrol';
+  | 'patrol'
+  | 'fence';
 
 export const NPC_TAB_KEYS: readonly NpcTabKey[] = [
   'general',
@@ -19,6 +20,7 @@ export const NPC_TAB_KEYS: readonly NpcTabKey[] = [
   'shop',
   'teleports',
   'patrol',
+  'fence',
 ];
 
 export const NPC_TAB_LABELS: Record<NpcTabKey, string> = {
@@ -30,6 +32,7 @@ export const NPC_TAB_LABELS: Record<NpcTabKey, string> = {
   shop: 'Магазин',
   teleports: 'Телепорты',
   patrol: 'Патруль',
+  fence: 'Скупка',
 };
 
 const BASE_TABS: NpcTabKey[] = ['general', 'stats', 'equipment', 'dialogues', 'quests'];
@@ -39,6 +42,7 @@ const ROLE_TABS: Record<string, NpcTabKey> = {
   merchant: 'shop',
   teleport_master: 'teleports',
   guard: 'patrol',
+  fence: 'fence',
 };
 
 export const isNpcTabKey = (value: string | null): value is NpcTabKey =>

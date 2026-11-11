@@ -1070,6 +1070,8 @@ async def create_new_post(
         getattr(post_data, "gates", []),
     )
     _validate_intent_post(char_count, gate_list)
+    # FEAT-211 3.12: caravan targets must stand in this location right now.
+    await crud.validate_caravan_targets(session, gate_list, post_data.location_id)
 
     result = await crud.create_post(session, post_data)
 
@@ -1528,6 +1530,8 @@ async def move_and_post(
         getattr(movement, "gates", []),
     )
     _validate_intent_post(plain_char_count, mp_gates)
+    # FEAT-211 3.12: a caravan target must stand in the destination location.
+    await crud.validate_caravan_targets(session, mp_gates, destination_location_id)
 
     # 5. Создаём пост для новой локации (destination_location_id)
     payload = {
@@ -2815,6 +2819,9 @@ async def choose_dialogue_option(
 # --------------------------------------------------------------------
 # NPC SHOP — Admin endpoints
 # --------------------------------------------------------------------
+# FEAT-211: stolen bales are bought only by a fence, never listed in a shop.
+SHOP_STOLEN_ROW_MESSAGE = "Краденое нельзя продавать в магазине"
+
 @router.post("/admin/npc-shop/{npc_id}/items", response_model=schemas.NpcShopItemAdminRead)
 async def add_npc_shop_item(
     npc_id: int,
@@ -2828,6 +2835,8 @@ async def add_npc_shop_item(
         raise HTTPException(status_code=404, detail="НПС не найден")
     if not await crud.item_exists(session, body.item_id):
         raise HTTPException(status_code=404, detail="Предмет не найден")
+    if await crud.stolen_item_ids(session, [body.item_id]):
+        raise HTTPException(status_code=400, detail=SHOP_STOLEN_ROW_MESSAGE)
     try:
         shop_item = await crud.create_npc_shop_item(session, npc_id, body.dict())
     except crud.ShopItemDuplicate:
@@ -2869,7 +2878,10 @@ async def update_npc_shop_item(
     admin: UserRead = Depends(get_admin_user),
 ):
     """Update prices, stock, restock target or active status of a shop item (a row bought from
-    players becomes an admin row)."""
+    players becomes an admin row). FEAT-211: a row of a stolen item can only be deleted."""
+    existing = await crud.get_shop_item_by_id(session, shop_item_id)
+    if existing is not None and await crud.stolen_item_ids(session, [existing.item_id]):
+        raise HTTPException(status_code=400, detail=SHOP_STOLEN_ROW_MESSAGE)
     updated = await crud.update_npc_shop_item(session, shop_item_id, body.dict(exclude_unset=True))
     if not updated:
         raise HTTPException(status_code=404, detail="Товар в магазине не найден")
@@ -3374,6 +3386,121 @@ async def sell_to_npc(
         "quantity": quantity,
         "total_price": total_price,
         "price_reasons": reputation_read.bid_reasons(terms) if quote.base_unit_price is not None else [],
+    }
+
+
+# --------------------------------------------------------------------
+# FENCE («Скупщик», FEAT-211 3.11) — selling stolen bales
+# --------------------------------------------------------------------
+FENCE_NOT_FOUND_MESSAGE = "Скупщик не найден"
+FENCE_NOT_BUYING_MESSAGE = "Скупщик это не берёт"
+FENCE_NO_CASH_MESSAGE = "У скупщика сейчас нет денег"
+
+
+async def _require_fence_access(session, character_id: int, npc_id: int, current_user) -> "crud.FenceTerms":
+    """Shared A13/A14 checks: owner, not activity-locked, an active alive fence (404), the
+    npc_dialogue post + NPC tier gate (403), the same location (400). No outlaw refusal."""
+    await verify_character_ownership(session, character_id, current_user.id)
+    await check_not_activity_locked(session, character_id)
+    terms = await crud.fence_terms(session, npc_id)
+    if terms is None:
+        raise HTTPException(status_code=404, detail=FENCE_NOT_FOUND_MESSAGE)
+    await _require_npc_gate(session, character_id, npc_id)
+    char_location = await crud.get_character_location(session, character_id)
+    if char_location is None or int(char_location) != terms.location_id:
+        raise HTTPException(status_code=400, detail="Персонаж не находится в локации этого NPC")
+    return terms
+
+
+@router.get("/npcs/{npc_id}/fence/offers", response_model=List[schemas.FenceOfferRead])
+async def get_fence_offers(
+    npc_id: int,
+    character_id: int = Query(..., ge=1),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """FEAT-211 A13: the stolen bales of the character's bag this fence buys now and at what price
+    (floor(items.price x region price_mult x price_pct / 100)). The fence's cash is not disclosed."""
+    terms = await _require_fence_access(session, character_id, npc_id, current_user)
+    return await crud.get_fence_offers(session, terms, character_id, schemas.SHOP_MAX_QUANTITY)
+
+
+@router.post("/npcs/{npc_id}/fence/sell", response_model=schemas.ShopTransactionResponse)
+async def sell_to_fence(
+    npc_id: int,
+    body: schemas.ShopSellRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """FEAT-211 A14: sell stolen bales to a fence. Same flow as `sell_to_npc`, but the price comes
+    from `crud.fence_quotes`, the money from the fence's own cash (op npc_shop_sell, metadata
+    fence: true) and the bought bales are destroyed (nothing is stocked). A failed credit returns
+    the item to the player."""
+    terms = await _require_fence_access(session, body.character_id, npc_id, current_user)
+    quantity = int(body.quantity)
+    quote = (await crud.fence_quotes(session, terms, [body.item_id])).get(body.item_id)
+    if quote is None:
+        raise HTTPException(status_code=400, detail=FENCE_NOT_BUYING_MESSAGE)
+    total_price = quote.unit_price * quantity
+    if await crud.merchant_cash(session, npc_id) < total_price:
+        raise HTTPException(status_code=409, detail=FENCE_NO_CASH_MESSAGE)
+    # End the read snapshot: nothing is held across the HTTP call.
+    await session.commit()
+
+    # Remove the bales from the bag via inventory-service (player's JWT), like sell_to_npc step 4.
+    auth_header = request.headers.get("authorization", "")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            remove_resp = await client.delete(
+                f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}"
+                f"/items/{body.item_id}?quantity={quantity}",
+                headers={"Authorization": auth_header},
+            )
+            if remove_resp.status_code != 200:
+                detail = "Не удалось удалить предмет из инвентаря"
+                try:
+                    detail = remove_resp.json().get("detail", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=remove_resp.status_code, detail=detail)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
+
+    sell_meta = {"npc_id": npc_id, "item_id": body.item_id, "quantity": quantity,
+                 "sell_price": quote.unit_price, "fence": True, "group_code": quote.group_code,
+                 "price_pct": terms.price_pct}
+    try:
+        new_balance = await crud.pay_player_from_merchant(
+            session, npc_id, body.character_id, total_price,
+            region_id=terms.region_id, location_id=terms.location_id, metadata=sell_meta,
+        )
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        no_cash = isinstance(exc, econ_core.InsufficientFunds)
+        if not no_cash:
+            logger.exception("Fence sell credit failed: character %s, npc %s, item %s x%s",
+                             body.character_id, npc_id, body.item_id, quantity)
+        if not await _return_sold_item(body.character_id, body.item_id, quantity):
+            logger.error("Fence sell: item %s x%s NOT returned to character %s (npc %s) after a failed credit",
+                         body.item_id, quantity, body.character_id, npc_id)
+        if no_cash:
+            raise HTTPException(status_code=409, detail=FENCE_NO_CASH_MESSAGE)
+        raise HTTPException(status_code=500, detail=SHOP_SELL_FAILED_MESSAGE)
+
+    await _track_cumulative_stats(body.character_id, {
+        "items_sold": quantity,
+        "total_gold_earned": total_price,
+    })
+
+    return {
+        "success": True,
+        "message": "Продажа совершена",
+        "new_balance": new_balance,
+        "item_name": quote.item_name,
+        "quantity": quantity,
+        "total_price": total_price,
     }
 
 

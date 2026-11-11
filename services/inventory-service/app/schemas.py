@@ -967,6 +967,9 @@ class Item(ItemBase):
     damage_entries: List[ItemDamageOut] = []
     # FEAT-168 #6: which XP the item accelerates (empty for every other item)
     xp_buffs: List[ItemXpBuffOut] = []
+    # FEAT-211: read-only stolen-bale marks (set by migration, not in ItemCreate)
+    is_stolen: bool = False
+    bale_group: Optional[str] = None
 
     class Config:
         orm_mode = True

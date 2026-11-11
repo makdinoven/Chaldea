@@ -156,7 +156,9 @@ OP_LOAN_COLLECT = "loan_collect"          # vault / character -> bank (overdue d
 OP_CARAVAN_DISPATCH = "caravan_dispatch"  # buyer purse (+ buyer region treasury for food) -> escrow
 OP_CARAVAN_DELIVERY = "caravan_delivery"  # escrow -> seller purse (value) + escrow -> buyer country (duty)
 OP_CARAVAN_CANCEL = "caravan_cancel"      # escrow -> the buyer accounts that paid (full refund)
-CARAVAN_OP_TYPES = frozenset({OP_CARAVAN_DISPATCH, OP_CARAVAN_DELIVERY, OP_CARAVAN_CANCEL})
+# FEAT-211: escrow -> raiders (marks share of a raided physical caravan)
+OP_CARAVAN_RAID = "caravan_raid"
+CARAVAN_OP_TYPES = frozenset({OP_CARAVAN_DISPATCH, OP_CARAVAN_DELIVERY, OP_CARAVAN_CANCEL, OP_CARAVAN_RAID})
 # FEAT-193: a player fills a region's guild order: purse (+ region treasury for food) -> character (untaxed)
 OP_GUILD_ORDER = "guild_order"
 GUILD_OP_TYPES = frozenset({OP_GUILD_ORDER})

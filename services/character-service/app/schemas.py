@@ -2089,6 +2089,25 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "caravan_travel_foreign": (1, 8),
     "caravan_min_value": (1, 1_000_000),
     "caravan_max_per_run": (1, 5_000),
+    # FEAT-211 physical caravans and raids
+    "caravan_physical_enabled": (0, 1),
+    "caravan_physical_min_value": (1, 10_000_000),
+    "caravan_physical_small_chance": (0.0, 1.0),
+    "caravan_physical_max_active": (0, 1_000),
+    "caravan_step_minutes": (5, 120),
+    "caravan_route_max_steps": (2, 200),
+    "caravan_post_hold_max_min": (0, 1_440),
+    "caravan_raid_battle_max_hours": (1, 336),
+    "caravan_raid_marks_share": (0.0, 1.0),
+    "caravan_raid_goods_share": (0.0, 1.0),
+    "caravan_guard_count_base": (1, 5),
+    "caravan_guard_value_per_extra": (1, 10_000_000),
+    "caravan_guard_count_max": (1, 5),
+    "caravan_guard_mult_per_1000": (0.0, 5.0),
+    "caravan_guard_mult_max": (1.0, 10.0),
+    "caravan_guard_mult_dangerous": (1.0, 5.0),
+    "caravan_rep_trade_share": (0.0, 1.0),
+    "fence_purse_share": (0.0, 1.0),
     # FEAT-193 guild orders
     "guild_enabled": (0, 1),
     "guild_markup_pct": (0.0, 200.0),
@@ -2133,6 +2152,9 @@ ECON_SIM_INT_PARAMS = frozenset({
     "quota_season_amount", "mint_season_limit",
     "caravans_enabled", "caravan_travel_domestic", "caravan_travel_foreign", "caravan_min_value",
     "caravan_max_per_run",
+    "caravan_physical_enabled", "caravan_physical_min_value", "caravan_physical_max_active", "caravan_step_minutes",
+    "caravan_route_max_steps", "caravan_post_hold_max_min", "caravan_raid_battle_max_hours",
+    "caravan_guard_count_base", "caravan_guard_value_per_extra", "caravan_guard_count_max",
     "guild_enabled", "guild_min_order_value", "guild_xp_daily_cap",
     "classes_enabled",
 })
@@ -2529,6 +2551,24 @@ class EconSimParamsIn(BaseModel):
     caravan_travel_foreign: Optional[int] = None
     caravan_min_value: Optional[int] = None
     caravan_max_per_run: Optional[int] = None
+    caravan_physical_enabled: Optional[int] = None
+    caravan_physical_min_value: Optional[int] = None
+    caravan_physical_small_chance: Optional[float] = None
+    caravan_physical_max_active: Optional[int] = None
+    caravan_step_minutes: Optional[int] = None
+    caravan_route_max_steps: Optional[int] = None
+    caravan_post_hold_max_min: Optional[int] = None
+    caravan_raid_battle_max_hours: Optional[int] = None
+    caravan_raid_marks_share: Optional[float] = None
+    caravan_raid_goods_share: Optional[float] = None
+    caravan_guard_count_base: Optional[int] = None
+    caravan_guard_value_per_extra: Optional[int] = None
+    caravan_guard_count_max: Optional[int] = None
+    caravan_guard_mult_per_1000: Optional[float] = None
+    caravan_guard_mult_max: Optional[float] = None
+    caravan_guard_mult_dangerous: Optional[float] = None
+    caravan_rep_trade_share: Optional[float] = None
+    fence_purse_share: Optional[float] = None
     guild_enabled: Optional[int] = None
     guild_markup_pct: Optional[float] = None
     guild_open_threshold_pct: Optional[float] = None
@@ -3229,6 +3269,25 @@ class CaravanParamsOut(BaseModel):
     caravan_travel_foreign: int
     caravan_min_value: int
     caravan_max_per_run: int
+    # FEAT-211 physical caravans and raids (3.14)
+    caravan_physical_enabled: int
+    caravan_physical_min_value: int
+    caravan_physical_small_chance: float
+    caravan_physical_max_active: int
+    caravan_step_minutes: int
+    caravan_route_max_steps: int
+    caravan_post_hold_max_min: int
+    caravan_raid_battle_max_hours: int
+    caravan_raid_marks_share: float
+    caravan_raid_goods_share: float
+    caravan_guard_count_base: int
+    caravan_guard_value_per_extra: int
+    caravan_guard_count_max: int
+    caravan_guard_mult_per_1000: float
+    caravan_guard_mult_max: float
+    caravan_guard_mult_dangerous: float
+    caravan_rep_trade_share: float
+    fence_purse_share: float
 
 
 class CaravanEscrowOut(BaseModel):
@@ -3293,11 +3352,174 @@ class CaravanOut(BaseModel):
     goods_returned: Optional[bool]
     created_at: datetime
     finished_at: Optional[datetime]
+    # FEAT-211 physical caravans (A4, admin only)
+    is_physical: bool = False
+    current_location_id: Optional[int] = None
+    current_location_name: Optional[str] = None
+    route_index: int = 0
+    route_len: int = 0
+    next_move_at: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    hold_started_at: Optional[datetime] = None
+    guard_count: int = 0
+    stolen_units: float = 0
+    raid_paid: int = 0
+    raid_status: Optional[str] = None            # starting | fighting | won | repelled | aborted | expired
 
 
 class CaravanListOut(BaseModel):
     total: int
     items: List[CaravanOut]
+
+
+# ===========================================================================
+# FEAT-211 physical caravans — admin (contract 3.13 A4–A9; app/caravan_api.py)
+# ===========================================================================
+
+CARAVAN_KIND_RE = r"^(all|physical|abstract)$"
+CARAVAN_GUARD_POOL_MAX = 20
+
+
+class CaravanRoutePointOut(BaseModel):
+    index: int
+    location_id: int
+    name: Optional[str]
+    region_id: Optional[int]
+    region_name: Optional[str]
+
+
+class CaravanRaidAttackerOut(BaseModel):
+    id: int
+    name: Optional[str]
+    marks: int
+    bales: int
+
+
+class CaravanRaidAdminOut(BaseModel):
+    id: int
+    status: str
+    leader_id: int
+    leader_name: Optional[str]
+    is_group: bool
+    battle_id: Optional[int]
+    attackers: List[CaravanRaidAttackerOut]
+    marks: int
+    stolen_units: float
+    stolen_value: int
+    bales: int
+    guard_template_id: Optional[int]
+    guard_template_name: Optional[str]
+    guard_mult: Optional[float]
+    created_at: datetime
+    finished_at: Optional[datetime]
+
+
+class CaravanDetailOut(CaravanOut):
+    route: List[CaravanRoutePointOut] = []
+    held_by: Optional[str] = None                # post | raid | null
+    raid: Optional[CaravanRaidAdminOut] = None
+
+
+class CaravanGateRegionOut(BaseModel):
+    region_id: int
+    name: Optional[str]
+    country_name: Optional[str]
+    station_location_id: Optional[int]
+    station_location_name: Optional[str]
+    gate_override_id: Optional[int]
+    gate_override_name: Optional[str]
+    gate_location_id: Optional[int]
+    gate_location_name: Optional[str]
+    gate_source: str                             # override | station | none
+
+
+class CaravanNoRoadOut(BaseModel):
+    from_region_id: int
+    from_name: Optional[str]
+    to_region_id: int
+    to_name: Optional[str]
+    reason: str                                  # no_gate | no_path | too_long
+
+
+class CaravanRoadsOut(BaseModel):
+    regions: List[CaravanGateRegionOut]
+    no_road: List[CaravanNoRoadOut]
+
+
+class CaravanGateIn(BaseModel):
+    location_id: Optional[conint(strict=True, ge=1)] = None
+
+    class Config:
+        extra = Extra.forbid
+
+
+class CaravanGuardTemplateOut(BaseModel):
+    mob_template_id: int
+    name: Optional[str]
+    level: int
+
+
+class CaravanGuardPoolOut(BaseModel):
+    templates: List[CaravanGuardTemplateOut]
+
+
+class CaravanGuardPoolIn(BaseModel):
+    mob_template_ids: List[conint(strict=True, ge=1)] = Field(default_factory=list,
+                                                                max_items=CARAVAN_GUARD_POOL_MAX)
+
+    class Config:
+        extra = Extra.forbid
+
+    @validator("mob_template_ids")
+    def _unique(cls, v):
+        if len(set(v)) != len(v):
+            raise ValueError("Шаблоны мобов не должны повторяться")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# FEAT-211 raids — player / internal (contract 3.13 A1–A3; app/caravan_api.py). The player shapes deliberately
+# have NO origin, destination, route or cargo value (players learn the roads themselves).
+# ---------------------------------------------------------------------------
+
+class CaravanHereOut(BaseModel):
+    id: int
+    group_code: str
+    group_name: Optional[str]
+    guard_count: int
+    state: str                                   # on_road | held | under_attack | raided
+    departs_in_sec: Optional[int]
+    can_attack: bool
+    reason: Optional[str]
+
+
+class CaravansHereOut(BaseModel):
+    location_id: Optional[int]
+    caravans: List[CaravanHereOut]
+
+
+class CaravanRaidIn(BaseModel):
+    character_id: conint(strict=True, ge=1)
+    group: bool = False
+
+    class Config:
+        extra = Extra.forbid
+
+
+class CaravanRaidStartOut(BaseModel):
+    raid_id: int
+    battle_id: int
+
+
+class CaravanRaidResultIn(BaseModel):
+    battle_id: conint(ge=1)
+    caravan_raid_id: conint(ge=1)
+    winner_team: Optional[int] = None
+    aborted: bool = False
+
+
+class CaravanRaidResultOut(BaseModel):
+    status: str                                  # won | repelled | aborted | already | unknown
 
 
 class CaravanCardLine(BaseModel):

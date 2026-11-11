@@ -2748,3 +2748,151 @@ faction_debts → faction_donation_days → faction_pvp_kills → faction_qm_pur
 
 **Отметка «Готов»** (миграция `049_mob_admin_ready`) не входит в `MobTemplateCreate`/`MobTemplateUpdate` (обычное
 сохранение её не трогает) и не попадает в публичные ответы (`/mobs/by_location` → `MobInLocation` и др.).
+
+## Физические караваны — этап 1: дороги и движение (FEAT-211)
+
+Часть караванов NPC (FEAT-192) едет **по локациям**. Модули: чистые `app/caravan_route.py` (BFS по графу,
+торговые ворота) и хелперы в `app/econ_caravan.py` (`choose_physical`, `guard_count`, `guard_multiplier`,
+`remaining_payout`, `refund_split`, `stolen`, `bale_count`, `split_loot`, `physical_roll`); БД —
+`app/economy_caravan_crud.py` (`RoutePlanner`, `deliver_physical`, удержание, админ-чтения); проход —
+`app/caravan_pass.py`; админ-роутер — `app/caravan_api.py` (подключён после экономического).
+
+### Выбор и маршрут (3.2)
+
+- **Торговые ворота края** = `econ_regions.trade_gate_location_id` (переопределение админом) иначе
+  `Regions.jail_location_id` (отделение стражи) иначе нет.
+- **Граф** — `LocationNeighbors` (обе стороны, межрегиональные стрелки включены), грузится один раз за проход тика;
+  через локации `marker_type='dungeon'` не ходят (концы маршрута — можно). Кратчайший путь по числу переходов, соседи
+  по возрастанию id (детерминированно); длиннее `caravan_route_max_steps` → «нет дороги».
+- **Правило** (после `clamp_dispatch`): выключено / нет дороги / на дорогах уже `caravan_physical_max_active` →
+  абстрактный; `value ≥ caravan_physical_min_value` или межстрановой → физический; иначе — при
+  `u < caravan_physical_small_chance`, `u` = sha256 от `(run, from, to, group)` (стабилен при возобновлении прогона).
+  Ошибка построения планировщика → все караваны прогона абстрактные (тик не падает).
+- Физическая строка: `is_physical=1`, `route` (JSON id локаций, ≥ 2), `route_index=0`, `current_location_id`,
+  `next_move_at = now + caravan_step_minutes ± 25 %` (`patrol_core.next_delay`), `guard_count`. `travel_runs/runs_left`
+  пишутся, но для физических не используются; фаза прибытия тика (`advance_and_finish`, `finish`) их не трогает.
+
+### Проход `caravan_pass` (3.3)
+
+Из `econ_scheduler.run_scheduled_once` — после прохода фракций, до тика. Захват
+`econ_sim_settings.caravan_pass_last_run_at` (раз в 55 с); пропускается, когда тик экономики выключен в БД. Шаги (каждый
+— своими короткими транзакциями, пачки по 200):
+1–3. Рейдовые шаги из `caravan_raid_crud` (см. «Налёты на караваны» ниже): `expire_stale_raids`,
+`poll_raid_battles`, `raid_followups`.
+4. Шаг: блокируется только строка каравана; **удержан** → `hold_started_at` (один раз) и ждёт; иначе `route_index+1`;
+   последняя точка → `arrived_at`.
+5. Доставка прибывших — `deliver_physical` (порядок блокировок как у `finish`, без логики run-id); пропускается целиком,
+   пока прогон экономики в статусе `running`. Доезжают `units − stolen_units`; деньги — остаток эскроу
+   `R = paid − raid_paid`: пошлина `floor(duty × R / (value + duty))` (полная без налёта), продавцу остальное
+   (`caravan_delivery`, ключ `:done`, метаданные `physical, stolen_units, raid_paid`). Край назначения исчез / вышел из
+   экономики → отмена (`caravan_cancel`, `:back`): товар назад, возврат `R` пропорционально плательщикам.
+
+### Удержание (3.4)
+
+Не двигается, пока: налёт `starting`/`fighting`; или (только без налёта и внутри окна `hold_started_at +
+caravan_post_hold_max_min`, одно на весь маршрут) открыт гейт locations-service `action_gates(action_type='caravan',
+target_ref=<id>, location_id=<текущая>, status='open')` либо висит `post_gate_requests(status='pending')` в этой локации
+с `{"action_type":"caravan","targets":[…id…]}`.
+
+### Видимость, инварианты
+
+- Карточка края (`card_caravans`) — только `is_physical = 0`: физические не видны ни в пути, ни после доставки.
+- Подинвариант эскроу: `escrow = Σ (paid_purse + paid_treasury − raid_paid)` караванов в пути. «В пути» для
+  планировщика и гильдии — `SUM(units − stolen_units)`.
+- Новая операция ledger `caravan_raid` (`caravan_escrow → character`, без налога) — в `CARAVAN_OP_TYPES`
+  (копии `econ_core.py` / контрактных кейсов во всех 4 сервисах). Действие репутации `caravan_attack` — `has_source=1`.
+
+### Миграция `050_physical_caravans`
+
+`econ_caravans` + `is_physical, route, route_index, current_location_id, next_move_at, arrived_at, hold_started_at,
+guard_count, stolen_units, raid_paid` (индексы `ix_econ_caravans_move`, `ix_econ_caravans_loc`); новые таблицы
+`econ_caravan_raids` (UNIQUE `caravan_id`), `econ_caravan_raid_shares` (UNIQUE `raid_id, character_id`),
+`econ_caravan_guard_templates` (FK `mob_templates` ON DELETE CASCADE), `econ_fences`; `econ_regions.
+trade_gate_location_id`; `econ_sim_settings.caravan_pass_last_run_at`; `reputation_actions.has_source=1` для
+`caravan_attack`. Всё с проверками information_schema; откат удаляет всё (налётные деньги в пути сломали бы
+подинвариант — до беты допустимо).
+
+### Параметры (JSON `econ_sim_settings.params`, входят в карточку караванов `overview.params`)
+
+`caravan_physical_enabled` (1), `caravan_physical_min_value` (1000), `caravan_physical_small_chance` (0.1),
+`caravan_physical_max_active` (30), `caravan_step_minutes` (18, 5…120), `caravan_route_max_steps` (40),
+`caravan_post_hold_max_min` (120), `caravan_raid_battle_max_hours` (48), `caravan_raid_marks_share` (0.2),
+`caravan_raid_goods_share` (0.3), `caravan_guard_count_base` (2), `caravan_guard_value_per_extra` (1000),
+`caravan_guard_count_max` (5), `caravan_guard_mult_per_1000` (0.1), `caravan_guard_mult_max` (2.0),
+`caravan_guard_mult_dangerous` (1.25), `caravan_rep_trade_share` (0.5), `fence_purse_share` (0.1). Диапазоны —
+`schemas.ECON_SIM_PARAM_BOUNDS`.
+
+### Админ API (A4–A9)
+
+| Метод | Путь | Права | Описание |
+|-------|------|-------|----------|
+| GET | `/characters/admin/economy/caravans` | `economy:read` | + `kind=all\|physical\|abstract`; элементы + `is_physical, current_location_id/name, route_index, route_len, next_move_at, arrived_at, hold_started_at, guard_count, stolen_units, raid_paid, raid_status` |
+| GET | `/characters/admin/economy/caravans/{id}` | `economy:read` | элемент A4 + `route [{index, location_id, name, region_id, region_name}]`, `held_by` (`post`/`raid`/null), `raid` (участники, добыча, охрана) или null; нет → 404 «Караван не найден» |
+| GET | `/characters/admin/economy/caravans/roads` | `economy:read` | ворота участвующих краёв (`station / override / gate`, `gate_source`) + `no_road` по парам (своя страна + разрешённые пары) с причиной `no_gate / no_path / too_long` |
+| PUT | `/characters/admin/economy/caravans/gates/{region_id}` | `economy:settings` | `{location_id: int\|null}` → элемент края; 404 «Край не найден», 400 «Локация не принадлежит этому краю» / «Подземелье не может быть торговыми воротами» |
+| GET | `/characters/admin/economy/caravans/guards` | `economy:read` | пул шаблонов охраны `{templates: [{mob_template_id, name, level}]}` |
+| PUT | `/characters/admin/economy/caravans/guards` | `economy:settings` | `{mob_template_ids}` (≤ 20, без повторов → 422) — заменяет пул; 400 «Шаблон моба не найден: N» |
+
+`crud.despawn_dungeon_mobs(db, ids)` — тело `POST /internal/despawn-dungeon-mobs`, вынесено для уборки охраны
+караванов (поведение эндпоинта не изменилось).
+
+## Налёты на караваны — этап 2 (FEAT-211, 3.6 / 3.8)
+
+Модули: `app/caravan_raid_crud.py` (вся логика), эндпоинты — в `app/caravan_api.py`, клиент боя —
+`battle_client.create_caravan_raid_battle` (`POST /battles/internal/caravan-raid`), последствия —
+`shadow_crud.caravan_raid_consequences`.
+
+| Метод | Путь | Доступ | Описание |
+|-------|------|--------|----------|
+| GET | `/characters/caravans/here?character_id=` | JWT, владелец | A1: физические караваны в пути в **своей** локации персонажа (параметра локации нет): `{location_id, caravans: [{id, group_code, group_name, guard_count, state (on_road/held/under_attack/raided), departs_in_sec, can_attack, reason}]}` — без откуда/куда/маршрута/ценности |
+| POST | `/characters/caravans/{caravan_id}/raid` | JWT, владелец; nginx `caravan_raid_limit` | A2: `{character_id, group}` → 201 `{raid_id, battle_id}`; 404 «Караван не найден», 400 «Каравана нет в вашей локации», 409 «Этот караван уже ограблен или на него уже напали» / «Караван уже прибыл» / «Охрана караванов не настроена — налёт невозможен», 403 «Нужен боевой пост с этим караваном, чтобы напасть», 500 «Не удалось собрать охрану каравана», 4xx battle-service — как есть, 503 «Сервис боя недоступен — налёт не начат» |
+| POST | `/characters/internal/caravans/raid-result` | X-Internal-Token | A3: колбэк battle-service `{battle_id, caravan_raid_id, winner_team, aborted}` → `{status: won/repelled/aborted/already/unknown}`; идемпотентен |
+
+**Старт.** Tx A: блокировка каравана, проверки, предпроверка открытого гейта поста `caravan` лидера (чтобы не плодить
+охрану; окончательно гейт потребляет battle-service), строка `econ_caravan_raids` `starting` (UNIQUE `caravan_id` =
+один налёт на караван). Охрана: шаблон из пула с уровнем ближе всего к `Locations.recommended_level` (ничья → меньший
+id), `guard_count` каравана штук, множитель `guard_multiplier`, `spawn_mob_from_template(..., "dungeon")` (скрыты из
+списков локации). Затем бой (команда 0 — налётчик/его отряд, 1 — охрана) и Tx B → `fighting` (`battle_id`,
+`attacker_ids`). Любой сбой после строки налёта — охрана убрана, строка удалена.
+
+**Итог** (`settle_raid`, колбэк и опрос — одна функция). Tx 1 (караван → налёт → доли → персонажи → счета): победа
+команды 0 → `won`: украдено `floor3((units − stolen) × caravan_raid_goods_share)` (стоимость по `unit_price`), тюки =
+`round_half_up(стоимость / items.price)` краденого тюка группы (`items.is_stolen=1, bale_group`), марки =
+`floor(paid × caravan_raid_marks_share)` — операция `caravan_raid` эскроу → налётчики (ключ `caravan:c<id>:raid`),
+делёж поровну (остаток лидеру), тюки по кругу с лидера; доли в `econ_caravan_raid_shares`, `character_logs`
+(`caravan_raid`). Иначе `repelled` / `aborted` / `expired` (без добычи). Каждый исход отпускает караван
+(`next_move_at = now + шаг`). Уведомления — после коммита. Tx 2 (`law_step`, только `won`, захват `law_done`):
+преступление `caravan_attack` в крае налёта (дельта = очки действия `caravan_attack`, розыск `crime_weight`),
+свидетели — принудительно при выключенной системе или страже в локации, иначе бросок как за убийство NPC; при свидетелях
+— репутация края налёта (с эхом) + `round(дельта × caravan_rep_trade_share)` в краях продавца и покупателя (без эха);
+скрыто/в маске — отложенное преступление + подозрение (раскрытие применит репутацию `caravan_attack`). Затем тюки через
+inventory-service (`POST /inventory/internal/characters/{id}/items`, отметка `bales_delivered_at`; 4xx — лог и отметка,
+5xx/сеть — повтор проходом) и уборка охраны (`crud.despawn_dungeon_mobs`, `guards_despawned`).
+
+**Проход:** `expire_stale_raids` — `starting` без боя старше 10 мин: если бой с этим `caravan_raid_id` есть в
+`battles` — строка переводится в `fighting`, иначе удаляется вместе с охраной; `poll_raid_battles` — `fighting` старше
+2 мин: опрос `GET /battles/internal/{id}/result` (404 → `aborted`), дольше `caravan_raid_battle_max_hours` → `expired`;
+`raid_followups` — закон, недоставленные тюки (налёты, завершённые > 1 мин назад), уборка охраны.
+
+## Скупщик краденого — настройки и касса (FEAT-211, 3.11)
+
+Модули: `app/fence_schemas.py` (Pydantic v1), `app/fence_crud.py`, `app/fence_api.py` (роутер подключён в `main.py`
+после патрулей). Таблица `econ_fences` (миграция 050): строка на НПС, нет строки = значения по умолчанию
+(`is_active=1`, `price_pct=40`, `accepted_groups=NULL` = все 12 групп, `cash_target=2000`). Игровые эндпоинты продажи
+(A13/A14) — в locations-service, читают `econ_fences` сырым SQL.
+
+| Метод | Путь | Права | Описание |
+|---|---|---|---|
+| GET | `/characters/admin/npcs/{npc_id}/fence` | `npcs:read` | `{npc_id, is_active, price_pct, accepted_groups, cash_target, cash, region_id, region_name, refill_active}`; 404 «НПС не найден» |
+| PUT | `/characters/admin/npcs/{npc_id}/fence` | `npcs:update` | `{is_active, price_pct 1..100, accepted_groups, cash_target 0..10 000 000}` → тело GET; 409 «Настройки скупки доступны только скупщику» (сохранённая роль ≠ `fence`); 400 «Неизвестная группа товаров» / диапазоны |
+
+Группы нормализуются (без повторов, канонический порядок `econ_core.GOODS_GROUPS`); пустой список хранится как NULL.
+`refill_active` = роль `fence`, активен, жив, край участвует в экономике.
+
+**Пополнение кассы** — `econ_tick._fence_pass` после фракций, до банков: по каждому участвующему краю со скупщиками одна
+транзакция `econ_regions(row) FOR UPDATE → characters скупщиков (asc) → econ_accounts`; бюджет
+`floor(кошелёк населения × fence_purse_share)`, каждому скупщику (по возрастанию id) `min(cash_target − касса, остаток)`;
+одна операция `merchant_trade` `population_purse → character`, без налога, ключ `fence:<run>:r<region>` (повтор в том же
+прогоне → `DuplicateOperation`, пропуск), метаданные `fence: true`. Сбой края — откат, `RunSummary.fence_failed_region_ids`
+и префикс ошибки прогона «скупщики — ошибка в регионах: », повтор в следующем тике. Счётчики `fences_refilled`,
+`fence_cash_added`.

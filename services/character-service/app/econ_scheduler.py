@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
+import caravan_pass
 import econ_tick
 import faction_pass
 import law_pass
@@ -88,13 +89,24 @@ def run_faction_pass(factory: Callable[[], Session]) -> None:
         logger.exception("faction pass failed")
 
 
+def run_caravan_pass(factory: Callable[[], Session]) -> None:
+    """FEAT-211 §3.3: the physical caravan pass (own throttle, ~55 s): steps caravans along their roads, delivers
+    arrived ones, raid housekeeping. Economy: it skips itself while the economy tick is switched off in the DB; its
+    failure never blocks the tick."""
+    try:
+        caravan_pass.run_pass(factory)
+    except Exception:
+        logger.exception("caravan pass failed")
+
+
 def run_scheduled_once(session_factory: Optional[Callable[[], Session]] = None) -> Optional[econ_tick.RunSummary]:
-    """One scheduler iteration: the reputation decay pass, the law pass, the faction pass, then respects the DB
-    switch and claims/runs the current economy slot (None = no economy run)."""
+    """One scheduler iteration: the reputation decay pass, the law pass, the faction pass, the caravan pass, then
+    respects the DB switch and claims/runs the current economy slot (None = no economy run)."""
     factory = session_factory or _default_factory()
     run_reputation_decay(factory)
     run_law_pass(factory)
     run_faction_pass(factory)
+    run_caravan_pass(factory)
     session = factory()
     try:
         enabled = econ_tick.is_tick_enabled(session)

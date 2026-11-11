@@ -95,6 +95,8 @@ const GATE_BADGE_META: Record<string, { icon: string; label: string; cls: string
   gathering: { icon: '⛏', label: 'Сбор', cls: 'border-stat-energy/40 bg-stat-energy/10 text-stat-energy' },
   dungeon: { icon: '🏰', label: 'Вход в подземелье', cls: 'border-rarity-epic/40 bg-rarity-epic/10 text-rarity-epic' },
   pvp: { icon: '⚔', label: 'PvP', cls: 'border-gold/20 bg-gold/10 text-gold/90' },
+  // FEAT-211: raid on a physical caravan
+  caravan: { icon: '🐫', label: 'Налёт на караван', cls: 'border-site-red/40 bg-site-red/10 text-site-red' },
 };
 
 const NpcPostAttackButton = ({ npcId, npcName, currentCharacterId }: { npcId: number; npcName: string; currentCharacterId: number }) => {

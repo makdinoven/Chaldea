@@ -64,7 +64,7 @@ def test_default_params_match_the_migration_seed():
     defaults = S.SimParams().to_dict()
     seeded = {k: v for k, v in defaults.items()
               if not k.startswith(("merchant_", "bank_", "event_", "events_", "mint_", "quota_", "caravan", "guild_",
-                                   "class_", "classes_", "wealth_", "mob_", "grant_deficit"))
+                                   "class_", "classes_", "wealth_", "mob_", "grant_deficit", "fence_"))
               and k != "population_scale"}
     assert seeded == pytest.approx(mig.DEFAULT_PARAMS)
     assert S.SimParams.from_mapping(mig.DEFAULT_PARAMS) == S.SimParams()

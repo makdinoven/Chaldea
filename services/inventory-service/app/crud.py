@@ -2900,6 +2900,9 @@ def deposit_to_auction_storage(
     item_obj = db.query(models.Items).get(inv_row.item_id)
     if not item_obj:
         raise HTTPException(status_code=400, detail="Предмет не найден")
+    # FEAT-211: stolen caravan bales are sold only to a fence
+    if item_obj.is_stolen:
+        raise HTTPException(status_code=400, detail="Краденое нельзя выставить на аукцион")
     if data.quantity < 1:
         raise HTTPException(status_code=400, detail="Количество должно быть не менее 1")
     if data.quantity > inv_row.quantity:

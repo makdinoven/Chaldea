@@ -152,6 +152,8 @@ async def shop_db(tmp_path):
         for ddl in cc.MERCHANT_SQLITE_DDL:
             if any(f"CREATE TABLE {t} " in ddl or f"CREATE TABLE {t}(" in ddl for t in _MERCHANT_TABLES):
                 await s.execute(text(ddl))
+        # FEAT-211: inventory-service 037 stolen-goods flag (quote_bids refuses stolen items)
+        await s.execute(text("ALTER TABLE items ADD COLUMN is_stolen INTEGER NOT NULL DEFAULT 0"))
         await s.execute(text("CREATE TABLE character_inventory (id INTEGER PRIMARY KEY, character_id INTEGER, "
                              "item_id INTEGER, quantity INTEGER)"))
         for sql, params in cc.SEED_SQL:

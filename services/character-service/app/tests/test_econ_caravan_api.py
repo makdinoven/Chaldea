@@ -146,9 +146,12 @@ def test_overview_defaults(api, world):
     _region(world, 3, country=2)
     _add_region(world, 4, world_row=False)                 # econ row of a deleted region: not counted
     data = api.get(f"{CARAVANS}/overview").json()
-    assert data["params"] == {"caravans_enabled": 1, "caravan_surplus_share": 0.25, "caravan_purse_share": 0.25,
-                              "caravan_treasury_food_share": 0.5, "caravan_travel_domestic": 1,
-                              "caravan_travel_foreign": 2, "caravan_min_value": 10, "caravan_max_per_run": 200}
+    feat192 = {"caravans_enabled": 1, "caravan_surplus_share": 0.25, "caravan_purse_share": 0.25,
+               "caravan_treasury_food_share": 0.5, "caravan_travel_domestic": 1,
+               "caravan_travel_foreign": 2, "caravan_min_value": 10, "caravan_max_per_run": 200}
+    # FEAT-211 3.14 extends the caravan card with the physical caravan / raid keys
+    assert {k: data["params"][k] for k in feat192} == feat192
+    assert set(data["params"]) == set(crud.CARAVAN_PARAM_KEYS)
     assert data["escrow"] == {"balance": 0, "expected": 0, "ok": True}
     assert data["in_transit"] == {"count": 0, "value": 0, "duty": 0}
     assert data["last_run"] is None
@@ -284,7 +287,11 @@ def test_list_newest_first_with_names(listed):
                           "from_country_id", "from_country_name", "to_region_id", "to_region_name", "to_country_id",
                           "to_country_name", "units", "unit_price", "value", "duty", "duty_pct", "paid_purse",
                           "paid_treasury", "travel_runs", "runs_left", "dispatch_run_id", "finished_run_id",
-                          "cancel_reason", "goods_returned", "created_at", "finished_at"}
+                          "cancel_reason", "goods_returned", "created_at", "finished_at",
+                          # FEAT-211 A4 (admin only)
+                          "is_physical", "current_location_id", "current_location_name", "route_index", "route_len",
+                          "next_move_at", "arrived_at", "hold_started_at", "guard_count", "stolen_units", "raid_paid",
+                          "raid_status"}
     assert (first["status"], first["group_name"], first["from_region_name"], first["to_region_name"],
             first["from_country_name"], first["finished_run_id"], first["cancel_reason"], first["goods_returned"]) == \
         ("delivered", "Продовольствие", "Регион 1", "Регион 2", "Мидденгерд", 2, None, None)
@@ -365,7 +372,8 @@ def test_sim_accepts_the_caravan_params_without_emit(world):
     assert resp.status_code == 200, resp.text
     params = resp.json()["params"]
     assert {k: params[k] for k in values} == values
-    assert c.get(f"{CARAVANS}/overview").json()["params"] == values
+    overview = c.get(f"{CARAVANS}/overview").json()["params"]
+    assert {k: overview[k] for k in values} == values
 
 
 @pytest.mark.parametrize("key, value", [

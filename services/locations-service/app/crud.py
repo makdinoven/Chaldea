@@ -37,12 +37,14 @@ def _internal_token_headers() -> dict:
 logger = logging.getLogger(__name__)
 
 MIN_POST_LENGTH = 300  # characters after stripping HTML (general minimum)
-GATED_POST_TYPES = {"combat", "pvp", "gathering", "dungeon", "npc_dialogue"}
+GATED_POST_TYPES = {"combat", "pvp", "gathering", "dungeon", "npc_dialogue", "caravan"}
 # Symbol cost per gate TARGET (FEAT-145 v2): combat is cheap (1 mob / 200 chars);
 # other intents cost 500 per target. A post's required length is the sum across
 # all its gate targets, floored at the general 300-char minimum.
 GATE_SYMBOL_COST = {
     "combat": 200, "pvp": 500, "gathering": 500, "dungeon": 500, "npc_dialogue": 500,
+    # FEAT-211: a raid on a physical caravan is a heavy action, priced like PvP.
+    "caravan": 500,
 }
 
 # --- Черновики ролевых постов (FEAT-156) ---
@@ -124,6 +126,7 @@ def required_symbols_for_gates(gate_list) -> int:
 GATE_LABELS = {
     "combat": "нападения на мобов", "npc_dialogue": "диалога с НПС",
     "gathering": "сбора", "dungeon": "входа в подземелье", "pvp": "PvP",
+    "caravan": "налёта на караван",
 }
 
 
@@ -143,6 +146,36 @@ def validate_gate_shape(gate_list) -> None:
                 status_code=400,
                 detail=f"Для {GATE_LABELS.get(g['action_type'], g['action_type'])} выберите цель в посте",
             )
+
+
+CARAVAN_NOT_HERE_MESSAGE = "Каравана нет в этой локации"
+
+
+async def validate_caravan_targets(session: AsyncSession, gate_list, location_id) -> None:
+    """FEAT-211 3.12: every target of a ``caravan`` gate must be a physical caravan
+    still on the road and standing in the post's location right now
+    (``econ_caravans`` — a character-service table read from the shared DB).
+    Raises 400 «Каравана нет в этой локации» otherwise. Gates of other types are
+    not looked at; no query at all when the list has no caravan gate."""
+    ids = sorted({
+        int(t)
+        for g in (gate_list or []) if g.get("action_type") == "caravan"
+        for t in (g.get("targets") or []) if t is not None
+    })
+    if not ids:
+        return
+    if location_id is None:
+        raise HTTPException(status_code=400, detail=CARAVAN_NOT_HERE_MESSAGE)
+    from sqlalchemy import bindparam
+    rows = (await session.execute(
+        text(
+            "SELECT id FROM econ_caravans WHERE id IN :ids AND is_physical = 1 "
+            "AND status = 'in_transit' AND arrived_at IS NULL AND current_location_id = :loc"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": ids, "loc": int(location_id)},
+    )).fetchall()
+    if {int(r[0]) for r in rows} != set(ids):
+        raise HTTPException(status_code=400, detail=CARAVAN_NOT_HERE_MESSAGE)
 
 
 def strip_html_tags(html: str) -> str:
@@ -1758,6 +1791,8 @@ async def edit_post(
                         status_code=400,
                         detail="Гейт на эту цель уже есть в посте",
                     )
+        # FEAT-211 3.12: a caravan target must be standing in the post's location now.
+        await validate_caravan_targets(session, requested_gates, post_row.location_id)
 
     # The symbol budget (FEAT-159, section 3.6). Gates are bought with text
     # length, so an edit may neither strip the text that paid for the gates the
@@ -3850,6 +3885,7 @@ _GATE_TARGET_KIND = {
     "npc_dialogue": "character",
     "gathering": "gathering_node",
     "dungeon": "dungeon",
+    "caravan": "caravan",   # FEAT-211: an econ_caravans row (character-service table)
 }
 
 
@@ -3870,7 +3906,7 @@ async def _resolve_gate_targets(session: AsyncSession, items: List[dict]) -> Lis
     if not items:
         return items
 
-    char_ids, node_ids, dungeon_ids = set(), set(), set()
+    char_ids, node_ids, dungeon_ids, caravan_ids = set(), set(), set(), set()
     for it in items:
         for g in (it.get("gates") or []):
             kind = _GATE_TARGET_KIND.get(g.get("action_type"))
@@ -3883,6 +3919,8 @@ async def _resolve_gate_targets(session: AsyncSession, items: List[dict]) -> Lis
                     node_ids.add(int(t))
                 elif kind == "dungeon":
                     dungeon_ids.add(int(t))
+                elif kind == "caravan":
+                    caravan_ids.add(int(t))
 
     async def _rows(sql: str, ids: set):
         """One best-effort batch read. A failure (missing table, driver error)
@@ -3936,6 +3974,19 @@ async def _resolve_gate_targets(session: AsyncSession, items: List[dict]) -> Lis
     ):
         dungeons[int(r[0])] = {"name": r[1], "location_id": r[2], "active": bool(r[3])}
 
+    caravans = {}
+    for r in await _rows(
+        "SELECT c.id, g.name, c.current_location_id, c.status, c.is_physical, c.arrived_at "
+        "FROM econ_caravans c LEFT JOIN econ_goods_groups g ON g.code = c.group_code "
+        "WHERE c.id IN :ids",
+        caravan_ids,
+    ):
+        caravans[int(r[0])] = {
+            "name": f"Караван: {r[1]}" if r[1] else f"Караван #{int(r[0])}",
+            "location_id": r[2],
+            "on_road": r[3] == "in_transit" and bool(r[4]) and r[5] is None,
+        }
+
     def _where(entity_location_id, loc_id) -> str:
         if entity_location_id is None or loc_id is None:
             return ", локация неизвестна"
@@ -3984,6 +4035,12 @@ async def _resolve_gate_targets(session: AsyncSession, items: List[dict]) -> Lis
                     if info:
                         name = info["name"]
                         state = "подземелье" if info["active"] else "подземелье, отключено"
+                        state += _where(info["location_id"], loc_id)
+                elif kind == "caravan":
+                    info = caravans.get(tid)
+                    if info:
+                        name = info["name"]
+                        state = "караван в пути" if info["on_road"] else "караван уже не в пути"
                         state += _where(info["location_id"], loc_id)
                 else:
                     state = "неизвестный тип намерения"
@@ -4499,6 +4556,18 @@ async def item_exists(session: AsyncSession, item_id: int) -> bool:
     return row is not None
 
 
+async def stolen_item_ids(session: AsyncSession, item_ids) -> set:
+    """FEAT-211: which of these items are stolen goods (``items.is_stolen = 1``, inventory-service
+    migration 037). Only a fence buys them; ordinary merchants never trade them."""
+    ids = sorted({int(i) for i in item_ids})
+    if not ids:
+        return set()
+    placeholders, params = econ_core.in_params("st", ids)
+    rows = (await session.execute(
+        text(f"SELECT id FROM items WHERE is_stolen = 1 AND id IN ({placeholders})"), params)).fetchall()
+    return {int(r[0]) for r in rows}
+
+
 async def get_shop_row_by_item(session: AsyncSession, npc_id: int, item_id: int) -> Optional[NpcShopItem]:
     result = await session.execute(
         select(NpcShopItem).where(NpcShopItem.npc_id == npc_id, NpcShopItem.item_id == item_id)
@@ -4778,8 +4847,11 @@ async def quote_bids(session: AsyncSession, market: MerchantMarket, item_ids,
     by_item = {int(r[2]): r for r in rows}
     items = await get_item_markets(session, set(ids) | set(by_item))
     groups = set(_buys_groups(rows, items)) if market.living else set()
+    stolen = await stolen_item_ids(session, ids)   # FEAT-211: ordinary merchants never buy stolen goods
     out: Dict[int, BidQuote] = {}
     for item_id in ids:
+        if item_id in stolen:
+            continue
         quote = quote_bid(market, items.get(item_id), by_item.get(item_id), groups)
         if quote is not None:
             cut = econ_core.reputation_bid(quote.unit_price, sell_pct)
@@ -5130,6 +5202,137 @@ async def pay_player_from_merchant(
 async def merchant_cash(session: AsyncSession, npc_id: int) -> int:
     """The NPC's cash (characters.currency_balance), plain read; 0 when unknown."""
     return int(await _character_balance(session, npc_id) or 0)
+
+
+# ---------------------------------------------------------------------------
+# FEAT-211 3.11: the fence («Скупщик», NPC role ``fence``) buys stolen bales.
+# Settings live in character-service ``econ_fences`` (no row = defaults); read here
+# by raw SQL over the shared DB. Plain reads, never locked.
+# ---------------------------------------------------------------------------
+
+FENCE_ROLE = "fence"
+FENCE_DEFAULT_PRICE_PCT = 40
+
+
+class FenceTerms(NamedTuple):
+    npc_id: int
+    location_id: int
+    region_id: Optional[int]
+    price_pct: int
+    accepted_groups: Optional[frozenset]   # None = every goods group
+    mults: Dict[str, Decimal]              # region price_mult per group ({} = not simulated -> 1)
+
+
+class FenceOffer(NamedTuple):
+    item_id: int
+    item_name: Optional[str]
+    item_image: Optional[str]
+    group_code: str
+    unit_price: int
+
+
+def _fence_groups(raw) -> Optional[frozenset]:
+    """econ_fences.accepted_groups (JSON as str / bytes / list / None) -> set of codes; NULL / [] /
+    garbage = None (all groups)."""
+    if raw is None:
+        return None
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            logger.warning("econ_fences.accepted_groups is not valid JSON: %r", raw[:200])
+            return None
+    if not isinstance(raw, (list, tuple)):
+        return None
+    groups = frozenset(str(g) for g in raw if g)
+    return groups or None
+
+
+async def fence_terms(session: AsyncSession, npc_id: int) -> Optional[FenceTerms]:
+    """The fence's live terms, or None when this NPC is not an active, alive fence with a location
+    (the caller answers 404 «Скупщик не найден»)."""
+    row = (await session.execute(text(
+        "SELECT is_npc, npc_role, npc_status, current_location_id FROM characters WHERE id = :id"),
+        {"id": npc_id})).first()
+    if row is None or not row[0] or row[1] != FENCE_ROLE or row[2] == "dead" or not row[3]:
+        return None
+    settings_row = (await session.execute(text(
+        "SELECT is_active, price_pct, accepted_groups FROM econ_fences WHERE npc_id = :id"),
+        {"id": npc_id})).first()
+    price_pct = FENCE_DEFAULT_PRICE_PCT
+    accepted = None
+    if settings_row is not None:
+        if not settings_row[0]:
+            return None
+        if settings_row[1] is not None:
+            price_pct = int(settings_row[1])
+        accepted = _fence_groups(settings_row[2])
+    market = await merchant_market(session, npc_id)
+    return FenceTerms(
+        npc_id=int(npc_id), location_id=int(row[3]), region_id=market.region_id,
+        price_pct=price_pct, accepted_groups=accepted,
+        mults=dict(market.mults) if market.living else {},
+    )
+
+
+def fence_unit_price(item_price, mult, price_pct: int) -> int:
+    """floor(items.price x region price_mult x price_pct / 100); < 1 = «does not buy» (pure)."""
+    if not item_price or int(item_price) <= 0 or price_pct <= 0:
+        return 0
+    value = Decimal(int(item_price)) * Decimal(str(mult)) * Decimal(int(price_pct)) / Decimal(100)
+    return int(value.to_integral_value(rounding="ROUND_FLOOR"))
+
+
+async def fence_quotes(session: AsyncSession, terms: FenceTerms, item_ids) -> Dict[int, FenceOffer]:
+    """{item_id: FenceOffer} for the stolen items among `item_ids` this fence buys now (accepted
+    group, price >= 1). Anything else is absent."""
+    ids = sorted({int(i) for i in item_ids})
+    if not ids:
+        return {}
+    placeholders, params = econ_core.in_params("fi", ids)
+    rows = (await session.execute(text(
+        f"SELECT id, name, image, price, bale_group FROM items "
+        f"WHERE is_stolen = 1 AND id IN ({placeholders}) ORDER BY id"), params)).fetchall()
+    out: Dict[int, FenceOffer] = {}
+    for item_id, name, image, price, group in rows:
+        if not group or group not in econ_core.GOODS_GROUPS:
+            continue
+        if terms.accepted_groups is not None and group not in terms.accepted_groups:
+            continue
+        unit = fence_unit_price(price, terms.mults.get(group, Decimal(1)), terms.price_pct)
+        if unit < 1:
+            continue
+        out[int(item_id)] = FenceOffer(int(item_id), name, image, group, unit)
+    return out
+
+
+async def goods_group_names(session: AsyncSession) -> Dict[str, str]:
+    """{group_code: Russian name} from econ_goods_groups (character-service table)."""
+    rows = (await session.execute(text("SELECT code, name FROM econ_goods_groups"))).fetchall()
+    return {str(r[0]): str(r[1]) for r in rows if r[1]}
+
+
+async def get_fence_offers(session: AsyncSession, terms: FenceTerms, character_id: int,
+                           max_quantity: int) -> List[dict]:
+    """GET /npcs/{npc_id}/fence/offers rows: the stolen bales of the bag this fence buys now."""
+    bag = await get_bag_quantities(session, character_id)
+    if not bag:
+        return []
+    quotes = await fence_quotes(session, terms, bag.keys())
+    if not quotes:
+        return []
+    names = await goods_group_names(session)
+    return [{
+        "item_id": q.item_id,
+        "item_name": q.item_name,
+        "item_image": q.item_image,
+        "group_code": q.group_code,
+        "group_name": names.get(q.group_code, q.group_code),
+        "unit_price": q.unit_price,
+        "max_quantity": min(bag[item_id], max_quantity),
+    } for item_id, q in sorted(quotes.items())]
 
 
 async def store_item_bought_from_player(session: AsyncSession, npc_id: int, item_id: int, quantity: int,

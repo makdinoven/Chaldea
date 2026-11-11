@@ -19,7 +19,7 @@ Readers of foreign tables are parameterised ``text()`` and fail loudly; the only
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from sqlalchemy import text
@@ -302,6 +302,128 @@ def npc_kill_consequences(db: Session, npc: "models.Character", *, battle_id: Op
 
 
 # =====================================================================================================================
+# FEAT-211 caravan raid
+# =====================================================================================================================
+
+def _region_exists(db: Session, region_id: Optional[int]) -> bool:
+    if not region_id:
+        return False
+    return db.execute(text("SELECT 1 FROM Regions WHERE id = :r"), {"r": int(region_id)}).first() is not None
+
+
+def caravan_raid_reason(caravan_id: int, battle_id: Optional[int]) -> str:
+    return f"Нападение на караван (#{int(caravan_id)})" + (f" в бою #{battle_id}" if battle_id else "")
+
+
+def caravan_raid_consequences(db: Session, raid: "models.EconCaravanRaid", caravan: "models.EconCaravan",
+                              player_ids: Iterable[int], *, trade_share=0,
+                              now: Optional[datetime] = None) -> KillOutcome:
+    """FEAT-211 §3.8 Tx 2: crime + reputation of a WON caravan raid for every PLAYER raider (caller commits).
+
+    Crime ``caravan_attack`` in the raid region; the reputation delta is the ``caravan_attack`` action's points (the
+    admin-editable «тяжесть», builtin −100), the wanted points ``crime_weight(delta)``. Witnesses: forced when the
+    witness system is off or city guards stand at the raid location (FEAT-203 reaction), else ONE group roll exactly
+    like an NPC kill (marker base %, stealth, mask, fame). Witnessed unmasked members get the raid-region reputation,
+    the reported crime (wanted at once) and ``round(delta × trade_share)`` in the seller's and buyer's regions (no
+    echo, each distinct region other than the raid region that still exists); unseen / masked members get a deferred
+    crime (the reveal pass applies the raid-region reputation later) and the region's suspicion rises once. Infamy
+    comes with every crime row (``law_crud.record_crime``)."""
+    now = now or now_utc()
+    outcome = KillOutcome()
+    players = sorted({int(c) for c in player_ids or () if c})
+    if players:
+        ph, params = law_crud._in("k", players)
+        players = [int(r[0]) for r in db.execute(text(
+            f"SELECT id FROM characters WHERE id IN ({ph}) AND is_npc = 0 ORDER BY id"), params).fetchall()]
+    if not players:
+        return outcome
+    location_id = int(raid.location_id) if raid.location_id else None
+    region_id = int(raid.region_id) if raid.region_id else reputation_crud.location_region(db, location_id)
+    if not region_id or not _region_exists(db, region_id):
+        return outcome
+    action = reputation_crud.load_action(db, rc.ACTION_CARAVAN)
+    delta = int(action.points) if action is not None else 0
+    crime_points = lc.crime_weight(delta)
+    if crime_points <= 0:
+        return outcome                                  # the admin made a raid harmless: nothing to punish
+
+    s = load_settings(db)
+    forced = (not s.witness_enabled) or bool(location_id and law_crud.guards_at(db, location_id, now))
+    members: Dict[int, _Member] = {}
+    if forced:
+        witnessed, chance, roll = True, Decimal(100), None
+        for cid in players:
+            members[cid] = _Member(cid, False, Decimal(100))
+    else:
+        base = sc.base_pct(location_marker(db, location_id), s)
+        fame_tiers = renown_crud.load_renown_tiers(db, sc.SCALE_FAME)
+        for cid in players:
+            info = law_crud.stealth_info(db, cid, s)
+            masked = wears_mask(db, cid)
+            members[cid] = _Member(cid, masked, sc.member_chance(
+                base, info.reduction_pct, masked, fame_witness_pct(db, cid, fame_tiers)), info.reduction_pct)
+        chance = sc.group_chance([m.chance for m in members.values()], len(players), s)
+        witnessed, roll = lc.roll_succeeds(chance, law_crud.rng())
+
+    law_settings = law_crud.load_settings(db)
+    levels = law_crud.load_levels(db)
+    battle_id = int(raid.battle_id) if raid.battle_id else None
+    reason = caravan_raid_reason(caravan.id, battle_id)
+    trade_delta = int((Decimal(delta) * Decimal(str(trade_share or 0))).to_integral_value(rounding=ROUND_HALF_UP))
+    trade_regions = [r for r in sorted({int(caravan.from_region_id), int(caravan.to_region_id)} - {int(region_id)})
+                     if _region_exists(db, r)]
+    user_ids = law_crud.character_user_ids(db, players)
+    deferred_masked = deferred_any = False
+    for cid in players:
+        member = members[cid]
+        rep_key = caravan_raid_rep_key(raid.id, cid)
+        common = dict(crime_type=lc.CRIME_CARAVAN_ATTACK, character_id=cid, region_id=region_id,
+                      points=crime_points, event_key=f"crime:caravan_raid:{int(raid.id)}:{cid}",
+                      location_id=location_id, victim_id=None, battle_id=battle_id, floor=None, now=now,
+                      reputation_delta=delta, reputation_key=rep_key, reputation_reason=reason,
+                      masked=member.masked, witness_chance_pct=chance, witness_roll_pct=roll,
+                      stealth_reduction_pct=member.reduction_pct)
+        if witnessed and (forced or not member.masked):
+            results = [reputation_crud.apply_reputation(
+                db, character_id=cid, region_id=region_id, action=rc.ACTION_CARAVAN, idem_key=rep_key, delta=delta,
+                reason=reason, now=now)]
+            if trade_delta != 0:
+                for other in trade_regions:
+                    results.append(reputation_crud.apply_reputation(
+                        db, character_id=cid, region_id=other, action=rc.ACTION_CARAVAN,
+                        idem_key=f"{rep_key}:r{other}", delta=trade_delta, reason=reason, echo=False, now=now))
+            outcome.tier_changes.extend(reputation_crud.tier_changes_of(results))
+            outcome.fame_changes.extend(reputation_crud.fame_changes_of(results))
+            crime = law_crud.register_crime(db, settings=law_settings, levels=levels, status=lc.CRIME_REPORTED,
+                                            **common)
+            if crime.change is not None:
+                outcome.wanted_changes.append(crime.change)
+            continue
+        status = lc.CRIME_MASKED if witnessed else lc.CRIME_UNWITNESSED
+        crime = law_crud.register_crime(db, status=status, reveal_until=now + timedelta(days=int(s.reveal_days)),
+                                        next_roll_at=now + REVEAL_STEP, **common)
+        if crime.crime is None:
+            continue                                    # duplicate / skipped: nothing new happened
+        deferred_any = True
+        deferred_masked = deferred_masked or member.masked
+        if status == lc.CRIME_MASKED:
+            outcome.notices.append(law_notify.Notice(user_ids.get(cid), law_notify.MSG_MASKED, law_notify.WS_MASKED,
+                                                     law_notify.CATEGORY_PROGRESS, {"character_id": cid}))
+        else:
+            outcome.notices.append(law_notify.Notice(user_ids.get(cid), law_notify.MSG_UNSEEN, law_notify.WS_UNSEEN,
+                                                     law_notify.CATEGORY_PROGRESS, {"character_id": cid}))
+    if deferred_any:
+        add_suspicion(db, region_id, s.suspicion_masked if deferred_masked else s.suspicion_unwitnessed, s, now)
+    logger.info("caravan raid %s caravan=%s battle=%s players=%s forced=%s chance=%s roll=%s witnessed=%s", raid.id,
+                caravan.id, battle_id, players, forced, chance, roll, witnessed)
+    return outcome
+
+
+def caravan_raid_rep_key(raid_id: int, character_id: int) -> str:
+    return f"caravan_raid:{int(raid_id)}:{int(character_id)}"
+
+
+# =====================================================================================================================
 # reveal / close
 # =====================================================================================================================
 
@@ -354,7 +476,10 @@ def reveal_crime(db: Session, crime_id: int, *, now: Optional[datetime] = None, 
                           law_crud.region_names(db, [region_id]).get(region_id))
     if crime.reputation_delta and crime.reputation_key:
         rep = reputation_crud.apply_reputation(
-            db, character_id=character_id, region_id=region_id, action=rc.ACTION_NPC_KILL, idem_key=crime.reputation_key,
+            db, character_id=character_id, region_id=region_id,
+            # FEAT-211: a revealed caravan raid keeps its own reputation action
+            action=rc.ACTION_CARAVAN if crime.crime_type == lc.CRIME_CARAVAN_ATTACK else rc.ACTION_NPC_KILL,
+            idem_key=crime.reputation_key,
             delta=int(crime.reputation_delta), reason=crime.reputation_reason, now=now)
         result.tier_changes, result.fame_changes = list(rep.tier_changes), list(rep.fame_changes)
     result.wanted_change = law_crud.apply_crime_wanted(

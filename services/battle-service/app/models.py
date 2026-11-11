@@ -80,6 +80,11 @@ class Battle(Base):
     law_encounter_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, index=True
     )
+    # FEAT-211: set for caravan raid battles (character-service raid id);
+    # the outcome is reported to POST /characters/internal/caravans/raid-result.
+    caravan_raid_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
 
     participants = relationship(
         "BattleParticipant",

@@ -33,6 +33,8 @@ export const GATE_COST: Record<string, number> = {
   npc_dialogue: 500,
   gathering: 500,
   dungeon: 500,
+  /** FEAT-211: a raid on a physical caravan — heavy action, priced like PvP. */
+  caravan: 500,
 };
 
 export const GATE_LABEL: Record<string, string> = {
@@ -41,6 +43,7 @@ export const GATE_LABEL: Record<string, string> = {
   npc_dialogue: 'Диалог с НПС',
   gathering: 'Сбор ресурсов',
   dungeon: 'Вход в подземелье',
+  caravan: 'Налёт на караван',
 };
 
 /** FEAT-152: per-action visual accents for the gate grid (mock language). */
@@ -50,6 +53,7 @@ export const GATE_STYLE: Record<string, { icon: string; activeCls: string }> = {
   gathering: { icon: '⛏', activeCls: 'border-stat-energy/40 bg-stat-energy/10 text-stat-energy' },
   dungeon: { icon: '🏰', activeCls: 'border-rarity-epic/40 bg-rarity-epic/10 text-rarity-epic' },
   pvp: { icon: '⚔', activeCls: 'border-gold/20 bg-gold/10 text-gold/90' },
+  caravan: { icon: '🐫', activeCls: 'border-site-red/40 bg-site-red/10 text-site-red' },
 };
 
 /** Style for a gate type this table does not know — never a missing lookup. */
@@ -58,7 +62,7 @@ export const FALLBACK_GATE_STYLE = {
   activeCls: 'border-gold/20 bg-gold/10 text-gold/90',
 };
 
-export const GATE_ORDER = ['combat', 'npc_dialogue', 'gathering', 'dungeon'] as const;
+export const GATE_ORDER = ['combat', 'npc_dialogue', 'gathering', 'dungeon', 'caravan'] as const;
 
 export interface GateOption {
   id: number;
