@@ -437,7 +437,7 @@ def _lock_session(jailed=None, encounter=None, location=CELL, district=500, neig
 
     async def execute(query, params=None):
         q = str(query)
-        if "jailed_until, law_encounter_id FROM characters" in q:
+        if "jailed_until, law_encounter_id" in q and "FROM characters" in q:
             return _res((None, None, None, None, jailed, encounter))
         if "jail_district_id FROM characters" in q:
             if broken:

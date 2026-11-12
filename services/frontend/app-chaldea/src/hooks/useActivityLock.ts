@@ -13,6 +13,8 @@ import { parseServerDate } from '../utils/serverDate';
  * - `jail` — FEAT-198: serving a jail term until `until` (naive UTC);
  * - `law_encounter` — FEAT-198: stopped by the guards, a choice is pending
  *   (`law_encounter_id`).
+ * - `caravan_escort` — FEAT-212: riding with a caravan as its escort (no walking,
+ *   posts or trade until the caravan arrives or the player gets off).
  * Time limits are shown as a live countdown (A8): `message` is the static head,
  * `until` feeds `<RemainingText>` / `useCountdownTo`.
  * While locked the backend refuses outside-world actions with 409.
@@ -23,7 +25,8 @@ export type ActivityLockReason =
   | 'asleep'
   | 'reading'
   | 'jail'
-  | 'law_encounter';
+  | 'law_encounter'
+  | 'caravan_escort';
 
 export interface ActivityLockData {
   locked: boolean;
@@ -119,6 +122,17 @@ const useActivityLock = (): ActivityLockState => {
       dungeonSessionId: null,
       lawEncounterId: null,
       message: 'Персонаж без сознания',
+    };
+  }
+
+  if (lock.reason === 'caravan_escort') {
+    return {
+      locked: true,
+      reason: 'caravan_escort',
+      until: null,
+      dungeonSessionId: null,
+      lawEncounterId: null,
+      message: 'Вы в охране каравана',
     };
   }
 

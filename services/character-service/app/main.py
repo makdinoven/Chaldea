@@ -18,6 +18,8 @@ import patrol_crud
 import shadow_crud
 import renown_crud
 import faction_territory
+import caravan_escort_crud
+import caravan_escort_public
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -932,7 +934,8 @@ def _is_in_dungeon_run(db: Session, character_id: int) -> bool:
 async def _prepare_move(db: Session, character_id: int, from_location_id, gather_reason: str) -> bool:
     """Steps 4–7 of a forced move (admin teleport, FEAT-180 home teleport scroll):
     refuse in battle / a dungeon run (409), cancel gathering, expire the intentions
-    in the location being left (502 when locations-service fails — nothing moved).
+    in the location being left (502 when locations-service fails — nothing moved),
+    FEAT-212: release an active caravan escort job (no pay) before the move.
     Returns whether a gathering was cancelled."""
     # 4. Бой — отказ: выдёргивание из боя оставило бы бой неразрешимым.
     if _is_in_battle(db, character_id):
@@ -967,6 +970,18 @@ async def _prepare_move(db: Session, character_id: int, from_location_id, gather
             status_code=502,
             detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
         )
+
+    # FEAT-212 3.5: охранник каравана снимается с охраны (без оплаты) — иначе
+    # караван утащил бы его обратно на следующем шаге.
+    try:
+        released = caravan_escort_crud.release(db, character_id)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Не удалось снять персонажа {character_id} с охраны каравана: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+    if released.notice is not None:
+        law_notify.publish([released.notice])
     return gathering_cancelled
 
 
@@ -2283,6 +2298,8 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
     characters = db.query(models.Character).filter(
         models.Character.current_location_id == location_id,
         models.Character.is_npc == False,
+        # FEAT-212 3.6: a caravan escort rides hidden inside the wagon
+        models.Character.escort_caravan_id.is_(None),
     ).all()
     result = []
     for ch in characters:
@@ -2391,7 +2408,8 @@ def update_location(
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     lock = activity_lock.lock_for_character(character)
-    if lock["reason"] == activity_lock.REASON_LAW_ENCOUNTER or (
+    # FEAT-212 3.5: an escort rides with the caravan (defence in depth — locations-service refuses first)
+    if lock["reason"] in (activity_lock.REASON_LAW_ENCOUNTER, activity_lock.REASON_CARAVAN_ESCORT) or (
             lock["reason"] == activity_lock.REASON_JAIL and not _prison_move_allowed(db, character, new_location_id)):
         db.rollback()
         raise HTTPException(status_code=409, detail=activity_lock.lock_message(lock))
@@ -2448,8 +2466,29 @@ def update_location(
     }
 
 
+@router.get("/internal/{character_id}/profile", response_model=schemas.CharacterProfileResponse)
+async def internal_get_character_profile(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Профиль персонажа (internal, service-to-service) — реальные локация и блокировка.
+
+    FEAT-212 Task 16: публичный `/characters/{id}/profile` маскирует охранника
+    каравана (замороженная локация найма, без блокировки `caravan_escort`);
+    сервисы, решающие по локации/блокировке (locations, dungeon), читают этот
+    двойник. Префикс /characters/internal/ закрыт nginx снаружи.
+    """
+    return await _build_character_profile(character_id, db, masked=False)
+
+
 @router.get("/{character_id}/profile", response_model=schemas.CharacterProfileResponse)
 async def get_character_profile(character_id: int, db: Session = Depends(get_db)):
+    """Публичный профиль персонажа (FEAT-212 3.6: охранник каравана замаскирован)."""
+    return await _build_character_profile(character_id, db, masked=True)
+
+
+async def _build_character_profile(character_id: int, db: Session, masked: bool) -> dict:
     """
     Возвращает профиль персонажа, включая:
       - character_photo: фото персонажа (например, поле avatar),
@@ -2480,6 +2519,9 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         "travel_cooldown_until": character.travel_cooldown_until,
         "activity_lock": activity_lock.lock_for_character(character),
     }
+    if masked:
+        # FEAT-212 3.6: strangers see a caravan escort at his hire location and unlocked
+        caravan_escort_public.mask_body(db, character, profile)
 
     # Release the pooled connection before calling user-service. user-service's
     # own GET /users/me calls back into this service (/short_info), so holding a
@@ -2505,7 +2547,7 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
 
     return profile
 
-def _build_short_info(character_id: int, db: Session) -> dict:
+def _build_short_info(character_id: int, db: Session, masked: bool = False) -> dict:
     """Body of `GET /characters/{id}/short_info`.
 
     FEAT-171 §3.5 (Pass A): extracted so the public route and the internal twin
@@ -2522,7 +2564,7 @@ def _build_short_info(character_id: int, db: Session) -> dict:
     subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == ch.id_subrace).first()
     char_class = db.query(models.Class).filter(models.Class.id_class == ch.id_class).first()
 
-    return {
+    body = {
         "id": ch.id,
         "name": ch.name,
         "avatar": ch.avatar,
@@ -2545,11 +2587,16 @@ def _build_short_info(character_id: int, db: Session) -> dict:
         # FEAT-175: banner data for the frontend (via /users/me).
         "activity_lock": activity_lock.lock_for_character(ch),
     }
+    if masked:
+        # FEAT-212 3.6: strangers see a caravan escort at the hire location and unlocked
+        caravan_escort_public.mask_body(db, ch, body)
+    return body
 
 
 @router.get("/internal/{character_id}/short_info")
 def internal_get_short_info(
     character_id: int,
+    masked: bool = Query(False),
     db: Session = Depends(get_db),
     _: None = Depends(verify_internal_token),
 ):
@@ -2558,8 +2605,11 @@ def internal_get_short_info(
     FEAT-171 §3.4 C4i: всегда содержит `currency_balance` — именно этот маршрут
     питает /users/me и счётчик золота в шапке. Живёт под префиксом
     /characters/internal/ (nginx отдаёт 403 снаружи) + X-Internal-Token.
+
+    FEAT-212 3.6: `masked=true` — вид для чужих (охранник каравана: локация
+    найма, без блокировки) для сервисов, которые показывают карточку посторонним.
     """
-    body = _build_short_info(character_id, db)
+    body = _build_short_info(character_id, db, masked=masked)
     # FEAT-180 stage 7: the header's «back to the house» link (via /users/me).
     # Internal only — the room is private to the house's people.
     ch = db.query(models.Character).filter(models.Character.id == character_id).first()
@@ -2575,7 +2625,7 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
     читают сервис-в-сервис (user-service, locations-service), и optional-auth
     здесь тихо обеднил бы /users/me. Золото живёт во внутреннем двойнике C4i.
     """
-    body = _build_short_info(character_id, db)
+    body = _build_short_info(character_id, db, masked=True)
     body.pop("currency_balance", None)
     return body
 
@@ -2619,6 +2669,8 @@ def list_characters(
         except Exception as e:
             logger.warning(f"Не удалось получить username для user_id {uid}: {e}")
 
+    # FEAT-212 3.6: caravan escorts show the frozen hire location (one batch query)
+    public_locations = caravan_escort_public.public_locations(db, characters)
     result = []
     for ch in characters:
         race = db.query(models.Race).filter(models.Race.id_race == ch.id_race).first()
@@ -2652,7 +2704,7 @@ def list_characters(
             "skitaltsy_since_segment": ch.skitaltsy_since_segment,
             "height": ch.height,
             "weight": ch.weight,
-            "current_location_id": ch.current_location_id,
+            "current_location_id": public_locations.get(int(ch.id), ch.current_location_id),
             "subrace_image": subrace.image if subrace else None,
         })
     return {"items": result, "total": total, "page": page, "page_size": page_size}
@@ -4868,8 +4920,10 @@ from patrol_api import router as patrol_router  # noqa: E402
 from faction_api import router as faction_router  # noqa: E402
 from caravan_api import router as caravan_router  # noqa: E402
 from fence_api import router as fence_router  # noqa: E402
+from caravan_escort_api import router as caravan_escort_router  # noqa: E402
 app.include_router(economy_router)
 app.include_router(caravan_router)      # FEAT-211; after the economy router (its /admin/economy/caravans/overview)
+app.include_router(caravan_escort_router)  # FEAT-212; player escorts C1–C6 (static /caravans/escort... paths)
 app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
 app.include_router(law_router)          # FEAT-198; before the main router (static /law/..., /admin/law/... paths)
 app.include_router(shadow_router)       # FEAT-199; before the main router (static /renown/..., /admin/shadow/... paths)

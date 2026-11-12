@@ -119,7 +119,8 @@ def _physical_world(f, *, seller_country=1, buyer_country=1, treasury=0, **param
     if seller_country != buyer_country:
         _pair(f, seller_country, buyer_country, duty=10)
     _stations(f, r1=L_GATE1, r2=L_GATE2)
-    values = {"caravan_physical_min_value": 1}
+    # FEAT-212: the pre-departure window is off by default here (these tests walk the FEAT-211 step timing)
+    values = {"caravan_physical_min_value": 1, "caravan_departure_minutes": 0}
     values.update(params)
     _set_params(f, **values)
 
@@ -388,6 +389,18 @@ def test_large_caravan_goes_by_road(world):
     dispatched = T0 + timedelta(hours=6)
     assert dispatched + timedelta(minutes=13) <= row.next_move_at <= dispatched + timedelta(minutes=23)
     assert row.value == 400 and row.status == "in_transit"
+
+
+def test_departure_window_holds_a_new_caravan_at_the_gate(world):
+    """FEAT-212 3.2: a newborn physical caravan stands at the seller gate ``caravan_departure_minutes`` (hire window)."""
+    _physical_world(world, caravan_departure_minutes=45)
+    _dispatch(world)
+    row = _row(world)
+    assert (row.route_index, row.current_location_id) == (0, L_GATE1)
+    assert row.next_move_at == T0 + timedelta(hours=6, minutes=45)
+    _pass(world, T0 + timedelta(hours=6, minutes=40))                          # still preparing
+    assert (_row(world).route_index, _row(world).current_location_id) == (0, L_GATE1)
+    assert econ_sim.SimParams().caravan_departure_minutes == 45               # the default
 
 
 def test_foreign_caravan_goes_by_road_even_when_small(world):

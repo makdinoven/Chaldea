@@ -36,11 +36,16 @@ class CaravanRaidBattleCreate(BaseModel):
     group: bool = False
     guard_character_ids: List[int] = Field(..., min_items=1, max_items=5)
     location_id: int
+    # FEAT-212: hired player escorts riding inside the caravan (team 1 with the guards).
+    # Unavailable ones are silently skipped; the response lists the ones actually placed.
+    escort_character_ids: List[int] = Field(default_factory=list, max_items=4)
 
 
 class CaravanRaidBattleCreated(BattleCreated):
-    """FEAT-211: B1 response — BattleCreated + the attackers actually pulled in."""
+    """FEAT-211: B1 response — BattleCreated + the attackers actually pulled in.
+    FEAT-212: + the escorts actually placed on the caravan team."""
     attacker_character_ids: List[int]
+    escort_character_ids: List[int] = Field(default_factory=list)
 
 
 class BattleCreate(BaseModel):

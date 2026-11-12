@@ -35,6 +35,13 @@ MSG_ENEMY_POINTS = "Очки за победу: от 1 до 10000"
 MSG_ENEMIES_MAX = "Врагов может быть не больше 50"
 MSG_ENEMY_DUP = "Враг указан дважды"
 MSG_ENEMY_HOSTILE_ONE = "Строка «участники враждебных фракций» может быть только одна"
+MSG_ENEMY_ESCORT_ONE = "Строка «Охрана караванов» может быть только одна"        # FEAT-212
+MSG_ENEMY_RAID_ONE = "Строка «Налёты на караваны» может быть только одна"         # FEAT-212
+SINGLETON_MESSAGES = {fc.ENEMY_HOSTILE: MSG_ENEMY_HOSTILE_ONE, fc.ENEMY_ESCORT: MSG_ENEMY_ESCORT_ONE,
+                      fc.ENEMY_RAID: MSG_ENEMY_RAID_ONE}
+DEED_NOTICES = {fc.ENEMY_ESCORT: "Охрана каравана — дело фракции «{name}»: +{points} очков",
+                fc.ENEMY_RAID: "Налёт на караван — дело фракции «{name}»: +{points} очков"}
+DEED_EVENTS = {fc.ENEMY_ESCORT: fc.EV_CARAVAN_ESCORT, fc.ENEMY_RAID: fc.EV_CARAVAN_RAID}
 MSG_ENEMY_MOB = "Шаблон моба не найден"
 MSG_ENEMY_NPC = "NPC не найден (нужен NPC, не моб)"
 MSG_KILL_CAP = "Лимит очков за победы в день: от 0 до 100000 (или пусто — общий)"
@@ -303,6 +310,84 @@ def _apply_winner(db: Session, battle_id: int, character_id: int,
 
 
 # =====================================================================================================================
+# FEAT-212 3.10: caravan deeds (escort delivered / raid won) as "дело фракции"
+# =====================================================================================================================
+
+def apply_caravan_deed(db: Session, character_id: int, kind: str, event_key: str,
+                       now: Optional[datetime] = None) -> FlowResult:
+    """Points for a caravan deed to every faction of the character (secret ones too — notices go only to the player)
+    that lists ``kind`` (``escort`` / ``raid``) in its enemies. Same day counter and cap as kill points
+    (``faction_donation_days.kill_points``, ``fc.kill_cap``); idempotent per faction via ``faction_log`` UNIQUE
+    (event_key, faction_id); no hostile penalty. Runs its OWN transactions (the day rows are created by short commits
+    first) and commits; nothing may be open in ``db`` before the call."""
+    if kind not in DEED_EVENTS:
+        raise ValueError(f"unknown caravan deed kind: {kind}")
+    now = now or fcr.now_utc()
+    character_id = int(character_id)
+    result = FlowResult(data={"applied": [], "duplicate": False})
+    chars = _characters(db, [character_id])
+    info = chars.get(character_id)
+    if info is None or info[0]:
+        db.rollback()
+        return result
+    fids = _active_memberships(db, [character_id]).get(character_id, set())
+    points: Dict[int, int] = {}
+    for fid, rows in _enemies(db, fids).items():
+        pts = next((int(e.points) for e in rows if e.kind == kind), 0)
+        if pts > 0:
+            points[int(fid)] = pts
+    db.rollback()
+    if not points:
+        return result
+    day = fec.today_utc(now)
+    for fid in sorted(points):
+        fec.ensure_day_row(db, character_id, fid, day)      # own short transactions, nothing open before
+    try:
+        ts = load_territory_settings(db)
+        members = fec._lock_members(db, character_id, points)
+        day_rows = {int(r.faction_id): r for r in fec._lock(db, db.query(models.FactionDonationDay).filter(
+            models.FactionDonationDay.character_id == character_id,
+            models.FactionDonationDay.faction_id.in_(sorted(points)),
+            models.FactionDonationDay.day == day).order_by(models.FactionDonationDay.faction_id)).all()}
+        factions = {int(f.id): f for f in db.query(models.Faction).filter(
+            models.Faction.id.in_(sorted(points))).all()}
+        event_type = DEED_EVENTS[kind]
+        for fid in sorted(points):
+            member, faction, day_row = members.get(fid), factions.get(fid), day_rows.get(fid)
+            if member is None or member.status != fc.STATUS_ACTIVE or faction is None or day_row is None:
+                continue
+            if fcr.log_key_exists(db, event_key, fid):
+                result.data["duplicate"] = True
+                continue
+            gain, today_after = fc.kill_gain([points[fid]], fc.kill_cap(faction.kill_points_daily_cap, ts),
+                                             int(day_row.kill_points or 0))
+            day_row.kill_points = today_after
+            if gain > 0:
+                actual = fcr.change_points(db, member, gain, event_type, now, event_key=event_key, reason=kind)
+                result.notices.append(Notice(info[2], DEED_NOTICES[kind].format(name=faction.name, points=actual),
+                                             CATEGORY_PROGRESS, {"faction_id": fid, "character_id": character_id,
+                                                                 "event": event_type}))
+            else:
+                actual = 0
+                fcr.log_event(db, character_id=character_id, faction_id=fid, event_type=event_type, now=now,
+                              points_delta=0, points_after=int(member.points), rank_id=member.rank_id,
+                              event_key=event_key, reason="cap")
+            result.data["applied"].append({"character_id": character_id, "faction_id": fid,
+                                           "points_delta": int(actual)})
+        db.flush()
+        result.merge(fcr.recheck_ranks(db, character_id, now))
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        result.data["duplicate"] = True
+        result.notices = []
+    except Exception:
+        db.rollback()
+        raise
+    return result
+
+
+# =====================================================================================================================
 # admin: enemies / outlaw regions (§3.9)
 # =====================================================================================================================
 
@@ -325,7 +410,7 @@ def enemies_out(db: Session, faction_id: int) -> dict:
     for r in rows:
         name = mob_names.get(int(r.ref_id)) if r.kind == fc.ENEMY_MOB else (
             npc_names.get(int(r.ref_id)) if r.kind == fc.ENEMY_NPC else None)
-        items.append({"kind": r.kind, "ref_id": int(r.ref_id) if r.kind != fc.ENEMY_HOSTILE else None,
+        items.append({"kind": r.kind, "ref_id": int(r.ref_id) if r.kind not in fc.ENEMY_SINGLETONS else None,
                       "points": int(r.points), "name": name})
     return {"enemies": items, "kill_points_daily_cap": faction.kill_points_daily_cap}
 
@@ -346,9 +431,9 @@ def put_enemies(db: Session, faction_id: int, body) -> dict:
         points = e.points
         if isinstance(points, bool) or not 1 <= int(points) <= fc.MAX_ENEMY_POINTS:
             raise _err(MSG_ENEMY_POINTS)
-        ref = 0 if kind == fc.ENEMY_HOSTILE else int(e.ref_id or 0)
-        if kind == fc.ENEMY_HOSTILE and any(k == fc.ENEMY_HOSTILE for k, _r, _p in rows):
-            raise _err(MSG_ENEMY_HOSTILE_ONE)
+        ref = 0 if kind in fc.ENEMY_SINGLETONS else int(e.ref_id or 0)
+        if kind in fc.ENEMY_SINGLETONS and any(k == kind for k, _r, _p in rows):
+            raise _err(SINGLETON_MESSAGES[kind])
         if (kind, ref) in seen:
             raise _err(MSG_ENEMY_DUP)
         seen.add((kind, ref))

@@ -115,7 +115,7 @@ class _Chars:
         p = params or {}
         cid = p.get("cid", p.get("gid"))
         c = self.chars.get(cid)
-        if "jailed_until, law_encounter_id FROM characters" in q:
+        if "jailed_until, law_encounter_id" in q and "FROM characters" in q:
             if c is None:
                 return _res(None)
             return _res(_lock_row(c.get("dungeon"), c.get("unconscious"), None, None,

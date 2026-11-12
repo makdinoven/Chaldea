@@ -38,13 +38,19 @@ def _internal_token_headers() -> dict:
 
 async def get_character_profile(character_id: int) -> dict:
     """
-    GET /characters/{character_id}/profile
+    GET /characters/internal/{character_id}/profile
     Returns character profile dict (avatar, name, level, class, race, location, etc.)
+
+    FEAT-212 Task 16: the internal twin carries the REAL location / activity lock (the public
+    route masks a caravan escort, which would let him past the entry checks). Deploy skew: an
+    old character-service without the twin answers 404 -> retry the public route.
     """
-    url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/profile"
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/profile"
     try:
         async with _client() as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=_internal_token_headers())
+            if resp.status_code == 404:
+                resp = await client.get(f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/profile")
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:

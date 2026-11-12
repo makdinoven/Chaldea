@@ -65,6 +65,8 @@ const LAW_LOCK_REFRESH_TYPES: ReadonlySet<string> = new Set([
   'law_jailed',
   'law_released',
   'law_resolved',
+  // FEAT-212: hired / released / fell out / delivered — the escort lock changes.
+  'caravan_escort',
 ]);
 
 const MAX_RECONNECT_DELAY = 30000;

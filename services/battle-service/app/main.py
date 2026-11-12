@@ -945,11 +945,14 @@ async def _is_activity_locked(db, character_id: int) -> bool:
 
 
 async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dungeon_session_id=None,
-                          law_encounter_id=None, caravan_raid_id=None):
+                          law_encounter_id=None, caravan_raid_id=None,
+                          autobattle_forbidden_character_ids=None):
     """Create the Battle + participants, init Redis state, register NPCs.
 
     Shared by the public create endpoint and the party-start flow. Validation
     (ownership, location, team sizes) is the caller's responsibility.
+    `autobattle_forbidden_character_ids` (FEAT-212): characters flagged
+    `autobattle_forbidden` in the Redis state (caravan escorts in a raid).
     Returns (battle_obj, participant_objs, first_actor_pid, deadline).
     """
     # FEAT-198: the guard-battle tag is passed only when set (older call shapes stay unchanged).
@@ -995,6 +998,11 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dung
     # payload only — never into the snapshot that is saved to Mongo.
     for snap, payload in zip(participants_info, participants_payload):
         payload["passive_state"] = await _saber_seed(snap, dungeon_session_id)
+    if autobattle_forbidden_character_ids:
+        forbidden = set(autobattle_forbidden_character_ids)
+        for payload in participants_payload:
+            if payload["character_id"] in forbidden:
+                payload["autobattle_forbidden"] = True
 
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
@@ -1882,6 +1890,25 @@ async def _ensure_caravan_guards(db, guard_ids: list, location_id: int) -> None:
             raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
 
 
+async def _escort_available(db, character_id: int, location_id: int) -> bool:
+    """FEAT-212: may this hired escort join the raid on the caravan team?
+
+    A player (`is_npc = 0`) at the raid location, not in an active battle, whose activity
+    lock is either absent or the caravan-escort lock itself — the ONLY lock exemption."""
+    row = (await db.execute(
+        text("SELECT is_npc, current_location_id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )).fetchone()
+    if not row or row[0] not in (0, False):
+        return False
+    if row[1] is None or row[1] != location_id:
+        return False
+    if await get_active_battle_for_character(db, character_id):
+        return False
+    lock = await activity_lock.get_activity_lock(db, character_id)
+    return lock["reason"] in (None, activity_lock.REASON_CARAVAN_ESCORT)
+
+
 @router.post(
     "/internal/caravan-raid",
     response_model=CaravanRaidBattleCreated,
@@ -1898,13 +1925,23 @@ async def internal_create_caravan_raid_battle(
     rules as the party mob attack); team 1 = the caravan guards (NPCs spawned by
     character-service at the location). Requires consuming the leader's post gate of type
     `caravan` naming this caravan. The battle is `pve`, tagged with `caravan_raid_id`, so its
-    end is reported to character-service (`_notify_caravan_battle_end`)."""
-    if len(body.guard_character_ids) > settings.BATTLE_MAX_TEAM_SIZE:
+    end is reported to character-service (`_notify_caravan_battle_end`).
+
+    FEAT-212: `escort_character_ids` = hired player escorts. Guards + escorts must fit one team
+    (else 400). Each escort is silently skipped unless `_escort_available`; placed escorts go to
+    team 1, are flagged `autobattle_forbidden` in the state and are never registered with
+    autobattle. An escort can never be an attacker (leader -> neutral 409, squadmates filtered)."""
+    escort_requested = list(dict.fromkeys(body.escort_character_ids or []))  # dedupe, keep order
+    if len(body.guard_character_ids) + len(escort_requested) > settings.BATTLE_MAX_TEAM_SIZE:
         raise HTTPException(
             400,
             f"В одной команде не может быть больше {settings.BATTLE_MAX_TEAM_SIZE} участников",
         )
     leader_id = body.leader_character_id
+    if leader_id in escort_requested:
+        # Neutral on purpose (the escort lock text): never reveal the caravan's escorts.
+        raise HTTPException(409, activity_lock.lock_message(
+            {"locked": True, "reason": activity_lock.REASON_CARAVAN_ESCORT}))
     leader_row = (await db.execute(
         text("SELECT current_location_id FROM characters WHERE id = :cid"),
         {"cid": leader_id},
@@ -1925,15 +1962,30 @@ async def internal_create_caravan_raid_battle(
         attackers = await _free_squadmates(db, leader_id, loc)
     else:
         attackers = [leader_id]
+    # FEAT-212: defence in depth for the "rat" — an escort is never on the raiders' team
+    # (a squadmate escort is already skipped by its activity lock).
+    escort_set = set(escort_requested)
+    attackers = [cid for cid in attackers if cid not in escort_set]
+
+    escort_ids = []
+    guard_set = set(guard_ids)
+    for cid in escort_requested:
+        if cid in guard_set:
+            continue
+        if await _escort_available(db, cid, loc):
+            escort_ids.append(cid)
 
     # GATE (FEAT-145 / FEAT-211): the leader's post must have named this caravan.
     if not await _consume_action_gate(leader_id, loc, CARAVAN_GATE_TYPE, body.caravan_id):
         raise HTTPException(403, CARAVAN_GATE_REQUIRED)
 
-    player_ids = attackers + guard_ids
-    teams = [CARAVAN_RAIDER_TEAM] * len(attackers) + [CARAVAN_GUARD_TEAM] * len(guard_ids)
+    defenders = guard_ids + escort_ids
+    player_ids = attackers + defenders
+    teams = [CARAVAN_RAIDER_TEAM] * len(attackers) + [CARAVAN_GUARD_TEAM] * len(defenders)
+    # FEAT-212: the escort flag is passed only when set (older call shapes stay unchanged).
+    escort_tag = {"autobattle_forbidden_character_ids": escort_ids} if escort_ids else {}
     battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
-        db, player_ids, teams, "pve", loc, caravan_raid_id=body.caravan_raid_id,
+        db, player_ids, teams, "pve", loc, caravan_raid_id=body.caravan_raid_id, **escort_tag,
     )
     return CaravanRaidBattleCreated(
         battle_id=battle_obj.id,
@@ -1941,6 +1993,7 @@ async def internal_create_caravan_raid_battle(
         next_actor=first_actor_pid,
         deadline_at=deadline,
         attacker_character_ids=attackers,
+        escort_character_ids=escort_ids,
     )
 
 
@@ -1974,9 +2027,27 @@ async def _post_caravan_callback(payload: dict) -> None:
     logger.error("Caravan callback for battle %s gave up after retries", payload.get("battle_id"))
 
 
-async def _notify_caravan_battle_end(db, battle_id: int, winner_team, aborted: bool = False) -> None:
+def _fallen_from_state(state) -> list:
+    """FEAT-212: character ids of participants who fell (hp <= 0) or dropped out (24 h
+    timeout), from a Redis battle state. Empty for a missing state."""
+    if not state:
+        return []
+    fallen = set()
+    for pdata in (state.get("participants") or {}).values():
+        hp = pdata.get("hp")
+        if pdata.get("dropped_out") or (isinstance(hp, (int, float)) and hp <= 0):
+            cid = pdata.get("character_id")
+            if isinstance(cid, int):
+                fallen.add(cid)
+    return sorted(fallen)
+
+
+async def _notify_caravan_battle_end(db, battle_id: int, winner_team, aborted: bool = False,
+                                     state=None) -> None:
     """FEAT-211: if this is a caravan raid battle, report the outcome to character-service.
-    No-op for every battle without the `caravan_raid_id` tag."""
+    No-op for every battle without the `caravan_raid_id` tag.
+    FEAT-212: + `fallen_character_ids` from the final state (`[]` when no state is passed —
+    force-finish)."""
     try:
         raid_id = await _get_caravan_raid_id(db, battle_id)
     except Exception as e:  # never break the battle ending over the callback
@@ -1989,6 +2060,7 @@ async def _notify_caravan_battle_end(db, battle_id: int, winner_team, aborted: b
         "caravan_raid_id": raid_id,
         "winner_team": winner_team,
         "aborted": aborted,
+        "fallen_character_ids": _fallen_from_state(state),
     }
     asyncio.create_task(_post_caravan_callback(payload))
 
@@ -2103,6 +2175,30 @@ async def _notify_dungeon_battle_end(
     asyncio.create_task(_post_dungeon_callback(payload))
 
 
+async def _fallen_for_result(db, battle_id: int, winner_team) -> list:
+    """FEAT-212 (B2): fallen participants of a caravan raid for the polling fallback.
+    Redis state when present; else `dropped_out_at` rows plus the whole losing team."""
+    try:
+        state = await load_state(battle_id)
+    except Exception as e:
+        logger.warning("Fallen lookup: state of battle %s unreadable: %s", battle_id, e)
+        state = None
+    if state:
+        return _fallen_from_state(state)
+    rows = (await db.execute(
+        text("SELECT character_id, team, dropped_out_at FROM battle_participants WHERE battle_id = :bid"),
+        {"bid": battle_id},
+    )).fetchall()
+    fallen = set()
+    for row in rows:
+        character_id = row[0]
+        team = row[1] if len(row) > 1 else None
+        dropped_out_at = row[2] if len(row) > 2 else None
+        if dropped_out_at is not None or (winner_team is not None and team != winner_team):
+            fallen.add(character_id)
+    return sorted(fallen)
+
+
 @router.get("/internal/{battle_id}/result", dependencies=[Depends(verify_internal_token)])
 async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_db)):
     """FEAT-175: durable outcome for dungeon-service's polling fallback once the
@@ -2133,6 +2229,9 @@ async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_
     law_encounter_id = law_encounter_id if isinstance(law_encounter_id, int) else None
     caravan_raid_id = getattr(battle, "caravan_raid_id", None)
     caravan_raid_id = caravan_raid_id if isinstance(caravan_raid_id, int) else None
+    fallen_character_ids = (
+        await _fallen_for_result(db, battle_id, winner_team) if caravan_raid_id is not None else []
+    )
     return {
         "battle_id": battle_id,
         "status": status,
@@ -2140,6 +2239,7 @@ async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_
         "law_encounter_id": law_encounter_id,  # FEAT-198 (additive)
         "caravan_raid_id": caravan_raid_id,  # FEAT-211 (additive)
         "winner_team": winner_team,
+        "fallen_character_ids": fallen_character_ids,  # FEAT-212 (additive, caravan raids only)
         # Finished without history = force-finished (admin / abandonment).
         "aborted": status in ("finished", "forfeit") and not has_history,
     }
@@ -2189,6 +2289,8 @@ async def get_state_internal(battle_id: int):
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
                 # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
                 "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
+                # FEAT-212: caravan escort — autobattle is refused (additive, False by default).
+                "autobattle_forbidden": bool(state["participants"][pid].get("autobattle_forbidden", False)),
                 # FEAT-168: нанесённый на оружие яд (или None). Клиент по нему
                 # показывает баннер и блокирует второй яд. В боях, начатых до
                 # деплоя, ключа нет — отдаём None.
@@ -2294,6 +2396,10 @@ async def get_state(
                             "dropped_out": bool(
                                 state["participants"][pid].get("dropped_out", False)
                             ),
+                            # FEAT-212: caravan escort — hide the autobattle toggle.
+                            "autobattle_forbidden": bool(
+                                state["participants"][pid].get("autobattle_forbidden", False)
+                            ),
                             # FEAT-168: яд на оружии (или None).
                             "weapon_coating": state["participants"][pid].get("weapon_coating"),
                             # FEAT-190 E20: total passive shield (0 for old states).
@@ -2394,6 +2500,8 @@ async def spectate_battle(
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
                 # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
                 "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
+                # FEAT-212: caravan escort — autobattle is refused (additive, False by default).
+                "autobattle_forbidden": bool(state["participants"][pid].get("autobattle_forbidden", False)),
                 # FEAT-168: нанесённый на оружие яд (или None). Клиент по нему
                 # показывает баннер и блокирует второй яд. В боях, начатых до
                 # деплоя, ключа нет — отдаём None.
@@ -3007,7 +3115,7 @@ async def _finalize_battle(
     # (the guard KO, reputation and wanted have already been applied through npc-status).
     await _notify_law_battle_end(db_session, battle_id, winner_team)
     # FEAT-211: a caravan raid reports its outcome (loot / crime are settled by character-service).
-    await _notify_caravan_battle_end(db_session, battle_id, winner_team)
+    await _notify_caravan_battle_end(db_session, battle_id, winner_team, state=battle_state)
     # FEAT-207: faction kill points (fire-and-forget; character-service decides who gets what)
     if winner_team is not None:
         await _notify_faction_battle_end(db_session, battle_id, battle_state, winner_team)
@@ -6756,6 +6864,8 @@ def _build_runtime(state: dict) -> dict:
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
                 # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
                 "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
+                # FEAT-212: caravan escort — autobattle is refused (additive, False by default).
+                "autobattle_forbidden": bool(state["participants"][pid].get("autobattle_forbidden", False)),
                 # FEAT-168: нанесённый на оружие яд (или None). Клиент по нему
                 # показывает баннер и блокирует второй яд. В боях, начатых до
                 # деплоя, ключа нет — отдаём None.

@@ -421,7 +421,13 @@ ACCESS_KINDS = (ACCESS_LOCATION, ACCESS_DUNGEON)
 ENEMY_MOB = "mob"                                   # ref = mob_templates.id
 ENEMY_NPC = "npc"                                   # ref = characters.id (is_npc = 1, npc_role != 'mob')
 ENEMY_HOSTILE = "hostile"                           # ref = 0: open members of hostile factions (PvP)
-ENEMY_KINDS = (ENEMY_MOB, ENEMY_NPC, ENEMY_HOSTILE)
+# FEAT-212 3.10: caravan deeds as "дело фракции" — singletons like hostile (ref = 0), points per deed, the kill cap
+ENEMY_ESCORT = "escort"                             # «Охрана караванов»: a caravan delivered under a member's escort
+ENEMY_RAID = "raid"                                 # «Налёты на караваны»: a won raid of a member
+ENEMY_KINDS = (ENEMY_MOB, ENEMY_NPC, ENEMY_HOSTILE, ENEMY_ESCORT, ENEMY_RAID)
+ENEMY_SINGLETONS = (ENEMY_HOSTILE, ENEMY_ESCORT, ENEMY_RAID)
+EV_CARAVAN_ESCORT = "caravan_escort"                # faction_log.event_type of an escort deed
+EV_CARAVAN_RAID = "caravan_raid"                    # faction_log.event_type of a raid deed
 PVP_KILL_BATTLE_TYPES = ("pvp_death", "pvp_attack")     # training duels never count (Q2)
 
 MAX_ENEMIES = 50

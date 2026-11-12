@@ -40,6 +40,8 @@ ACTION_GUILD = "guild_delivery"
 ACTION_NPC_KILL = "npc_kill"
 ACTION_REGION_EVENT = "region_event_help"
 ACTION_CARAVAN = "caravan_attack"
+ACTION_CARAVAN_ESCORT = "caravan_escort"      # FEAT-212: delivered a caravan as a player escort
+ACTION_CARAVAN_DEFENSE = "caravan_defense"    # FEAT-212: repelled a raid on the escorted caravan
 ACTION_CRIME = "crime"
 ACTION_ADMIN = "admin_manual"
 ACTION_DECAY = "decay"                  # journal-only pseudo action (never a row of reputation_actions)
@@ -96,6 +98,8 @@ DEFAULT_ACTIONS: Tuple[Tuple[str, str, int, Optional[int], bool, int], ...] = (
     (ACTION_NPC_KILL, "Убийство жителя", 0, None, True, 30),
     (ACTION_REGION_EVENT, "Помощь краю", 5, None, False, 40),
     (ACTION_CARAVAN, "Нападение на караван", -100, None, True, 50),
+    (ACTION_CARAVAN_ESCORT, "Охрана каравана", 10, 40, True, 55),
+    (ACTION_CARAVAN_DEFENSE, "Отбит налёт на караван", 25, None, True, 56),
     (ACTION_CRIME, "Преступление", -50, None, False, 60),
     (ACTION_ADMIN, "Решение властей", 0, None, False, 70),
 )

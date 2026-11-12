@@ -40,6 +40,7 @@ import GatheringLockBanner from '../../CommonComponents/GatheringLockBanner';
 import GatheringSection from './GatheringSection/GatheringSection';
 import HousesSection from './HousesSection';
 import RemainingText from '../../CommonComponents/RemainingText';
+import CaravanEscortModal from '../../CaravanEscort/CaravanEscortModal';
 import { fetchLawJail, type LawJailOut } from '../../../api/law';
 import { apiErrorMessage } from '../../../api/errors';
 
@@ -90,6 +91,8 @@ const LocationPage = () => {
   // gathering players can't bypass the lock by pressing UI shortcuts.
   // FEAT-175: in a dungeon run / knocked out after a wipe (banner lives in Layout).
   const activityLock = useActivityLock();
+  /** FEAT-212: the escort panel opened from the lock block. */
+  const [escortOpen, setEscortOpen] = useState(false);
   const actionsLocked = inBattle || isGathering || activityLock.locked;
 
   // FEAT-202: a country-prison inmate may walk and post inside the prison
@@ -1055,7 +1058,9 @@ const LocationPage = () => {
                           ? '⛓️'
                           : activityLock.reason === 'law_encounter'
                             ? '🛡️'
-                            : '💫'}
+                            : activityLock.reason === 'caravan_escort'
+                              ? '🐫'
+                              : '💫'}
                 </span>
                 <div className="flex flex-col gap-0.5 min-w-0">
                   <span className="text-white text-sm font-medium">
@@ -1080,8 +1085,19 @@ const LocationPage = () => {
                               : 'Из отделения стражи можно писать посты только в самой его локации.'
                             : activityLock.reason === 'law_encounter'
                               ? 'Сначала ответьте страже.'
-                              : 'Написание постов будет доступно, когда персонаж очнётся.'}
+                              : activityLock.reason === 'caravan_escort'
+                                ? 'Вы едете с караваном: ходить, писать посты и торговать нельзя, пока не сойдёте.'
+                                : 'Написание постов будет доступно, когда персонаж очнётся.'}
                   </span>
+                  {activityLock.reason === 'caravan_escort' && character?.id != null && (
+                    <button
+                      type="button"
+                      onClick={() => setEscortOpen(true)}
+                      className="btn-blue self-start mt-1.5 text-xs sm:text-sm !px-4 !py-1.5"
+                    >
+                      Караван
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -1177,6 +1193,11 @@ const LocationPage = () => {
           postId={historyPostId}
           onClose={() => setHistoryPostId(null)}
         />
+      )}
+
+      {/* FEAT-212: the escort panel, opened from the «Вы в охране каравана» lock block. */}
+      {escortOpen && character?.id != null && (
+        <CaravanEscortModal characterId={character.id} onClose={() => setEscortOpen(false)} />
       )}
     </div>
   );

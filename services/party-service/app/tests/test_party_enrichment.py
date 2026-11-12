@@ -1,4 +1,5 @@
-"""party-service FEAT-151 tests — MemberOut enrichment (level, class, HP/MP).
+"""party-service FEAT-151 tests — MemberOut enrichment (level, class, HP/MP);
+FEAT-212: caravan escorts hidden from `get_character_ids_at_location` (+ old-schema fallback).
 
 Unlike test_party.py (which stubs out the character lookups), this module
 creates the shared `characters` / `classes` / `character_attributes` tables in
@@ -308,3 +309,80 @@ def test_invites_list_shape_unchanged():
         "leader_character_id", "leader_name",
     }
     assert invites[0]["leader_name"] == "Лидер"
+
+
+# ---------------------------------------------------------------------------
+# FEAT-212: hired caravan escorts are hidden from "players on this location"
+# ---------------------------------------------------------------------------
+def _add_escort_column():
+    with _engine.begin() as conn:
+        conn.execute(text("ALTER TABLE characters ADD COLUMN escort_caravan_id INTEGER"))
+
+
+def _set_escort(char_id, caravan_id):
+    with _engine.begin() as conn:
+        conn.execute(text("UPDATE characters SET escort_caravan_id = :c WHERE id = :i"),
+                     {"c": caravan_id, "i": char_id})
+
+
+def test_at_location_hides_escorts():
+    _add_escort_column()
+    _add_char(1, 10, loc=1)
+    _add_char(2, 20, loc=1)
+    _add_char(3, 30, loc=2)
+    _set_escort(2, 7)
+    db = _TestSession()
+    try:
+        assert sorted(crud.get_character_ids_at_location(db, 1)) == [1]
+        _set_escort(2, None)   # released -> visible again
+        assert sorted(crud.get_character_ids_at_location(db, 1)) == [1, 2]
+    finally:
+        db.close()
+
+
+def test_at_location_old_schema_falls_back():
+    """character-service 051 not applied yet: no column -> legacy SQL, no 500."""
+    _add_char(1, 10, loc=1)
+    _add_char(2, 20, loc=1)
+    db = _TestSession()
+    try:
+        assert sorted(crud.get_character_ids_at_location(db, 1)) == [1, 2]
+    finally:
+        db.close()
+
+
+def test_at_location_other_errors_propagate():
+    class _Boom:
+        def execute(self, *a, **kw):
+            raise RuntimeError("connection lost")
+
+    with pytest.raises(RuntimeError, match="connection lost"):
+        crud.get_character_ids_at_location(_Boom(), 1)
+
+
+@pytest.mark.parametrize("msg,expected", [
+    ("(1054, \"Unknown column 'escort_caravan_id' in 'where clause'\")", True),
+    ("(sqlite3.OperationalError) no such column: escort_caravan_id", True),
+    ("connection lost", False),
+    ("(1054, \"Unknown column 'is_npc' in 'where clause'\")", False),
+    # the DB error echoes the whole SQL: another missing column must not match on the SQL text
+    ("(1054, \"Unknown column 'is_npc' in 'where clause'\") [SQL: SELECT id FROM characters "
+     "WHERE current_location_id = %s AND (is_npc = 0 OR is_npc IS NULL) AND escort_caravan_id IS NULL]", False),
+], ids=["mysql", "sqlite", "other", "other-column", "other-column-sql-echo"])
+def test_missing_escort_column_detection(msg, expected):
+    assert crud._is_missing_escort_column(RuntimeError(msg)) is expected
+
+
+def test_by_location_endpoint_hides_escort_members():
+    """End to end: the escort is dropped from his squad's co-located list, and a squad
+    left with a single visible member here is not listed at all (2+ rule)."""
+    _add_escort_column()
+    for cid in (1, 2, 3, 4, 5):
+        _add_char(cid, cid * 10, loc=1)
+    _make_party(1, member_ids=[2, 4])
+    _make_party(3, member_ids=[5])
+    _set_escort(2, 7)
+    _set_escort(5, 7)
+    data = _client(10).get("/party/by-location", params={"location_id": 1}).json()
+    assert len(data) == 1
+    assert sorted(m["character_id"] for m in data[0]["members"]) == [1, 4]

@@ -610,6 +610,12 @@ export interface EconSimParams {
   caravan_guard_mult_dangerous: number;
   caravan_rep_trade_share: number;
   fence_purse_share: number;
+  /* FEAT-212 player caravan escorts (feature file 3.4) */
+  caravan_departure_minutes: number;
+  caravan_escort_seats: number;
+  caravan_escort_fee_share: number;
+  caravan_escort_bonus_share: number;
+  caravan_escort_defense_fame: number;
   /* FEAT-193 guild orders (feature file 3.4) — older backends may not send them yet */
   guild_enabled: number;
   guild_markup_pct: number;
@@ -1321,6 +1327,12 @@ export interface CaravanParams {
   caravan_guard_mult_dangerous?: number;
   caravan_rep_trade_share?: number;
   fence_purse_share?: number;
+  /* FEAT-212 player caravan escorts (feature file 3.4) — optional: an older backend does not send them */
+  caravan_departure_minutes?: number;
+  caravan_escort_seats?: number;
+  caravan_escort_fee_share?: number;
+  caravan_escort_bonus_share?: number;
+  caravan_escort_defense_fame?: number;
 }
 
 export interface CaravanCountry {
@@ -1397,6 +1409,8 @@ export interface CaravanRow {
   stolen_units?: number;
   raid_paid?: number;
   raid_status?: CaravanRaidStatus | null;
+  /** FEAT-212 (A4): active player escorts — optional on an older backend */
+  escort_count?: number;
 }
 
 export interface CaravanList {
@@ -1452,6 +1466,23 @@ export interface CaravanRaidAdmin {
   guard_mult: number | null;
   created_at: string;
   finished_at: string | null;
+  /** FEAT-212: player escorts placed on the guard team */
+  escort_ids?: number[];
+}
+
+/** FEAT-212 (A5): escort row status. */
+export type CaravanEscortStatus = 'active' | 'left' | 'fallen' | 'delivered' | 'cancelled' | 'released';
+
+/** FEAT-212 (A5): one player escort of a caravan (admin only). */
+export interface CaravanEscortAdmin {
+  character_id: number;
+  name: string | null;
+  status: CaravanEscortStatus | string;
+  joined_at: string;
+  ended_at: string | null;
+  fee: number;
+  bonus: number;
+  in_raid: boolean;
 }
 
 /** A5 — one caravan with its route and raid. */
@@ -1459,6 +1490,8 @@ export interface CaravanDetail extends CaravanRow {
   route: CaravanRoutePoint[];
   held_by: 'post' | 'raid' | null;
   raid: CaravanRaidAdmin | null;
+  /** FEAT-212 — optional on an older backend */
+  escorts?: CaravanEscortAdmin[];
 }
 
 export type CaravanGateSource = 'override' | 'station' | 'none';

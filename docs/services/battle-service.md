@@ -729,6 +729,27 @@ battle-service только проводит бой и сообщает итог
   нельзя присоединиться» (состав налётчиков фиксирован — по нему делится добыча).
 * Награды за охрану — как за любых мобов (опыт, лут шаблона, бестиарий); шаблоны охраны выбирает админ.
 
+## Охрана караванов из игроков (FEAT-212)
+
+* **B1 расширен:** `CaravanRaidBattleCreate.escort_character_ids: List[int] = []` (≤ 4, дубли убираются) — нанятые
+  игроки-охранники. Охрана + охранники > `BATTLE_MAX_TEAM_SIZE` → 400. Лидер налёта среди охранников → 409 с нейтральным
+  текстом блокировки («Персонаж: действие сейчас недоступно»). Налётчики (`attackers`) фильтруются `not in escorts`
+  («крыса» никогда не в обеих командах). Каждый охранник **молча пропускается**, если не проходит `_escort_available`:
+  игрок (`is_npc = 0`), стоит в `location_id`, не в активном бою, блокировка — нет или именно `caravan_escort`
+  (единственное исключение из блокировок). Команда 1 = охрана + охранники. Ответ: + `escort_character_ids` (кого
+  реально поставили). Старый character-service поле не шлёт → `[]`, бой как раньше.
+* **Автобой охранникам запрещён:** `_assemble_battle(..., autobattle_forbidden_character_ids=escorts)` ставит
+  участнику флаг `autobattle_forbidden: true` в Redis-состоянии (`init_battle_state`, старые состояния → `false`).
+  Флаг отдают `GET /battles/{id}/state`, `GET /battles/internal/{id}/state`, WS-runtime (`_build_runtime`) и
+  спектатор — в `runtime.participants[pid].autobattle_forbidden`. autobattle-service по нему отвечает 403 на
+  `/register`; фронт по нему прячет переключатель автобоя. Охранники — игроки, в автобой их и так никто не регистрирует.
+* **Павшие:** колбэк налёта шлёт + `fallen_character_ids` — персонажи с `hp <= 0` или `dropped_out` в финальном
+  состоянии (`_finalize_battle` передаёт `battle_state`; принудительное завершение → `[]`).
+  `GET /battles/internal/{id}/result` для боёв с `caravan_raid_id` отдаёт `fallen_character_ids` (из Redis-состояния,
+  если оно живо; иначе строки `dropped_out_at IS NOT NULL` ∪ вся проигравшая команда), для остальных боёв — `[]`.
+* Блокировка активности: причина `caravan_escort`, см. «Блокировка активности» в locations-service.md (файл
+  `activity_lock.py` побайтно одинаков).
+
 ## FEAT-188: пассивки подклассов
 
 **Загрузка.** `build_participant_info` (общая для всех 4 мест сборки боя: `_assemble_battle`,

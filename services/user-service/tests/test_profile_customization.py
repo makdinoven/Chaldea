@@ -355,7 +355,7 @@ class TestGetUserCharacters:
             db_session.add(rel)
         db_session.commit()
 
-        async def side_effect(char_id):
+        async def side_effect(char_id, masked=False):
             return {
                 "id": char_id,
                 "name": f"Char{char_id}",

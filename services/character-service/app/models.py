@@ -115,6 +115,9 @@ class Character(Base):
     npc_ready = Column(Boolean, nullable=False, default=False, server_default='0')
     npc_ready_at = Column(DateTime, nullable=True, default=None)
     npc_ready_by = Column(String(255), nullable=True, default=None)
+    # FEAT-212 (051): the physical caravan this player currently escorts (activity lock reason `caravan_escort`;
+    # hidden from public lists / cards, see caravan_escort_public.py). CS is the only writer; BS/LS/IS/party read it.
+    escort_caravan_id = Column(BigInteger, nullable=True, default=None)  # index ix_characters_escort_caravan (051)
 
     # character_titles.character_id входит в составной первичный ключ, поэтому
     # ORM по умолчанию пытается занулить его при удалении персонажа и падает с
@@ -1114,6 +1117,10 @@ class EconCaravanRaid(Base):
     created_at = Column(DateTime, nullable=False)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
+    # FEAT-212 (051): player escorts placed on the guard team (JSON list of character ids); the raid faction-points
+    # followup claim (like `law_done`).
+    escort_ids = Column(JSON, nullable=True)
+    faction_done = Column(Boolean, nullable=False, default=False, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("caravan_id", name="uq_econ_caravan_raids_caravan"),
@@ -1137,6 +1144,50 @@ class EconCaravanRaidShare(Base):
 
     __table_args__ = (
         UniqueConstraint("raid_id", "character_id", name="uq_econ_caravan_raid_shares"),
+    )
+
+
+class EconCaravanEscort(Base):
+    """FEAT-212: one player's escort job on a physical caravan. UNIQUE (caravan, character) = no rejoin after
+    «Сойти». status: active | left | fallen | delivered | cancelled | released. ``hire_location_id`` is the public
+    (frozen) location shown to strangers while active. No FKs (style of econ tables)."""
+
+    __tablename__ = "econ_caravan_escorts"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    caravan_id = Column(BigInteger, nullable=False)
+    character_id = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False)
+    hire_location_id = Column(BigInteger, nullable=True)
+    in_raid = Column(Boolean, nullable=False, default=False, server_default="0")
+    fee = Column(BigInteger, nullable=False, default=0, server_default="0")
+    bonus = Column(BigInteger, nullable=False, default=0, server_default="0")
+    payout_op_id = Column(BigInteger, nullable=True)
+    rewards_done = Column(Boolean, nullable=False, default=False, server_default="0")
+    joined_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("caravan_id", "character_id", name="uq_caravan_escort"),
+        Index("ix_econ_caravan_escorts_char", "character_id", "status"),
+        Index("ix_econ_caravan_escorts_rewards", "status", "rewards_done"),
+    )
+
+
+class EconCaravanMessage(Base):
+    """FEAT-212: the caravan channel — messages visible only to the active escorts of that caravan."""
+
+    __tablename__ = "econ_caravan_messages"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    caravan_id = Column(BigInteger, nullable=False)
+    character_id = Column(Integer, nullable=False)
+    body = Column(String(500), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_econ_caravan_messages_caravan", "caravan_id", "id"),
+        Index("ix_econ_caravan_messages_char", "character_id", "created_at"),
     )
 
 

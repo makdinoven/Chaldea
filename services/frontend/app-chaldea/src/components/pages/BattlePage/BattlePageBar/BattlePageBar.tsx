@@ -5,6 +5,7 @@ import Tooltip from "../../../CommonComponents/Tooltip/Tooltip";
 import { SKILLS_KEYS } from "../../../../helpers/commonConstants";
 import AvatarCircle from "./AvatarCircle";
 import {
+  AUTOBATTLE_FORBIDDEN_TEXT,
   useBattleBar,
   type BattlePageBarProps,
   type SkillSlot,
@@ -135,7 +136,10 @@ const BattlePageBar = (props: BattlePageBarProps) => {
         </div>
       </div>
 
-      {/* Autobattle controls */}
+      {/* Autobattle controls (FEAT-212: hidden for a caravan escort in its raid battle) */}
+      {bar.autobattleForbidden ? (
+        <p className="min-h-[60px] flex items-center text-white/50 text-sm">{AUTOBATTLE_FORBIDDEN_TEXT}</p>
+      ) : (
       <div className="flex justify-between items-center min-h-[60px] gap-5 flex-wrap">
         <div className="flex items-center gap-5">
           {AUTOBATTLE_MODE_BTNS.map((btn) => {
@@ -199,6 +203,7 @@ const BattlePageBar = (props: BattlePageBarProps) => {
           {isAutoBattleOn ? "остановить автобой" : "Включить автобой"}
         </button>
       </div>
+      )}
 
       {/* Turn history — flat circles carrying the acting avatar (FEAT-143) */}
       <div

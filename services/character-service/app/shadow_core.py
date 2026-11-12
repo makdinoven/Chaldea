@@ -45,6 +45,7 @@ SOURCE_QUEST = "quest"
 SOURCE_REPUTATION = "reputation"
 SOURCE_CRIME = "crime"
 SOURCE_STAFF = "staff"
+SOURCE_CARAVAN_DEFENSE = "caravan_defense"   # FEAT-212: a repelled raid on a caravan the player escorted
 
 # region suspicion states (calm is never shown)
 SUSPICION_CALM = "calm"

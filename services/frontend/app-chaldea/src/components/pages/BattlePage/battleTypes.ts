@@ -51,6 +51,8 @@ export interface RuntimeState {
       team: number;
       /** FEAT-190 — total passive shield; absent in older states. */
       shield?: number;
+      /** FEAT-212 — a caravan escort in its raid battle: autobattle is refused (absent in older states). */
+      autobattle_forbidden?: boolean;
     }
   >;
   current_actor: number;

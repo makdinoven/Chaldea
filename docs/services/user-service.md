@@ -167,3 +167,9 @@ user-service/
 `character.activity_lock` (из `/characters/internal/{id}/short_info`):
 `{"locked": bool, "reason": "dungeon"|"unconscious"|null, "until": iso|null, "dungeon_session_id": int|null}` —
 для баннера «в подземелье» / «без сознания до …». Публичный профиль поле не отдаёт.
+
+**FEAT-212:** `_fetch_character_short(cid, with_house=False, masked=False)`. `masked=True` добавляет
+`?masked=true` к внутреннему `short_info` — character-service маскирует охранника каравана (локация застывает на
+месте найма, блокировка не показывается). Маскированно: `GET /users/{id}/characters` (всегда) и
+`GET /users/{id}/profile` (для всех, кроме самого владельца). `/users/me` — реальные данные (баннер охраны).
+Старый character-service параметр игнорирует — данные реальные, как раньше.

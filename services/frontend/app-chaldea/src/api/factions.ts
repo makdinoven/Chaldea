@@ -1263,15 +1263,23 @@ export const adminFactionTerritory = async (factionId: number): Promise<FactionT
 
 /* Admin: enemies (kill points) */
 
-export type FactionEnemyKind = 'mob' | 'npc' | 'hostile';
+/** FEAT-212: `escort` / `raid` are caravan deeds — singletons like `hostile` (no target, `ref_id: null`). */
+export type FactionEnemyKind = 'mob' | 'npc' | 'hostile' | 'escort' | 'raid';
 
-export const FACTION_ENEMY_KINDS: FactionEnemyKind[] = ['mob', 'npc', 'hostile'];
+export const FACTION_ENEMY_KINDS: FactionEnemyKind[] = ['mob', 'npc', 'hostile', 'escort', 'raid'];
 
 export const FACTION_ENEMY_KIND_LABEL: Record<FactionEnemyKind, string> = {
   mob: 'Моб',
   npc: 'НПС',
   hostile: 'Участники враждебных фракций',
+  escort: 'Охрана караванов',
+  raid: 'Налёты на караваны',
 };
+
+/** Kinds without a target: at most one row each (backend `faction_core.ENEMY_SINGLETONS`). */
+export const FACTION_ENEMY_SINGLETONS: ReadonlySet<FactionEnemyKind> = new Set<FactionEnemyKind>(['hostile', 'escort', 'raid']);
+
+export const isSingletonEnemyKind = (kind: FactionEnemyKind): boolean => FACTION_ENEMY_SINGLETONS.has(kind);
 
 export const FACTION_ENEMIES_MAX = 50;
 export const FACTION_ENEMY_POINTS_MAX = 10_000;

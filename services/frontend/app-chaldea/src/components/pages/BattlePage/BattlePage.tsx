@@ -81,6 +81,8 @@ interface RuntimeState {
       team: number;
       /** FEAT-190 — total passive shield; absent in older states. */
       shield?: number;
+      /** FEAT-212 — a caravan escort in its raid battle: autobattle is refused (absent in older states). */
+      autobattle_forbidden?: boolean;
     }
   >;
   current_actor: number;
@@ -772,8 +774,10 @@ const BattlePage = () => {
         battle_id: Number(battleId),
       });
       return true;
-    } catch {
-      toast.error("Не удалось включить автобой");
+    } catch (e) {
+      // FEAT-212: a caravan escort gets 403 «Охранникам каравана автобой недоступен…» — show the server text.
+      const err = e as { response?: { data?: { detail?: string } } };
+      toast.error(err?.response?.data?.detail || "Не удалось включить автобой");
       return false;
     }
   };

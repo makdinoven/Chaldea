@@ -1044,25 +1044,33 @@ def list_caravans(
 # The quest XP book multiplier is resolved over HTTP BEFORE any DB transaction (fail-open to 1.0).
 
 @router.get("/economy/guild/npc/{npc_id}", response_model=schemas.GuildView)
-def get_guild_view(
+async def get_guild_view(
     npc_id: int,
     character_id: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     current_user: UserRead = Depends(get_current_user_via_http),
 ):
-    """The guild window at this NPC (read-only, no gate)."""
-    multiplier = crud.get_character_xp_multiplier(character_id, crud.XP_SOURCE_QUEST)
+    """The guild window at this NPC (read-only). FEAT-212 3.11: like the hand-in, it needs an open «Диалог с НПС»
+    gate naming the guild NPC (fail-closed 503 / 403), checked with no open DB transaction."""
+    ctx = await run_in_threadpool(_guild_precheck, db, npc_id, character_id, current_user.id, False)
+    try:
+        gate_open = await locations_client.check_npc_gate(character_id, ctx.location_id, npc_id)
+    except locations_client.GateUnavailable:
+        raise HTTPException(status_code=503, detail=economy_guild_crud.MSG_GATE_UNAVAILABLE)
+    if not gate_open:
+        raise HTTPException(status_code=403, detail=economy_guild_crud.MSG_GATE_CLOSED)
+    multiplier = await run_in_threadpool(crud.get_character_xp_multiplier, character_id, crud.XP_SOURCE_QUEST)
 
     def action():
-        ctx = economy_guild_crud.guild_context(db, npc_id, character_id, current_user.id, write=False)
-        return economy_guild_crud.build_view(db, ctx, xp_multiplier=multiplier)
-    return _read_or_error(db, action)
+        view_ctx = economy_guild_crud.guild_context(db, npc_id, character_id, current_user.id, write=False)
+        return economy_guild_crud.build_view(db, view_ctx, xp_multiplier=multiplier)
+    return await run_in_threadpool(_read_or_error, db, action)
 
 
-def _guild_precheck(db: Session, npc_id: int, character_id: int, user_id: int):
+def _guild_precheck(db: Session, npc_id: int, character_id: int, user_id: int, write: bool = True):
     """Steps 1-4; the read transaction is always closed before the gate's HTTP call."""
     try:
-        return economy_guild_crud.resolve_guild(db, npc_id, character_id, user_id, write=True)
+        return economy_guild_crud.resolve_guild(db, npc_id, character_id, user_id, write=write)
     except economy_crud.EconomyApiError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     except SQLAlchemyError:

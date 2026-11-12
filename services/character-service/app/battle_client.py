@@ -69,13 +69,15 @@ async def create_guard_battle(law_encounter_id: int, character_id: int, guard_np
 
 
 async def create_caravan_raid_battle(caravan_raid_id: int, caravan_id: int, leader_character_id: int, group: bool,
-                                     guard_character_ids, location_id: int) -> dict:
-    """FEAT-211 B1: start the raid fight (team 0 raiders, team 1 guards). Returns
-    ``{"battle_id": int, "attacker_character_ids": [int]}``. Raises :class:`BattleServiceError`."""
+                                     guard_character_ids, location_id: int, escort_character_ids=()) -> dict:
+    """FEAT-211 B1: start the raid fight (team 0 raiders, team 1 guards + FEAT-212 player escorts). Returns
+    ``{"battle_id": int, "attacker_character_ids": [int], "escort_character_ids": [int]}`` — the escorts battle-service
+    actually placed (an old battle-service without the field → ``[]``). Raises :class:`BattleServiceError`."""
     url = f"{_base_url()}/battles/internal/caravan-raid"
     payload = {"caravan_raid_id": int(caravan_raid_id), "caravan_id": int(caravan_id),
                "leader_character_id": int(leader_character_id), "group": bool(group),
-               "guard_character_ids": [int(g) for g in guard_character_ids], "location_id": int(location_id)}
+               "guard_character_ids": [int(g) for g in guard_character_ids], "location_id": int(location_id),
+               "escort_character_ids": [int(e) for e in (escort_character_ids or ())]}
     try:
         async with httpx.AsyncClient(timeout=BATTLE_TIMEOUT_SECONDS) as client:
             response = await client.post(url, json=payload, headers=_internal_headers())
@@ -89,7 +91,8 @@ async def create_caravan_raid_battle(caravan_raid_id: int, caravan_id: int, lead
     try:
         data = response.json()
         return {"battle_id": int(data["battle_id"]),
-                "attacker_character_ids": [int(a) for a in (data.get("attacker_character_ids") or [])]}
+                "attacker_character_ids": [int(a) for a in (data.get("attacker_character_ids") or [])],
+                "escort_character_ids": [int(e) for e in (data.get("escort_character_ids") or [])]}
     except Exception as e:
         raise BattleServiceError("bad battle-service answer", response.status_code) from e
 

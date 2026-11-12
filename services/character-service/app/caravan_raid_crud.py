@@ -13,11 +13,19 @@
   (inventory-service) and :func:`despawn_guards`;
 * **caravan pass hooks** (3.3 steps 1–3, called by ``caravan_pass``): :func:`expire_stale_raids`,
   :func:`poll_raid_battles`, :func:`raid_followups` — ``fn(factory, now, params) -> int``.
+* **player escorts** (FEAT-212 §3.9): an activity-locked leader (an escort included) is refused before any spawn;
+  :func:`spawn_guards` spawns ``max(1, min(guards, 5 − escorts))`` mobs and puts the caravan's active escorts on
+  :class:`RaidStart`; battle-service places them on the guard team and answers which ones it placed —
+  :func:`mark_fighting` stores them (``escort_ids``) and flags their rows ``in_raid``. :func:`settle_raid`: ``won`` →
+  every placed escort falls out, ``repelled`` → only the fallen ones (``fallen_character_ids`` of the callback / the
+  poll), ``aborted`` → they stay, ``expired`` → they are released. Faction points of a won raid
+  (:func:`raid_faction_points`, claimed by ``faction_done``) run next to the law step.
 
-Lock order (FEAT-211 3.16): ``econ_caravans(row) → econ_caravan_raids(row) → econ_caravan_raid_shares (insert) →
-characters (asc id) → econ_accounts (asc id)``. Law / reputation rows are written only in the separate law
-transaction, which first claims the raid row by a conditional ``law_done`` UPDATE. Notices are published after the
-commit. Raider team = 0, guard team = 1.
+Lock order (FEAT-211 3.16 + FEAT-212 §3.15): ``econ_caravans(row) → econ_caravan_raids(row) → econ_caravan_escorts
+(asc id) → econ_caravan_raid_shares (insert) → characters (asc id, ONE sorted lock call for raiders ∪ escorts) →
+econ_accounts (asc id)``. Law / reputation rows are written only in the separate law transaction, which first claims
+the raid row by a conditional ``law_done`` UPDATE; faction rows only in ``faction_kills.apply_caravan_deed``'s own
+transactions (nothing else open). Notices are published after the commit. Raider team = 0, guard team = 1.
 """
 
 import logging
@@ -32,6 +40,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
+import activity_lock
+import caravan_escort_crud as escort_crud
 import econ_caravan
 import econ_core as core
 import econ_ledger
@@ -88,6 +98,10 @@ MSG_UNDER_ATTACK = "На караван уже напали"
 MSG_CHARACTER_NOT_FOUND = "Персонаж не найден"
 MSG_NPC = "НПС не может нападать на караваны"
 MSG_REPELLED = "Охрана каравана отбилась"
+MSG_ESCORT_FALLEN = "Охрана каравана разбита — вы выбыли из каравана"
+MSG_ESCORT_FALLEN_REPELLED = "Вы пали в бою за караван — вы выбыли из каравана, оплаты не будет"
+MSG_ESCORT_REPELLED = "Налёт отбит! Надбавка будет выплачена по прибытии"
+MSG_ESCORT_EXPIRED = "Бой за караван затянулся — караван ушёл дальше без вас"
 
 
 def now_utc() -> datetime:
@@ -218,6 +232,7 @@ class RaidStart:
     caravan_id: int
     location_id: int
     guard_ids: Tuple[int, ...] = ()
+    escort_ids: Tuple[int, ...] = ()                  # FEAT-212: the caravan's active player escorts (asc id)
 
 
 def begin_raid(db: Session, caravan_id: int, character_id: int, group: bool,
@@ -229,6 +244,11 @@ def begin_raid(db: Session, caravan_id: int, character_id: int, group: bool,
         raise EconomyApiError(404, MSG_CHARACTER_NOT_FOUND)
     if bool(char[1]):
         raise EconomyApiError(400, MSG_NPC)
+    leader = db.query(models.Character).filter(models.Character.id == int(character_id)).first()
+    message = activity_lock.lock_message(activity_lock.lock_for_character(leader)) if leader is not None else None
+    if message:                                     # an escort (neutral text) / jailed / unconscious … — spares a spawn
+        db.rollback()
+        raise EconomyApiError(409, message)
     row = caravan_crud._lock_caravan(db, caravan_id)
     try:
         if row is None or not row.is_physical or row.status != caravan_crud.STATUS_IN_TRANSIT:
@@ -278,7 +298,8 @@ def spawn_guards(db: Session, raid_id: int, params=None) -> RaidStart:
     count = _i(caravan.guard_count) if caravan is not None else 0
     if count <= 0:
         count = econ_caravan.guard_count(value, params)
-    count = max(1, min(MAX_GUARDS, count))
+    escorts = active_escort_ids(db, int(raid.caravan_id))[:MAX_GUARDS - 1]
+    count = max(1, min(count, MAX_GUARDS - len(escorts)))
     mult = econ_caravan.guard_multiplier(value, marker, params)
     location_id, caravan_id = int(raid.location_id), int(raid.caravan_id)
     db.rollback()
@@ -301,7 +322,14 @@ def spawn_guards(db: Session, raid_id: int, params=None) -> RaidStart:
         if isinstance(exc, EconomyApiError):
             raise
         raise EconomyApiError(500, MSG_GUARD_SPAWN_FAILED)
-    return RaidStart(int(raid_id), caravan_id, location_id, tuple(spawned))
+    return RaidStart(int(raid_id), caravan_id, location_id, tuple(spawned), tuple(escorts))
+
+
+def active_escort_ids(db: Session, caravan_id: int) -> List[int]:
+    """Character ids of the caravan's active player escorts, ascending (FEAT-212 §3.9)."""
+    return [int(r[0]) for r in db.execute(text(
+        "SELECT character_id FROM econ_caravan_escorts WHERE caravan_id = :c AND status = :s ORDER BY character_id"),
+        {"c": int(caravan_id), "s": escort_crud.STATUS_ACTIVE}).fetchall()]
 
 
 def _json(ids: Sequence[int]) -> str:
@@ -333,20 +361,31 @@ def abandon_start(db: Session, start: RaidStart) -> None:
 
 
 def mark_fighting(db: Session, raid_id: int, battle_id: int, attacker_ids: Sequence[int],
-                  now: Optional[datetime] = None) -> bool:
-    """Tx B (commits): ``starting`` → ``fighting`` with the battle and the attackers. False when the row already moved
-    on (a very fast callback settled it)."""
+                  now: Optional[datetime] = None, *, escort_ids: Sequence[int] = ()) -> bool:
+    """Tx B (commits): ``starting`` → ``fighting`` with the battle, the attackers and the escorts battle-service placed
+    on the guard team (``escort_ids`` + ``in_raid = 1`` on their active rows). False when the row already moved on (a
+    very fast callback settled it — the settlement then read the escorts from the battle's guard team)."""
     now = now or now_utc()
+    escorts = sorted({int(e) for e in escort_ids or ()})
     result = db.execute(text(
-        "UPDATE econ_caravan_raids SET status = :f, battle_id = :b, attacker_ids = :a, started_at = :now "
-        "WHERE id = :id AND status = :s"),
-        {"f": STATUS_FIGHTING, "b": int(battle_id), "a": _json(attacker_ids), "now": now, "id": int(raid_id),
-         "s": STATUS_STARTING})
+        "UPDATE econ_caravan_raids SET status = :f, battle_id = :b, attacker_ids = :a, escort_ids = :e, "
+        "started_at = :now WHERE id = :id AND status = :s"),
+        {"f": STATUS_FIGHTING, "b": int(battle_id), "a": _json(attacker_ids), "e": _json(escorts), "now": now,
+         "id": int(raid_id), "s": STATUS_STARTING})
     if (result.rowcount or 0) != 1:
         db.execute(text("UPDATE econ_caravan_raids SET attacker_ids = :a WHERE id = :id AND attacker_ids IS NULL"),
                    {"a": _json(attacker_ids), "id": int(raid_id)})
+        db.execute(text("UPDATE econ_caravan_raids SET escort_ids = :e WHERE id = :id AND escort_ids IS NULL"),
+                   {"e": _json(escorts), "id": int(raid_id)})
         db.commit()
         return False
+    if escorts:
+        caravan_id = db.execute(text("SELECT caravan_id FROM econ_caravan_raids WHERE id = :id"),
+                                {"id": int(raid_id)}).scalar()
+        ph, params = core.in_params("c", escorts)
+        db.execute(text(f"UPDATE econ_caravan_escorts SET in_raid = 1 WHERE caravan_id = :car AND status = :s "
+                        f"AND character_id IN ({ph})"),
+                   {**params, "car": int(caravan_id), "s": escort_crud.STATUS_ACTIVE})
     db.commit()
     return True
 
@@ -436,12 +475,93 @@ def _raid_message(group_name: Optional[str], marks: int, bales: int, bale_name: 
     return f"Налёт на караван ({group_name or 'товары'}): добыча {loot}"
 
 
+def _raid_escorts(db: Session, raid: "models.EconCaravanRaid") -> List[int]:
+    """The escorts placed in the raid battle: stored by Tx B, else (a callback faster than Tx B / a raid re-attached
+    by the pass) the battle's guard-team players that still escort this caravan; ``[]`` when unreadable."""
+    if raid.escort_ids is not None:
+        return _ids(raid.escort_ids)
+    if not raid.battle_id:
+        return []
+    try:
+        with db.begin_nested():
+            return [int(r[0]) for r in db.execute(text(
+                "SELECT DISTINCT bp.character_id FROM battle_participants bp JOIN econ_caravan_escorts e "
+                "ON e.character_id = bp.character_id WHERE bp.battle_id = :b AND bp.team = :t "
+                "AND e.caravan_id = :c AND e.status = :s ORDER BY bp.character_id"),
+                {"b": int(raid.battle_id), "t": GUARD_TEAM, "c": int(raid.caravan_id),
+                 "s": escort_crud.STATUS_ACTIVE}).fetchall()]
+    except DBAPIError:
+        logger.warning("caravan raid %s: battle participants unreadable — escorts left in the caravan", raid.id)
+        return []
+
+
+@dataclass
+class EscortPlan:
+    """What the settlement does with the raid's escorts (FEAT-212 §3.9)."""
+    out_rows: List["models.EconCaravanEscort"] = field(default_factory=list)   # fall out / released
+    out_status: Optional[str] = None
+    out_message: Optional[str] = None
+    survivors: List["models.EconCaravanEscort"] = field(default_factory=list)  # repelled: stay, bonus on arrival
+
+    @property
+    def out_ids(self) -> List[int]:
+        return [int(r.character_id) for r in self.out_rows]
+
+
+def _escort_plan(db: Session, raid: "models.EconCaravanRaid", caravan: Optional["models.EconCaravan"], status: str,
+                 fallen_character_ids: Optional[Sequence[int]]) -> EscortPlan:
+    """Lock the active escort rows (asc id; after the raid row) of the escorts placed in the battle and decide:
+    ``won`` → all fall out; ``repelled`` → those in ``fallen_character_ids`` fall out (missing field → none), the
+    rest stay; ``expired`` → all released; ``aborted`` → all stay."""
+    if caravan is None or status == STATUS_ABORTED:
+        return EscortPlan()
+    placed = set(_raid_escorts(db, raid))
+    if not placed:
+        return EscortPlan()
+    if raid.escort_ids is None:
+        raid.escort_ids = sorted(placed)
+    rows = [r for r in escort_crud._active_rows_locked(db, int(caravan.id)) if int(r.character_id) in placed]
+    for row in rows:
+        row.in_raid = True                       # Tx B may have been lost; the rewards step reads it
+    if status == STATUS_WON:
+        return EscortPlan(rows, escort_crud.STATUS_FALLEN, MSG_ESCORT_FALLEN)
+    if status == STATUS_EXPIRED:
+        return EscortPlan(rows, escort_crud.STATUS_RELEASED, MSG_ESCORT_EXPIRED)
+    fallen = {int(c) for c in fallen_character_ids or ()}
+    return EscortPlan([r for r in rows if int(r.character_id) in fallen], escort_crud.STATUS_FALLEN,
+                      MSG_ESCORT_FALLEN_REPELLED, [r for r in rows if int(r.character_id) not in fallen])
+
+
+def _apply_escort_plan(db: Session, caravan: "models.EconCaravan", plan: EscortPlan,
+                       now: datetime) -> List[law_notify.Notice]:
+    """Rows → fallen / released, columns cleared (the character stays at the raid location; no knockout, no pay),
+    CharacterLog; notices for them and for the repelled survivors. The characters are already locked."""
+    ids = plan.out_ids + [int(r.character_id) for r in plan.survivors]
+    if not ids:
+        return []
+    users = law_crud.character_user_ids(db, ids)
+    notices = []
+    for row in plan.out_rows:
+        row.status = plan.out_status
+        row.ended_at = now
+        escort_crud._log(db, row.character_id, plan.out_message, caravan.id, status=plan.out_status)
+        notices.append(escort_crud._notice(users.get(int(row.character_id)), plan.out_message, row.character_id,
+                                           caravan.id, status=plan.out_status))
+    escort_crud._clear_columns(db, caravan.id, plan.out_ids)
+    for row in plan.survivors:
+        notices.append(escort_crud._notice(users.get(int(row.character_id)), MSG_ESCORT_REPELLED, row.character_id,
+                                           caravan.id, status=STATUS_REPELLED))
+    return notices
+
+
 def settle_raid(db: Session, raid_id: int, *, battle_id: Optional[int], winner_team: Optional[int], aborted: bool,
                 now: Optional[datetime] = None, expire: bool = False, params=None,
-                rng: Callable[[], float] = random.random) -> SettleResult:
+                rng: Callable[[], float] = random.random,
+                fallen_character_ids: Optional[Sequence[int]] = None) -> SettleResult:
     """Tx 1 (economy; commits). Idempotent: a raid that is no longer ``starting`` / ``fighting`` → ``already``.
-    ``expire`` = the battle ran longer than ``caravan_raid_battle_max_hours`` (no loot). Notices are returned (publish
-    after this call)."""
+    ``expire`` = the battle ran longer than ``caravan_raid_battle_max_hours`` (no loot). ``fallen_character_ids`` =
+    the battle's knocked-out / dropped participants (FEAT-212; an old battle-service sends none → on a repelled raid
+    every escort stays). Notices are returned (publish after this call)."""
     now = now or now_utc()
     probe = db.execute(text("SELECT caravan_id FROM econ_caravan_raids WHERE id = :id"), {"id": int(raid_id)}).first()
     if probe is None:
@@ -476,15 +596,22 @@ def settle_raid(db: Session, raid_id: int, *, battle_id: Optional[int], winner_t
 
         attackers = _attackers(db, raid)
         players = _players(db, attackers)
+        escorts = _escort_plan(db, raid, caravan, status, fallen_character_ids)    # escort rows locked here
         notices: List[law_notify.Notice] = []
         group_name = _group_name(db, caravan.group_code) if caravan is not None else None
         if status == STATUS_WON and caravan is not None and players:
-            notices = _pay_out(db, raid, caravan, attackers, players, group_name, params, now)
-        elif status == STATUS_REPELLED:
-            user_ids = law_crud.character_user_ids(db, players)
-            notices = [law_notify.Notice(user_ids.get(cid), MSG_REPELLED, WS_CARAVAN_RAID,
-                                         law_notify.CATEGORY_PROGRESS, {"character_id": cid, "raid_id": int(raid.id)})
-                       for cid in players]
+            notices = _pay_out(db, raid, caravan, attackers, players, group_name, params, now,
+                               lock_also=escorts.out_ids)
+        else:
+            _lock_characters(db, escorts.out_ids)                                 # the one character lock of Tx 1
+            if status == STATUS_REPELLED:
+                user_ids = law_crud.character_user_ids(db, players)
+                notices = [law_notify.Notice(user_ids.get(cid), MSG_REPELLED, WS_CARAVAN_RAID,
+                                             law_notify.CATEGORY_PROGRESS,
+                                             {"character_id": cid, "raid_id": int(raid.id)})
+                           for cid in players]
+        if caravan is not None:
+            notices = notices + _apply_escort_plan(db, caravan, escorts, now)
         if raid.attacker_ids is None:
             raid.attacker_ids = attackers
         raid.status = status
@@ -497,13 +624,16 @@ def settle_raid(db: Session, raid_id: int, *, battle_id: Optional[int], winner_t
     except Exception:
         db.rollback()
         raise
-    logger.info("caravan raid %s settled: %s (battle %s, attackers %s)", raid_id, status, battle_id, attackers)
+    logger.info("caravan raid %s settled: %s (battle %s, attackers %s, escorts out %s, stay %s)", raid_id, status,
+                battle_id, attackers, escorts.out_ids, [int(r.character_id) for r in escorts.survivors])
     return SettleResult(status, int(raid_id), notices)
 
 
 def _pay_out(db: Session, raid: "models.EconCaravanRaid", caravan: "models.EconCaravan", attackers: Sequence[int],
-             players: Sequence[int], group_name: Optional[str], params, now: datetime) -> List[law_notify.Notice]:
-    """The loot of a won raid (inside Tx 1): stolen units / bales, escrow marks via the ledger, shares, logs."""
+             players: Sequence[int], group_name: Optional[str], params, now: datetime,
+             lock_also: Sequence[int] = ()) -> List[law_notify.Notice]:
+    """The loot of a won raid (inside Tx 1): stolen units / bales, escrow marks via the ledger, shares, logs.
+    ``lock_also`` = the escorts falling out — locked in the same single sorted character lock as the raiders."""
     left = max(Decimal(0), caravan_crud._dec3(caravan.units) - caravan_crud._dec3(caravan.stolen_units))
     stolen_units, stolen_value = econ_caravan.stolen(left, caravan.unit_price, params.caravan_raid_goods_share)
     paid_total = _i(caravan.paid_purse) + _i(caravan.paid_treasury)
@@ -515,7 +645,7 @@ def _pay_out(db: Session, raid: "models.EconCaravanRaid", caravan: "models.EconC
     split = econ_caravan.split_loot(marks, bales, [a for a in attackers if a in players] or players,
                                     raid.leader_character_id)
 
-    _lock_characters(db, players)
+    _lock_characters(db, list(players) + list(lock_also))
     escrow_ref = core.AccountRef.caravan_escrow()
     caravan_crud._lock_balances(db, [escrow_ref])
     legs = [core.Leg(escrow_ref, core.AccountRef.character(cid), m) for cid, (m, _b) in split.items() if m > 0]
@@ -620,6 +750,44 @@ def law_step(db: Session, raid_id: int, now: Optional[datetime] = None, params=N
         raise
 
 
+def raid_faction_key(raid_id: int, character_id: int) -> str:
+    return f"faction:caravan_raid:r{int(raid_id)}:{int(character_id)}"
+
+
+def raid_faction_points(db: Session, raid_id: int, now: Optional[datetime] = None) -> int:
+    """FEAT-212 §3.10: faction points «Налёты на караваны» for the players of a ``won`` raid's shares, once per raid
+    (``faction_done``). ``faction_kills.apply_caravan_deed`` runs its own transactions (nothing may be open) and is
+    idempotent per faction (event key), so the claim is set after the deeds — a crash in between only repeats no-ops.
+    Publishes the notices. Returns the number of faction deeds applied."""
+    import faction_core as fc
+    import faction_kills
+    import faction_notify
+    now = now or now_utc()
+    row = db.execute(text("SELECT status, faction_done FROM econ_caravan_raids WHERE id = :id"),
+                     {"id": int(raid_id)}).first()
+    players = [int(r[0]) for r in db.execute(text(
+        "SELECT character_id FROM econ_caravan_raid_shares WHERE raid_id = :r ORDER BY character_id"),
+        {"r": int(raid_id)}).fetchall()]
+    db.rollback()
+    if row is None or row[0] != STATUS_WON or bool(row[1]):
+        return 0
+    applied = 0
+    notices = []
+    for cid in players:
+        result = faction_kills.apply_caravan_deed(db, cid, fc.ENEMY_RAID, raid_faction_key(raid_id, cid), now)
+        notices.extend(result.notices)
+        applied += len(result.data.get("applied") or [])
+    try:
+        db.execute(text("UPDATE econ_caravan_raids SET faction_done = 1 WHERE id = :id AND status = :s "
+                        "AND faction_done = 0"), {"id": int(raid_id), "s": STATUS_WON})
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    faction_notify.publish(notices)
+    return applied
+
+
 def _inventory_url(character_id: int) -> str:
     return f"{settings.INVENTORY_SERVICE_URL.rstrip('/')}/internal/characters/{int(character_id)}/items"
 
@@ -702,6 +870,11 @@ def finish_raid(db: Session, raid_id: int, now: Optional[datetime] = None, param
         db.rollback()
         logger.exception("caravan raid %s: law step failed, retried by the caravan pass", raid_id)
     try:
+        raid_faction_points(db, raid_id, now)
+    except Exception:
+        db.rollback()
+        logger.exception("caravan raid %s: faction points failed, retried by the caravan pass", raid_id)
+    try:
         deliver_bales(db, raid_id, now)
     except Exception:
         db.rollback()
@@ -714,10 +887,12 @@ def finish_raid(db: Session, raid_id: int, now: Optional[datetime] = None, param
 
 
 def battle_result(db: Session, *, battle_id: int, raid_id: int, winner_team: Optional[int], aborted: bool,
-                  now: Optional[datetime] = None) -> str:
-    """A3 (battle-service callback): settle, publish, then law / bales / guards. Returns the A3 status."""
+                  now: Optional[datetime] = None, fallen_character_ids: Optional[Sequence[int]] = None) -> str:
+    """A3 (battle-service callback): settle, publish, then law / faction points / bales / guards. Returns the A3
+    status."""
     now = now or now_utc()
-    result = settle_raid(db, raid_id, battle_id=battle_id, winner_team=winner_team, aborted=aborted, now=now)
+    result = settle_raid(db, raid_id, battle_id=battle_id, winner_team=winner_team, aborted=aborted, now=now,
+                         fallen_character_ids=fallen_character_ids)
     publish(result.notices)
     if result.status in FINAL_STATUSES or result.status == RESULT_ALREADY:
         finish_raid(db, raid_id, now)          # a late callback of an expired raid only despawns the guards
@@ -774,6 +949,19 @@ def expire_stale_raids(factory: SessionFactory, now: datetime, params) -> int:
     return done
 
 
+def _fallen(value) -> Optional[List[int]]:
+    """``fallen_character_ids`` of a battle-service answer; None when an old battle-service sent no such field."""
+    if value is None:
+        return None
+    out = []
+    for x in value if isinstance(value, (list, tuple)) else ():
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def poll_raid_battles(factory: SessionFactory, now: datetime, params) -> int:
     """Step 2: ``fighting`` raids started > 2 min ago — poll battle-service (lost callbacks); a 404 battle = aborted;
     still running past ``caravan_raid_battle_max_hours`` → ``expired`` (no loot, caravan released)."""
@@ -803,7 +991,8 @@ def poll_raid_battles(factory: SessionFactory, now: datetime, params) -> int:
                     kwargs = dict(battle_id=int(battle_id), winner_team=None, aborted=True)
                 elif isinstance(result, dict) and result.get("status") in FINISHED_BATTLE_STATUSES:
                     kwargs = dict(battle_id=int(battle_id), winner_team=result.get("winner_team"),
-                                  aborted=bool(result.get("aborted")))
+                                  aborted=bool(result.get("aborted")),
+                                  fallen_character_ids=_fallen(result.get("fallen_character_ids")))
             if kwargs is None and started_at is not None and started_at + max_age <= now:
                 kwargs = dict(battle_id=int(battle_id) if battle_id else None, winner_team=None, aborted=False,
                               expire=True)
@@ -822,8 +1011,8 @@ def poll_raid_battles(factory: SessionFactory, now: datetime, params) -> int:
 
 
 def raid_followups(factory: SessionFactory, now: datetime, params) -> int:
-    """Step 3: won raids without the law step, undelivered bales (of raids finished > 1 min ago — fresh ones are the
-    callback's), finished raids with guards still spawned."""
+    """Step 3: won raids without the law step / without the faction points (FEAT-212), undelivered bales (of raids
+    finished > 1 min ago — fresh ones are the callback's), finished raids with guards still spawned."""
     done = 0
     for raid_id in _select_ids(factory, "SELECT id FROM econ_caravan_raids WHERE status = :s AND law_done = 0 "
                                         "ORDER BY id LIMIT :n", {"s": STATUS_WON}):
@@ -836,6 +1025,16 @@ def raid_followups(factory: SessionFactory, now: datetime, params) -> int:
         except Exception:
             db.rollback()
             logger.exception("caravan pass: law step of raid %s failed", raid_id)
+        finally:
+            db.close()
+    for raid_id in _select_ids(factory, "SELECT id FROM econ_caravan_raids WHERE status = :s AND faction_done = 0 "
+                                        "ORDER BY id LIMIT :n", {"s": STATUS_WON}):
+        db = factory()
+        try:
+            done += raid_faction_points(db, raid_id, now)
+        except Exception:
+            db.rollback()
+            logger.exception("caravan pass: faction points of raid %s failed", raid_id)
         finally:
             db.close()
     for raid_id in _select_ids(factory, "SELECT DISTINCT r.id FROM econ_caravan_raids r JOIN econ_caravan_raid_shares s "

@@ -7,6 +7,7 @@ import time
 import models, schemas
 import locations_client
 import activity_lock
+import caravan_escort_public
 from config import settings
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
@@ -732,7 +733,8 @@ def get_character_public(db: Session, character_id: int) -> Optional[dict]:
         "registered_at": character.registered_at,
         "skitaltsy_since_year": character.skitaltsy_since_year,
         "skitaltsy_since_segment": character.skitaltsy_since_segment,
-        "current_location_id": character.current_location_id,
+        # FEAT-212 3.6: a caravan escort shows the frozen hire location
+        "current_location_id": caravan_escort_public.public_location_id(db, character),
         "is_npc": bool(character.is_npc),
         "user_id": character.user_id,
         "username": None,  # заполняется в эндпоинте: имя живёт в user-service

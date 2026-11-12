@@ -1,4 +1,4 @@
-"""FEAT-198 QA (task 10): law in inventory-service.
+"""FEAT-198 QA (task 10) + FEAT-212 QA (task 12): law and the caravan-escort lock in inventory-service.
 
   * The activity-lock copy (sync): reason priority, relative messages, the REAL shared-DB
     query against SQLite incl. the unknown-column fallback (a `characters` table without the
@@ -193,3 +193,83 @@ def test_ownership_is_checked_before_the_lock(auction_client, law_db, url, paylo
     body = dict(payload, character_id=2)
     r = auction_client.post(url, json=body)
     assert r.status_code == 403, r.text
+
+
+# ===========================================================================
+# 3. FEAT-212: caravan escort reason + the deploy-skew fallback chain (real SQLite)
+# ===========================================================================
+
+_ESCORT_TABLE = _FULL_TABLE.replace(
+    "jailed_until DATETIME, law_encounter_id INTEGER",
+    "jailed_until DATETIME, law_encounter_id INTEGER, escort_caravan_id INTEGER",
+)
+_BROKEN_TABLE = """CREATE TABLE characters (
+    id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, current_location_id INTEGER,
+    dungeon_session_id INTEGER, unconscious_until DATETIME, asleep_since DATETIME
+)"""
+NEUTRAL = "Персонаж: действие сейчас недоступно"
+
+
+@pytest.fixture()
+def escort_db(db_session):
+    _make_characters(db_session, _ESCORT_TABLE)
+    yield db_session
+    db_session.execute(text("DROP TABLE IF EXISTS characters"))
+    db_session.commit()
+
+
+class TestEscortLock:
+    def test_escort_from_sqlite_is_neutral(self, escort_db):
+        _set(escort_db, 1, escort_caravan_id=7)
+        lock = activity_lock.get_activity_lock(escort_db, 1)
+        assert lock["reason"] == "caravan_escort"
+        assert activity_lock.lock_message(lock) == NEUTRAL
+        assert activity_lock.get_activity_lock(escort_db, 2)["locked"] is False
+
+    def test_check_raises_409_neutral(self, escort_db):
+        _set(escort_db, 1, escort_caravan_id=7)
+        with pytest.raises(HTTPException) as exc:
+            activity_lock.check_not_activity_locked(escort_db, 1, subject="Ваш персонаж")
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Ваш персонаж: действие сейчас недоступно"
+        assert "карав" not in exc.value.detail.lower()
+
+    def test_law_beats_escort(self, escort_db):
+        _set(escort_db, 1, escort_caravan_id=7, law_encounter_id=3)
+        assert activity_lock.get_activity_lock(escort_db, 1)["reason"] == "law_encounter"
+
+    def test_table_without_escort_column_uses_the_law_sql(self, law_db):
+        """Character-service 051 not applied yet: the law columns are still read."""
+        _set(law_db, 1, law_encounter_id=4)
+        assert activity_lock.get_activity_lock(law_db, 1)["reason"] == "law_encounter"
+
+    def test_unrelated_missing_column_propagates(self, db_session):
+        """No `reading_since` -> not our deploy skew -> the error is not swallowed."""
+        _make_characters(db_session, _BROKEN_TABLE)
+        try:
+            with pytest.raises(Exception):
+                activity_lock.get_activity_lock(db_session, 1)
+        finally:
+            db_session.rollback()
+            db_session.execute(text("DROP TABLE IF EXISTS characters"))
+            db_session.commit()
+
+
+@pytest.fixture()
+def escort_client(client, escort_db):
+    from main import app
+
+    user = UserRead(id=1, username="alice", role="user", permissions=[])
+    app.dependency_overrides[get_current_user_via_http] = lambda: user
+    yield client
+    app.dependency_overrides.pop(get_current_user_via_http, None)
+
+
+@pytest.mark.parametrize("url,payload", AUCTION_ROUTES, ids=ROUTE_IDS)
+def test_escort_gets_the_neutral_409(escort_client, escort_db, url, payload):
+    _set(escort_db, 1, escort_caravan_id=7)
+    with patch("crud.is_character_in_battle") as in_battle:
+        r = escort_client.post(url, json=payload)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == NEUTRAL
+    in_battle.assert_not_called()

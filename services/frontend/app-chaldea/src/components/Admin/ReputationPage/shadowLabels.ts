@@ -41,6 +41,8 @@ export const RENOWN_SOURCE_LABELS: Record<string, string> = {
   reputation: 'Репутация',
   crime: 'Преступление',
   staff: 'Решение властей',
+  /** FEAT-212: a repelled raid on a caravan the player escorted. */
+  caravan_defense: 'Отбитый налёт на караван',
 };
 
 export const RENOWN_SCALE_LABELS: Record<string, string> = {

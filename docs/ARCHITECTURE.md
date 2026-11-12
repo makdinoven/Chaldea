@@ -78,7 +78,7 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | Сервис | Таблицы |
 |--------|---------|
 | user-service | `users`, `users_character`, `users_avatar_preview`, `users_avatar_character_preview` |
-| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL), закон FEAT-198 (миграция `039_law`): `character_wanted`, `law_settings`, `law_levels`, `law_crimes`, `law_encounters`, `law_jail_terms`, `law_log` + `characters.jailed_until`, `jail_region_id`, `law_encounter_id` (две из них читаются остальными сервисами как блокировка активности), тень FEAT-199 (миграция `040_shadow_renown`): `shadow_settings`, `region_suspicion`, `character_renown`, `renown_tiers`, `renown_log` + колонки снимка в `law_crimes` (`character_renown` / `renown_tiers` читает locations-service SQL-ом); скрытность FEAT-201 (миграция `041_stealth`): новые поля в `shadow_settings`, `law_crimes.stealth_reduction_pct`; тюрьма страны FEAT-202 (миграция `042_country_prison`): 3 поля в `law_settings`, `law_jail_terms.facility` / `country_id` / `district_id`, `characters.jail_district_id` (читается locations-service SQL-ом для перемещений внутри тюрьмы); патрули стражи FEAT-204 (миграция `044_guard_patrols`): `guard_patrols`, `guard_patrol_points`, `law_settings.patrols_enabled` / `patrol_encounter_hold_min` (читает `LocationNeighbors` / `Locations` / `Districts` locations-service SQL-ом); физические караваны и налёты FEAT-211 (миграция `050_physical_caravans`): `econ_caravans` + `is_physical`, `route`, `route_index`, `current_location_id`, `next_move_at`, `hold_started_at`, `guard_count`, `stolen_units`, `raid_paid` и др. (читает locations-service SQL-ом для гейта поста «caravan»), `econ_regions.trade_gate_location_id`, `econ_caravan_raids`, `econ_caravan_raid_shares`, `econ_caravan_guard_templates`, `econ_fences` (настройки скупщика; читает locations-service SQL-ом). Сам character-service для маршрутов и удержания читает SQL-ом `LocationNeighbors` / `Locations` / `action_gates` / `post_gate_requests`, для восстановления итога налёта — `battles.caravan_raid_id` / `battle_participants`, для тюков — `items.is_stolen` / `bale_group` |
+| character-service | `characters` (+ `reputation_min_tier`, `reputation_kill_points` — FEAT-197), `character_requests`, `races`, `subraces`, `classes`, `starter_kits`, `titles`, `character_titles`, `level_thresholds`, `econ_*` (экономика, FEAT-181…194; `econ_banks` + `loan_min_reputation_tier`), `teleport_links` (+ `min_reputation_tier`), репутация FEAT-197: `character_reputation`, `reputation_log`, `reputation_settings`, `reputation_tiers`, `reputation_actions`, `reputation_npc_role_weights` (читаются locations-service напрямую SQL), закон FEAT-198 (миграция `039_law`): `character_wanted`, `law_settings`, `law_levels`, `law_crimes`, `law_encounters`, `law_jail_terms`, `law_log` + `characters.jailed_until`, `jail_region_id`, `law_encounter_id` (две из них читаются остальными сервисами как блокировка активности), тень FEAT-199 (миграция `040_shadow_renown`): `shadow_settings`, `region_suspicion`, `character_renown`, `renown_tiers`, `renown_log` + колонки снимка в `law_crimes` (`character_renown` / `renown_tiers` читает locations-service SQL-ом); скрытность FEAT-201 (миграция `041_stealth`): новые поля в `shadow_settings`, `law_crimes.stealth_reduction_pct`; тюрьма страны FEAT-202 (миграция `042_country_prison`): 3 поля в `law_settings`, `law_jail_terms.facility` / `country_id` / `district_id`, `characters.jail_district_id` (читается locations-service SQL-ом для перемещений внутри тюрьмы); патрули стражи FEAT-204 (миграция `044_guard_patrols`): `guard_patrols`, `guard_patrol_points`, `law_settings.patrols_enabled` / `patrol_encounter_hold_min` (читает `LocationNeighbors` / `Locations` / `Districts` locations-service SQL-ом); физические караваны и налёты FEAT-211 (миграция `050_physical_caravans`): `econ_caravans` + `is_physical`, `route`, `route_index`, `current_location_id`, `next_move_at`, `hold_started_at`, `guard_count`, `stolen_units`, `raid_paid` и др. (читает locations-service SQL-ом для гейта поста «caravan»), `econ_regions.trade_gate_location_id`, `econ_caravan_raids`, `econ_caravan_raid_shares`, `econ_caravan_guard_templates`, `econ_fences` (настройки скупщика; читает locations-service SQL-ом). Сам character-service для маршрутов и удержания читает SQL-ом `LocationNeighbors` / `Locations` / `action_gates` / `post_gate_requests`, для восстановления итога налёта — `battles.caravan_raid_id` / `battle_participants`, для тюков — `items.is_stolen` / `bale_group`; охрана караванов из игроков FEAT-212 (миграция `051_caravan_escorts`): `characters.escort_caravan_id` (пишет только character-service; battle-, locations-, inventory-service читают как причину блокировки `caravan_escort`, party-service — чтобы не показывать охранника в отрядах на локации; у всех откат на старую схему без колонки), `econ_caravan_escorts` (найм, статус, плата/надбавка), `econ_caravan_messages` (караванный канал), `econ_caravan_raids` + `escort_ids`, `faction_done`, действия репутации `caravan_escort` / `caravan_defense` |
 | character-attributes-service | `character_attributes` (+ `stealth` — FEAT-201, миграция `009_add_stealth`, читается character-service SQL-ом) |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
 | inventory-service | `items` (+ `is_mask` — FEAT-199, читается character-service SQL-ом; + `stealth_modifier` — FEAT-201, миграция 035; + `is_stolen`, `bale_group` — FEAT-211, миграция 037, 12 краденых тюков), `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
@@ -148,6 +148,12 @@ UTC и местного времени без признака, где что.
 ```
 user-service ──> character-service (профиль персонажа)
                ──> locations-service (детали локации)
+               ──> character-service (FEAT-212: публичные `/users/{id}/characters` и чужой
+                      `/users/{id}/profile` берут внутренний `short_info?masked=true` — у охранника
+                      каравана локация застывает на месте найма, блокировка охраны скрыта)
+
+party-service (FEAT-212, без HTTP: `/party/by-location` читает `characters.escort_caravan_id`
+                      SQL-ом и прячет охранников каравана; без колонки — запрос без фильтра)
 
 character-service ──> inventory-service (создание инвентаря)
                   ──> skills-service (назначение навыков)
@@ -167,12 +173,18 @@ character-service ──> inventory-service (создание инвентаря
                   ──> battle-service (FEAT-211: POST /battles/internal/caravan-raid — бой налёта
                       на караван (команда 0 — налётчики, 1 — охрана; гейт поста «caravan» тратит
                       battle-service); проход караванов опрашивает GET /battles/internal/{id}/result
-                      для налётов в статусе fighting — страховка от потерянного колбэка)
+                      для налётов в статусе fighting — страховка от потерянного колбэка;
+                      FEAT-212: + `escort_character_ids` — игроки-охранники в команду 1, ответ
+                      возвращает реально поставленных; итог читает `fallen_character_ids`)
                   ──> inventory-service (FEAT-211: POST /inventory/internal/characters/{id}/items —
                       краденые тюки налётчикам после победы; повтор при сбое в проходе караванов)
 
 locations-service ──> character-service (игроки в локации)
                   ──> character-attributes-service (стамина для перемещения, refund_stamina при cancel/battle-interrupt — FEAT-128)
+                  ──> character-service (FEAT-212: GET /characters/internal/{id}/profile +
+                      X-Internal-Token — реальная локация/блокировка для move, move_and_post,
+                      drop, pickup; публичный /characters/{id}/profile маскирует охранника;
+                      при 404 — откат на публичный)
                   ──> inventory-service (FEAT-128: gathering/award на finalize, free_slots_check на старте, gathering-skills на старте для расчёта бонусов)
 
                   ──> character-service (FEAT-197: /characters/internal/reputation/apply —
@@ -205,9 +217,16 @@ battle-service ──> character-attributes-service (боевые характе
                       боя со стражей после цикла смерти NPC; aborted при принудительном завершении)
                ──> character-service (FEAT-211: POST /characters/internal/caravans/raid-result —
                       итог боя с тегом battles.caravan_raid_id при завершении и aborted при
-                      принудительном завершении; fire-and-forget, сбой не ломает конец боя)
+                      принудительном завершении; fire-and-forget, сбой не ломает конец боя;
+                      FEAT-212: + `fallen_character_ids` — выбывшие охранники; то же поле в
+                      GET /battles/internal/{id}/result)
 
-autobattle-service ──> battle-service (состояние боя, отправка действий)
+dungeon-service ──> character-service (FEAT-212: профиль для входа в данж — GET
+                      /characters/internal/{id}/profile + X-Internal-Token, при 404 — публичный)
+
+autobattle-service ──> battle-service (состояние боя, отправка действий; FEAT-212: флаг
+                      участника `autobattle_forbidden` в состоянии боя (охранник каравана в налёте)
+                      → /register отвечает 403; /unregister и /speed — только владелец персонажа)
 
 notification-service ──> user-service (список юзеров для рассылки)
 ```

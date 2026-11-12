@@ -506,6 +506,7 @@ def test_migration_049_is_single_head():
                 if rev:
                     downs.add(rev)
     assert "048_npc_admin_ready" in downs
-    # FEAT-211: 050_physical_caravans follows 049 and is the single head now
+    # FEAT-211: 050_physical_caravans follows 049; FEAT-212: 051_caravan_escorts follows 050 and is the single head
     assert "049_mob_admin_ready" in downs
-    assert "050_physical_caravans" not in downs
+    assert "050_physical_caravans" in downs
+    assert "051_caravan_escorts" not in downs

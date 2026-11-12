@@ -307,11 +307,12 @@ class TestSetSpeedOwnership:
         assert SPEED[20] == "slow"
 
     @patch("auth_http.requests.get")
-    def test_no_owner_entry_allows_speed_set(self, mock_auth):
-        """If participant has no OWNER entry, any authenticated user can set speed."""
+    def test_no_owner_entry_refuses_speed_set(self, mock_auth):
+        """FEAT-212 (ISSUES.md): a participant with no OWNER entry and no resolvable owner
+        (an internally registered mob/NPC) cannot be tuned by any player."""
         mock_auth.return_value = _mock_response(200, USER_1)
         ALLOWED.add(30)
-        # No OWNER entry for pid 30
+        # No OWNER entry for pid 30, no known battle -> owner unresolvable
 
         with TestClient(app) as client:
             response = client.post(
@@ -319,8 +320,8 @@ class TestSetSpeedOwnership:
                 json={"participant_id": 30, "speed": "slow"},
                 headers=AUTH_HEADERS,
             )
-        assert response.status_code == 200
-        assert SPEED[30] == "slow"
+        assert response.status_code == 403
+        assert SPEED.get(30) != "slow"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

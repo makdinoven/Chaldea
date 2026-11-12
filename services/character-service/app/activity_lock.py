@@ -12,6 +12,10 @@ FEAT-198 (law) adds two more columns on `characters`:
   * `law_encounter_id` — set while the guards have stopped the character and
     the player has not chosen what to do yet.
 
+FEAT-212 adds `escort_caravan_id` on `characters` — set while the player
+escorts a physical caravan (reason `caravan_escort`). Its refusal text is
+neutral for every subject: third parties must not learn about the escort.
+
 Other services read the same columns from the shared DB (the established
 pattern for battle/gathering locks) and only character-service writes them.
 """
@@ -32,6 +36,8 @@ REASON_READING = "reading"
 REASON_JAIL = "jail"
 # FEAT-198: stopped by the guards, a choice is pending (`characters.law_encounter_id`).
 REASON_LAW_ENCOUNTER = "law_encounter"
+# FEAT-212: escorting a physical caravan (`characters.escort_caravan_id`).
+REASON_CARAVAN_ESCORT = "caravan_escort"
 
 
 def _as_naive_utc(value) -> Optional[datetime]:
@@ -61,10 +67,10 @@ def _lock(reason, until=None, dungeon_session_id=None, law_encounter_id=None) ->
 
 def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] = None,
                  asleep_since=None, reading_since=None,
-                 jailed_until=None, law_encounter_id=None) -> dict:
+                 jailed_until=None, law_encounter_id=None, escort_caravan_id=None) -> dict:
     """Build the public lock object from the raw column values.
 
-    Priority: jail > law_encounter > unconscious > dungeon > asleep > reading.
+    Priority: jail > law_encounter > unconscious > dungeon > caravan_escort > asleep > reading.
     Unconsciousness wins over the dungeon lock (a knocked-out character never
     holds a dungeon lock anyway — the knock-out clears it).
     """
@@ -79,6 +85,8 @@ def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] 
         return _lock(REASON_UNCONSCIOUS, until=until.isoformat())
     if isinstance(dungeon_session_id, int) and dungeon_session_id > 0:
         return _lock(REASON_DUNGEON, dungeon_session_id=dungeon_session_id)
+    if isinstance(escort_caravan_id, int) and escort_caravan_id > 0:
+        return _lock(REASON_CARAVAN_ESCORT)
     if _as_naive_utc(asleep_since) is not None:
         return _lock(REASON_ASLEEP)
     if _as_naive_utc(reading_since) is not None:
@@ -94,6 +102,7 @@ def lock_for_character(character) -> dict:
         reading_since=getattr(character, "reading_since", None),
         jailed_until=getattr(character, "jailed_until", None),
         law_encounter_id=getattr(character, "law_encounter_id", None),
+        escort_caravan_id=getattr(character, "escort_caravan_id", None),
     )
 
 
@@ -130,4 +139,7 @@ def lock_message(lock: dict, subject: str = "Персонаж") -> Optional[str]
         return f"{subject} спит — сначала нужно проснуться"
     if lock.get("reason") == REASON_READING:
         return f"{subject} читает — сначала нужно закончить чтение"
+    if lock.get("reason") == REASON_CARAVAN_ESCORT:
+        # neutral on purpose (FEAT-212 3.5): never reveal the hidden escort to a third party
+        return f"{subject}: действие сейчас недоступно"
     return f"{subject} находится в подземелье"

@@ -60,7 +60,7 @@ def _session(jailed=None, encounter=None, dungeon=None, unconscious=None, locati
 
     async def execute(query, params=None):
         q = str(query)
-        if "jailed_until, law_encounter_id FROM characters" in q:
+        if "jailed_until, law_encounter_id" in q and "FROM characters" in q:
             return _res((dungeon, unconscious, None, None, jailed, encounter))
         if "SELECT current_location_id" in q and "FROM characters" in q:
             return _res((location, None))  # FEAT-202: + jail_district_id (station prisoner)

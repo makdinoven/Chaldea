@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio, math, random, statistics, logging, traceback
 from collections import defaultdict, deque
-from typing import Any, Dict, Tuple, Deque
+from typing import Any, Dict, Optional, Tuple, Deque
 
 import os
 import aioredis, uvicorn
@@ -114,6 +114,38 @@ def _require_owner(pid: int, user: UserRead) -> None:
         raise HTTPException(403, "Вы не можете управлять чужим персонажем")
 
 
+# FEAT-212: тексты отказов владельцу/охраннику.
+MSG_NOT_YOUR_AUTOBATTLE = "Вы не можете отменить автобой чужого персонажа"
+MSG_NOT_YOUR_SPEED = "Вы не можете менять скорость чужого автобоя"
+MSG_AUTOBATTLE_FORBIDDEN = "Охранникам каравана автобой недоступен — в налёте вы ходите сами"
+
+
+async def _resolve_owner(pid: int) -> Optional[int]:
+    """Пользователь, которому принадлежит участник (FEAT-212, ISSUES.md).
+
+    Сначала реестр OWNER (кто включил автобой). Мобов и NPC регистрирует
+    battle-service через /internal/register — у них OWNER нет; тогда
+    владелец ищется по бою: участник → character_id → user_id. У NPC/мобов
+    владельца нет (None), как и при любой ошибке — тогда никому нельзя.
+    """
+    owner = OWNER.get(pid)
+    if owner is not None:
+        return owner
+    bid = PID_BATTLE.get(pid)
+    if not bid:
+        return None
+    try:
+        ctx = await get_battle_state(bid)
+        participant = ((ctx or {}).get("runtime") or {}).get("participants", {}).get(str(pid))
+        character_id = (participant or {}).get("character_id")
+        if not character_id:
+            return None
+        return await get_character_owner(character_id)
+    except Exception as e:  # сеть / 404 состояния — считаем владельца неизвестным
+        log.warning("owner lookup failed for pid=%s bid=%s: %s", pid, bid, e)
+        return None
+
+
 # ─────────────────────────────  REST  ────────────────────────────
 @app.get("/health")
 async def health() -> Dict[str, Any]:
@@ -153,14 +185,20 @@ def set_feedback(p: FeedbackPayload, user: UserRead = Depends(get_current_user_v
 
 @app.post("/register")
 async def register(p: RegisterPayload, user: UserRead = Depends(get_current_user_via_http)):
-    # Ownership validation: проверяем, что персонаж принадлежит текущему пользователю
-    bid = p.battle_id
+    # Ownership validation: проверяем, что персонаж принадлежит текущему пользователю.
+    # FEAT-212: без battle_id берём последний бой участника из your_turn (если он известен),
+    # чтобы запрет автобоя для охранников каравана нельзя было обойти нулевым battle_id.
+    bid = p.battle_id or PID_BATTLE.get(p.participant_id, 0)
+    ctx = None
     if bid:
         ctx = await get_battle_state(bid)
         pid_str = str(p.participant_id)
         participant_data = ctx.get("runtime", {}).get("participants", {}).get(pid_str)
         if not participant_data:
             raise HTTPException(403, "Участник не найден в этом бою")
+        # FEAT-212: охранник каравана в налёте ходит только сам.
+        if participant_data.get("autobattle_forbidden"):
+            raise HTTPException(403, MSG_AUTOBATTLE_FORBIDDEN)
         character_id = participant_data.get("character_id")
         if character_id:
             owner_user_id = await get_character_owner(character_id)
@@ -178,7 +216,7 @@ async def register(p: RegisterPayload, user: UserRead = Depends(get_current_user
     # если уже наш ход → сразу ходим
     bid = PID_BATTLE.get(p.participant_id)
     if bid:
-        if not p.battle_id:
+        if ctx is None:
             # battle state was not fetched yet — fetch now
             ctx = await get_battle_state(bid)
         if ctx["runtime"]["current_actor"] == p.participant_id:
@@ -208,11 +246,15 @@ async def internal_register(p: RegisterPayload):
 
 
 @app.post("/unregister")
-def unregister(participant_id: int = Body(..., embed=True), user: UserRead = Depends(get_current_user_via_http)):
-    # Проверяем, что пользователь сам регистрировал этот pid
-    registered_owner = OWNER.get(participant_id)
-    if registered_owner is not None and registered_owner != user.id:
-        raise HTTPException(403, "Вы не можете отменить автобой чужого персонажа")
+async def unregister(participant_id: int = Body(..., embed=True),
+                     user: UserRead = Depends(get_current_user_via_http)):
+    # FEAT-212 (ISSUES.md): выключать автобой может только владелец персонажа.
+    # Раньше участник без записи в OWNER (моб/NPC, зарегистрированный battle-service)
+    # снимался кем угодно. Неизвестный pid — тихий no-op (ничего не раскрываем).
+    if participant_id not in ALLOWED and participant_id not in OWNER:
+        return {"ok": True, "allowed": list(ALLOWED)}
+    if await _resolve_owner(participant_id) != user.id:
+        raise HTTPException(403, MSG_NOT_YOUR_AUTOBATTLE)
     ALLOWED.discard(participant_id)
     OWNER.pop(participant_id, None)
     SPEED.pop(participant_id, None)
@@ -223,14 +265,14 @@ def unregister(participant_id: int = Body(..., embed=True), user: UserRead = Dep
 
 
 @app.post("/speed")
-def set_speed(p: SpeedPayload, user: UserRead = Depends(get_current_user_via_http)):
+async def set_speed(p: SpeedPayload, user: UserRead = Depends(get_current_user_via_http)):
     if p.speed not in ("fast", "slow"):
         raise HTTPException(400, "Допустимые значения скорости: fast, slow")
     if p.participant_id not in ALLOWED:
         raise HTTPException(404, "Участник не зарегистрирован в автобое")
-    registered_owner = OWNER.get(p.participant_id)
-    if registered_owner is not None and registered_owner != user.id:
-        raise HTTPException(403, "Вы не можете менять скорость чужого автобоя")
+    # FEAT-212: только владелец (у мобов/NPC владельца нет → 403).
+    if await _resolve_owner(p.participant_id) != user.id:
+        raise HTTPException(403, MSG_NOT_YOUR_SPEED)
     SPEED[p.participant_id] = p.speed
     return {"ok": True, "participant_id": p.participant_id, "speed": p.speed}
 
@@ -356,6 +398,15 @@ async def handle_turn(bid: int, pid: int) -> None:
                 return
             if ctx["runtime"]["current_actor"] != pid:
                 return                              # чужой ход (или уже обработан)
+            # FEAT-212: охранник каравана ходит только сам — даже если pid попал в
+            # ALLOWED в обход /register-проверки (battle_id=0 до первого your_turn).
+            me = (ctx["runtime"].get("participants") or {}).get(str(pid)) or {}
+            if me.get("autobattle_forbidden"):
+                log.warning("battle=%s pid=%s: autobattle forbidden (caravan escort) — unregistered", bid, pid)
+                ALLOWED.discard(pid)
+                OWNER.pop(pid, None)
+                SPEED.pop(pid, None)
+                return
 
             # ---------- features / history ----------
             feats = build_features(ctx, pid)

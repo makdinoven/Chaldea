@@ -390,7 +390,7 @@ info|good|bad, character_id, name}`; новая рассылается по WS `
 
 ## Межсервисные связи
 
-* character-service: профиль (`character_name`, `activity_lock`), блокировки (`/internal/activity-lock/*`),
+* character-service: профиль (`character_name`, `activity_lock`; FEAT-212: `/characters/internal/{id}/profile` + `X-Internal-Token`, при 404 — откат на публичный), блокировки (`/internal/activity-lock/*`),
   спавн/удаление мобов. Золото — не по HTTP, а проводками в общей БД (FEAT-181).
 * character-attributes-service: атрибуты, выносливость, `recover` (лечение и урон отрицательным значением).
 * inventory-service: выдача предметов, названия предметов.

@@ -1002,3 +1002,360 @@ def test_reveal_of_a_deferred_raid_uses_the_caravan_action(lw, monkeypatch):
     assert _own_rep(lw, ALPHA, R_OST) == [("caravan_attack", -100)]
     assert wanted(lw, ALPHA, R_OST) > 0
     assert _own_rep(lw, ALPHA, R_DUNY) == []                                      # accepted simplification
+
+
+# ===================================================================================================================
+# FEAT-212 QA (#10): raids on caravans with player escorts (features/FEAT-212 §3.9, §3.10 raid)
+# ===================================================================================================================
+
+import asyncio  # noqa: E402
+
+import activity_lock  # noqa: E402
+import caravan_escort_crud as escort_crud  # noqa: E402
+import faction_core  # noqa: E402
+import faction_kills  # noqa: E402
+from faction_crud import FlowResult  # noqa: E402
+
+E1, E2, E3, E4, E5 = 511, 512, 513, 514, 515
+ESCORT_USERS = {E1: 21, E2: 22, E3: 23, E4: 24, E5: 25}
+
+
+class EscortBattle(FakeBattle):
+    """B1 stand-in that also takes ``escort_character_ids``: answers the sent escorts as placed (``placed`` overrides,
+    ``old_bs`` omits the field like a pre-FEAT-212 battle-service)."""
+
+    def __init__(self):
+        super().__init__()
+        self.kwargs = []
+        self.placed = None
+        self.old_bs = False
+
+    async def __call__(self, raid_id, caravan_id, leader, group, guard_ids, location_id, **kwargs):
+        self.kwargs.append(dict(kwargs))
+        out = await super().__call__(raid_id, caravan_id, leader, group, guard_ids, location_id)
+        if not self.old_bs:
+            sent = kwargs.get("escort_character_ids", [])
+            out["escort_character_ids"] = list(sent if self.placed is None else self.placed)
+        return out
+
+
+class FakeDeeds:
+    def __init__(self):
+        self.calls = []
+        self.error = None
+
+    def __call__(self, db, character_id, kind, event_key, now=None):
+        self.calls.append((int(character_id), kind, event_key))
+        if self.error is not None:
+            raise self.error
+        return FlowResult(data={"applied": [1]})
+
+
+@pytest.fixture
+def erw(api, rw, monkeypatch):
+    """The raid world + five escort-capable players at L_GATE1, an escort-aware B1 stand-in, faction deeds mocked."""
+    db = rw()
+    try:
+        with econ_ledger.allow_direct_balance_write(db):
+            for cid, user in ESCORT_USERS.items():
+                _person(db, cid, user, L_GATE1)
+            db.commit()
+    finally:
+        db.close()
+    rw.battle = EscortBattle()
+    monkeypatch.setattr(battle_client, "create_caravan_raid_battle", rw.battle)
+    rw.deeds = FakeDeeds()
+    monkeypatch.setattr(faction_kills, "apply_caravan_deed", rw.deeds)
+    return rw
+
+
+def _hire_escorts(f, *cids):
+    for cid in cids:
+        _exec(f, "INSERT INTO econ_caravan_escorts (caravan_id, character_id, status, hire_location_id, in_raid, fee, "
+                 "bonus, rewards_done, joined_at) VALUES (:car, :c, 'active', :l, 0, 0, 0, 0, :t)",
+              car=f.cid, c=cid, l=L_GATE1, t=raids.now_utc())
+        _exec(f, "UPDATE characters SET escort_caravan_id = :car WHERE id = :c", car=f.cid, c=cid)
+
+
+def _escorts(f):
+    return {int(r[0]): (r[1], int(r[2] or 0)) for r in _rows(f, "SELECT character_id, status, in_raid "
+                                                               "FROM econ_caravan_escorts")}
+
+
+def _escort_ids(f):
+    v = _scalar(f, "SELECT escort_ids FROM econ_caravan_raids")
+    return json.loads(v) if isinstance(v, str) else v
+
+
+def _col(f, cid):
+    return _scalar(f, "SELECT escort_caravan_id FROM characters WHERE id = :c", c=cid)
+
+
+def _settle_f(api, raid_id, *, winner=0, aborted=False, fallen=None):
+    body = {"battle_id": BATTLE, "caravan_raid_id": raid_id, "winner_team": winner, "aborted": aborted}
+    if fallen is not None:
+        body["fallen_character_ids"] = fallen
+    resp = api.post(RESULT, json=body, headers=INTERNAL)
+    assert resp.status_code == 200, resp.text
+    return resp.json()["status"]
+
+
+def _escort_notices(stub):
+    return {(p["target_value"], p["message"]) for call in stub.call_args_list for p in call.args[0]
+            if p["ws_type"] == escort_crud.WS_CARAVAN_ESCORT}
+
+
+def _escort_logs(f):
+    return {(int(c), d) for c, d in _rows(f, "SELECT character_id, description FROM character_logs "
+                                             "WHERE event_type = :e", e=escort_crud.LOG_EVENT_TYPE)}
+
+
+# ---- raid start ----------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("guards,escorts,mobs", [
+    (2, 0, 2), (2, 1, 2), (5, 2, 3), (3, 3, 2), (5, 4, 1), (5, 5, 1),
+])
+def test_escorts_reduce_the_guard_mobs(erw, api, guards, escorts, mobs):
+    _exec(erw, "UPDATE econ_caravans SET guard_count = :g", g=guards)
+    team = list(ESCORT_USERS)[:escorts]
+    _hire_escorts(erw, *team)
+    _start(api, erw)
+    raid = _raid(erw)
+    assert len(raid["guard_ids"]) == _guards_alive(erw) == mobs
+    [kw] = erw.battle.kwargs
+    if escorts:
+        assert kw == {"escort_character_ids": team[:4]}                 # asc id, at most 4 (one mob always stays)
+    else:
+        assert kw == {}                                                  # exactly the FEAT-211 call
+    assert len(raid["guard_ids"]) + len(kw.get("escort_character_ids", [])) <= raids.MAX_GUARDS
+    assert _escort_ids(erw) == team[:4]
+
+
+def test_placed_escorts_are_the_answer_intersected_with_the_sent_ones(erw, api):
+    _hire_escorts(erw, E1, E2)
+    erw.battle.placed = [E2, 9999]                                       # E1 skipped by BS, 9999 never sent
+    _start(api, erw)
+    assert _escort_ids(erw) == [E2]
+    assert _escorts(erw) == {E1: ("active", 0), E2: ("active", 1)}
+    assert _raid(erw)["status"] == "fighting"
+
+
+def test_old_battle_service_without_the_field_places_nobody(erw, api):
+    _hire_escorts(erw, E1)
+    erw.battle.old_bs = True
+    _start(api, erw)
+    assert _escort_ids(erw) == [] and _escorts(erw) == {E1: ("active", 0)}
+
+
+def test_battle_client_payload_and_old_answer(monkeypatch):
+    sent, answers = [], [{"battle_id": 5, "attacker_character_ids": [1], "escort_character_ids": [3]},
+                         {"battle_id": 6, "attacker_character_ids": [1]}]
+
+    class Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            sent.append((url, json, headers))
+            body = answers[len(sent) - 1]
+            return SimpleNamespace(status_code=200, text="", json=lambda: body)
+
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", TOKEN)
+    monkeypatch.setattr(battle_client.httpx, "AsyncClient", Client)
+    out = asyncio.run(battle_client.create_caravan_raid_battle(1, 2, 1, False, [7, 8], 3,
+                                                               escort_character_ids=[3, "4"]))
+    assert out == {"battle_id": 5, "attacker_character_ids": [1], "escort_character_ids": [3]}
+    url, payload, headers = sent[0]
+    assert url.endswith("/battles/internal/caravan-raid") and headers == INTERNAL
+    assert payload["escort_character_ids"] == [3, 4] and payload["guard_character_ids"] == [7, 8]
+    out = asyncio.run(battle_client.create_caravan_raid_battle(1, 2, 1, False, [7], 3))
+    assert out["escort_character_ids"] == []                             # old battle-service answer
+    assert sent[1][1]["escort_character_ids"] == []
+
+
+def test_escort_cannot_lead_a_raid_and_nothing_spawns(erw, api):
+    _hire_escorts(erw, RAIDER)
+    _gate(erw, erw.cid)
+    resp = api.post(_raid_url(erw.cid), json={"character_id": RAIDER})
+    expected = activity_lock.lock_message({"locked": True, "reason": activity_lock.REASON_CARAVAN_ESCORT})
+    assert resp.status_code == 409 and resp.json()["detail"] == expected
+    assert "карав" not in expected.lower()                               # neutral text, the job stays secret
+    assert _raid(erw) is None and _guards_alive(erw) == 0 and erw.battle.calls == []
+
+
+def test_escort_squadmate_stays_on_the_guard_side(erw, api):
+    _hire_escorts(erw, MATE)
+    raid_id = _start(api, erw, group=True, attackers=[RAIDER])           # BS left the escort out of the attackers
+    assert erw.battle.kwargs == [{"escort_character_ids": [MATE]}]
+    assert _settle_f(api, raid_id, winner=0) == "won"
+    assert _raid(erw)["attacker_ids"] == [RAIDER]
+    assert (_gold(erw, RAIDER), _gold(erw, MATE)) == (80, 0)
+    assert _escorts(erw) == {MATE: ("fallen", 1)}
+    _check(erw)
+
+
+# ---- settlement ----------------------------------------------------------------------------------------------------
+
+def test_won_raid_drops_every_placed_escort_at_the_raid_location(erw, api, stub_law_notify_send):
+    _hire_escorts(erw, E1, E2, E3)
+    erw.battle.placed = [E1, E2]                                         # E3 was not in the fight
+    raid_id = _start(api, erw)
+    assert _settle_f(api, raid_id, winner=0) == "won"
+    assert _escorts(erw) == {E1: ("fallen", 1), E2: ("fallen", 1), E3: ("active", 0)}
+    assert (_col(erw, E1), _col(erw, E2), _col(erw, E3)) == (None, None, erw.cid)
+    assert {_scalar(erw, "SELECT current_location_id FROM characters WHERE id = :c", c=c) for c in (E1, E2)} == \
+        {L_GATE1}
+    assert _scalar(erw, "SELECT COUNT(*) FROM econ_caravan_escorts WHERE ended_at IS NULL") == 1
+    assert _rows(erw, "SELECT SUM(fee), SUM(bonus) FROM econ_caravan_escorts") == [(0, 0)]
+    assert (_gold(erw, E1), _gold(erw, E2)) == (0, 0)
+    assert _escort_logs(erw) == {(E1, raids.MSG_ESCORT_FALLEN), (E2, raids.MSG_ESCORT_FALLEN)}
+    assert _escort_notices(stub_law_notify_send) == {(21, raids.MSG_ESCORT_FALLEN), (22, raids.MSG_ESCORT_FALLEN)}
+    _check(erw)
+
+
+def test_repelled_raid_drops_only_the_fallen_and_pays_the_rest_with_bonus(erw, api, stub_law_notify_send):
+    _hire_escorts(erw, E1, E2)
+    raid_id = _start(api, erw)
+    assert _settle_f(api, raid_id, winner=1, fallen=[E1, RAIDER]) == "repelled"
+    assert _escorts(erw) == {E1: ("fallen", 1), E2: ("active", 1)}
+    assert (_col(erw, E1), _col(erw, E2)) == (None, erw.cid)
+    assert _escort_logs(erw) == {(E1, raids.MSG_ESCORT_FALLEN_REPELLED)}
+    assert _escort_notices(stub_law_notify_send) == {(21, raids.MSG_ESCORT_FALLEN_REPELLED),
+                                                     (22, raids.MSG_ESCORT_REPELLED)}
+    _check(erw)
+    # delivery: the survivor gets fee + bonus, the fallen one nothing
+    _exec(erw, "UPDATE econ_caravans SET route_index = 3, current_location_id = :l, arrived_at = :t, "
+               "next_move_at = NULL", l=L_GATE2, t=raids.now_utc())
+    import economy_caravan_crud
+    assert economy_caravan_crud.deliver_physical_tx(erw, erw.cid, raids.now_utc()).status == "delivered"
+    rows = {int(r[0]): (r[1], int(r[2]), int(r[3])) for r in _rows(
+        erw, "SELECT character_id, status, fee, bonus FROM econ_caravan_escorts")}
+    assert rows[E1] == ("fallen", 0, 0)
+    status, fee, bonus = rows[E2]
+    assert status == "delivered" and fee > 0 and bonus > 0
+    assert (_gold(erw, E1), _gold(erw, E2)) == (0, fee + bonus)
+    _check(erw)
+
+
+@pytest.mark.parametrize("fallen", [None, []])
+def test_repelled_raid_without_fallen_ids_keeps_every_escort(erw, api, fallen):
+    _hire_escorts(erw, E1, E2)
+    raid_id = _start(api, erw)
+    assert _settle_f(api, raid_id, winner=1, fallen=fallen) == "repelled"
+    assert _escorts(erw) == {E1: ("active", 1), E2: ("active", 1)}
+    assert (_col(erw, E1), _col(erw, E2)) == (erw.cid, erw.cid)
+
+
+def test_aborted_raid_keeps_the_escorts(erw, api, stub_law_notify_send):
+    _hire_escorts(erw, E1)
+    raid_id = _start(api, erw)
+    stub_law_notify_send.reset_mock()
+    assert _settle_f(api, raid_id, aborted=True, fallen=[E1]) == "aborted"
+    assert _escorts(erw)[E1][0] == "active" and _col(erw, E1) == erw.cid
+    assert _escort_notices(stub_law_notify_send) == set() and _escort_logs(erw) == set()
+
+
+def test_expired_raid_releases_the_escorts(erw, api, monkeypatch, stub_law_notify_send):
+    _hire_escorts(erw, E1, E2)
+    _start(api, erw)
+    now = raids.now_utc()
+    old = now - timedelta(hours=int(_params(erw).caravan_raid_battle_max_hours), minutes=1)
+    _exec(erw, "UPDATE econ_caravan_raids SET started_at = :t", t=old)
+    monkeypatch.setattr(battle_client, "get_battle_result", lambda b: {"status": "in_progress"})
+    assert raids.poll_raid_battles(erw, now, _params(erw)) == 1
+    assert _raid(erw)["status"] == "expired"
+    assert _escorts(erw) == {E1: ("released", 1), E2: ("released", 1)}
+    assert (_col(erw, E1), _col(erw, E2)) == (None, None)
+    assert _escort_notices(stub_law_notify_send) == {(21, raids.MSG_ESCORT_EXPIRED), (22, raids.MSG_ESCORT_EXPIRED)}
+    _check(erw)
+
+
+def test_settlement_falls_back_to_the_battle_guard_team_when_escort_ids_were_lost(erw):
+    _hire_escorts(erw, E1, E2, E3)
+    now = raids.now_utc()
+    raid_id = _insert_raid(erw, "fighting", created=now, started=now, battle_id=BATTLE)
+    _exec(erw, "CREATE TABLE IF NOT EXISTS battle_participants (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "battle_id INTEGER, character_id INTEGER, team INTEGER)")
+    for cid, team, battle in ((RAIDER, 0, BATTLE), (E1, 1, BATTLE), (E2, 0, BATTLE), (E3, 1, BATTLE + 1)):
+        _exec(erw, "INSERT INTO battle_participants (battle_id, character_id, team) VALUES (:b, :c, :t)",
+              b=battle, c=cid, t=team)
+    assert _escort_ids(erw) is None
+    db = erw()
+    try:
+        assert raids.battle_result(db, battle_id=BATTLE, raid_id=raid_id, winner_team=0, aborted=False) == "won"
+    finally:
+        db.close()
+    assert _escort_ids(erw) == [E1]
+    assert _escorts(erw) == {E1: ("fallen", 1), E2: ("active", 0), E3: ("active", 0)}
+
+
+@pytest.mark.parametrize("answer,out", [
+    ({"status": "finished", "winner_team": 1, "fallen_character_ids": [E2, "x", None]}, {E2}),
+    ({"status": "finished", "winner_team": 1}, set()),                  # old battle-service: nobody falls
+])
+def test_poll_reads_fallen_ids(erw, monkeypatch, answer, out):
+    _hire_escorts(erw, E1, E2)
+    now = raids.now_utc()
+    db = erw()
+    try:
+        db.add(models.EconCaravanRaid(caravan_id=erw.cid, leader_character_id=RAIDER, location_id=L_GATE1,
+                                      region_id=1, status="fighting", created_at=now - timedelta(minutes=10),
+                                      started_at=now - timedelta(minutes=5), battle_id=BATTLE,
+                                      attacker_ids=[RAIDER], escort_ids=[E1, E2]))
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr(battle_client, "get_battle_result", lambda b: answer)
+    assert raids.poll_raid_battles(erw, now, _params(erw)) == 1
+    assert {c for c, (s, _r) in _escorts(erw).items() if s == "fallen"} == out
+    assert _raid(erw)["status"] == "repelled"
+
+
+def test_a3_with_fallen_ids_keeps_the_internal_auth(api, erw):
+    body = {"battle_id": BATTLE, "caravan_raid_id": 1, "winner_team": 1, "fallen_character_ids": [E1]}
+    assert api.post(RESULT, json=body).status_code == 401
+    assert api.post(RESULT, json=body, headers={"X-Internal-Token": "wrong"}).status_code == 401
+    for bad in ({**body, "fallen_character_ids": ["x"]}, {**body, "fallen_character_ids": "1 OR 1=1"}):
+        assert api.post(RESULT, json=bad, headers=INTERNAL).status_code == 422
+
+
+# ---- faction raid points (once per raid) ---------------------------------------------------------------------------
+
+def test_faction_raid_points_once_per_won_raid(erw, api):
+    raid_id = _start(api, erw, attackers=[MATE, RAIDER])
+    assert _settle_f(api, raid_id, winner=0) == "won"
+    expected = [(cid, faction_core.ENEMY_RAID, raids.raid_faction_key(raid_id, cid)) for cid in (RAIDER, MATE)]
+    assert erw.deeds.calls == expected
+    assert expected[0][2] == f"faction:caravan_raid:r{raid_id}:{RAIDER}"
+    assert _scalar(erw, "SELECT faction_done FROM econ_caravan_raids") == 1
+    assert _settle_f(api, raid_id, winner=0) == "already"                # duplicate callback
+    raids.raid_followups(erw, raids.now_utc() + timedelta(minutes=5), _params(erw))
+    assert raids.raid_faction_points(erw(), raid_id) == 0
+    assert erw.deeds.calls == expected
+
+
+def test_faction_raid_points_retried_by_the_followups(erw, api):
+    erw.deeds.error = RuntimeError("factions down")
+    raid_id = _start(api, erw)
+    assert _settle_f(api, raid_id, winner=0) == "won"                    # payout stays, the step is retried
+    assert _scalar(erw, "SELECT faction_done FROM econ_caravan_raids") == 0
+    erw.deeds.error, erw.deeds.calls = None, []
+    assert raids.raid_followups(erw, raids.now_utc(), _params(erw)) >= 1
+    assert erw.deeds.calls == [(RAIDER, faction_core.ENEMY_RAID, raids.raid_faction_key(raid_id, RAIDER))]
+    assert _scalar(erw, "SELECT faction_done FROM econ_caravan_raids") == 1
+    raids.raid_followups(erw, raids.now_utc(), _params(erw))
+    assert len(erw.deeds.calls) == 1
+
+
+@pytest.mark.parametrize("winner,aborted", [(1, False), (None, True)])
+def test_no_faction_raid_points_for_a_failed_raid(erw, api, winner, aborted):
+    raid_id = _start(api, erw)
+    _settle_f(api, raid_id, winner=winner, aborted=aborted)
+    raids.raid_followups(erw, raids.now_utc(), _params(erw))
+    assert erw.deeds.calls == [] and raids.raid_faction_points(erw(), raid_id) == 0

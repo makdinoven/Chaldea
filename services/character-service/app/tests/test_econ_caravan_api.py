@@ -291,7 +291,9 @@ def test_list_newest_first_with_names(listed):
                           # FEAT-211 A4 (admin only)
                           "is_physical", "current_location_id", "current_location_name", "route_index", "route_len",
                           "next_move_at", "arrived_at", "hold_started_at", "guard_count", "stolen_units", "raid_paid",
-                          "raid_status"}
+                          "raid_status",
+                          # FEAT-212 A4
+                          "escort_count"}
     assert (first["status"], first["group_name"], first["from_region_name"], first["to_region_name"],
             first["from_country_name"], first["finished_run_id"], first["cancel_reason"], first["goods_returned"]) == \
         ("delivered", "Продовольствие", "Регион 1", "Регион 2", "Мидденгерд", 2, None, None)

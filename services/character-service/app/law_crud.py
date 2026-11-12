@@ -546,7 +546,7 @@ def check_patrol_arrival(db: Session, character: "models.Character", location_id
     """FEAT-204: a patrolling guard arrived where ``character`` stands (online or not). The same FEAT-203 check as an
     entry (same formula, seam, encounter, timeout), with the arriving guard as the encounter's guard and
     ``source='patrol'``; characters who are busy are skipped this time: any activity lock (jail / encounter / KO /
-    dungeon / asleep / reading), inside a house, in an active battle. The row must be locked; never commits."""
+    dungeon / caravan escort / asleep / reading), inside a house, in an active battle. The row must be locked; never commits."""
     now = now or now_utc()
     if character is None or bool(character.is_npc) or not location_id:
         return _NO_ENTRY
@@ -556,7 +556,8 @@ def check_patrol_arrival(db: Session, character: "models.Character", location_id
         getattr(character, "dungeon_session_id", None), getattr(character, "unconscious_until", None), now,
         asleep_since=getattr(character, "asleep_since", None), reading_since=getattr(character, "reading_since", None),
         jailed_until=getattr(character, "jailed_until", None),
-        law_encounter_id=getattr(character, "law_encounter_id", None))
+        law_encounter_id=getattr(character, "law_encounter_id", None),
+        escort_caravan_id=getattr(character, "escort_caravan_id", None))
     if lock.get("locked"):
         return _NO_ENTRY
     if getattr(character, "house_room_id", None):

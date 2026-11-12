@@ -358,3 +358,60 @@ class TestCleanupOnBattleFinish:
         assert 20 in ALLOWED
         assert PID_BATTLE[10] == 1
         assert OWNER[10] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-212 (review): a caravan escort never acts through autobattle
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestHandleTurnEscortForbidden:
+    """Defence in depth: a pid that reached ALLOWED without the /register check
+    (battle_id=0 before its first your_turn) must not act when its participant
+    is flagged `autobattle_forbidden` — it is dropped from the registries."""
+
+    def setup_method(self):
+        _cleanup()
+
+    @pytest.mark.asyncio
+    @patch("main.strategy_for", return_value=_stub_strategy())
+    @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
+    @patch("main.asyncio.sleep", new_callable=AsyncMock)
+    @patch("main.post_battle_action", new_callable=AsyncMock)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    async def test_forbidden_participant_never_acts(
+        self, mock_state, mock_action, mock_sleep, mock_features, mock_strategy
+    ):
+        ctx = _make_battle_ctx(current_actor=10)
+        ctx["runtime"]["participants"]["10"]["autobattle_forbidden"] = True
+        mock_state.return_value = ctx
+        ALLOWED.add(10)
+        OWNER[10] = 7
+        PID_BATTLE[10] = 1
+
+        await handle_turn(1, 10)
+
+        mock_action.assert_not_called()
+        assert 10 not in ALLOWED
+        assert 10 not in OWNER
+
+    @pytest.mark.asyncio
+    @patch("main.strategy_for", return_value=_stub_strategy())
+    @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
+    @patch("main.asyncio.sleep", new_callable=AsyncMock)
+    @patch("main.post_battle_action", new_callable=AsyncMock)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    async def test_unflagged_participant_still_acts(
+        self, mock_state, mock_action, mock_sleep, mock_features, mock_strategy
+    ):
+        ctx = _make_battle_ctx(current_actor=10)
+        ctx["runtime"]["participants"]["10"]["autobattle_forbidden"] = False
+        mock_state.return_value = ctx
+        mock_action.return_value = _make_action_response()
+        ALLOWED.add(10)
+        PID_BATTLE[10] = 1
+
+        await handle_turn(1, 10)
+
+        assert mock_action.call_count == 1
+        assert 10 in ALLOWED

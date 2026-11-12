@@ -392,7 +392,7 @@ def test_view_lists_orders_offers_and_refusals_without_money_numbers(client, wor
     # scroll / recipe (no group) and ore (no ore order) are not «wanted» at all
     for word in ("budget", "purse", "treasury", "guild_budget"):
         assert word not in resp.text
-    world.gate.assert_not_called()
+    world.gate.assert_awaited_once()                    # FEAT-212 3.11: the window is gated too
 
 
 def test_view_max_accept_follows_volume_and_money(client, world):
@@ -839,7 +839,7 @@ def test_activity_lock_is_409_for_the_hand_in_only(client, world):
     resp = post(client)
     assert resp.status_code == 409 and "подземелье" in resp.json()["detail"]
     assert view(client).status_code == 200
-    world.gate.assert_not_called()
+    world.gate.assert_awaited_once()                    # only the view asked (FEAT-212 3.11); the hand-in stopped first
     assert _inv(world)[0][1] == 1
 
 
@@ -860,6 +860,19 @@ def test_gate_closed_403_and_unavailable_503(client, world):
     assert resp.status_code == 503 and resp.json()["detail"] == guild_crud.MSG_GATE_UNAVAILABLE
     assert _inv(world)[0][1] == 1 and _ops(world) == []
     world.gate.assert_awaited_with(ALPHA, 100, G_NPC)
+
+
+def test_view_needs_the_dialogue_gate_too(client, world):
+    """FEAT-212 3.11: the guild window itself is behind the npc_dialogue gate (fail-closed)."""
+    world.gate.return_value = False
+    resp = view(client)
+    assert resp.status_code == 403 and resp.json()["detail"] == guild_crud.MSG_GATE_CLOSED
+    world.gate.return_value = True
+    world.gate.side_effect = locations_client.GateUnavailable()
+    resp = view(client)
+    assert resp.status_code == 503 and resp.json()["detail"] == guild_crud.MSG_GATE_UNAVAILABLE
+    world.gate.side_effect = None
+    assert view(client).status_code == 200
 
 
 def test_region_not_participating_or_disabled_is_409(client, world):

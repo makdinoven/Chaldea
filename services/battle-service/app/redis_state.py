@@ -234,6 +234,9 @@ async def init_battle_state(
             # (stacks/flags owned by passives.py). Old payloads → False / {}.
             "is_npc": bool(p.get("is_npc")),
             "passive_state": dict(p.get("passive_state") or {}),
+            # FEAT-212: caravan escorts fight by hand only (autobattle-service
+            # refuses /register when this flag is set). Old payloads → False.
+            "autobattle_forbidden": bool(p.get("autobattle_forbidden")),
             }
     for p in participants_payload
         },

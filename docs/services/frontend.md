@@ -112,6 +112,25 @@ src/
   краткая сводка в подсказке ячейки, подписи всех 8 видов опыта в
   `ActiveBuffIndicator`.
 
+### Охрана караванов из игроков (FEAT-212)
+
+- **Найм** — `components/pages/LocationPage/CaravaneerModal/CaravaneerModal.tsx`
+  (кнопка «Караваны» в `NpcProfileModal` у НПС с ролью `caravaneer`, если персонаж
+  рядом): караваны на сборах у ворот, «есть места / мест нет», ожидаемая плата,
+  причина отказа, подтверждение найма. 403 гейта показывается с подсказкой про пост
+  «Диалог с НПС» (та же подсказка в `GuildModal`).
+- **В охране** — `components/CaravanEscort/CaravanEscortModal.tsx` (+
+  `CaravanEscortRoute.tsx`, `CaravanEscortChannel.tsx`, `escortLabels.ts`): маршрут
+  с текущей точкой, отсчёт до перехода, охранники, плата, налёт со ссылкой на бой,
+  караванный канал (опрос 15 с), «Сойти с каравана» с подтверждением.
+- **Блокировка** — причина `caravan_escort` в `hooks/useActivityLock.ts`;
+  `CommonComponents/ActivityLockBanner.tsx` рисует полосу «Вы в охране каравана» с
+  кнопкой «Караван», `LocationPage` — блок с тем же входом в окно.
+- **Автобой** — участнику с `autobattle_forbidden` в состоянии боя (охранник в
+  налёте) переключатель автобоя скрыт (`BattlePage` / `useBattleBar`), 403
+  autobattle-service показывается тостом.
+- API/типы: `api/caravanEscort.ts`, `types/caravanEscort.ts`.
+
 ### CreateCharacterPage
 - 4 шага: раса -> класс -> биография -> review
 - Предпросмотр стартовых навыков и предметов по классу

@@ -78,7 +78,16 @@ const PHYSICAL_PARAMS: CaravanParamDef[] = [
   { key: 'fence_purse_share', label: 'Доля кошелька жителей на кассы скупщиков', def: 0.1, min: 0, max: 1 },
 ];
 
-const ALL_PARAMS: CaravanParamDef[] = [...CARAVAN_PARAMS, ...PHYSICAL_PARAMS];
+/** FEAT-212 — «Охрана из игроков» (feature file 3.4; bounds mirror `schemas.py`). */
+const ESCORT_PARAMS: CaravanParamDef[] = [
+  { key: 'caravan_departure_minutes', label: 'Сборы в воротах, мин', def: 45, min: 0, max: 720, integer: true },
+  { key: 'caravan_escort_seats', label: 'Мест для игроков в охране', def: 3, min: 0, max: 4, integer: true },
+  { key: 'caravan_escort_fee_share', label: 'Доля выручки продавца охране', def: 0.05, min: 0, max: 0.5 },
+  { key: 'caravan_escort_bonus_share', label: 'Надбавка за отбитый налёт (доля)', def: 0.03, min: 0, max: 0.5 },
+  { key: 'caravan_escort_defense_fame', label: 'Слава за отбитый налёт', def: 5, min: 0, max: 1000, integer: true },
+];
+
+const ALL_PARAMS: CaravanParamDef[] = [...CARAVAN_PARAMS, ...PHYSICAL_PARAMS, ...ESCORT_PARAMS];
 
 const KIND_TABS: { id: CaravanKindFilter; label: string }[] = [
   { id: 'all', label: 'Все' },
@@ -346,6 +355,14 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
         </p>
       </div>
       {renderGrid(PHYSICAL_PARAMS)}
+      <div className="flex flex-col gap-1 border-t border-white/10 pt-4">
+        <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">Охрана из игроков</h3>
+        <p className="text-white/50 text-xs">
+          Игроки нанимаются у НПС-караванщика в воротах, пока караван собирается. Плата и надбавка — из выручки
+          продавца при доставке.
+        </p>
+      </div>
+      {renderGrid(ESCORT_PARAMS)}
       {canEdit ? (
         <button
           type="button"
@@ -589,6 +606,11 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
           </span>
         )}
         {c.raid_status && <RaidBadge status={c.raid_status} />}
+        {(c.escort_count ?? 0) > 0 && (
+          <span className="inline-flex rounded-full border border-site-blue/40 bg-site-blue/10 px-2 py-0.5 text-[11px] text-site-blue whitespace-nowrap">
+            охрана-игроки: {c.escort_count}
+          </span>
+        )}
         <span className="text-white text-sm font-medium">{c.group_name ?? c.group_code}</span>
         <span className="text-white/60 text-sm">{formatQty(c.units)} ед.</span>
         <span className="text-white/40 text-xs ml-auto">

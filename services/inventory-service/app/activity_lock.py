@@ -12,6 +12,10 @@ FEAT-198 (law) adds two more columns on `characters`:
   * `law_encounter_id` — set while the guards have stopped the character and
     the player has not chosen what to do yet.
 
+FEAT-212 (caravan escorts) adds `escort_caravan_id`: set while the character
+rides inside a caravan as a hired escort. The refusal text for this reason is
+neutral for every subject (it never mentions caravans — escorts are hidden).
+
 Other services read the same columns from the shared DB (the established
 pattern for battle/gathering locks) and only character-service writes them.
 """
@@ -32,6 +36,8 @@ REASON_READING = "reading"
 REASON_JAIL = "jail"
 # FEAT-198: stopped by the guards, a choice is pending (`characters.law_encounter_id`).
 REASON_LAW_ENCOUNTER = "law_encounter"
+# FEAT-212: hired as a caravan escort (`characters.escort_caravan_id`).
+REASON_CARAVAN_ESCORT = "caravan_escort"
 
 
 def _as_naive_utc(value) -> Optional[datetime]:
@@ -61,10 +67,11 @@ def _lock(reason, until=None, dungeon_session_id=None, law_encounter_id=None) ->
 
 def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] = None,
                  asleep_since=None, reading_since=None,
-                 jailed_until=None, law_encounter_id=None) -> dict:
+                 jailed_until=None, law_encounter_id=None, escort_caravan_id=None) -> dict:
     """Build the public lock object from the raw column values.
 
-    Priority: jail > law_encounter > unconscious > dungeon > asleep > reading.
+    Priority: jail > law_encounter > unconscious > dungeon > caravan_escort >
+    asleep > reading.
     Unconsciousness wins over the dungeon lock (a knocked-out character never
     holds a dungeon lock anyway — the knock-out clears it).
     """
@@ -79,6 +86,8 @@ def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] 
         return _lock(REASON_UNCONSCIOUS, until=until.isoformat())
     if isinstance(dungeon_session_id, int) and dungeon_session_id > 0:
         return _lock(REASON_DUNGEON, dungeon_session_id=dungeon_session_id)
+    if isinstance(escort_caravan_id, int) and escort_caravan_id > 0:
+        return _lock(REASON_CARAVAN_ESCORT)
     if _as_naive_utc(asleep_since) is not None:
         return _lock(REASON_ASLEEP)
     if _as_naive_utc(reading_since) is not None:
@@ -94,6 +103,7 @@ def lock_for_character(character) -> dict:
         reading_since=getattr(character, "reading_since", None),
         jailed_until=getattr(character, "jailed_until", None),
         law_encounter_id=getattr(character, "law_encounter_id", None),
+        escort_caravan_id=getattr(character, "escort_caravan_id", None),
     )
 
 
@@ -126,6 +136,9 @@ def lock_message(lock: dict, subject: str = "Персонаж") -> Optional[str]
         if until is not None:
             return f"{subject} без сознания — осталось {format_remaining(until)}"
         return f"{subject} без сознания"
+    if lock.get("reason") == REASON_CARAVAN_ESCORT:
+        # Neutral on purpose: the escort is hidden from other players.
+        return f"{subject}: действие сейчас недоступно"
     if lock.get("reason") == REASON_ASLEEP:
         return f"{subject} спит — сначала нужно проснуться"
     if lock.get("reason") == REASON_READING:
@@ -139,6 +152,7 @@ def lock_message(lock: dict, subject: str = "Персонаж") -> Optional[str]
 # ---------------------------------------------------------------------------
 
 import logging  # noqa: E402
+import re  # noqa: E402
 
 from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import text  # noqa: E402
@@ -149,6 +163,11 @@ logger = logging.getLogger(__name__)
 
 _LOCK_SQL = text(
     "SELECT dungeon_session_id, unconscious_until, asleep_since, reading_since, "
+    "jailed_until, law_encounter_id, escort_caravan_id FROM characters WHERE id = :cid"
+)
+# FEAT-212 deploy skew: character-service migration 051 not applied yet.
+_LOCK_SQL_LAW = text(
+    "SELECT dungeon_session_id, unconscious_until, asleep_since, reading_since, "
     "jailed_until, law_encounter_id FROM characters WHERE id = :cid"
 )
 # FEAT-198 deploy skew: character-service migration 039 not applied yet.
@@ -157,12 +176,24 @@ _LOCK_SQL_LEGACY = text(
     "FROM characters WHERE id = :cid"
 )
 
+_ESCORT_COLUMNS = ("escort_caravan_id",)
+_LAW_COLUMNS = ("jailed_until", "law_encounter_id")
+
+
+# MySQL: "Unknown column 'x' in 'field list'"; SQLite: "no such column: x". The error text
+# also echoes the whole SQL, so only the column the DB actually names is compared.
+_MISSING_COLUMN_RE = re.compile(r"(?:unknown column\s+['\"`]?|no such column:\s*)([\w.]+)")
+
+
+def _is_missing_column(exc: Exception, names) -> bool:
+    for found in _MISSING_COLUMN_RE.findall(str(exc).lower()):
+        if found.rsplit(".", 1)[-1] in names:
+            return True
+    return False
+
 
 def _is_missing_law_column(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return ("jailed_until" in msg or "law_encounter_id" in msg) and (
-        "unknown column" in msg or "no such column" in msg
-    )
+    return _is_missing_column(exc, _LAW_COLUMNS)
 
 
 def _col(row, index: int):
@@ -173,24 +204,46 @@ def _lock_from_row(row) -> dict:
     if not row:
         return compute_lock(None, None)
     return compute_lock(row[0], row[1], asleep_since=_col(row, 2), reading_since=_col(row, 3),
-                        jailed_until=_col(row, 4), law_encounter_id=_col(row, 5))
+                        jailed_until=_col(row, 4), law_encounter_id=_col(row, 5),
+                        escort_caravan_id=_col(row, 6))
 
 
 def get_activity_lock(db, character_id: int) -> dict:
+    """Fallback chain for deploy skew: full SQL -> without `escort_caravan_id`
+    (character-service 051 not applied) -> without the law columns (039)."""
+    params = {"cid": character_id}
     try:
-        result = db.execute(_LOCK_SQL, {"cid": character_id})
+        result = db.execute(_LOCK_SQL, params)
     except Exception as e:
-        if not _is_missing_law_column(e):
+        # The DB names only the first unknown column: a missing law column means
+        # an even older schema (039 < 051) -> straight to the legacy SQL.
+        if _is_missing_law_column(e):
+            _warn_no_law()
+            result = db.execute(_LOCK_SQL_LEGACY, params)
+        elif _is_missing_column(e, _ESCORT_COLUMNS):
+            logger.warning("characters.escort_caravan_id ещё нет (миграция character-service 051 "
+                           "не применена) — блокировка читается без охраны караванов")
+            try:
+                result = db.execute(_LOCK_SQL_LAW, params)
+            except Exception as e2:
+                if not _is_missing_law_column(e2):
+                    raise
+                _warn_no_law()
+                result = db.execute(_LOCK_SQL_LEGACY, params)
+        else:
             raise
-        logger.warning("characters.jailed_until/law_encounter_id ещё нет (миграция character-service 039 "
-                       "не применена) — блокировка читается без закона")
-        result = db.execute(_LOCK_SQL_LEGACY, {"cid": character_id})
     return _lock_from_row(result.fetchone())
+
+
+def _warn_no_law() -> None:
+    logger.warning("characters.jailed_until/law_encounter_id ещё нет (миграция character-service 039 "
+                   "не применена) — блокировка читается без закона")
 
 
 def check_not_activity_locked(db, character_id: int, subject: str = "Персонаж") -> None:
     """Raise 409 with the shared Russian wording if the character is in a
-    dungeon run, knocked out, asleep, reading, jailed or stopped by the guards."""
+    dungeon run, knocked out, asleep, reading, jailed, stopped by the guards or
+    riding as a caravan escort."""
     message = lock_message(get_activity_lock(db, character_id), subject=subject)
     if message:
         raise HTTPException(status_code=LOCK_STATUS_CODE, detail=message)

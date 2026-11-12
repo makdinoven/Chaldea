@@ -1,7 +1,12 @@
 import HudFrame from "./HudFrame";
 import SlotMedallion from "./SlotMedallion";
 import TurnSeal from "./TurnSeal";
-import type { BattleBarState, SlotType, TurnDataState } from "../../BattlePageBar/useBattleBar";
+import {
+  AUTOBATTLE_FORBIDDEN_TEXT,
+  type BattleBarState,
+  type SlotType,
+  type TurnDataState,
+} from "../../BattlePageBar/useBattleBar";
 
 const SKILL_SLOTS: SlotType[] = ["attack", "defense", "support"];
 
@@ -30,6 +35,14 @@ export const AutobattleControls = ({
   dense = false,
 }: AutobattleControlsProps) => {
   const chip = `chip-outline rounded-full py-1 ${dense ? "px-2 text-[10px]" : "px-2.5 text-[11px]"}`;
+  // FEAT-212: a caravan escort fights the raid by himself.
+  if (bar.autobattleForbidden) {
+    return (
+      <span className={`text-white/50 ${dense ? "text-[10px] min-w-0 truncate" : "text-[11px]"}`}>
+        {AUTOBATTLE_FORBIDDEN_TEXT}
+      </span>
+    );
+  }
   return (
     <div className={`flex items-center ${dense ? "min-w-0 gap-1 overflow-x-auto" : "flex-wrap gap-1.5"}`}>
       <button

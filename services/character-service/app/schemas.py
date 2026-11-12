@@ -2108,6 +2108,12 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "caravan_guard_mult_dangerous": (1.0, 5.0),
     "caravan_rep_trade_share": (0.0, 1.0),
     "fence_purse_share": (0.0, 1.0),
+    # FEAT-212 player escorts
+    "caravan_departure_minutes": (0, 720),
+    "caravan_escort_seats": (0, 4),
+    "caravan_escort_fee_share": (0.0, 0.5),
+    "caravan_escort_bonus_share": (0.0, 0.5),
+    "caravan_escort_defense_fame": (0, 1_000),
     # FEAT-193 guild orders
     "guild_enabled": (0, 1),
     "guild_markup_pct": (0.0, 200.0),
@@ -2155,6 +2161,7 @@ ECON_SIM_INT_PARAMS = frozenset({
     "caravan_physical_enabled", "caravan_physical_min_value", "caravan_physical_max_active", "caravan_step_minutes",
     "caravan_route_max_steps", "caravan_post_hold_max_min", "caravan_raid_battle_max_hours",
     "caravan_guard_count_base", "caravan_guard_value_per_extra", "caravan_guard_count_max",
+    "caravan_departure_minutes", "caravan_escort_seats", "caravan_escort_defense_fame",
     "guild_enabled", "guild_min_order_value", "guild_xp_daily_cap",
     "classes_enabled",
 })
@@ -2569,6 +2576,11 @@ class EconSimParamsIn(BaseModel):
     caravan_guard_mult_dangerous: Optional[float] = None
     caravan_rep_trade_share: Optional[float] = None
     fence_purse_share: Optional[float] = None
+    caravan_departure_minutes: Optional[int] = None
+    caravan_escort_seats: Optional[int] = None
+    caravan_escort_fee_share: Optional[float] = None
+    caravan_escort_bonus_share: Optional[float] = None
+    caravan_escort_defense_fame: Optional[int] = None
     guild_enabled: Optional[int] = None
     guild_markup_pct: Optional[float] = None
     guild_open_threshold_pct: Optional[float] = None
@@ -3288,6 +3300,12 @@ class CaravanParamsOut(BaseModel):
     caravan_guard_mult_dangerous: float
     caravan_rep_trade_share: float
     fence_purse_share: float
+    # FEAT-212 player escorts
+    caravan_departure_minutes: int
+    caravan_escort_seats: int
+    caravan_escort_fee_share: float
+    caravan_escort_bonus_share: float
+    caravan_escort_defense_fame: int
 
 
 class CaravanEscrowOut(BaseModel):
@@ -3365,6 +3383,7 @@ class CaravanOut(BaseModel):
     stolen_units: float = 0
     raid_paid: int = 0
     raid_status: Optional[str] = None            # starting | fighting | won | repelled | aborted | expired
+    escort_count: int = 0                        # FEAT-212: active player escorts
 
 
 class CaravanListOut(BaseModel):
@@ -3412,12 +3431,26 @@ class CaravanRaidAdminOut(BaseModel):
     guard_mult: Optional[float]
     created_at: datetime
     finished_at: Optional[datetime]
+    escort_ids: List[int] = []                   # FEAT-212: player escorts placed on the guard team
+
+
+class CaravanEscortAdminOut(BaseModel):
+    """FEAT-212 A5: one escort row (status active | left | fallen | delivered | cancelled | released)."""
+    character_id: int
+    name: Optional[str]
+    status: str
+    joined_at: datetime
+    ended_at: Optional[datetime]
+    fee: int
+    bonus: int
+    in_raid: bool
 
 
 class CaravanDetailOut(CaravanOut):
     route: List[CaravanRoutePointOut] = []
     held_by: Optional[str] = None                # post | raid | null
     raid: Optional[CaravanRaidAdminOut] = None
+    escorts: List[CaravanEscortAdminOut] = []    # FEAT-212
 
 
 class CaravanGateRegionOut(BaseModel):
@@ -3525,6 +3558,9 @@ class CaravanRaidResultIn(BaseModel):
     caravan_raid_id: conint(ge=1)
     winner_team: Optional[int] = None
     aborted: bool = False
+    # FEAT-212: knocked-out / dropped participants (escorts among them fall out of a repelled caravan); an old
+    # battle-service sends none → None (every escort stays)
+    fallen_character_ids: Optional[List[int]] = None
 
 
 class CaravanRaidResultOut(BaseModel):

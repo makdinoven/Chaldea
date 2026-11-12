@@ -95,7 +95,8 @@ PUT заменяет таблицу целиком (уровни подряд с
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/characters/{id}/full_profile` | Полный профиль с уровнем, атрибутами, титулом. **FEAT-171 (C1, optional-auth):** владелец, админ/модератор с `characters:read` и NPC получают прежнее тело; любой другой зритель — `PublicProfileResponse` (`id`, `name`, `level`, `active_title`, `active_title_rarity`, `avatar`). Ключей `currency_balance`, `stat_points`, `level_progress`, `attributes` в его ответе **нет** (именно отсутствуют, а не null). Несуществующий персонаж → 404 |
-| GET | `/characters/{id}/profile` | Профиль с данными пользователя; `character_class_id` (1 воин, 2 плут, 3 маг) — для миниатюр на 3D-столе данжа |
+| GET | `/characters/{id}/profile` | Профиль с данными пользователя; `character_class_id` (1 воин, 2 плут, 3 маг) — для миниатюр на 3D-столе данжа ; FEAT-212: охранник каравана замаскирован (локация найма, без блокировки охраны) |
+| GET | `/characters/internal/{id}/profile` | То же тело с реальными `current_location_id`/`activity_lock` (+ `X-Internal-Token`; locations, dungeon) |
 | GET | `/characters/{id}/short_info` | Краткая инфо (имя, аватар, локация). **FEAT-171 (C4, D7):** `currency_balance` убран **безусловно, для всех** — маршрут читают сервис-в-сервис, поэтому optional-auth тут не годится. Баланс отдаёт только двойник `/characters/internal/{id}/short_info` |
 | GET | `/characters/{id}/race_info` | Раса, подраса, класс, уровень |
 | GET | `/characters/list` | Список всех персонажей |
@@ -423,6 +424,15 @@ law_encounter > unconscious > dungeon > asleep > reading**. В объекте б
 (character — канонический, locations и battle — async, inventory — sync); общая часть идентична, CI её не
 сверяет. Копии в locations / battle / inventory читают `jailed_until, law_encounter_id` и при ошибке «unknown
 column» (миграция 039 ещё не применена) повторяют старый SELECT без них — рассинхрон деплоя не роняет маршруты.
+
+**FEAT-212 — причина `caravan_escort`** (миграция `051_caravan_escorts`, `characters.escort_caravan_id` не NULL —
+игрок едет в охране физического каравана). Приоритет: **jail > law_encounter > unconscious > dungeon >
+caravan_escort > asleep > reading**. Текст отказа **нейтральный для любого subject** — «Цель: действие сейчас
+недоступно» (третьи лица не должны узнать об охраннике; сам охранник видит причину в своём баннере).
+`law_crud.check_patrol_arrival` передаёт колонку (охранника патруль пропускает); `PUT /characters/internal/{id}/
+update_location` отказывает охраннику 409 (защита в глубину, как для `law_encounter`); админ-перенос
+(`_prepare_move`) сначала снимает с охраны без оплаты (`caravan_escort_crud.release`, запись `caravan_escort` в
+журнале, уведомление «Вы сняты с охраны каравана»); телепорт домой отказывает как при любой блокировке.
 
 Колонки `characters.dungeon_session_id` / `characters.unconscious_until` (и FEAT-198 `jailed_until` /
 `law_encounter_id`) пишет только character-service; остальные сервисы читают их из общей БД (как блокировку боя). В тестах
@@ -2846,7 +2856,7 @@ trade_gate_location_id`; `econ_sim_settings.caravan_pass_last_run_at`; `reputati
 |-------|------|--------|----------|
 | GET | `/characters/caravans/here?character_id=` | JWT, владелец | A1: физические караваны в пути в **своей** локации персонажа (параметра локации нет): `{location_id, caravans: [{id, group_code, group_name, guard_count, state (on_road/held/under_attack/raided), departs_in_sec, can_attack, reason}]}` — без откуда/куда/маршрута/ценности |
 | POST | `/characters/caravans/{caravan_id}/raid` | JWT, владелец; nginx `caravan_raid_limit` | A2: `{character_id, group}` → 201 `{raid_id, battle_id}`; 404 «Караван не найден», 400 «Каравана нет в вашей локации», 409 «Этот караван уже ограблен или на него уже напали» / «Караван уже прибыл» / «Охрана караванов не настроена — налёт невозможен», 403 «Нужен боевой пост с этим караваном, чтобы напасть», 500 «Не удалось собрать охрану каравана», 4xx battle-service — как есть, 503 «Сервис боя недоступен — налёт не начат» |
-| POST | `/characters/internal/caravans/raid-result` | X-Internal-Token | A3: колбэк battle-service `{battle_id, caravan_raid_id, winner_team, aborted}` → `{status: won/repelled/aborted/already/unknown}`; идемпотентен |
+| POST | `/characters/internal/caravans/raid-result` | X-Internal-Token | A3: колбэк battle-service `{battle_id, caravan_raid_id, winner_team, aborted, fallen_character_ids?}` → `{status: won/repelled/aborted/already/unknown}`; идемпотентен. `fallen_character_ids` (FEAT-212, необязательное; старый battle-service не шлёт → `null`) — выбывшие участники боя |
 
 **Старт.** Tx A: блокировка каравана, проверки, предпроверка открытого гейта поста `caravan` лидера (чтобы не плодить
 охрану; окончательно гейт потребляет battle-service), строка `econ_caravan_raids` `starting` (UNIQUE `caravan_id` =
@@ -2896,3 +2906,158 @@ inventory-service (`POST /inventory/internal/characters/{id}/items`, отмет�
 прогоне → `DuplicateOperation`, пропуск), метаданные `fence: true`. Сбой края — откат, `RunSummary.fence_failed_region_ids`
 и префикс ошибки прогона «скупщики — ошибка в регионах: », повтор в следующем тике. Счётчики `fences_refilled`,
 `fence_cash_added`.
+
+## Охрана караванов из игроков — фундамент (FEAT-212, задача 1)
+
+### Миграция `051_caravan_escorts` (revises `050_physical_caravans`; шаги защищены information_schema, без ENUM/FK)
+
+- `characters.escort_caravan_id BIGINT NULL` + индекс `ix_characters_escort_caravan` — караван, который игрок сейчас
+  охраняет (причина блокировки `caravan_escort`). Пишет только character-service; battle/locations/inventory/party
+  читают сырым SQL.
+- `econ_caravan_escorts` — строка на (караван, персонаж), UNIQUE `uq_caravan_escort` = обратно в тот же караван не
+  берут. `status`: `active|left|fallen|delivered|cancelled|released`; `hire_location_id` — «застывшая» публичная
+  локация; `in_raid`, `fee`, `bonus`, `payout_op_id`, `rewards_done`, `joined_at`, `ended_at`.
+- `econ_caravan_messages` — караванный канал (`caravan_id, character_id, body ≤500, created_at`).
+- `econ_caravan_raids` + `escort_ids JSON`, `faction_done` (старые налёты помечены `1` — без ретро-очков фракций).
+- `reputation_actions`: встроенные `caravan_escort` «Охрана каравана» (10, лимит 40/день, sort 55) и
+  `caravan_defense` «Отбит налёт на караван» (25, без лимита, sort 56); зеркало — `reputation_core.DEFAULT_ACTIONS`
+  (копия в locations-service, `scripts/check_econ_copies.sh`).
+- Откат удаляет всё перечисленное (активные охранники просто теряют блокировку).
+
+### Параметры (JSON `econ_sim_settings.params`, входят в `CARAVAN_PARAM_KEYS` → карточка караванов)
+
+`caravan_departure_minutes` (45, 0…720) — новорождённый физический караван стоит у ворот продавца столько минут
+(«сборы», окно найма; 0 = прежнее поведение — один обычный шаг 18 мин ±25 %), `economy_caravan_crud.departure_delay`;
+`caravan_escort_seats` (3, 0…4; 0 = найм выключен), `caravan_escort_fee_share` (0.05, 0…0.5),
+`caravan_escort_bonus_share` (0.03, 0…0.5), `caravan_escort_defense_fame` (5, 0…1000).
+
+### Видимость охранника (`caravan_escort_public.py`)
+
+- `GET /characters/by_location` — охранники не попадают в список (фильтр `escort_caravan_id IS NULL`).
+- Публичный `GET /characters/{id}/short_info`, `GET /characters/{id}/public`, `GET /characters/list` — у активного
+  охранника `current_location_id` = `hire_location_id`, `activity_lock` (в short_info) считается без колонки охраны
+  (выглядит незаблокированным; прочие причины видны как раньше).
+- `GET /characters/internal/{id}/short_info` — реальные значения (баннер `/users/me`); `?masked=true` — тот же вид
+  для чужих (для сервисов, показывающих карточку посторонним).
+- `GET /characters/{id}/profile` (публичный, без JWT; фронтенд его не вызывает) — замаскирован так же
+  (Task 16). Реальные значения — `GET /characters/internal/{id}/profile` (+ `X-Internal-Token`, тело то же):
+  его читают locations-service (проверки «персонаж на этой локации»/перемещение) и dungeon-service (вход в данж,
+  `activity_lock`); при 404 от старого CS оба откатываются на публичный путь. battle-service (имя/аватар),
+  autobattle-service (`user_id`) и `get_post_details` в locations остаются на публичном — маска их не задевает.
+
+### `caravan_escort_crud.py` — `release`
+
+`release(db, character_id, status='released')` — снять с охраны без оплаты (без commit; порядок блокировок караван →
+строка охраны → персонаж; идемпотентно, «висячую» колонку тоже чистит). Зовётся из `_prepare_move` (админ-перенос,
+свиток дома).
+
+## Охрана караванов из игроков — ядро (FEAT-212, задача 2)
+
+Модули: `app/caravan_escort_crud.py` (логика), `app/caravan_escort_schemas.py` (Pydantic v1),
+`app/caravan_escort_api.py` (роутер, подключён в `main.py` сразу после `caravan_api`).
+
+### Эндпоинты игрока (JWT + владелец персонажа на каждом вызове)
+
+| # | Метод | Путь | Ответ / ошибки |
+|---|---|---|---|
+| C1 | GET | `/characters/caravans/caravaneer/{npc_id}?character_id=` | `{npc_id, location_id, my_escort_caravan_id, seats_enabled, caravans: [{id, group_code, group_name, departs_in_sec, has_seats, pay_estimate, can_hire, reason}]}` — караваны, которые «собираются» у ворот караванщика. **Без числа мест/охранников** (решение PM 1: только «есть места» / «мест нет»), без откуда/куда/маршрута/ценности. `pay_estimate` = гарантированная плата на голову при полностью занятых местах (`fee_pool // seats`, не зависит от текущего числа охранников) |
+| C2 | POST | `/characters/caravans/{caravan_id}/escort/hire` | `{character_id, npc_id}` → 201 тело C3 (`EscortJob`); ошибки ниже |
+| C3 | GET | `/characters/caravans/escort?character_id=` | `{escort: EscortJob или null}`; `EscortJob = {caravan_id, group_code, group_name, from_region_name, to_region_name, route: [{index, location_id, name}], route_index, current_location_id, current_location_name, state (preparing/on_road/held/under_attack/arrived), next_move_in_sec, seats_total, escorts: [{character_id, name, avatar}], pay_estimate (на голову сейчас, + надбавка если налёт отбит), raid_status, battle_id (бой налёта, если охранник в нём), joined_at}` |
+| C4 | POST | `/characters/caravans/escort/leave` | `{character_id}` → `{left: true, location_id}`; 404 «Вы не в охране каравана», 409 «Идёт бой — сойти с каравана нельзя» (налёт `starting`/`fighting`) |
+| C5 | GET | `/characters/caravans/escort/messages?character_id=&after_id=0` | `{caravan_id, messages: [{id, character_id, name, avatar, body, created_at}]}` от старых к новым, ≤ 100; `after_id=0` — последние 100, иначе следующие после `after_id`; 404 «Вы не в охране каравана» |
+| C6 | POST | `/characters/caravans/escort/messages` | `{character_id, text}` → 201 элемент сообщения; 404, 400 «Сообщение: от 1 до 500 символов» (после strip), 429 «Слишком часто — подождите пару секунд» (3 с на персонажа) |
+
+**Порядок проверок C1/C2** (как у банкира/гильдии): 1) владелец + персонаж игрока (404 «Персонаж не найден» / 403
+«Вы можете управлять только своими персонажами» / 403 «Охрану караванов нанимают только персонажи игроков»);
+2) НПС с ролью `caravaneer`, жив → иначе 404 «Караванщик не найден»; 3) персонаж в локации НПС → 400 «Вы не у
+караванщика»; 4) гейт FEAT-145 `npc_dialogue` через `locations_client.check_npc_gate` **без открытой транзакции**
+(fail-closed: 503 «Не удалось проверить обращение к караванщику, попробуйте позже», закрыт → 403 «Нужен
+пост-намерение «Диалог с НПС» с этим персонажем»); 5) порог репутации НПС (`reputation_crud.require_npc_tier`, 403).
+
+**Найм (C2, одна транзакция: караван FOR UPDATE → активные строки охраны → персонаж)**, ошибки по порядку: 404
+«Караван не найден» (нет / не физический / не в пути); 409 «Караван уже ушёл» (`route_index > 0` или прибыл); 400
+«Этот караван собирается не здесь»; 409 «На этот караван уже напали» (есть строка налёта); 409 «Караванщик сейчас не
+нанимает охрану» (`caravan_escort_seats = 0`); 409 «Мест в охране больше нет»; 409 «Вы уже в охране каравана»; 409
+«В этот караван вас больше не возьмут» (была строка — сошёл/пал; также UNIQUE); 409 текст блокировки активности; 409
+«Персонаж в бою»; 409 «Сначала закончите сбор ресурсов» (`gathering_sessions.status='active'`, таблица отсутствует →
+пропуск); 403 «Вас разыскивают в краю, откуда идёт караван — караванщик не возьмёт» (`law_crud.read_wanted` в крае
+продавца); 403 «Нужна репутация: …» (ниже «Скиталец» в крае продавца). Край продавца удалён → проверки закона и
+репутации пропускаются. Успех: строка `active`, `hire_location_id` = текущая локация, колонка `escort_caravan_id`,
+`house_room_id = NULL`, `character_logs` `caravan_escort`, уведомление WS `caravan_escort` после коммита.
+«Собирается» = физический, `in_transit`, не прибыл, `route_index = 0`, налёта не было.
+
+### В пути, доставка, награды
+
+- **Шаг** (`caravan_pass.step_caravan`, та же транзакция): после сдвига каравана активные охранники (строки asc id →
+  персонажи asc id) переезжают сырым UPDATE `current_location_id`, `house_room_id = NULL` (без проверки входа закона и
+  территории фракций — едут «в фургоне»). Удержанный караван (налёт/пост) охранников не двигает.
+- **Доставка** (`deliver_physical`, операция `caravan_delivery`, без новой op и без правок `econ_core`): `seller_part`
+  после налёта → `fee_pool = floor(seller_part × caravan_escort_fee_share)`, `bonus_pool = floor(seller_part ×
+  caravan_escort_bonus_share)` если налёт `repelled`; на голову `pool // n` (остаток продавцу); доп. ноги `escrow →
+  character`; метаданные `escorts: [{character_id, fee, bonus}]`. Строки → `delivered` (`fee`, `bonus`,
+  `payout_op_id`), колонка очищается (персонаж у ворот покупателя), лог «Охрана каравана (<группа>): плата N марок (+M
+  за отбитый налёт)», уведомления после коммита (`FinishResult.notices`). Ограбление уменьшает плату само (доля от
+  остатка). Отмена → строки `cancelled`, без оплаты, уведомление «Караван отменён — оплаты не будет». Инвариант мира и
+  подинвариант эскроу не меняются.
+- **Шаг прохода 6 `escort_rewards`** (своя транзакция на охранника): сначала очки фракций
+  (`faction_kills.apply_caravan_deed(kind='escort')`, свои коммиты, идемпотентно по ключу
+  `faction:caravan_escort:c<caravan>:<cid>`), затем захват `rewards_done` + репутация `caravan_escort` в краях
+  продавца и покупателя (`echo=False`, ключ `caravan_escort:<caravan>:<cid>:r<region>`); если налёт отбит и охранник
+  был в бою (`in_raid` / `raid.escort_ids`) — `caravan_defense` в обоих краях и слава `caravan_escort_defense_fame`
+  (источник `caravan_defense`, ключ `caravan_defense:<caravan>:<cid>`). Уведомления — после коммита.
+- **Шаг прохода 7 `escort_housekeeping`**: активные строки закончившихся/исчезнувших караванов → `released`;
+  «висячая» колонка без активной строки → очищается; сообщения канала караванов, завершённых > 7 дней назад, удаляются
+  (1000 за проход).
+
+### Фракции: «дело фракции»
+
+`faction_enemies.kind` получил одиночные виды `escort` «Охрана караванов» и `raid` «Налёты на караваны» (`ref_id = 0`,
+как `hostile`; повтор → 422 «Строка «Охрана караванов» может быть только одна» / «…«Налёты на караваны»…»). Очки
+начисляются членам (тайным тоже, уведомление только игроку) по `faction_enemies.points` под общим дневным лимитом побед
+(`faction_donation_days.kill_points`, `fc.kill_cap`); события журнала `caravan_escort` / `caravan_raid`. Очки за налёт
+(`raid`) начисляет задача 3 через тот же `apply_caravan_deed`.
+
+### Админ
+
+A4 `GET /characters/admin/economy/caravans` — у элемента `escort_count` (активные охранники). A5
+`GET /characters/admin/economy/caravans/{id}` — `escorts: [{character_id, name, status, joined_at, ended_at, fee, bonus,
+in_raid}]`, у налёта `escort_ids`.
+
+### Гильдия торговцев — окно тоже по посту (3.11)
+
+`GET /characters/economy/guild/npc/{npc_id}` стал `async`: шаги 1–4 (`resolve_guild`, транзакция закрыта) → гейт
+`npc_dialogue` (503 «Не удалось проверить обращение к гильдии, попробуйте позже» / 403 «Нужен пост-намерение «Диалог с
+НПС» с этим персонажем») → окно. Сдача товаров была под гейтом и раньше.
+
+### Порядок блокировок (3.15)
+
+`econ_regions → econ_region_goods → econ_region_events → econ_caravans (asc) → econ_caravan_raids →
+econ_caravan_escorts (asc id) → econ_caravan_raid_shares → … → characters (asc id, один отсортированный захват) →
+econ_accounts (asc) → character_attributes`. Репутация/слава/фракции — только в своих транзакциях шага наград.
+
+## Охрана караванов из игроков — налёт (FEAT-212, задача 3)
+
+Модули: `app/caravan_raid_crud.py`, `app/battle_client.py`, `app/caravan_api.py`, схема `CaravanRaidResultIn`.
+
+- **A2, старт.** `begin_raid` до блокировки каравана отказывает лидеру с любой блокировкой активности (409, текст
+  `activity_lock.lock_message`; для охранника — нейтральный «Персонаж: действие сейчас недоступно») — охрана не
+  спавнится. `spawn_guards`: охранники-игроки = активные строки каравана (asc `character_id`, не больше 4), мобов
+  `max(1, min(guard_count, 5 − охранников))`; `RaidStart.escort_ids`. В B1 уходит `escort_character_ids` (только когда
+  охранники есть — иначе вызов как в FEAT-211). Ответ B1 `escort_character_ids` = кого battle-service реально поставил
+  (старый battle-service без поля → `[]`, охранники в бой не попадают и остаются в караване); CS берёт пересечение с
+  отправленными.
+- **Tx B** `mark_fighting(..., escort_ids=)`: `econ_caravan_raids.escort_ids` (JSON, `[]` если никого) и `in_raid = 1`
+  у их активных строк. Если колбэк обогнал Tx B — `escort_ids` дописывается, только если был NULL.
+- **Итог** (`settle_raid`, колбэк и опрос; `fallen_character_ids` из колбэка или из `GET /battles/internal/{id}/result`):
+  охранники боя = `raid.escort_ids`, а если NULL (Tx B потерян) — игроки команды 1 боя, которые ещё в охране этого
+  каравана. Их активные строки блокируются после строки налёта (asc id), им ставится `in_raid = 1`:
+  `won` → все выбывают (`fallen`, «Охрана каравана разбита — вы выбыли из каравана»); `repelled` → выбывают только те,
+  кто в `fallen_character_ids` (`fallen`, «Вы пали в бою за караван — вы выбыли из каравана, оплаты не будет»; поля нет
+  → никто), остальным «Налёт отбит! Надбавка будет выплачена по прибытии»; `aborted` → остаются; `expired` → `released`
+  («Бой за караван затянулся — караван ушёл дальше без вас»). Выбывший остаётся в локации налёта, без «без сознания»
+  и без оплаты; колонка `escort_caravan_id` очищается, `character_logs` `caravan_escort`, уведомление WS
+  `caravan_escort` после коммита. Персонажи налётчиков и выбывающих охранников блокируются **одним** отсортированным
+  захватом.
+- **Очки фракций за налёт** `raid_faction_points` (после `law_step` в колбэке и в `raid_followups`): игрокам долей
+  `won`-налёта `faction_kills.apply_caravan_deed(kind='raid')` с ключом `faction:caravan_raid:r<raid>:<cid>` (свои
+  транзакции, идемпотентно), затем отметка `faction_done = 1` (повтор после сбоя — пустые повторы).

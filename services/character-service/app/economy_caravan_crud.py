@@ -28,6 +28,13 @@ gates; the caravan pass (``caravan_pass.py``, every ~55 s) steps it one location
 locks only ``econ_caravans(row)``; delivery takes regions → goods → caravan (never the caravan first).
 ``econ_fences``, ``econ_caravan_guard_templates`` and the locations-service gate tables are plain reads, never locked.
 The escrow sub-invariant is ``escrow == Σ (paid_purse + paid_treasury − raid_paid)`` of caravans in transit.
+
+FEAT-212 player escorts (global lock order 3.15, supersedes the FEAT-211 one): ``econ_regions → econ_region_goods →
+econ_region_events → econ_caravans (asc) → econ_caravan_raids → econ_caravan_escorts (asc id) →
+econ_caravan_raid_shares → … → characters (asc id, ONE sorted lock call per tx) → econ_accounts (asc) →
+character_attributes``. Delivery: regions → goods → caravan → escorts → their characters → accounts; the escort pay
+is extra legs ``escrow → character`` of the same ``caravan_delivery`` op, carved out of the seller part (so the escrow
+sub-invariant is unchanged). The step transaction: caravan → escorts → characters (``caravan_escort_crud``).
 """
 
 import json
@@ -83,6 +90,9 @@ CARAVAN_PARAM_KEYS = (
     "caravan_guard_count_base", "caravan_guard_value_per_extra", "caravan_guard_count_max",
     "caravan_guard_mult_per_1000", "caravan_guard_mult_max", "caravan_guard_mult_dangerous",
     "caravan_rep_trade_share", "fence_purse_share",
+    # FEAT-212 player escorts (3.4)
+    "caravan_departure_minutes", "caravan_escort_seats", "caravan_escort_fee_share", "caravan_escort_bonus_share",
+    "caravan_escort_defense_fame",
 )
 
 # FEAT-211 physical caravans
@@ -408,6 +418,15 @@ def step_delay(params, u: float) -> timedelta:
     return patrol_core.next_delay(int(params.caravan_step_minutes), STEP_JITTER_PCT, u)
 
 
+def departure_delay(params, u: float) -> timedelta:
+    """FEAT-212 3.2: a newborn physical caravan stands at the seller gate ``caravan_departure_minutes`` (the escort
+    hire window, «сборы»); 0 = the old behaviour (one ordinary ``step_delay``)."""
+    minutes = int(getattr(params, "caravan_departure_minutes", 0) or 0)
+    if minutes > 0:
+        return timedelta(minutes=minutes)
+    return step_delay(params, u)
+
+
 def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params, now: datetime,
              planner: Optional[RoutePlanner] = None) -> DispatchResult:
     """Send one planned caravan (no commit; the caller commits / rolls back). FEAT-211: with a ``planner`` the
@@ -468,7 +487,7 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
             row.route = [int(x) for x in road]
             row.route_index = 0
             row.current_location_id = int(road[0])
-            row.next_move_at = now + step_delay(params, u)
+            row.next_move_at = now + departure_delay(params, u)
             row.guard_count = econ_caravan.guard_count(final.value, params)
     db.add(row)
     try:
@@ -526,6 +545,7 @@ def dispatch_tx(session_factory: SessionFactory, plan: econ_caravan.CaravanPlan,
 class FinishResult:
     status: str        # advanced | delivered | cancelled | postponed | already
     value: int = 0
+    notices: list = field(default_factory=list)     # FEAT-212: escort notices, published after the commit
 
 
 def in_transit_rows(db: Session) -> List[Tuple[int, int, int]]:
@@ -675,9 +695,11 @@ def advance_and_finish(session_factory: SessionFactory, run_id: int, now: dateti
 
 def deliver_physical(db: Session, caravan_id: int, now: datetime) -> FinishResult:
     """Deliver (or cancel) an arrived physical caravan (no commit). Lock order = :func:`finish`: ``econ_regions ×≤2
-    asc → econ_region_goods ×≤2 asc → econ_caravans(row) → econ_accounts``. Only ``units − stolen_units`` arrive
-    (or go back); the money is the rest of the escrow ``paid − raid_paid`` (``econ_caravan.remaining_payout`` /
-    ``refund_split``)."""
+    asc → econ_region_goods ×≤2 asc → econ_caravans(row) → [FEAT-212 econ_caravan_escorts → characters] →
+    econ_accounts``. Only ``units − stolen_units`` arrive (or go back); the money is the rest of the escrow
+    ``paid − raid_paid`` (``econ_caravan.remaining_payout`` / ``refund_split``). FEAT-212: active escorts are paid
+    out of the seller part inside the same op (delivered) or get nothing (cancelled); notices ride on the result."""
+    import caravan_escort_crud as escorts               # late: it imports this module
     probe = db.execute(text("SELECT from_region_id, to_region_id, group_code FROM econ_caravans WHERE id = :id"),
                        {"id": int(caravan_id)}).first()
     if probe is None:
@@ -701,10 +723,15 @@ def deliver_physical(db: Session, caravan_id: int, now: datetime) -> FinishResul
         seller_ref = (core.AccountRef.purse(from_id) if _region_exists(db, from_id)
                       else _country_or_world(db, row.from_country_id))
         duty_ref = _country_or_world(db, row.to_country_id)
+        plan = escorts.pay_plan(db, row, seller_part)
+        seller_part -= plan.total
         legs = [core.Leg(escrow_ref, seller_ref, seller_part), core.Leg(escrow_ref, duty_ref, duty_part)]
+        legs += plan.legs(escrow_ref)
         op_type, key, status, paid_out = core.OP_CARAVAN_DELIVERY, KEY_DONE, STATUS_DELIVERED, seller_part
         row.cancel_reason = None
     else:
+        plan = None
+        notices = escorts.cancel_escorts(db, row, now)      # escort rows + characters locked before the accounts
         origin_goods = goods.get((from_id, code))
         if origin_goods is not None and _region_exists(db, from_id):
             origin_goods.stock = _dec3(_dec3(origin_goods.stock) + units)
@@ -729,7 +756,7 @@ def deliver_physical(db: Session, caravan_id: int, now: datetime) -> FinishResul
         metadata={"caravan_id": int(row.id), "from_region_id": from_id, "to_region_id": to_id, "group_code": code,
                   "units": str(units), "value": _i(row.value), "duty": _i(row.duty),
                   "cancel_reason": row.cancel_reason, "physical": True, "stolen_units": str(_dec3(row.stolen_units)),
-                  "raid_paid": raid_paid},
+                  "raid_paid": raid_paid, "escorts": plan.metadata() if plan is not None else []},
     )
     row.status = status
     row.runs_left = 0
@@ -737,7 +764,9 @@ def deliver_physical(db: Session, caravan_id: int, now: datetime) -> FinishResul
     row.finished_at = now
     row.finished_run_id = None
     row.finish_op_id = posted.operation_id
-    return FinishResult(status, paid_out)
+    if plan is not None:
+        notices = escorts.finish_paid(db, row, plan, posted.operation_id, now)
+    return FinishResult(status, paid_out, notices)
 
 
 def deliver_physical_tx(session_factory: SessionFactory, caravan_id: int, now: datetime) -> FinishResult:
@@ -913,7 +942,8 @@ SELECT c.id, c.status, c.group_code, g.name, c.from_region_id, rf.name, c.from_c
        c.paid_purse, c.paid_treasury, c.travel_runs, c.runs_left, c.dispatch_run_id, c.finished_run_id,
        c.cancel_reason, c.goods_returned, c.created_at, c.finished_at,
        c.is_physical, c.current_location_id, lc.name, c.route_index, c.route, c.next_move_at, c.arrived_at,
-       c.hold_started_at, c.guard_count, c.stolen_units, c.raid_paid, cr.status
+       c.hold_started_at, c.guard_count, c.stolen_units, c.raid_paid, cr.status,
+       (SELECT COUNT(*) FROM econ_caravan_escorts ce WHERE ce.caravan_id = c.id AND ce.status = 'active')
 FROM econ_caravans c
 LEFT JOIN econ_goods_groups g ON g.code = c.group_code
 LEFT JOIN Regions rf ON rf.id = c.from_region_id
@@ -941,6 +971,8 @@ def _caravan_out(r) -> dict:
         "current_location_name": r[29], "route_index": _i(r[30]), "route_len": len(_json_list(r[31])),
         "next_move_at": r[32], "arrived_at": r[33], "hold_started_at": r[34], "guard_count": _i(r[35]),
         "stolen_units": round(_f(r[36]), 3), "raid_paid": _i(r[37]), "raid_status": r[38],
+        # FEAT-212 (A4): active player escorts
+        "escort_count": _i(r[39]),
     }
 
 
@@ -1075,7 +1107,19 @@ def _raid_out(db: Session, raid: "models.EconCaravanRaid") -> dict:
         "guard_template_name": template_name,
         "guard_mult": round(_f(raid.guard_mult), 3) if raid.guard_mult is not None else None,
         "created_at": raid.created_at, "finished_at": raid.finished_at,
+        # FEAT-212 (A5): player escorts placed on the guard team
+        "escort_ids": [int(x) for x in _json_list(raid.escort_ids) if isinstance(x, int) or str(x).isdigit()],
     }
+
+
+def _escorts_out(db: Session, caravan_id: int) -> List[dict]:
+    """FEAT-212 A5: every escort row of the caravan (admin only), in hire order."""
+    rows = db.execute(text(
+        "SELECT e.character_id, ch.name, e.status, e.joined_at, e.ended_at, e.fee, e.bonus, e.in_raid "
+        "FROM econ_caravan_escorts e LEFT JOIN characters ch ON ch.id = e.character_id "
+        "WHERE e.caravan_id = :c ORDER BY e.id"), {"c": int(caravan_id)}).fetchall()
+    return [{"character_id": int(r[0]), "name": r[1], "status": r[2], "joined_at": r[3], "ended_at": r[4],
+             "fee": _i(r[5]), "bonus": _i(r[6]), "in_raid": bool(r[7])} for r in rows]
 
 
 def caravan_detail(db: Session, caravan_id: int, now: Optional[datetime] = None) -> dict:
@@ -1099,6 +1143,7 @@ def caravan_detail(db: Session, caravan_id: int, now: Optional[datetime] = None)
         out["held_by"] = held_by(db, caravan, now, econ_tick.load_params(db), gate_tables_available(db))
     raid = db.query(models.EconCaravanRaid).filter(models.EconCaravanRaid.caravan_id == int(caravan_id)).first()
     out["raid"] = _raid_out(db, raid) if raid is not None else None
+    out["escorts"] = _escorts_out(db, caravan_id)
     return out
 
 

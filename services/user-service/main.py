@@ -302,17 +302,26 @@ def _normalize_site_background_url(value: Optional[str]) -> Optional[str]:
     return value
 
 
-async def _fetch_character_short(char_id: int, with_house: bool = False):
+async def _fetch_character_short(char_id: int, with_house: bool = False, masked: bool = False):
     """Fetch character short info + location, reused by /me and /profile.
 
     FEAT-171 C4i: публичный `short_info` больше не отдаёт `currency_balance`,
     поэтому баланс для счётчика золота берётся из внутреннего двойника
     `/characters/internal/{id}/short_info` с заголовком X-Internal-Token.
+
+    FEAT-212: `masked=True` (карточки для посторонних) просит character-service
+    замаскировать локацию и блокировку охранника каравана (`?masked=true`):
+    локация застывает на месте найма, блокировка не показывается. Старый
+    character-service параметр игнорирует — тогда данные реальные (как раньше).
     """
     char_url = f"{CHARACTER_SERVICE_URL}/characters/internal/{char_id}/short_info"
+    query = {"masked": "true"} if masked else None
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            resp = await client.get(char_url, headers=_internal_token_headers())
+            if query:
+                resp = await client.get(char_url, headers=_internal_token_headers(), params=query)
+            else:
+                resp = await client.get(char_url, headers=_internal_token_headers())
             resp.raise_for_status()
         except Exception as exc:
             logger.warning(
@@ -2023,7 +2032,8 @@ async def get_user_characters(
     characters = []
     if character_ids:
         # Fetch character info and post stats in parallel
-        char_tasks = [_fetch_character_short(cid) for cid in character_ids]
+        # FEAT-212: public list -> masked (a caravan escort must not be revealed).
+        char_tasks = [_fetch_character_short(cid, masked=True) for cid in character_ids]
         post_stats_task = _fetch_character_post_stats(character_ids)
         char_results, post_stats = await asyncio.gather(
             asyncio.gather(*char_tasks),
@@ -2102,7 +2112,9 @@ async def get_user_profile(
     # Character info
     character_data = None
     if user.current_character:
-        character_data = await _fetch_character_short(user.current_character)
+        # FEAT-212: strangers get the masked card (escort location frozen, lock hidden).
+        is_own_profile = bool(current_user and current_user.id == user_id)
+        character_data = await _fetch_character_short(user.current_character, masked=not is_own_profile)
 
     # Friendship status
     is_friend = None

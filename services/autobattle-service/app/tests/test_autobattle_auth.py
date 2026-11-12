@@ -270,13 +270,14 @@ class TestUnregisterAuth:
         assert 20 in ALLOWED  # Should NOT be removed
 
     @patch("auth_http.requests.get")
-    def test_unregister_unowned_pid_succeeds(self, mock_auth):
-        """Unregistering a pid not in OWNER mapping succeeds (no owner tracking = no restriction)."""
+    def test_unregister_unowned_pid_refused(self, mock_auth):
+        """FEAT-212 (ISSUES.md): a pid registered internally (mob/NPC, no OWNER entry and
+        no resolvable owner) can no longer be switched off by any player."""
         mock_auth.return_value = _mock_response(
             200, {"id": 1, "username": "player", "role": "user", "permissions": []}
         )
         ALLOWED.add(30)
-        # No OWNER entry for pid 30
+        # No OWNER entry for pid 30, no known battle -> owner unresolvable
 
         with TestClient(app) as client:
             response = client.post(
@@ -284,8 +285,9 @@ class TestUnregisterAuth:
                 json={"participant_id": 30},
                 headers={"Authorization": "Bearer fake-token"},
             )
-        assert response.status_code == 200
-        assert 30 not in ALLOWED
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Вы не можете отменить автобой чужого персонажа"
+        assert 30 in ALLOWED
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -361,3 +363,203 @@ class TestSetModeAuth:
             )
         # Strategy.set_mode raises ValueError for invalid mode -> 400
         assert response.status_code == 400
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-212: owner rules for /unregister and /speed, escorts refused on /register
+# ═══════════════════════════════════════════════════════════════════════════
+
+from main import SPEED  # noqa: E402
+
+PLAYER_1 = {"id": 1, "username": "player", "role": "user", "permissions": []}
+MOB_PID, ESCORT_PID, OWN_PID = 40, 41, 42
+MSG_UNREGISTER = "Вы не можете отменить автобой чужого персонажа"
+MSG_SPEED = "Вы не можете менять скорость чужого автобоя"
+MSG_ESCORT = "Охранникам каравана автобой недоступен — в налёте вы ходите сами"
+
+
+def _raid_state(current_actor=99):
+    return {
+        "runtime": {
+            "current_actor": current_actor,
+            "participants": {
+                str(MOB_PID): {"character_id": 900},
+                str(ESCORT_PID): {"character_id": 300, "autobattle_forbidden": True},
+                str(OWN_PID): {"character_id": 100, "autobattle_forbidden": False},
+            },
+        },
+    }
+
+
+async def _owner_of(character_id):
+    # mob 900 has no owner; escort 300 and character 100 belong to user 1
+    return {900: None, 300: 1, 100: 1}.get(character_id)
+
+
+class TestFeat212OwnerRules:
+
+    def setup_method(self):
+        _cleanup()
+        SPEED.clear()
+
+    @staticmethod
+    def _post(url, body):
+        with TestClient(app) as client:
+            return client.post(url, json=body, headers={"Authorization": "Bearer fake-token"})
+
+    # ---- /unregister ------------------------------------------------------
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_unregister_internal_mob_refused(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        ALLOWED.add(MOB_PID)
+        PID_BATTLE[MOB_PID] = 5          # registered by battle-service, no OWNER entry
+        r = self._post("/unregister", {"participant_id": MOB_PID})
+        assert r.status_code == 403
+        assert r.json()["detail"] == MSG_UNREGISTER
+        assert MOB_PID in ALLOWED
+        mock_state.assert_awaited_once_with(5)
+
+    @patch("main.get_character_owner", new_callable=AsyncMock, return_value=999)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_unregister_foreign_character_resolved_by_battle_refused(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        ALLOWED.add(OWN_PID)
+        PID_BATTLE[OWN_PID] = 5
+        r = self._post("/unregister", {"participant_id": OWN_PID})
+        assert r.status_code == 403
+        assert OWN_PID in ALLOWED
+
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_unregister_own_character_resolved_by_battle(self, mock_auth, mock_state, _owner):
+        """No OWNER entry, but the battle says the character is mine."""
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        ALLOWED.add(OWN_PID)
+        PID_BATTLE[OWN_PID] = 5
+        r = self._post("/unregister", {"participant_id": OWN_PID})
+        assert r.status_code == 200, r.text
+        assert OWN_PID not in ALLOWED
+
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_unregister_own_registry_entry_skips_the_lookup(self, mock_auth, mock_state):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        ALLOWED.add(OWN_PID)
+        OWNER[OWN_PID] = 1
+        PID_BATTLE[OWN_PID] = 5
+        assert self._post("/unregister", {"participant_id": OWN_PID}).status_code == 200
+        mock_state.assert_not_called()
+
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_unregister_unknown_pid_is_a_silent_noop(self, mock_auth, mock_state):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        r = self._post("/unregister", {"participant_id": 12345})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        mock_state.assert_not_called()
+
+    @patch("main.get_battle_state", new_callable=AsyncMock, side_effect=RuntimeError("404"))
+    @patch("auth_http.requests.get")
+    def test_unregister_unresolvable_owner_is_refused(self, mock_auth, _state):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        ALLOWED.add(OWN_PID)
+        PID_BATTLE[OWN_PID] = 5
+        assert self._post("/unregister", {"participant_id": OWN_PID}).status_code == 403
+        assert OWN_PID in ALLOWED
+
+    # ---- /speed -----------------------------------------------------------
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_speed_of_an_internal_mob_refused(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        ALLOWED.add(MOB_PID)
+        PID_BATTLE[MOB_PID] = 5
+        SPEED[MOB_PID] = "fast"
+        r = self._post("/speed", {"participant_id": MOB_PID, "speed": "slow"})
+        assert r.status_code == 403
+        assert r.json()["detail"] == MSG_SPEED
+        assert SPEED[MOB_PID] == "fast"
+
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_speed_of_own_character_resolved_by_battle(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        ALLOWED.add(OWN_PID)
+        PID_BATTLE[OWN_PID] = 5
+        r = self._post("/speed", {"participant_id": OWN_PID, "speed": "slow"})
+        assert r.status_code == 200, r.text
+        assert SPEED[OWN_PID] == "slow"
+
+    @patch("auth_http.requests.get")
+    def test_speed_of_a_foreign_registry_entry_refused(self, mock_auth):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        ALLOWED.add(OWN_PID)
+        OWNER[OWN_PID] = 999
+        r = self._post("/speed", {"participant_id": OWN_PID, "speed": "slow"})
+        assert r.status_code == 403
+        assert r.json()["detail"] == MSG_SPEED
+
+    @patch("auth_http.requests.get")
+    def test_speed_unregistered_stays_404(self, mock_auth):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        assert self._post("/speed", {"participant_id": 12345, "speed": "slow"}).status_code == 404
+
+    # ---- /register: escorts ------------------------------------------------
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_register_escort_refused(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        r = self._post("/register", {"participant_id": ESCORT_PID, "battle_id": 5})
+        assert r.status_code == 403
+        assert r.json()["detail"] == MSG_ESCORT
+        assert ESCORT_PID not in ALLOWED and ESCORT_PID not in OWNER
+
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_register_escort_with_zero_battle_id_falls_back_to_pid_battle(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        PID_BATTLE[ESCORT_PID] = 5      # known from your_turn
+        r = self._post("/register", {"participant_id": ESCORT_PID, "battle_id": 0})
+        assert r.status_code == 403
+        assert r.json()["detail"] == MSG_ESCORT
+        mock_state.assert_awaited_once_with(5)
+        assert ESCORT_PID not in ALLOWED
+
+    @patch("main.get_character_owner", new_callable=AsyncMock, return_value=999)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_register_zero_battle_id_keeps_the_ownership_check(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        PID_BATTLE[OWN_PID] = 5
+        r = self._post("/register", {"participant_id": OWN_PID, "battle_id": 0})
+        assert r.status_code == 403
+        assert OWN_PID not in ALLOWED
+
+    @patch("main.get_character_owner", side_effect=_owner_of)
+    @patch("main.get_battle_state", new_callable=AsyncMock)
+    @patch("auth_http.requests.get")
+    def test_register_non_escort_in_the_same_raid_works(self, mock_auth, mock_state, _owner):
+        mock_auth.return_value = _mock_response(200, PLAYER_1)
+        mock_state.return_value = _raid_state()
+        PID_BATTLE[OWN_PID] = 5
+        r = self._post("/register", {"participant_id": OWN_PID, "battle_id": 0})
+        assert r.status_code == 200, r.text
+        assert OWNER[OWN_PID] == 1
+        mock_state.assert_awaited_once_with(5)     # the fetched state is reused

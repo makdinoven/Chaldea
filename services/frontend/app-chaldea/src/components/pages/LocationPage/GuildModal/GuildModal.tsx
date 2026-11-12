@@ -12,6 +12,7 @@ import type { GuildOffer, GuildView } from '../../../../types/economy';
 import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 import { bankErrorText, newRequestId, parseAmount } from '../BankModal/bankFormat';
 import { GuildOrderRow, ItemThumb, guildClosedText, guildXpPreview } from './GuildParts';
+import { NPC_DIALOGUE_HINT_GUILD, isNpcDialogueGateError } from '../npcDialogueGate';
 
 interface GuildModalProps {
   npcId: number;
@@ -51,6 +52,8 @@ const GuildModal = ({ npcId, npcName, npcAvatar, onClose }: GuildModalProps) => 
   const [quantity, setQuantity] = useState('');
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** FEAT-212: the window and the hand-in need an open «Диалог с НПС» post — show how to make one. */
+  const [gateHint, setGateHint] = useState(false);
   /** Server message of the last successful hand-in (kept in the modal; partial ones are highlighted). */
   const [result, setResult] = useState<{ text: string; partial: boolean } | null>(null);
   /** Guards double submits between the click and the re-render that disables the button. */
@@ -68,9 +71,13 @@ const GuildModal = ({ npcId, npcName, npcAvatar, onClose }: GuildModalProps) => 
     try {
       setView(await getGuildView(npcId, characterId));
       setLoadError(null);
+      setGateHint(false);
     } catch (err) {
       const text = bankErrorText(err, 'Не удалось открыть гильдию торговцев');
       setLoadError(text);
+      setGateHint(isNpcDialogueGateError(err));
+      // The gate closed since the window opened: drop the stale view so the reason is shown.
+      if (isNpcDialogueGateError(err)) setView(null);
       toast.error(text);
     } finally {
       setLoading(false);
@@ -152,6 +159,7 @@ const GuildModal = ({ npcId, npcName, npcAvatar, onClose }: GuildModalProps) => 
       } else {
         const text = bankErrorText(err, 'Не удалось сдать товар гильдии');
         setActionError(text);
+        setGateHint(isNpcDialogueGateError(err));
         toast.error(text);
       }
       // The bag, the order or the residents' money may have changed: show the fresh state.
@@ -183,6 +191,7 @@ const GuildModal = ({ npcId, npcName, npcAvatar, onClose }: GuildModalProps) => 
       ) : !view ? (
         <div className="flex flex-col items-center gap-3 py-8 text-center">
           <p className="text-site-red text-sm">{loadError ?? 'Не удалось открыть гильдию торговцев'}</p>
+          {gateHint && <p className="text-white/60 text-xs sm:text-sm">{NPC_DIALOGUE_HINT_GUILD}</p>}
           {characterId && (
             <button type="button" className="btn-line" onClick={() => void load()}>
               Повторить

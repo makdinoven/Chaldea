@@ -174,6 +174,12 @@ class SimParams:
     caravan_guard_mult_dangerous: float = 1.25  # extra factor on `dangerous` locations
     caravan_rep_trade_share: float = 0.5      # seller / buyer region reputation loss vs the raid region
     fence_purse_share: float = 0.1            # share of a region purse its fences may refill from per recount
+    # FEAT-212 player escorts (3.4). Not in a seed either.
+    caravan_departure_minutes: int = 45       # a new physical caravan stands at the seller gate this long (hire window)
+    caravan_escort_seats: int = 3             # player escort seats per caravan; 0 = hiring off (<= 4 keeps >= 1 mob)
+    caravan_escort_fee_share: float = 0.05    # escort pay pool = share of the seller's remaining proceeds
+    caravan_escort_bonus_share: float = 0.03  # extra pool when the caravan's raid was repelled (same source)
+    caravan_escort_defense_fame: int = 5      # fame per escort for a repelled raid (paid on delivery)
     # FEAT-193 guild orders (3.4). Not in a seed either.
     guild_enabled: int = 1                    # 0 = no orders (open ones close on the next recount)
     guild_markup_pct: float = 20.0            # markup over the local price

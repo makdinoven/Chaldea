@@ -19,6 +19,9 @@ The leak had two halves and both are covered:
    and the header are asserted on the captured request, not on "it returned
    something" (§3.5).
 
+FEAT-212: `/users/{id}/characters` is always masked, `/users/{id}/profile` is masked for
+everyone but the owner (`?masked=true` on the internal short_info).
+
 `/users/me` is checked to still carry the balance: that is the one place the
 number is legitimately the viewer's own.
 """
@@ -83,7 +86,7 @@ def character_short(monkeypatch):
     """Stub the cross-service lookup and record every outgoing request."""
     calls = []
 
-    async def _fake(char_id, with_house=False):
+    async def _fake(char_id, with_house=False, masked=False):
         calls.append(char_id)
         return {
             "id": SHORT_INFO["id"],
@@ -316,3 +319,71 @@ class TestShortInfoLookupUsesTheInternalTwin:
                     if k != "X-Internal-Token"}
         with pytest.raises(KeyError):
             stripped["X-Internal-Token"]
+
+
+# ===========================================================================
+# FEAT-212: strangers get the masked card (a caravan escort is not revealed)
+# ===========================================================================
+
+@pytest.fixture()
+def masked_calls(monkeypatch):
+    """Like `character_short`, but records the `masked` flag of every lookup."""
+    calls = []
+
+    async def _fake(char_id, with_house=False, masked=False):
+        calls.append((char_id, masked))
+        data = {k: v for k, v in SHORT_INFO.items() if k != "current_location_id"}
+        return dict(data, id=char_id, current_location=None)
+
+    monkeypatch.setattr(main, "_fetch_character_short", _fake)
+    monkeypatch.setattr(main, "_fetch_character_post_stats", AsyncMock(return_value={}))
+    return calls
+
+
+class TestMaskedCharacterCards:
+
+    def test_owner_profile_is_not_masked(self, client, world, masked_calls):
+        owner = world["owner"]
+        assert client.get(f"/users/{owner.id}/profile", headers=_auth_header(owner)).status_code == 200
+        assert masked_calls == [(CHARACTER_ID, False)]
+
+    @pytest.mark.parametrize("viewer", [None, "stranger", "admin", "moderator"])
+    def test_everyone_else_gets_the_masked_profile(self, client, world, masked_calls, viewer):
+        headers = _auth_header(world[viewer]) if viewer else {}
+        r = client.get(f"/users/{world['owner'].id}/profile", headers=headers)
+        assert r.status_code == 200, r.text
+        assert masked_calls == [(CHARACTER_ID, True)]
+
+    @pytest.mark.parametrize("viewer", [None, "owner", "stranger"])
+    def test_characters_list_is_always_masked(self, client, db_session, world, masked_calls, viewer):
+        owner = world["owner"]
+        for cid in (CHARACTER_ID, 8):
+            db_session.add(models.UserCharacter(user_id=owner.id, character_id=cid))
+        db_session.commit()
+        headers = _auth_header(world[viewer]) if viewer else {}
+        r = client.get(f"/users/{owner.id}/characters", headers=headers)
+        assert r.status_code == 200, r.text
+        assert sorted(masked_calls) == [(CHARACTER_ID, True), (8, True)]
+
+    def test_me_is_never_masked(self, client, world, masked_calls):
+        owner = world["owner"]
+        assert client.get("/users/me", headers=_auth_header(owner)).status_code == 200
+        assert masked_calls and all(m is False for _cid, m in masked_calls)
+
+
+class TestMaskedQueryParam:
+    """`masked=True` adds `?masked=true` to the internal short_info; otherwise no params
+    at all (an old character-service sees exactly the old request)."""
+
+    def test_masked_sends_the_query(self, monkeypatch):
+        calls = TestShortInfoLookupUsesTheInternalTwin._capture(monkeypatch)
+        asyncio.run(main._fetch_character_short(CHARACTER_ID, masked=True))
+        url, kwargs = calls[0]
+        assert url.endswith(f"/characters/internal/{CHARACTER_ID}/short_info")
+        assert kwargs["params"] == {"masked": "true"}
+        assert kwargs["headers"]["X-Internal-Token"] == "test-internal-token"
+
+    def test_default_sends_no_params(self, monkeypatch):
+        calls = TestShortInfoLookupUsesTheInternalTwin._capture(monkeypatch)
+        asyncio.run(main._fetch_character_short(CHARACTER_ID))
+        assert "params" not in calls[0][1]

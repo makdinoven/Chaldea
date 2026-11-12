@@ -1086,6 +1086,11 @@ def history_text(row: "models.FactionLog", faction_name: str, rank_name: Optiona
         if delta > 0:
             return f"Победа над врагами фракции {f}: {signed} очков"
         return f"Победа над врагами фракции {f}: очков нет — лимит на сегодня исчерпан"
+    if t in (fc.EV_CARAVAN_ESCORT, fc.EV_CARAVAN_RAID):    # FEAT-212: caravan deeds
+        what = "Охрана каравана" if t == fc.EV_CARAVAN_ESCORT else "Налёт на караван"
+        if delta > 0:
+            return f"{what} — дело фракции {f}: {signed} очков"
+        return f"{what} — дело фракции {f}: очков нет — лимит на сегодня исчерпан"
     if t == fc.EV_EJECTED:
         return f"Выдворение с территории фракции {f}"
     if t == fc.EV_WARNING:

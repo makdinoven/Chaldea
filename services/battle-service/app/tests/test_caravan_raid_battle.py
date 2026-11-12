@@ -18,6 +18,12 @@ Covers:
   * POST /battles/{id}/join-request refuses a raid battle;
   * migration 010 chain (revision / down_revision / single head / idempotent up & down).
 
+FEAT-212 QA (task 11), sections 10-13: B1 `escort_character_ids` (dedupe, total cap, skip rules,
+team 1, leader-escort 409, the "rat" attackers filter, guard-id overlap), the
+`autobattle_forbidden` flag (assemble payload -> Redis state -> runtime), `fallen_character_ids`
+in the callback and in /internal/{id}/result, and the activity-lock fallback chain
+(`_is_missing_column`) against an old schema.
+
 Preamble copied from test_law_guard_battle.py (FEAT-163 harness for the finalize paths).
 """
 
@@ -129,6 +135,8 @@ class _Chars:
             if c is None:
                 return _res(None)
             return _res((c.get("is_npc", 0), c.get("status", "alive"), c.get("unconscious")))
+        if "SELECT is_npc, current_location_id FROM characters" in q:  # FEAT-212 _escort_available
+            return _res((c.get("is_npc", 0), c.get("location")) if c else None)
         if "SELECT current_location_id, is_npc FROM characters" in q:
             return _res((c.get("location"), c.get("is_npc", 0)) if c else None)
         if "SELECT current_location_id FROM characters" in q:
@@ -255,12 +263,15 @@ def _clean(monkeypatch):
     app.dependency_overrides.clear()
 
 
-def _locks(monkeypatch, locked=()):
-    """Activity lock per character id: ids in `locked` are in a dungeon run."""
+def _locks(monkeypatch, locked=(), escorting=()):
+    """Activity lock per character id: ids in `locked` are in a dungeon run, ids in
+    `escorting` ride as caravan escorts (FEAT-212)."""
     locked = set(locked)
+    escorting = set(escorting)
 
     async def get_lock(db, cid):
-        return activity_lock.compute_lock(7 if cid in locked else None, None)
+        return activity_lock.compute_lock(7 if cid in locked else None, None,
+                                          escort_caravan_id=CARAVAN if cid in escorting else None)
 
     monkeypatch.setattr(activity_lock, "get_activity_lock", get_lock)
 
@@ -272,8 +283,9 @@ def _payload(**kw):
     return body
 
 
-def _post_raid(monkeypatch, chars=None, body=None, busy=(), locked=(), http=None, headers=HDR):
-    _locks(monkeypatch, locked)
+def _post_raid(monkeypatch, chars=None, body=None, busy=(), locked=(), http=None, headers=HDR,
+               escorting=()):
+    _locks(monkeypatch, locked, escorting)
     db = _Chars(_world() if chars is None else chars).db
     http = http or _FakeHttp()
 
@@ -355,7 +367,8 @@ class TestRaidSolo:
         assert body["next_actor"] == 31
         assert body["attacker_character_ids"] == [LEADER]
         assert set(body) == {"battle_id", "participants", "next_actor", "deadline_at",
-                             "attacker_character_ids"}
+                             "attacker_character_ids", "escort_character_ids"}  # FEAT-212
+        assert body["escort_character_ids"] == []
         args, kwargs = assemble.call_args
         assert args[1] == [LEADER, G1, G2]
         assert args[2] == [main.CARAVAN_RAIDER_TEAM, main.CARAVAN_GUARD_TEAM, main.CARAVAN_GUARD_TEAM]
@@ -794,6 +807,7 @@ class TestNotifyCaravanBattleEnd:
         post.assert_awaited_once()
         assert post.call_args.args[0] == {
             "battle_id": 501, "caravan_raid_id": RAID, "winner_team": 0, "aborted": False,
+            "fallen_character_ids": [],  # FEAT-212: no state passed
         }
 
     @pytest.mark.asyncio
@@ -978,7 +992,10 @@ class TestCallbackInEndings:
         events, post_cb = await _finalize_recording(monkeypatch, db, state, winner_team=0)
         assert events == ["law", "caravan", "faction"]       # after the law notify
         post_cb.assert_awaited_once()
-        assert post_cb.call_args.args[0] == {
+        payload = dict(post_cb.call_args.args[0])
+        # FEAT-212: fallen = hp <= 0 / dropped out in the final state (the guards here).
+        assert payload.pop("fallen_character_ids") == main._fallen_from_state(state)
+        assert payload == {
             "battle_id": BATTLE_ID, "caravan_raid_id": RAID, "winner_team": 0, "aborted": False,
         }
 
@@ -1051,6 +1068,7 @@ class TestCallbackInEndings:
         post_cb.assert_awaited_once()
         assert post_cb.call_args.args[0] == {
             "battle_id": BATTLE_ID, "caravan_raid_id": RAID, "winner_team": None, "aborted": True,
+            "fallen_character_ids": [],  # FEAT-212: force-finish passes no state
         }
 
     @pytest.mark.asyncio
@@ -1242,3 +1260,517 @@ class TestMigration010:
         op = self._run("downgrade", ["id"], [])
         op.drop_index.assert_not_called()
         op.drop_column.assert_not_called()
+
+
+# ===========================================================================
+# 10. FEAT-212: B1 with escorts
+# ===========================================================================
+
+E1 = 21
+E2 = 22
+
+
+def _escort_world(**overrides):
+    base = {f"c{E1}": _player(user_id=21), f"c{E2}": _player(user_id=22)}
+    base.update(overrides)
+    return _world(**base)
+
+
+class TestRaidEscorts:
+    def test_escorts_join_team_1_and_are_flagged(self, monkeypatch):
+        r, assemble, http = _post_raid(monkeypatch, chars=_escort_world(),
+                                       body=_payload(escort_character_ids=[E1, E2]),
+                                       escorting={E1, E2})
+        assert r.status_code == 201, r.text
+        assert r.json()["escort_character_ids"] == [E1, E2]
+        assert r.json()["attacker_character_ids"] == [LEADER]
+        args, kwargs = assemble.call_args
+        assert args[1] == [LEADER, G1, G2, E1, E2]
+        assert args[2] == [0, 1, 1, 1, 1]
+        assert kwargs == {"caravan_raid_id": RAID, "autobattle_forbidden_character_ids": [E1, E2]}
+        assert len(http.gate_calls()) == 1
+
+    def test_unlocked_escort_is_also_fine(self, monkeypatch):
+        """No lock at all (e.g. the escort row was just written) is not a reason to skip."""
+        r, _, _ = _post_raid(monkeypatch, chars=_escort_world(), body=_payload(escort_character_ids=[E1]))
+        assert r.status_code == 201, r.text
+        assert r.json()["escort_character_ids"] == [E1]
+
+    @pytest.mark.parametrize("escort,busy,locked", [
+        (None, (), ()),
+        (_guard(), (), ()),
+        (_player(location=LOCATION + 1), (), ()),
+        (_player(location=None), (), ()),
+        (_player(), (E1,), ()),
+        (_player(), (), (E1,)),
+    ], ids=["missing", "npc", "elsewhere", "nowhere", "in-battle", "other-lock"])
+    def test_unavailable_escort_is_silently_skipped(self, monkeypatch, escort, busy, locked):
+        r, assemble, _ = _post_raid(monkeypatch, chars=_escort_world(**{f"c{E1}": escort}),
+                                    body=_payload(escort_character_ids=[E1, E2]),
+                                    busy=busy, locked=locked, escorting={E2})
+        assert r.status_code == 201, r.text
+        assert r.json()["escort_character_ids"] == [E2]
+        args, kwargs = assemble.call_args
+        assert args[1] == [LEADER, G1, G2, E2]
+        assert args[2] == [0, 1, 1, 1]
+        assert kwargs["autobattle_forbidden_character_ids"] == [E2]
+
+    def test_all_escorts_skipped_keeps_the_old_call_shape(self, monkeypatch):
+        r, assemble, _ = _post_raid(monkeypatch, chars=_escort_world(),
+                                    body=_payload(escort_character_ids=[E1]), locked={E1})
+        assert r.status_code == 201, r.text
+        assert r.json()["escort_character_ids"] == []
+        assert assemble.call_args.kwargs == {"caravan_raid_id": RAID}
+
+    def test_duplicates_are_removed(self, monkeypatch):
+        r, assemble, _ = _post_raid(monkeypatch, chars=_escort_world(),
+                                    body=_payload(escort_character_ids=[E1, E1, E1, E1]),
+                                    escorting={E1})
+        assert r.status_code == 201, r.text
+        assert r.json()["escort_character_ids"] == [E1]
+        assert assemble.call_args.args[1] == [LEADER, G1, G2, E1]
+
+    def test_guards_plus_escorts_over_the_cap_is_400(self, monkeypatch):
+        r, assemble, http = _post_raid(monkeypatch, body=_payload(escort_character_ids=[E1, E2, 23, 24]))
+        assert r.status_code == 400
+        assert str(main.settings.BATTLE_MAX_TEAM_SIZE) in r.json()["detail"]
+        assemble.assert_not_called()
+        assert http.gate_calls() == []
+
+    def test_exactly_the_cap_is_fine(self, monkeypatch):
+        ids = [E1, E2, 23, 24]
+        chars = _escort_world(c23=_player(user_id=23), c24=_player(user_id=24))
+        r, assemble, _ = _post_raid(monkeypatch, chars=chars,
+                                    body=_payload(guard_character_ids=[G1], escort_character_ids=ids),
+                                    escorting=set(ids))
+        assert r.status_code == 201, r.text
+        assert assemble.call_args.args[2] == [0, 1, 1, 1, 1, 1]
+
+    def test_more_than_four_escorts_is_422(self, monkeypatch):
+        r, assemble, _ = _post_raid(monkeypatch, body=_payload(guard_character_ids=[G1],
+                                                               escort_character_ids=[21, 22, 23, 24, 25]))
+        assert r.status_code == 422
+        assemble.assert_not_called()
+
+    def test_leader_who_is_an_escort_gets_the_neutral_409(self, monkeypatch):
+        r, assemble, http = _post_raid(monkeypatch, body=_payload(escort_character_ids=[LEADER]),
+                                       escorting={LEADER})
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert detail == "Персонаж: действие сейчас недоступно"
+        assert "карав" not in detail.lower()
+        assemble.assert_not_called()
+        assert http.gate_calls() == []
+
+    def test_escort_lock_on_the_leader_alone_is_also_refused(self, monkeypatch):
+        """The rat: the leader is an escort but is not listed — his own lock refuses."""
+        r, assemble, _ = _post_raid(monkeypatch, escorting={LEADER})
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Персонаж: действие сейчас недоступно"
+        assemble.assert_not_called()
+
+    def test_squadmate_escort_is_never_a_raider(self, monkeypatch):
+        """Defence in depth: an (unlocked) squadmate listed as an escort is filtered out of
+        the attackers and lands on the caravan team only."""
+        r, assemble, _ = _post_raid(monkeypatch, body=_payload(group=True, escort_character_ids=[MATE_A]))
+        assert r.status_code == 201, r.text
+        assert r.json()["attacker_character_ids"] == [LEADER, MATE_B]
+        assert r.json()["escort_character_ids"] == [MATE_A]
+        args = assemble.call_args.args
+        assert args[1] == [LEADER, MATE_B, G1, G2, MATE_A]
+        assert args[2] == [0, 0, 1, 1, 1]
+
+    def test_escort_locked_squadmate_is_skipped_as_a_raider(self, monkeypatch):
+        r, _, _ = _post_raid(monkeypatch, body=_payload(group=True, escort_character_ids=[MATE_A]),
+                             escorting={MATE_A})
+        assert r.status_code == 201, r.text
+        assert MATE_A not in r.json()["attacker_character_ids"]
+        assert r.json()["escort_character_ids"] == [MATE_A]
+
+    def test_escort_id_equal_to_a_guard_is_ignored(self, monkeypatch):
+        r, assemble, _ = _post_raid(monkeypatch, body=_payload(escort_character_ids=[G1]))
+        assert r.status_code == 201, r.text
+        assert r.json()["escort_character_ids"] == []
+        assert assemble.call_args.args[1] == [LEADER, G1, G2]
+
+
+class TestEscortAvailable:
+    @staticmethod
+    def _db(row):
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=_res(row))
+        return db
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reason_kw,expected", [
+        ({}, True),
+        ({"escort_caravan_id": 5}, True),
+        ({"dungeon_session_id": 3}, False),
+        ({"law_encounter_id": 4}, False),
+        ({"asleep_since": datetime.utcnow()}, False),
+    ], ids=["free", "escort-lock", "dungeon", "law", "asleep"])
+    async def test_only_the_escort_lock_is_exempt(self, monkeypatch, reason_kw, expected):
+        async def get_lock(db, cid):
+            kw = dict(reason_kw)
+            return activity_lock.compute_lock(kw.pop("dungeon_session_id", None), None, **kw)
+
+        monkeypatch.setattr(activity_lock, "get_activity_lock", get_lock)
+        with patch("main.get_active_battle_for_character", new_callable=AsyncMock, return_value=None):
+            assert await main._escort_available(self._db((0, LOCATION)), E1, LOCATION) is expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("row", [None, (1, LOCATION), (True, LOCATION), (0, LOCATION + 1), (0, None)],
+                             ids=["missing", "npc", "npc-bool", "elsewhere", "nowhere"])
+    async def test_row_checks(self, row):
+        with patch("main.get_active_battle_for_character", new_callable=AsyncMock, return_value=None):
+            assert await main._escort_available(self._db(row), E1, LOCATION) is False
+
+    @pytest.mark.asyncio
+    async def test_in_battle(self):
+        with patch("main.get_active_battle_for_character", new_callable=AsyncMock, return_value=MagicMock()):
+            assert await main._escort_available(self._db((0, LOCATION)), E1, LOCATION) is False
+
+
+# ===========================================================================
+# 11. FEAT-212: autobattle_forbidden flag (assemble -> state -> runtime)
+# ===========================================================================
+
+class TestAutobattleForbiddenFlag:
+    @pytest.mark.asyncio
+    async def test_assemble_flags_only_the_listed_characters(self, monkeypatch):
+        battle = SimpleNamespace(id=4040)
+        parts = [SimpleNamespace(id=31 + i, character_id=cid, team=t)
+                 for i, (cid, t) in enumerate([(LEADER, 0), (G1, 1), (E1, 1)])]
+        monkeypatch.setattr(main, "create_battle", AsyncMock(return_value=(battle, parts)))
+
+        async def info(cid, pid):
+            return {"participant_id": pid, "character_id": cid}
+
+        monkeypatch.setattr(main, "build_participant_info", info)
+        monkeypatch.setattr(main, "_participant_payload",
+                            lambda snap, objs: {"participant_id": snap["participant_id"],
+                                                "character_id": snap["character_id"]})
+        monkeypatch.setattr(main, "_saber_seed", AsyncMock(return_value={}))
+        monkeypatch.setattr(main, "save_snapshot", AsyncMock())
+        monkeypatch.setattr(main, "cache_snapshot", AsyncMock())
+        monkeypatch.setattr(main, "get_redis_client", AsyncMock(return_value=AsyncMock()))
+        init = AsyncMock()
+        monkeypatch.setattr(main, "init_battle_state", init)
+
+        async def execute(query, params=None):
+            return _res((1 if params["cid"] == G1 else 0,))
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute)
+        http = MagicMock()
+        client = http.return_value.__aenter__.return_value
+        client.post = AsyncMock(return_value=MagicMock(status_code=200, text="ok"))
+        monkeypatch.setattr(main.httpx, "AsyncClient", http)
+
+        await main._assemble_battle(db, [LEADER, G1, E1], [0, 1, 1], "pve", LOCATION,
+                                    caravan_raid_id=RAID, autobattle_forbidden_character_ids=[E1])
+        payload = {p["character_id"]: p for p in init.call_args.kwargs["participants_payload"]}
+        assert payload[E1]["autobattle_forbidden"] is True
+        assert "autobattle_forbidden" not in payload[LEADER]
+        assert "autobattle_forbidden" not in payload[G1]
+        # only the NPC guard is registered with autobattle, never the escort
+        regs = [c.kwargs["json"]["participant_id"] for c in client.post.call_args_list]
+        assert regs == [32]
+
+    @pytest.mark.asyncio
+    async def test_init_battle_state_copies_the_flag(self):
+        import json as _json
+        # A private copy of the real module: other test files swap `redis_state` for a mock.
+        spec = importlib.util.spec_from_file_location("_feat212_redis_state",
+                                                      os.path.join(APP_DIR, "redis_state.py"))
+        redis_state = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(redis_state)
+        real_init = redis_state.init_battle_state
+        rds = AsyncMock()
+
+        def payload(pid, cid, team, **extra):
+            p = {"participant_id": pid, "character_id": cid, "team": team, "hp": 100, "mana": 10,
+                 "energy": 10, "stamina": 10, "max_hp": 100, "max_mana": 10, "max_energy": 10,
+                 "max_stamina": 10, "fast_slots": []}
+            p.update(extra)
+            return p
+
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=rds)):
+            await real_init(battle_id=4041,
+                            participants_payload=[payload(1, LEADER, 0),
+                                                  payload(2, E1, 1, autobattle_forbidden=True)],
+                            first_actor_participant_id=1,
+                            deadline_at=datetime.utcnow() + timedelta(hours=1))
+        state = _json.loads(rds.set.call_args.args[1])
+        assert state["participants"]["2"]["autobattle_forbidden"] is True
+        assert state["participants"]["1"]["autobattle_forbidden"] is False
+
+    @staticmethod
+    def _state():
+        from _feat163_harness import make_state
+        parts = {1: make_participant(LEADER, team=0), 2: make_participant(E1, team=1)}
+        parts[2]["autobattle_forbidden"] = True
+        return make_state(parts, next_actor=1, deadline_at=utc_now() + timedelta(hours=1))
+
+    def test_runtime_exposes_the_flag_with_a_false_default(self):
+        runtime = main._build_runtime(self._state())["participants"]
+        runtime = {str(k): v for k, v in runtime.items()}
+        assert runtime["2"]["autobattle_forbidden"] is True
+        assert runtime["1"]["autobattle_forbidden"] is False   # old state without the key
+
+    def test_internal_state_exposes_the_flag(self, monkeypatch):
+        state = self._state()
+        state.setdefault("total_turns", 0)
+        state.setdefault("last_turn", 0)
+        monkeypatch.setattr(main, "load_state", AsyncMock(return_value=state))
+        monkeypatch.setattr(main, "get_redis_client", AsyncMock(return_value=AsyncMock()))
+        monkeypatch.setattr(main, "get_cached_snapshot", AsyncMock(return_value=[]))
+        r = _client(AsyncMock()).get("/battles/internal/4042/state", headers=HDR)
+        assert r.status_code == 200, r.text
+        participants = r.json()["runtime"]["participants"]
+        assert participants["2"]["autobattle_forbidden"] is True
+        assert participants["1"]["autobattle_forbidden"] is False
+
+
+# ===========================================================================
+# 12. FEAT-212: fallen_character_ids (callback + /internal/{id}/result)
+# ===========================================================================
+
+def _res_rows(rows):
+    r = MagicMock()
+    r.fetchall.return_value = [tuple(x) for x in rows]
+    r.fetchone.return_value = tuple(rows[0]) if rows else None
+    return r
+
+
+class TestFallenIds:
+    def test_from_state(self):
+        state = {"participants": {
+            "1": {"character_id": LEADER, "hp": 0},
+            "2": {"character_id": G1, "hp": 30},
+            "3": {"character_id": E1, "hp": -4},
+            "4": {"character_id": E2, "hp": 50, "dropped_out": True},
+            "5": {"character_id": "x", "hp": 0},          # junk id ignored
+            "6": {"character_id": MATE_A},                 # no hp -> alive
+        }}
+        assert main._fallen_from_state(state) == sorted([LEADER, E1, E2])
+
+    @pytest.mark.parametrize("state", [None, {}, {"participants": None}], ids=["none", "empty", "null"])
+    def test_empty(self, state):
+        assert main._fallen_from_state(state) == []
+
+    @pytest.mark.asyncio
+    async def test_callback_carries_the_fallen(self):
+        state = {"participants": {"1": {"character_id": LEADER, "hp": 20, "team": 0},
+                                  "2": {"character_id": G1, "hp": 0, "team": 1},
+                                  "3": {"character_id": E1, "hp": 0, "team": 1}}}
+        with patch("main._post_caravan_callback", new_callable=AsyncMock) as post:
+            await main._notify_caravan_battle_end(_tag_db(RAID), 601, 0, state=state)
+            await asyncio.sleep(0)
+        assert post.call_args.args[0]["fallen_character_ids"] == [E1, G1]
+
+    @pytest.mark.asyncio
+    async def test_finalize_passes_the_final_state(self, monkeypatch, rds):
+        db = _CaravanFakeDB(caravan_raid_id=RAID)
+        patch_main(monkeypatch, main, db, rds, rewards=None)
+        state = _raid_fight(db, rds, raider_hp=40, guard_hp=0)
+        _, post_cb = await _finalize_recording(monkeypatch, db, state, winner_team=0)
+        assert post_cb.call_args.args[0]["fallen_character_ids"] == [G1]
+
+    @staticmethod
+    def _result(monkeypatch, caravan_raid_id=RAID, state=None, state_exc=None, rows=()):
+        battle = SimpleNamespace(id=501, status=SimpleNamespace(value="finished"), dungeon_session_id=None,
+                                 law_encounter_id=None, caravan_raid_id=caravan_raid_id)
+        load = AsyncMock(side_effect=state_exc) if state_exc else AsyncMock(return_value=state)
+        monkeypatch.setattr(main, "load_state", load)
+
+        async def execute(query, params=None):
+            q = str(query)
+            if "SELECT character_id, team, dropped_out_at FROM battle_participants" in q:
+                return _res_rows(rows)
+            if "battle_history" in q:   # winner = team 1
+                return _res_rows([(0, "defeat"), (1, "victory")])
+            return _res(None)
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute)
+        with patch("main.get_battle", new_callable=AsyncMock, return_value=battle):
+            r = _client(db).get("/battles/internal/501/result", headers=HDR)
+        assert r.status_code == 200, r.text
+        return r.json(), load
+
+    def test_result_from_redis_state(self, monkeypatch):
+        state = {"participants": {"1": {"character_id": LEADER, "hp": 0},
+                                  "2": {"character_id": E1, "hp": 3, "dropped_out": True},
+                                  "3": {"character_id": G1, "hp": 9}}}
+        body, _ = self._result(monkeypatch, state=state, rows=[(G1, 1, None)])
+        assert body["fallen_character_ids"] == [LEADER, E1]
+        assert body["winner_team"] == 1
+
+    @pytest.mark.parametrize("state_exc", [None, RuntimeError("redis down")], ids=["expired", "unreadable"])
+    def test_result_db_fallback(self, monkeypatch, state_exc):
+        rows = [(LEADER, 0, None), (MATE_A, 0, None),       # losing team -> fallen
+                (G1, 1, None), (E1, 1, datetime.utcnow()),  # dropped out on the winning team
+                (E2, 1, None)]
+        body, _ = self._result(monkeypatch, state=None, state_exc=state_exc, rows=rows)
+        assert body["fallen_character_ids"] == sorted([LEADER, MATE_A, E1])
+
+    def test_untagged_battle_has_empty_fallen_and_skips_the_lookup(self, monkeypatch):
+        body, load = self._result(monkeypatch, caravan_raid_id=None,
+                                  state={"participants": {"1": {"character_id": 1, "hp": 0}}})
+        assert body["fallen_character_ids"] == []
+        load.assert_not_called()
+
+
+# ===========================================================================
+# 13. FEAT-212: activity lock — escort reason + deploy-skew fallback chain
+# ===========================================================================
+
+def _lock_db(schema):
+    """Mock AsyncSession over a `characters` table with only the given lock columns.
+    An unknown column raises the MySQL error (whose text also echoes the whole SQL)."""
+    calls = []
+
+    async def execute(query, params=None):
+        q = str(query)
+        calls.append(q)
+        cols = [c.strip() for c in q.split("SELECT", 1)[1].split("FROM", 1)[0].split(",")]
+        for c in cols:
+            if c not in schema:
+                raise RuntimeError(f"(pymysql.err.OperationalError) (1054, \"Unknown column '{c}' "
+                                   f"in 'field list'\") [SQL: {q}]")
+        return _res(tuple(schema[c] for c in cols))
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=execute)
+    return db, calls
+
+
+_LEGACY_COLS = {"dungeon_session_id": None, "unconscious_until": None, "asleep_since": None,
+                "reading_since": None}
+_LAW_COLS = dict(_LEGACY_COLS, jailed_until=None, law_encounter_id=None)
+_FULL_COLS = dict(_LAW_COLS, escort_caravan_id=None)
+
+
+@pytest.mark.real_activity_lock
+class TestEscortLockChain:
+    def test_neutral_message_for_every_subject(self):
+        lock = activity_lock.compute_lock(None, None, escort_caravan_id=3)
+        assert lock["reason"] == "caravan_escort" and lock["locked"] is True
+        for subject in ("Персонаж", "Ваш персонаж", "Цель"):
+            msg = activity_lock.lock_message(lock, subject=subject)
+            assert msg == f"{subject}: действие сейчас недоступно"
+            assert "карав" not in msg.lower() and "охран" not in msg.lower()
+
+    @pytest.mark.parametrize("kw,expected", [
+        ({"escort_caravan_id": 3, "dungeon_session_id": 2}, "dungeon"),
+        ({"escort_caravan_id": 3, "asleep_since": datetime.utcnow()}, "caravan_escort"),
+        ({"escort_caravan_id": 3, "law_encounter_id": 1}, "law_encounter"),
+        ({"escort_caravan_id": 0}, None),
+        ({"escort_caravan_id": "3"}, None),
+    ], ids=["dungeon-wins", "beats-asleep", "law-wins", "zero", "non-int"])
+    def test_priority(self, kw, expected):
+        kw = dict(kw)
+        lock = activity_lock.compute_lock(kw.pop("dungeon_session_id", None), None, **kw)
+        assert lock["reason"] == expected
+
+    def test_lock_for_character_reads_the_attribute(self):
+        assert activity_lock.lock_for_character(SimpleNamespace(escort_caravan_id=4))["reason"] == "caravan_escort"
+
+    @pytest.mark.asyncio
+    async def test_full_schema_one_query(self):
+        db, calls = _lock_db(dict(_FULL_COLS, escort_caravan_id=8))
+        assert (await activity_lock.get_activity_lock(db, 1))["reason"] == "caravan_escort"
+        assert len(calls) == 1 and "escort_caravan_id" in calls[0]
+
+    @pytest.mark.asyncio
+    async def test_no_escort_column_falls_back_to_the_law_sql(self):
+        db, calls = _lock_db(dict(_LAW_COLS, law_encounter_id=6))
+        assert (await activity_lock.get_activity_lock(db, 1))["reason"] == "law_encounter"
+        assert len(calls) == 2
+        assert "escort_caravan_id" not in calls[1] and "law_encounter_id" in calls[1]
+
+    @pytest.mark.asyncio
+    async def test_no_law_columns_jumps_straight_to_legacy(self):
+        db, calls = _lock_db(dict(_LEGACY_COLS, dungeon_session_id=4))
+        assert (await activity_lock.get_activity_lock(db, 1))["reason"] == "dungeon"
+        assert len(calls) == 2                     # full -> legacy, the law SQL is skipped
+        assert "jailed_until" not in calls[1]
+
+    @pytest.mark.asyncio
+    async def test_escort_then_law_missing_walks_the_whole_chain(self):
+        """The DB names `escort_caravan_id` first, then the law SQL fails too -> legacy."""
+        calls = []
+
+        async def execute(query, params=None):
+            q = str(query)
+            calls.append(q)
+            if "escort_caravan_id" in q:
+                raise RuntimeError(f"(1054, \"Unknown column 'escort_caravan_id' in 'field list'\") [SQL: {q}]")
+            if "jailed_until" in q:
+                raise RuntimeError(f"(1054, \"Unknown column 'law_encounter_id' in 'field list'\") [SQL: {q}]")
+            return _res((None, None, None, datetime.utcnow()))
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute)
+        assert (await activity_lock.get_activity_lock(db, 1))["reason"] == "reading"
+        assert len(calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_sqlite_wording_is_recognised(self):
+        calls = []
+
+        async def execute(query, params=None):
+            calls.append(str(query))
+            if "escort_caravan_id" in str(query):
+                raise RuntimeError("(sqlite3.OperationalError) no such column: escort_caravan_id")
+            return _res((None, None, None, None, None, None))
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute)
+        assert (await activity_lock.get_activity_lock(db, 1))["locked"] is False
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_other_missing_column_is_not_mistaken_for_ours(self):
+        """The error echoes the SQL (which names escort_caravan_id) — only the column the DB
+        names counts, so an unrelated missing column propagates."""
+        async def execute(query, params=None):
+            raise RuntimeError(f"(1054, \"Unknown column 'dungeon_session_id' in 'field list'\") [SQL: {query}]")
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute)
+        with pytest.raises(RuntimeError):
+            await activity_lock.get_activity_lock(db, 1)
+        assert db.execute.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_law_sql_failing_for_another_reason_propagates(self):
+        async def execute(query, params=None):
+            if "escort_caravan_id" in str(query):
+                raise RuntimeError("(1054, \"Unknown column 'escort_caravan_id' in 'field list'\")")
+            raise RuntimeError("connection lost")
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute)
+        with pytest.raises(RuntimeError, match="connection lost"):
+            await activity_lock.get_activity_lock(db, 1)
+
+    @pytest.mark.parametrize("msg,names,expected", [
+        ("(1054, \"Unknown column 'escort_caravan_id' in 'field list'\")", ("escort_caravan_id",), True),
+        ("(1054, \"Unknown column 'characters.escort_caravan_id' in 'field list'\")", ("escort_caravan_id",), True),
+        ("no such column: jailed_until", ("jailed_until", "law_encounter_id"), True),
+        ("(1054, \"Unknown column 'foo' in 'field list'\") [SQL: SELECT escort_caravan_id]",
+         ("escort_caravan_id",), False),
+        ("connection lost escort_caravan_id", ("escort_caravan_id",), False),
+    ], ids=["mysql", "qualified", "sqlite", "echoed-sql", "no-pattern"])
+    def test_is_missing_column(self, msg, names, expected):
+        assert activity_lock._is_missing_column(RuntimeError(msg), names) is expected
+
+    @pytest.mark.asyncio
+    async def test_check_raises_409_neutral(self):
+        db, _ = _lock_db(dict(_FULL_COLS, escort_caravan_id=2))
+        with pytest.raises(HTTPException) as exc:
+            await activity_lock.check_not_activity_locked(db, 1, subject="Ваш персонаж")
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Ваш персонаж: действие сейчас недоступно"

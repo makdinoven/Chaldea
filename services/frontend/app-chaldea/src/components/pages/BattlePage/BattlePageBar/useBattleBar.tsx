@@ -48,6 +48,8 @@ interface RuntimeParticipant {
   weapon_coating?: WeaponCoating | null;
   /** FEAT-190 — total passive shield; absent in older states. */
   shield?: number;
+  /** FEAT-212 — a caravan escort in its raid battle: autobattle is refused (absent in older states). */
+  autobattle_forbidden?: boolean;
 }
 
 interface RuntimeState {
@@ -354,6 +356,9 @@ const SKILL_KIND_LABELS: Record<string, string> = {
   support: "Поддержка",
 };
 export type SlotType = "attack" | "defense" | "support" | "item";
+
+/** FEAT-212: shown instead of the autobattle controls to a caravan escort in its raid battle. */
+export const AUTOBATTLE_FORBIDDEN_TEXT = "Охранникам каравана автобой недоступен — в налёте вы ходите сами";
 
 export const useBattleBar = ({
   battleId,
@@ -1401,6 +1406,11 @@ export const useBattleBar = ({
     return actor?.name ?? (pid === myData.participant_id ? myData.name ?? "" : "");
   })();
 
+  // FEAT-212: caravan escorts fight a raid by themselves — the autobattle controls are hidden for them.
+  const autobattleForbidden =
+    myData.participant_id != null &&
+    runtimeData?.participants?.[myData.participant_id]?.autobattle_forbidden === true;
+
   // The autobattle feedback prompt applies only to turns the viewer's own autobattle played.
   const isOwnAutobattleTurn =
     isAutoBattleOn && actorOfTurn(activeTurnIndex) === myData.participant_id;
@@ -1446,6 +1456,7 @@ export const useBattleBar = ({
     activeTurnActorName,
     actorOfTurn,
     isOwnAutobattleTurn,
+    autobattleForbidden,
     isTurnLikeTextShown,
     rateTurn,
     autobattleSpeed,

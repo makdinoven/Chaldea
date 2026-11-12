@@ -273,10 +273,20 @@ def _later_has_source_actions():
     return set(mod.HAS_SOURCE_ACTIONS)
 
 
+def _later_seeded_actions():
+    """FEAT-212 migration 051 seeds the builtin escort actions (``caravan_escort`` / ``caravan_defense``)."""
+    path = os.path.join(os.path.dirname(_MIGRATION), "051_caravan_escorts.py")
+    spec = importlib.util.spec_from_file_location("mig_051_caravan_escorts", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return list(mod.ACTIONS)
+
+
 def test_migration_action_and_role_seeds_equal_code_defaults():
     mig = _migration()
     flipped = _later_has_source_actions()
-    assert [(c, n, p, cap, bool(src) or c in flipped, o) for c, n, p, cap, src, o in mig.ACTIONS] == \
+    seeded = sorted(list(mig.ACTIONS) + _later_seeded_actions(), key=lambda a: a[5])
+    assert [(c, n, p, cap, bool(src) or c in flipped, o) for c, n, p, cap, src, o in seeded] == \
         [(c, n, p, cap, bool(src), o) for c, n, p, cap, src, o in rc.DEFAULT_ACTIONS]
     assert dict(mig.ROLE_WEIGHTS) == rc.DEFAULT_NPC_ROLE_WEIGHTS
     assert len(mig.ROLE_WEIGHTS) == len(dict(mig.ROLE_WEIGHTS))      # no duplicate role rows

@@ -58,6 +58,22 @@ def _internal_token_headers() -> dict:
     return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
 
 
+async def _get_character_profile(client, character_id: int):
+    """GET the character's profile with the REAL location / activity lock (FEAT-212 Task 16).
+
+    The public `/characters/{id}/profile` masks a caravan escort (frozen hire location), so
+    location checks read the internal twin. Deploy skew: an old character-service has no twin
+    (404) -> fall back to the public route (a missing character is 404 there as well).
+    """
+    resp = await client.get(
+        f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/profile",
+        headers=_internal_token_headers(),
+    )
+    if resp.status_code == 404:
+        resp = await client.get(f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/profile")
+    return resp
+
+
 def verify_internal_token(
     x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
 ) -> None:
@@ -1440,8 +1456,7 @@ async def move_and_post(
 
     # 1. Получаем профиль персонажа (чтобы узнать current_location_id)
     async with httpx.AsyncClient(timeout=5.0) as client:
-        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/profile"
-        profile_resp = await client.get(profile_url)
+        profile_resp = await _get_character_profile(client, movement.character_id)
         if profile_resp.status_code != 200:
             raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
         profile_data = profile_resp.json()
@@ -1732,8 +1747,7 @@ async def quick_move(
 
     # 1. Получаем профиль персонажа (текущая локация + имя)
     async with httpx.AsyncClient(timeout=5.0) as client:
-        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/profile"
-        profile_resp = await client.get(profile_url)
+        profile_resp = await _get_character_profile(client, body.character_id)
         if profile_resp.status_code != 200:
             raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
         profile_data = profile_resp.json()
@@ -2358,8 +2372,7 @@ async def drop_loot(
 
     # 2. Проверяем, что персонаж находится в данной локации
     async with httpx.AsyncClient(timeout=5.0) as client:
-        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/profile"
-        profile_resp = await client.get(profile_url)
+        profile_resp = await _get_character_profile(client, body.character_id)
         if profile_resp.status_code != 200:
             raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
         profile_data = profile_resp.json()
@@ -2427,8 +2440,7 @@ async def pickup_loot(
 
     # 2. Проверяем, что персонаж находится в данной локации
     async with httpx.AsyncClient(timeout=5.0) as client:
-        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/profile"
-        profile_resp = await client.get(profile_url)
+        profile_resp = await _get_character_profile(client, body.character_id)
         if profile_resp.status_code != 200:
             raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
         profile_data = profile_resp.json()

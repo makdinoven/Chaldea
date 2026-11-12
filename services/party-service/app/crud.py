@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -124,15 +125,44 @@ def get_attributes_map(db: Session, character_ids: list) -> dict:
 # ---------------------------------------------------------------------------
 # Party queries
 # ---------------------------------------------------------------------------
+_AT_LOCATION_SQL = text(
+    "SELECT id FROM characters "
+    "WHERE current_location_id = :loc AND (is_npc = 0 OR is_npc IS NULL) "
+    "AND escort_caravan_id IS NULL"
+)
+# FEAT-212 deploy skew: character-service migration 051 (escort_caravan_id) not applied yet.
+_AT_LOCATION_SQL_LEGACY = text(
+    "SELECT id FROM characters "
+    "WHERE current_location_id = :loc AND (is_npc = 0 OR is_npc IS NULL)"
+)
+
+
+# MySQL: "Unknown column 'x' in 'where clause'"; SQLite: "no such column: x". The error text
+# also echoes the whole SQL, so only the column the DB actually names is compared
+# (same rule as the activity_lock.py copies).
+_MISSING_COLUMN_RE = re.compile(r"(?:unknown column\s+['\"`]?|no such column:\s*)([\w.]+)")
+
+
+def _is_missing_escort_column(exc: Exception) -> bool:
+    for found in _MISSING_COLUMN_RE.findall(str(exc).lower()):
+        if found.rsplit(".", 1)[-1] == "escort_caravan_id":
+            return True
+    return False
+
+
 def get_character_ids_at_location(db: Session, location_id: int) -> list:
-    """Player character ids currently on a location (excludes NPCs/mobs)."""
-    rows = db.execute(
-        text(
-            "SELECT id FROM characters "
-            "WHERE current_location_id = :loc AND (is_npc = 0 OR is_npc IS NULL)"
-        ),
-        {"loc": location_id},
-    ).fetchall()
+    """Player character ids currently on a location (excludes NPCs/mobs).
+
+    FEAT-212: hired caravan escorts ride hidden inside the caravan — excluded."""
+    params = {"loc": location_id}
+    try:
+        rows = db.execute(_AT_LOCATION_SQL, params).fetchall()
+    except Exception as e:
+        if not _is_missing_escort_column(e):
+            raise
+        logger.warning("characters.escort_caravan_id ещё нет (миграция character-service 051 "
+                       "не применена) — охрана караванов не скрывается в списке отрядов")
+        rows = db.execute(_AT_LOCATION_SQL_LEGACY, params).fetchall()
     return [r[0] for r in rows]
 
 

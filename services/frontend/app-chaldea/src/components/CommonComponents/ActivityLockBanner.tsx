@@ -10,6 +10,7 @@
  * FEAT-198: in jail → JailBanner (term countdown, bail, escape); stopped by the
  * guards → «Стража ждёт вашего решения» + GuardEncounterModal, which reopens on
  * every page change / window focus until the encounter is resolved.
+ * FEAT-212: riding as a caravan escort → «Вы в охране каравана» + «Караван» (CaravanEscortModal).
  * Time limits are live countdowns (A8).
  */
 import { useEffect, useState } from 'react';
@@ -23,6 +24,7 @@ import { apiErrorMessage } from '../../api/errors';
 import RemainingText from './RemainingText';
 import JailBanner from '../pages/LocationPage/JailBanner';
 import GuardEncounterModal from '../pages/LocationPage/GuardEncounterModal';
+import CaravanEscortModal from '../CaravanEscort/CaravanEscortModal';
 
 /** The battle page (not watching someone else's): /location/:id/battle/:id. */
 const BATTLE_PAGE = /^\/location\/\d+\/battle\/\d+\/?$/;
@@ -37,6 +39,7 @@ const ActivityLockBanner = () => {
   const [waking, setWaking] = useState(false);
   /** The guard encounter the player closed the modal of (it reopens on navigation / focus). */
   const [dismissedEncounter, setDismissedEncounter] = useState<number | null>(null);
+  const [escortOpen, setEscortOpen] = useState(false);
 
   useEffect(() => {
     setDismissedEncounter(null);
@@ -87,6 +90,36 @@ const ActivityLockBanner = () => {
             encounterId={lock.lawEncounterId}
             onClose={() => setDismissedEncounter(encounterKey)}
           />
+        )}
+      </>
+    );
+  }
+
+  if (lock.reason === 'caravan_escort') {
+    // The raid battle itself: the escort fights there, the strip would only take space.
+    if (ANY_BATTLE_PAGE.test(pathname)) return null;
+    return (
+      <>
+        <div
+          role="status"
+          className="mb-4 rounded-card border border-gold/40 bg-site-bg backdrop-blur-sm px-3 py-2.5 sm:px-4 flex flex-wrap items-center gap-x-3 gap-y-2"
+        >
+          <span className="text-lg leading-none shrink-0" aria-hidden>🐫</span>
+          <div className="flex flex-col min-w-[180px] flex-1">
+            <span className="text-white text-sm">{lock.message}</span>
+            <span className="text-white/50 text-xs">
+              Вы едете с караваном: ходить, писать посты и торговать нельзя, пока не сойдёте или караван не прибудет.
+            </span>
+          </div>
+          {characterId != null && (
+            <button type="button" onClick={() => setEscortOpen(true)}
+              className="btn-blue text-xs sm:text-sm px-4 py-1.5 shrink-0">
+              Караван
+            </button>
+          )}
+        </div>
+        {escortOpen && characterId != null && (
+          <CaravanEscortModal characterId={characterId} onClose={() => setEscortOpen(false)} />
         )}
       </>
     );

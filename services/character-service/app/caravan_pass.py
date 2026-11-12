@@ -12,9 +12,14 @@ caravans frozen) or before migration 035. Every step is best effort, every carav
    no-ops);
 4. ``_step_caravans``   — due physical caravans move one location along their route unless held (3.4);
 5. ``_deliver_arrived`` — arrived caravans are delivered / cancelled (``economy_caravan_crud.deliver_physical``);
-   skipped entirely while an economy run is ``running`` (a region never changes in the middle of a resumable run).
+   skipped entirely while an economy run is ``running`` (a region never changes in the middle of a resumable run);
+   FEAT-212: escorts are paid / cancelled inside that op, their notices published after the commit;
+6. ``_escort_rewards``  — FEAT-212: reputation / fame / faction points of delivered escorts
+   (``caravan_escort_crud.escort_rewards``, own transaction per escort);
+7. ``_escort_housekeeping`` — FEAT-212: stale escort rows / dangling columns, old caravan-channel messages.
 
-The step transaction locks only ``econ_caravans(row)`` (lock order FEAT-211 3.16). Never started under pytest by the
+The step transaction locks ``econ_caravans(row)`` and, after it moved, its active escort rows and their characters
+(FEAT-212 3.15: caravan → escorts → characters; escorts ride with the caravan). Never started under pytest by the
 scheduler; tests call :func:`run_pass` directly (``now=`` / ``force=`` / ``rng=``).
 """
 
@@ -26,8 +31,10 @@ from typing import Callable, Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import caravan_escort_crud as escort_crud
 import econ_tick
 import economy_caravan_crud as caravan_crud
+import law_notify
 
 logger = logging.getLogger("character-service.caravan_pass")
 
@@ -113,6 +120,7 @@ def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
     index += 1
     row.route_index = index
     row.current_location_id = route[index]
+    escort_crud.move_escorts(db, row)          # FEAT-212: escorts ride inside the wagon
     if index == len(route) - 1:
         row.arrived_at = now
         row.next_move_at = None
@@ -191,6 +199,8 @@ def _deliver_arrived(factory: Callable[[], Session], now: datetime, stats: Dict[
                     continue
                 if result.status in (caravan_crud.STATUS_DELIVERED, caravan_crud.STATUS_CANCELLED):
                     stats[result.status] += 1
+                    if result.notices:
+                        law_notify.publish(result.notices)
             if len(ids) < BATCH_SIZE:
                 return
     finally:
@@ -214,7 +224,7 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
     finally:
         db.close()
     stats = {"stale_raids": 0, "raid_battles": 0, "raid_followups": 0, "held": 0, "moved": 0, "arrived": 0,
-             "delivered": 0, "cancelled": 0, "failed": 0}
+             "delivered": 0, "cancelled": 0, "escort_rewards": 0, "escort_housekeeping": 0, "failed": 0}
     for key, step in (("stale_raids", _stale_raids), ("raid_battles", _raid_battles),
                       ("raid_followups", _raid_followups)):
         try:
@@ -232,4 +242,11 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
     except Exception:
         stats["failed"] += 1
         logger.exception("caravan pass: deliveries failed")
+    for key, step in (("escort_rewards", lambda: escort_crud.escort_rewards(factory, now, params)),
+                      ("escort_housekeeping", lambda: escort_crud.escort_housekeeping(factory, now))):
+        try:
+            stats[key] = int(step() or 0)
+        except Exception:
+            stats["failed"] += 1
+            logger.exception("caravan pass: %s failed", key)
     return stats

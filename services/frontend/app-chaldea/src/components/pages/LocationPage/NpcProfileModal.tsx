@@ -13,6 +13,7 @@ import BankModal from './BankModal/BankModal';
 import MintModal from './MintModal/MintModal';
 import FenceModal from './FenceModal/FenceModal';
 import GuildModal from './GuildModal/GuildModal';
+import CaravaneerModal from './CaravaneerModal/CaravaneerModal';
 import QuartermasterModal from './QuartermasterModal/QuartermasterModal';
 import { QM_SILENT_TEXT, probeQuartermaster, type QuartermasterProbeState } from '../../../api/factions';
 import TeleportMenu from './TeleportMenu';
@@ -52,6 +53,8 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   const [mintOpen, setMintOpen] = useState(false);
   const [fenceOpen, setFenceOpen] = useState(false);
   const [guildOpen, setGuildOpen] = useState(false);
+  /** FEAT-212: «Караванщик» — hiring on as a caravan escort. */
+  const [caravaneerOpen, setCaravaneerOpen] = useState(false);
   /** FEAT-206: faction quartermaster binding as seen by this character (none / silent / open). */
   const [qmState, setQmState] = useState<QuartermasterProbeState>('none');
   const [qmOpen, setQmOpen] = useState(false);
@@ -190,6 +193,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
         npcName={npc.name}
         npcAvatar={npc.avatar}
         onClose={() => setGuildOpen(false)}
+      />
+    );
+  }
+
+  if (caravaneerOpen && npc) {
+    return (
+      <CaravaneerModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setCaravaneerOpen(false)}
       />
     );
   }
@@ -465,6 +479,26 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
               </svg>
               Гильдия торговцев
+            </button>
+          )}
+
+          {/* Caravans button — «Караванщик» NPCs hire caravan escorts, character in the same location (FEAT-212) */}
+          {npc.npc_role === 'caravaneer' && isCharacterHere && characterId && (
+            <button
+              onClick={() => setCaravaneerOpen(true)}
+              className="
+                mt-2 w-full px-6 py-3 rounded-card
+                border border-gold/50 bg-gold/10
+                text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                hover:bg-gold/20 hover:border-gold/80
+                transition-all duration-200
+                flex items-center justify-center gap-2
+              "
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 17h2m14 0h2M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0M9 17h6M3 13h18M5 13V8a2 2 0 012-2h10a2 2 0 012 2v5" />
+              </svg>
+              Караваны
             </button>
           )}
 

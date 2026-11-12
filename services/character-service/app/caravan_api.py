@@ -7,7 +7,9 @@ Player (JWT + owner; FEAT-211 task 3): A1 ``GET /characters/caravans/here`` (car
 location — never from / to / route / value), A2 ``POST /characters/caravans/{caravan_id}/raid`` (nginx rate limit
 ``caravan_raid_limit``), ``GET /characters/caravans/raids/by-battle/{battle_id}`` (own loot, victory window).
 Internal (X-Internal-Token): A3 ``POST /characters/internal/caravans/raid-result``
-(battle-service callback; the caravan pass polls lost ones). Business logic: ``caravan_raid_crud``.
+(battle-service callback with FEAT-212 ``fallen_character_ids``; the caravan pass polls lost ones). Business logic:
+``caravan_raid_crud``. FEAT-212: the raid start sends the caravan's player escorts to battle-service (B1) and stores
+the ones it placed.
 
 Endpoints are plain ``def`` (sync SQLAlchemy runs in the threadpool). Route order inside this router: the static
 ``/roads`` and ``/guards`` paths are declared before ``/{caravan_id}``.
@@ -163,9 +165,12 @@ async def post_caravan_raid(
         db, caravan_id, body.character_id, body.group))
     # spawn_guards cleans up after itself (guards despawned, raid row deleted) before raising
     start = await run_in_threadpool(_start_step, db, lambda: caravan_raid_crud.spawn_guards(db, start.raid_id))
+    # escorts only when there are any: a raid without escorts sends exactly the FEAT-211 call
+    extra = {"escort_character_ids": list(start.escort_ids)} if start.escort_ids else {}
     try:
         created = await battle_client.create_caravan_raid_battle(
-            start.raid_id, start.caravan_id, body.character_id, body.group, start.guard_ids, start.location_id)
+            start.raid_id, start.caravan_id, body.character_id, body.group, start.guard_ids, start.location_id,
+            **extra)
     except battle_client.BattleServiceError as exc:
         await run_in_threadpool(caravan_raid_crud.abandon_start, db, start)
         if exc.status_code is not None and 400 <= exc.status_code < 500:
@@ -178,17 +183,20 @@ async def post_caravan_raid(
         raise HTTPException(status_code=503, detail=MSG_BATTLE_UNAVAILABLE)
     battle_id = created["battle_id"]
     attackers = created["attacker_character_ids"] or [body.character_id]
+    # the escorts battle-service placed (an old battle-service answers none → they stay out of the fight)
+    placed = [e for e in (created.get("escort_character_ids") or []) if e in set(start.escort_ids)]
     for attempt in range(2):
         try:
-            await run_in_threadpool(caravan_raid_crud.mark_fighting, db, start.raid_id, battle_id, attackers)
+            await run_in_threadpool(lambda: caravan_raid_crud.mark_fighting(
+                db, start.raid_id, battle_id, attackers, escort_ids=placed))
             break
         except SQLAlchemyError:
             db.rollback()
             # the battle exists: the caravan pass re-attaches a lost Tx B through battles.caravan_raid_id
             logger.exception("caravan raid %s: Tx B failed (attempt %s)", start.raid_id, attempt + 1)
-    logger.info("caravan raid %s: caravan=%s leader=%s group=%s battle=%s attackers=%s guards=%s user=%s",
+    logger.info("caravan raid %s: caravan=%s leader=%s group=%s battle=%s attackers=%s guards=%s escorts=%s user=%s",
                 start.raid_id, caravan_id, body.character_id, body.group, battle_id, attackers,
-                list(start.guard_ids), current_user.id)
+                list(start.guard_ids), placed, current_user.id)
     return {"raid_id": start.raid_id, "battle_id": battle_id}
 
 
@@ -205,7 +213,8 @@ def post_caravan_raid_result(
     """The raid fight ended (or was force-finished). Idempotent; an unknown raid answers ``unknown``."""
     try:
         status = caravan_raid_crud.battle_result(db, battle_id=body.battle_id, raid_id=body.caravan_raid_id,
-                                                 winner_team=body.winner_team, aborted=body.aborted)
+                                                 winner_team=body.winner_team, aborted=body.aborted,
+                                                 fallen_character_ids=body.fallen_character_ids)
     except SQLAlchemyError:
         db.rollback()
         logger.exception("caravan raid %s: settlement failed (the caravan pass polls it)", body.caravan_raid_id)

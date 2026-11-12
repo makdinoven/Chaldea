@@ -1031,6 +1031,37 @@ SWEPT_FILES = tuple(
 )
 
 
+def _segment_getter(source):
+    """A fast drop-in for `ast.get_source_segment(source, node)`.
+
+    The stdlib helper re-splits the *whole* source on every call; with
+    `main.py` at ~360 KB and thousands of calls the sweep took ~100 s and blew
+    CI's 30 s per-test timeout. Here the lines are split (and UTF-8 encoded,
+    since `col_offset` is a byte offset) exactly once, and each segment is a
+    slice — the same string the stdlib returns for every node.
+    """
+    import ast
+
+    lines = [line.encode("utf-8") for line in ast._splitlines_no_ff(source)]
+
+    def segment(node):
+        try:
+            if node.end_lineno is None or node.end_col_offset is None:
+                return None
+            lineno, end_lineno = node.lineno - 1, node.end_lineno - 1
+            col, end_col = node.col_offset, node.end_col_offset
+        except AttributeError:
+            return None
+        if lineno == end_lineno:
+            return lines[lineno][col:end_col].decode("utf-8")
+        first = lines[lineno][col:].decode("utf-8")
+        middle = [line.decode("utf-8") for line in lines[lineno + 1:end_lineno]]
+        last = lines[end_lineno][:end_col].decode("utf-8")
+        return "".join([first, *middle, last])
+
+    return segment
+
+
 class TestEveryInternalCallSiteSendsHeaders:
     """No allowlist. Any resolved `/internal/` URL must carry `headers=`."""
 
@@ -1039,6 +1070,7 @@ class TestEveryInternalCallSiteSendsHeaders:
         import ast
 
         env = {}
+        segment = self._segment
 
         class _V(ast.NodeVisitor):
             def _scope(self, node):
@@ -1046,8 +1078,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
                             and isinstance(sub.targets[0], ast.Name):
-                        local[sub.targets[0].id] = \
-                            ast.get_source_segment(source, sub.value) or ""
+                        local[sub.targets[0].id] = segment(sub.value) or ""
                 env[(node.lineno, node.end_lineno)] = local
                 self.generic_visit(node)
 
@@ -1066,20 +1097,17 @@ class TestEveryInternalCallSiteSendsHeaders:
                 if kw.arg == "url":
                     arg = kw.value
                     break
-        raw = (ast.get_source_segment(source, arg) if arg is not None else "") or ""
+        raw = (self._segment(arg) if arg is not None else "") or ""
         if "/" in raw:
             return raw
         # a URL-building helper — `_some_url(cid)`: inline its return
         if arg is not None and isinstance(arg, ast.Call) \
                 and isinstance(arg.func, ast.Name):
             builder = arg.func.id
-            for sub in ast.walk(self._tree):
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) \
-                        and sub.name == builder:
-                    for inner in ast.walk(sub):
-                        if isinstance(inner, ast.Return) and inner.value is not None:
-                            return ast.get_source_segment(
-                                self._source, inner.value) or raw
+            for sub in self._functions.get(builder, ()):
+                for inner in ast.walk(sub):
+                    if isinstance(inner, ast.Return) and inner.value is not None:
+                        return self._segment(inner.value) or raw
         # a bare name — look it up in the innermost enclosing function
         scopes = [(end - start, local) for (start, end), local in env.items()
                   if start <= node.lineno <= end]
@@ -1096,6 +1124,13 @@ class TestEveryInternalCallSiteSendsHeaders:
         offenders, checked = [], 0
         tree = ast.parse(source)
         self._source, self._tree = source, tree
+        self._segment = _segment_getter(source)
+        # name -> its (Async)FunctionDefs in `ast.walk` order, collected once
+        # instead of re-walking the whole tree for every URL-builder lookup.
+        self._functions = {}
+        for sub in ast.walk(tree):
+            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._functions.setdefault(sub.name, []).append(sub)
         env = self._resolve(source, tree)
 
         for node in ast.walk(tree):
@@ -1104,7 +1139,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                 continue
             if node.func.attr not in ("get", "post", "put", "patch", "delete"):
                 continue
-            base = ast.get_source_segment(source, node.func.value)
+            base = self._segment(node.func.value)
             if base not in ("httpx", "client", "requests"):
                 continue
             url = self._url_of(source, env, node)
