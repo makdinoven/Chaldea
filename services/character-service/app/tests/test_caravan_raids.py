@@ -799,6 +799,54 @@ def test_a1_auth_ownership_and_validation(api, rw):
 
 
 # ===================================================================================================================
+# own loot by battle (the battle victory window)
+# ===================================================================================================================
+
+def _share_url(battle_id=BATTLE):
+    return f"/characters/caravans/raids/by-battle/{battle_id}"
+
+
+def test_share_is_pending_until_the_settlement_then_shows_own_loot(api, rw, stub_law_notify_send):
+    raid_id = _start(api, rw, attackers=[MATE, RAIDER])
+    resp = api.get(_share_url(), params={"character_id": RAIDER})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"raid": True, "status": "pending", "marks": 0, "bales": 0, "bale_name": None}
+    assert _settle(api, raid_id, winner=0) == "won"
+    assert api.get(_share_url(), params={"character_id": RAIDER}).json() == {
+        "raid": True, "status": "won", "marks": 40, "bales": 1, "bale_name": "Тюк зерна (краденое)"}
+    _as_user(MATE_USER)
+    assert api.get(_share_url(), params={"character_id": MATE}).json()["marks"] == 40
+
+
+def test_share_of_a_repelled_raid_has_no_loot(api, rw, stub_law_notify_send):
+    raid_id = _start(api, rw)
+    assert _settle(api, raid_id, winner=1) == "repelled"
+    assert api.get(_share_url(), params={"character_id": RAIDER}).json() == {
+        "raid": True, "status": "repelled", "marks": 0, "bales": 0, "bale_name": None}
+
+
+def test_share_is_not_a_raid_for_other_battles_and_outsiders(api, rw, stub_law_notify_send):
+    none = {"raid": False, "status": None, "marks": 0, "bales": 0, "bale_name": None}
+    assert api.get(_share_url(), params={"character_id": RAIDER}).json() == none          # no raid at all
+    raid_id = _start(api, rw)
+    assert _settle(api, raid_id, winner=0) == "won"
+    assert api.get(_share_url(BATTLE + 1), params={"character_id": RAIDER}).json() == none  # another battle
+    _as_user(OTHER_USER)
+    assert api.get(_share_url(), params={"character_id": STRANGER}).json() == none          # not a raider
+
+
+def test_share_auth_ownership_and_validation(api, rw):
+    assert api.get(_share_url(), params={"character_id": STRANGER}).status_code == 403
+    assert api.get(_share_url(), params={"character_id": 777777}).status_code == 404
+    for bad in ("abc", "0", "501 OR 1=1"):
+        assert api.get(_share_url(), params={"character_id": bad}).status_code == 422
+    assert api.get("/characters/caravans/raids/by-battle/0", params={"character_id": RAIDER}).status_code == 422
+    assert api.get(_share_url()).status_code == 422
+    app.dependency_overrides.pop(get_current_user_via_http, None)
+    assert api.get(_share_url(), params={"character_id": RAIDER}).status_code == 401
+
+
+# ===================================================================================================================
 # law: shadow_crud.caravan_raid_consequences in the law world
 # ===================================================================================================================
 

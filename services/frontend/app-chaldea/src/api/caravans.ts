@@ -3,6 +3,7 @@ import { BASE_URL } from './api';
 import type {
   CaravanRaidRequest,
   CaravanRaidResponse,
+  CaravanRaidShare,
   CaravansHereResponse,
 } from '../types/caravans';
 
@@ -31,5 +32,17 @@ export const startCaravanRaid = async (
   body: CaravanRaidRequest,
 ): Promise<CaravanRaidResponse> => {
   const { data } = await axios.post<CaravanRaidResponse>(`${CARAVANS}/${caravanId}/raid`, body, QUIET_403);
+  return data;
+};
+
+/** The character's own loot of the raid fought in this battle; `raid: false` for any other battle. */
+export const fetchCaravanRaidShare = async (
+  battleId: number,
+  characterId: number,
+): Promise<CaravanRaidShare> => {
+  const { data } = await axios.get<CaravanRaidShare>(`${CARAVANS}/raids/by-battle/${battleId}`, {
+    params: { character_id: characterId },
+    ...QUIET_403,
+  });
   return data;
 };

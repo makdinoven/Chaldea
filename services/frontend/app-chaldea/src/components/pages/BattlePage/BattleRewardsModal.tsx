@@ -1,15 +1,22 @@
 import type { BattleRewards } from '../../../api/mobs';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import { useCurrency } from '../../../hooks/useCurrency';
+import type { CaravanRaidShare } from '../../../types/caravans';
 
 interface BattleRewardsModalProps {
   rewards: BattleRewards;
+  /** FEAT-211: own loot of a caravan raid, settled apart from the PvE rewards. */
+  raidLoot?: CaravanRaidShare | null;
   visible: boolean;
   onClose: () => void;
 }
 
-const BattleRewardsModal = ({ rewards, visible, onClose }: BattleRewardsModalProps) => {
+const BattleRewardsModal = ({ rewards, raidLoot, visible, onClose }: BattleRewardsModalProps) => {
   const { forms } = useCurrency();
+  const raidPending = !!raidLoot?.raid && raidLoot.status === 'pending';
+  const raidMarks = raidLoot?.raid ? raidLoot.marks : 0;
+  const raidBales = raidLoot?.raid ? raidLoot.bales : 0;
+  const hasRaidBlock = raidPending || raidMarks > 0 || raidBales > 0;
   return (
     <ModalShell
       open={visible}
@@ -129,8 +136,48 @@ const BattleRewardsModal = ({ rewards, visible, onClose }: BattleRewardsModalPro
                 </div>
               )}
 
+              {/* FEAT-211: caravan raid loot */}
+              {hasRaidBlock && (
+                <div className="flex flex-col gap-2">
+                  <span className="text-white/60 text-xs uppercase tracking-wider px-1">
+                    Добыча налёта
+                  </span>
+                  {raidPending && (
+                    <p className="text-white/60 text-sm px-1">
+                      Добыча подсчитывается — она придёт уведомлением.
+                    </p>
+                  )}
+                  {raidMarks > 0 && (
+                    <div className="flex items-center gap-3 p-3 rounded-card bg-white/5">
+                      <div className="w-10 h-10 rounded-full bg-gold/20 flex items-center justify-center shrink-0 text-lg">
+                        🪙
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-white/60 text-xs uppercase tracking-wider">
+                          {forms.name}
+                        </span>
+                        <span className="text-gold text-lg font-medium">+{raidMarks}</span>
+                      </div>
+                    </div>
+                  )}
+                  {raidBales > 0 && (
+                    <div className="flex items-center gap-3 p-3 rounded-card bg-white/5">
+                      <div className="w-10 h-10 rounded-full bg-site-red/20 flex items-center justify-center shrink-0 text-lg">
+                        📦
+                      </div>
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <span className="text-white text-sm font-medium truncate">
+                          {raidLoot?.bale_name ?? 'Краденый товар'}
+                        </span>
+                        <span className="text-white/50 text-xs">x{raidBales}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Fallback: no rewards */}
-              {rewards.xp === 0 && rewards.gold === 0 && rewards.items.length === 0 && (
+              {rewards.xp === 0 && rewards.gold === 0 && rewards.items.length === 0 && !hasRaidBlock && (
                 <p className="text-white/50 text-sm text-center">
                   Нет наград за этот бой
                 </p>

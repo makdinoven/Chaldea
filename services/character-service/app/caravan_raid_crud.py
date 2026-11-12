@@ -557,6 +557,36 @@ def _pay_out(db: Session, raid: "models.EconCaravanRaid", caravan: "models.EconC
 
 
 # =====================================================================================================================
+# Player: own share of a raid by its battle (the battle victory window)
+# =====================================================================================================================
+
+SHARE_PENDING = "pending"           # the fight ended but the settlement has not run yet (the client asks again)
+
+
+def raid_share_by_battle(db: Session, battle_id: int, character_id: int) -> dict:
+    """The character's loot of the raid fought in ``battle_id``. ``raid = False`` for any battle that is not a raid
+    or where the character was not a raider (so the window shows the ordinary PvE rewards only)."""
+    none = {"raid": False, "status": None, "marks": 0, "bales": 0, "bale_name": None}
+    row = db.execute(text(
+        "SELECT id, status, attacker_ids FROM econ_caravan_raids WHERE battle_id = :b ORDER BY id DESC LIMIT 1"),
+        {"b": int(battle_id)}).first()
+    if row is None or int(character_id) not in _ids(row[2]):
+        return none
+    status = row[1]
+    if status in ACTIVE_STATUSES:
+        return {**none, "raid": True, "status": SHARE_PENDING}
+    out = {**none, "raid": True, "status": status}
+    if status != STATUS_WON:
+        return out
+    share = db.execute(text(
+        "SELECT s.marks, s.bales, i.name FROM econ_caravan_raid_shares s LEFT JOIN items i ON i.id = s.bale_item_id "
+        "WHERE s.raid_id = :r AND s.character_id = :c"), {"r": int(row[0]), "c": int(character_id)}).first()
+    if share is not None:
+        out.update(marks=int(share[0] or 0), bales=int(share[1] or 0), bale_name=share[2])
+    return out
+
+
+# =====================================================================================================================
 # After the settlement: law (Tx 2), bales, guards
 # =====================================================================================================================
 

@@ -66,3 +66,14 @@ export interface FenceSellResponse {
   quantity: number;
   total_price: number;
 }
+
+/** `GET /characters/caravans/raids/by-battle/{battle_id}` — the character's own raid loot (victory window). */
+export interface CaravanRaidShare {
+  /** False for any battle that is not a caravan raid of this character. */
+  raid: boolean;
+  /** `pending` while the settlement has not run yet; then won | repelled | aborted | expired. */
+  status: string | null;
+  marks: number;
+  bales: number;
+  bale_name: string | null;
+}

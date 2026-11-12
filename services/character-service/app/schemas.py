@@ -3511,6 +3511,15 @@ class CaravanRaidStartOut(BaseModel):
     battle_id: int
 
 
+class CaravanRaidShareOut(BaseModel):
+    """The character's loot of a raid battle (the victory window); ``raid = False`` for any other battle."""
+    raid: bool
+    status: Optional[str]                        # pending | won | repelled | aborted | expired
+    marks: int = 0
+    bales: int = 0
+    bale_name: Optional[str] = None
+
+
 class CaravanRaidResultIn(BaseModel):
     battle_id: conint(ge=1)
     caravan_raid_id: conint(ge=1)

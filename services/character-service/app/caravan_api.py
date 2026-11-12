@@ -5,7 +5,8 @@ Admin (contract 3.13): A5 caravan detail, A6 roads / trade gates, A7 gate overri
 reads need ``economy:read``, writes ``economy:settings``. The extended caravan list (A4) stays in ``economy_api``.
 Player (JWT + owner; FEAT-211 task 3): A1 ``GET /characters/caravans/here`` (caravans in the character's own
 location — never from / to / route / value), A2 ``POST /characters/caravans/{caravan_id}/raid`` (nginx rate limit
-``caravan_raid_limit``). Internal (X-Internal-Token): A3 ``POST /characters/internal/caravans/raid-result``
+``caravan_raid_limit``), ``GET /characters/caravans/raids/by-battle/{battle_id}`` (own loot, victory window).
+Internal (X-Internal-Token): A3 ``POST /characters/internal/caravans/raid-result``
 (battle-service callback; the caravan pass polls lost ones). Business logic: ``caravan_raid_crud``.
 
 Endpoints are plain ``def`` (sync SQLAlchemy runs in the threadpool). Route order inside this router: the static
@@ -122,6 +123,18 @@ def get_caravans_here(
 ):
     _require_owner(db, character_id, current_user)
     return _read_or_error(db, lambda: caravan_raid_crud.caravans_here(db, character_id))
+
+
+@router.get("/caravans/raids/by-battle/{battle_id}", response_model=schemas.CaravanRaidShareOut)
+def get_caravan_raid_share(
+    battle_id: int = Path(..., ge=1),
+    character_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """The character's own loot of the raid fought in this battle (``raid = False`` for any other battle)."""
+    _require_owner(db, character_id, current_user)
+    return _read_or_error(db, lambda: caravan_raid_crud.raid_share_by_battle(db, battle_id, character_id))
 
 
 def _start_step(db: Session, action):

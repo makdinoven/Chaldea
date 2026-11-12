@@ -21,6 +21,8 @@ import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGr
 import BattleRewardsModal from "./BattleRewardsModal";
 import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
+import { fetchCaravanRaidShare } from "../../../api/caravans";
+import type { CaravanRaidShare } from "../../../types/caravans";
 import { checkActiveSession } from "../../../api/dungeons";
 import { DUNGEON_BATTLE_RETURN_KEY } from "../../DungeonPage/dungeonConstants";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
@@ -37,6 +39,11 @@ import type { ParticipantPassiveFields } from "./battleTypes";
 
 // three.js is heavy; only the 3D view pulls it in.
 const ArenaScene = lazy(() => import("./Arena3D/ArenaScene"));
+
+/** FEAT-211: the raid loot is settled by character-service right after the fight — ask again while it is pending. */
+const RAID_SHARE_RETRY_MS = 2000;
+const RAID_SHARE_MAX_ATTEMPTS = 6;
+const EMPTY_REWARDS: BattleRewards = { xp: 0, gold: 0, items: [] };
 
 // --- Types ---
 
@@ -226,6 +233,34 @@ const BattlePage = () => {
   // PvE rewards state
   const [pveRewards, setPveRewards] = useState<BattleRewards | null>(null);
   const [showRewardsModal, setShowRewardsModal] = useState(false);
+  // FEAT-211: own loot of a caravan raid (marks + stolen bales) — not part of the PvE rewards
+  const [raidLoot, setRaidLoot] = useState<CaravanRaidShare | null>(null);
+
+  useEffect(() => {
+    const charId = character?.id;
+    if (isSpectateMode || !battleResult || battleResult.isLose || !charId || !battleId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async (attempt: number) => {
+      try {
+        const share = await fetchCaravanRaidShare(Number(battleId), charId);
+        if (cancelled || !share.raid) return;
+        setRaidLoot(share);
+        setPveRewards((prev) => prev ?? EMPTY_REWARDS);
+        setShowRewardsModal(true);
+        if (share.status === "pending" && attempt < RAID_SHARE_MAX_ATTEMPTS) {
+          timer = setTimeout(() => load(attempt + 1), RAID_SHARE_RETRY_MS);
+        }
+      } catch {
+        if (!cancelled) toast.error("Не удалось узнать добычу налёта — она придёт уведомлением");
+      }
+    };
+    load(1);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [battleResult, character?.id, battleId, isSpectateMode]);
 
   // Navigate back: to the dungeon run this battle belongs to (it shows the
   // outcome — next room, loot sharing or the wipe screen), otherwise to the
@@ -972,6 +1007,7 @@ const BattlePage = () => {
       {!isSpectateMode && pveRewards && (
         <BattleRewardsModal
           rewards={pveRewards}
+          raidLoot={raidLoot}
           visible={showRewardsModal}
           onClose={() => {
             setShowRewardsModal(false);
