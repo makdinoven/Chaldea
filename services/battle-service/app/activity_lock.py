@@ -12,9 +12,9 @@ FEAT-198 (law) adds two more columns on `characters`:
   * `law_encounter_id` — set while the guards have stopped the character and
     the player has not chosen what to do yet.
 
-FEAT-212 (caravan escorts) adds `escort_caravan_id`: set while the character
-rides inside a caravan as a hired escort. The refusal text for this reason is
-neutral for every subject (it never mentions caravans — escorts are hidden).
+FEAT-212 adds `escort_caravan_id` on `characters` — set while the player
+escorts a physical caravan (reason `caravan_escort`). Its refusal text is
+neutral for every subject: third parties must not learn about the escort.
 
 Other services read the same columns from the shared DB (the established
 pattern for battle/gathering locks) and only character-service writes them.
@@ -36,7 +36,7 @@ REASON_READING = "reading"
 REASON_JAIL = "jail"
 # FEAT-198: stopped by the guards, a choice is pending (`characters.law_encounter_id`).
 REASON_LAW_ENCOUNTER = "law_encounter"
-# FEAT-212: hired as a caravan escort (`characters.escort_caravan_id`).
+# FEAT-212: escorting a physical caravan (`characters.escort_caravan_id`).
 REASON_CARAVAN_ESCORT = "caravan_escort"
 
 
@@ -70,8 +70,7 @@ def compute_lock(dungeon_session_id, unconscious_until, now: Optional[datetime] 
                  jailed_until=None, law_encounter_id=None, escort_caravan_id=None) -> dict:
     """Build the public lock object from the raw column values.
 
-    Priority: jail > law_encounter > unconscious > dungeon > caravan_escort >
-    asleep > reading.
+    Priority: jail > law_encounter > unconscious > dungeon > caravan_escort > asleep > reading.
     Unconsciousness wins over the dungeon lock (a knocked-out character never
     holds a dungeon lock anyway — the knock-out clears it).
     """
@@ -136,13 +135,13 @@ def lock_message(lock: dict, subject: str = "Персонаж") -> Optional[str]
         if until is not None:
             return f"{subject} без сознания — осталось {format_remaining(until)}"
         return f"{subject} без сознания"
-    if lock.get("reason") == REASON_CARAVAN_ESCORT:
-        # Neutral on purpose: the escort is hidden from other players.
-        return f"{subject}: действие сейчас недоступно"
     if lock.get("reason") == REASON_ASLEEP:
         return f"{subject} спит — сначала нужно проснуться"
     if lock.get("reason") == REASON_READING:
         return f"{subject} читает — сначала нужно закончить чтение"
+    if lock.get("reason") == REASON_CARAVAN_ESCORT:
+        # neutral on purpose (FEAT-212 3.5): never reveal the hidden escort to a third party
+        return f"{subject}: действие сейчас недоступно"
     return f"{subject} находится в подземелье"
 
 
