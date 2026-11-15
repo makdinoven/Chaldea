@@ -8,6 +8,7 @@ import LocationSearch from '../../../../CommonComponents/LocationSearch/Location
 interface Neighbor {
   neighbor_id: number;
   energy_cost: number;
+  is_auto_arrow?: boolean;
 }
 
 interface LocationItem {
@@ -129,22 +130,31 @@ const LocationNeighborsEditor = ({
         {neighbors.length > 0 ? (
           neighbors.map((n) => (
             <div
-              key={n.neighbor_id}
-              className="flex justify-between items-center p-2.5 mb-2 bg-black/30 border border-white/10 rounded"
+              key={`${n.neighbor_id}-${n.is_auto_arrow ? 'arrow' : 'manual'}`}
+              className="flex flex-wrap justify-between items-center gap-x-4 gap-y-1 p-2.5 mb-2 bg-black/30 border border-white/10 rounded"
             >
-              <span className="font-medium flex-1 text-[#8ab3d5]">
+              <span className="font-medium flex-1 min-w-0 break-words text-[#8ab3d5]">
                 {getLocationName(n.neighbor_id)}
               </span>
-              <span className="mx-4 text-[#a8c6df]">
+              <span className="text-[#a8c6df]">
                 Энергия: {n.energy_cost}
               </span>
-              <button
-                type="button"
-                className="px-2.5 py-1.5 bg-red-500/20 text-white border-none rounded cursor-pointer transition-colors hover:bg-red-500/30"
-                onClick={() => handleRemoveNeighbor(n.neighbor_id)}
-              >
-                Удалить
-              </button>
+              {n.is_auto_arrow ? (
+                <span
+                  className="text-xs text-white/45"
+                  title="Переход через стрелку региона. Меняется и удаляется в редакторе карты региона."
+                >
+                  через стрелку
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="px-2.5 py-1.5 bg-red-500/20 text-white border-none rounded cursor-pointer transition-colors hover:bg-red-500/30"
+                  onClick={() => handleRemoveNeighbor(n.neighbor_id)}
+                >
+                  Удалить
+                </button>
+              )}
             </div>
           ))
         ) : (

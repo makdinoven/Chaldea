@@ -171,6 +171,12 @@ class LocationNeighbor(Base):
     path_data = Column(JSON, nullable=True)
     is_auto_arrow = Column(Boolean, nullable=False, default=False, server_default="0")
 
+    # One row per direction: a manual and an arrow link of the same pair used
+    # to coexist and show up as a duplicated transition (migration 059).
+    __table_args__ = (
+        UniqueConstraint('location_id', 'neighbor_id', name='uq_location_neighbor_pair'),
+    )
+
 
 class Post(Base):
     __tablename__ = "posts"
@@ -640,6 +646,10 @@ class ArrowNeighbor(Base):
     arrow_id = Column(BigInteger, ForeignKey('region_transition_arrows.id', ondelete='CASCADE'), nullable=False, index=True)
     energy_cost = Column(Integer, nullable=False, default=0)
     path_data = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('location_id', 'arrow_id', name='uq_arrow_neighbor_location'),
+    )
 
 
 class FloatingStructure(Base):

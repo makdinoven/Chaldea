@@ -21,6 +21,8 @@ import type { AppDispatch } from '../../../../redux/store';
 interface Neighbor {
   neighbor_id: number;
   energy_cost: number;
+  /** Transition created by a region arrow; edited on the region map, never re-saved here. */
+  is_auto_arrow?: boolean;
 }
 
 interface LocationFormData {
@@ -145,9 +147,10 @@ const EditLocationForm = ({
       }
       if (Array.isArray(currentLocation.neighbors)) {
         setNeighbors(
-          (currentLocation.neighbors as { neighbor_id: number; energy_cost: number }[]).map((n) => ({
+          (currentLocation.neighbors as Neighbor[]).map((n) => ({
             neighbor_id: n.neighbor_id,
             energy_cost: n.energy_cost || 1,
+            is_auto_arrow: Boolean(n.is_auto_arrow),
           }))
         );
       } else {
@@ -295,12 +298,15 @@ const EditLocationForm = ({
       }
 
       const newLocationId = locationId === 'new' ? (result as { id: number }).id : locationId;
-      if (neighbors.length > 0) {
+      // Arrow transitions belong to the region map; sending them here
+      // re-created them as manual links and duplicated the transition.
+      const manualNeighbors = neighbors.filter((n) => !n.is_auto_arrow);
+      if (manualNeighbors.length > 0) {
         try {
           await dispatch(
             updateLocationNeighbors({
               locationId: newLocationId,
-              neighbors,
+              neighbors: manualNeighbors,
             } as never) as unknown as ReturnType<typeof updateLocationNeighbors>
           ).unwrap();
         } catch {

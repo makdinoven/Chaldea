@@ -835,22 +835,27 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             )
         )
         all_neighbors = neighbors_result.scalars().all()
-        seen_edges = set()
+        # Both rows of a link store the same waypoints in (min_id -> max_id)
+        # order: the path editor canonicalizes the draw direction and
+        # add_neighbor / update_neighbor_path write one list to both rows.
+        # So the waypoints are never reversed here; the (min, max) row is
+        # preferred, the other one is only a fallback for a one-way link.
+        edges_by_pair: Dict[Tuple[int, int], dict] = {}
         for n in all_neighbors:
             edge = (min(n.location_id, n.neighbor_id), max(n.location_id, n.neighbor_id))
-            if edge not in seen_edges:
-                seen_edges.add(edge)
-                # If the row is reversed relative to normalized (min,max) direction,
-                # reverse the waypoints so they match from_id→to_id order
-                pd = n.path_data
-                if pd and n.location_id > n.neighbor_id:
-                    pd = list(reversed(pd))
-                neighbor_edges.append({
+            canonical = n.location_id < n.neighbor_id
+            current = edges_by_pair.get(edge)
+            if current is None or (canonical and not current["_canonical"]):
+                edges_by_pair[edge] = {
                     "from_id": edge[0],
                     "to_id": edge[1],
                     "energy_cost": n.energy_cost,
-                    "path_data": pd,
-                })
+                    "path_data": n.path_data,
+                    "_canonical": canonical,
+                }
+        for item in edges_by_pair.values():
+            item.pop("_canonical")
+            neighbor_edges.append(item)
 
     # Получаем стрелки переходов для региона
     arrows_result = await session.execute(
@@ -1281,8 +1286,14 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "map_icon_url": loc.map_icon_url,
         "is_starting": bool(getattr(loc, 'is_starting', False)),
         "starting_blurb": getattr(loc, 'starting_blurb', None),
+        # is_auto_arrow lets the admin editor show arrow transitions read-only
+        # instead of re-saving them as manual links (that created duplicates).
         "neighbors": [
-            {"neighbor_id": n.neighbor_id, "energy_cost": n.energy_cost}
+            {
+                "neighbor_id": n.neighbor_id,
+                "energy_cost": n.energy_cost,
+                "is_auto_arrow": bool(n.is_auto_arrow),
+            }
             for n in neighbors
         ],
         "children": [
@@ -2321,51 +2332,96 @@ async def update_location_neighbors(
         neighbors: List[LocationNeighborCreate]
 ) -> List[dict]:
     """
-    Обновляет (перезаписывает) список соседей для локации location_id.
-    Удаляет все существующие связи (X->N, N->X), и создаёт новые пары в обе стороны.
+    Приводит ручные связи локации location_id к переданному списку.
+
+    Связи, которые уже есть, обновляются на месте: меняется только цена,
+    нарисованный путь (path_data) остаётся. Раньше все связи удалялись и
+    создавались заново без path_data, и после любого «Сохранить» в окне
+    локации кривые дорожки на карте региона становились прямыми.
+    Удаляются только связи, которых нет в списке. Переходы через стрелки
+    (is_auto_arrow) не трогаются и не копируются.
     """
     try:
-        # 1) Удаляем только ручные связи, где X — одна из сторон
-        #    (сохраняем is_auto_arrow=True, созданные системой стрелок)
-        await db.execute(
-            delete(LocationNeighbor).where(
+        # Pairs already linked through a transition arrow. The arrow owns them:
+        # re-creating them as manual rows duplicated the transition.
+        auto_result = await db.execute(
+            select(LocationNeighbor.neighbor_id).where(
+                LocationNeighbor.location_id == location_id,
+                LocationNeighbor.is_auto_arrow == True,
+            )
+        )
+        auto_neighbor_ids = {row[0] for row in auto_result.all()}
+
+        # One link per neighbor; the last entry wins on a repeated id.
+        wanted = {}
+        for neighbor in neighbors:
+            if neighbor.neighbor_id == location_id or neighbor.neighbor_id in auto_neighbor_ids:
+                continue
+            wanted[neighbor.neighbor_id] = neighbor
+
+        if wanted:
+            existing_ids = await db.execute(
+                select(Location.id).where(Location.id.in_(list(wanted)))
+            )
+            known = {row[0] for row in existing_ids.all()}
+            wanted = {nid: n for nid, n in wanted.items() if nid in known}
+
+        # Current manual rows of this location, both directions, by the other side.
+        rows_result = await db.execute(
+            select(LocationNeighbor).where(
                 ((LocationNeighbor.location_id == location_id)
                  | (LocationNeighbor.neighbor_id == location_id))
                 & (LocationNeighbor.is_auto_arrow == False)
             )
         )
-        await db.commit()
+        forward_rows: Dict[int, LocationNeighbor] = {}
+        reverse_rows: Dict[int, LocationNeighbor] = {}
+        for row in rows_result.scalars().all():
+            if row.location_id == location_id:
+                forward_rows[row.neighbor_id] = row
+            else:
+                reverse_rows[row.location_id] = row
 
-        # 2) Создаём новые связи (в обе стороны)
+        # 1) Links that are no longer listed go away (both directions).
+        for other_id in set(forward_rows) | set(reverse_rows):
+            if other_id not in wanted:
+                for row in (forward_rows.get(other_id), reverse_rows.get(other_id)):
+                    if row is not None:
+                        await db.delete(row)
+
+        # 2) Listed links: update the cost in place, create missing directions.
         new_neighbors = []
-        for neighbor in neighbors:
-            # Сначала проверяем, что такая локация существует
-            neighbor_exists = await db.execute(
-                select(Location).where(Location.id == neighbor.neighbor_id)
-            )
-            if not neighbor_exists.scalars().first():
-                # Если локации нет — пропускаем
-                continue
+        for other_id, neighbor in wanted.items():
+            forward = forward_rows.get(other_id)
+            reverse = reverse_rows.get(other_id)
+            if neighbor.path_data is not None:
+                path = [{"x": wp.x, "y": wp.y} for wp in neighbor.path_data]
+            else:
+                # Keep the drawn road; a missing direction borrows it from its twin.
+                path = (forward.path_data if forward is not None else None) or                        (reverse.path_data if reverse is not None else None)
 
-            # Прямое направление X->N
-            forward = LocationNeighbor(
-                location_id=location_id,
-                neighbor_id=neighbor.neighbor_id,
-                energy_cost=neighbor.energy_cost
-            )
-            db.add(forward)
+            if forward is None:
+                db.add(LocationNeighbor(
+                    location_id=location_id, neighbor_id=other_id,
+                    energy_cost=neighbor.energy_cost, path_data=path,
+                ))
+            else:
+                forward.energy_cost = neighbor.energy_cost
+                if neighbor.path_data is not None or forward.path_data is None:
+                    forward.path_data = path
 
-            # Обратное направление N->X
-            reverse = LocationNeighbor(
-                location_id=neighbor.neighbor_id,
-                neighbor_id=location_id,
-                energy_cost=neighbor.energy_cost
-            )
-            db.add(reverse)
+            if reverse is None:
+                db.add(LocationNeighbor(
+                    location_id=other_id, neighbor_id=location_id,
+                    energy_cost=neighbor.energy_cost, path_data=path,
+                ))
+            else:
+                reverse.energy_cost = neighbor.energy_cost
+                if neighbor.path_data is not None or reverse.path_data is None:
+                    reverse.path_data = path
 
-            # Добавляем в список для возврата клиенту
             new_neighbors.append({
-                "neighbor_id": neighbor.neighbor_id,
+                "neighbor_id": other_id,
                 "energy_cost": neighbor.energy_cost
             })
 
@@ -6670,21 +6726,20 @@ async def sync_cross_region_neighbors(session: AsyncSession, arrow_id: int) -> N
     local_location_ids = [an.location_id for an in local_ans]
     remote_location_ids = [an.location_id for an in remote_ans]
 
-    # Delete existing auto-arrow LocationNeighbors between these location sets
+    # Delete every existing link between these location sets, manual ones
+    # included: the arrow owns these pairs now, and keeping a manual row next
+    # to the new auto row left two transitions with different costs.
     await session.execute(
         delete(LocationNeighbor).where(
-            and_(
-                LocationNeighbor.is_auto_arrow == True,
-                or_(
-                    and_(
-                        LocationNeighbor.location_id.in_(local_location_ids),
-                        LocationNeighbor.neighbor_id.in_(remote_location_ids),
-                    ),
-                    and_(
-                        LocationNeighbor.location_id.in_(remote_location_ids),
-                        LocationNeighbor.neighbor_id.in_(local_location_ids),
-                    ),
-                )
+            or_(
+                and_(
+                    LocationNeighbor.location_id.in_(local_location_ids),
+                    LocationNeighbor.neighbor_id.in_(remote_location_ids),
+                ),
+                and_(
+                    LocationNeighbor.location_id.in_(remote_location_ids),
+                    LocationNeighbor.neighbor_id.in_(local_location_ids),
+                ),
             )
         )
     )
