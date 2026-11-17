@@ -8,7 +8,7 @@ import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
 import { parseServerDate } from '../../../utils/serverDate';
-import { LocationData, NpcInLocation, Post } from './types';
+import { LocationData, NeighborLocation, NpcInLocation, Post } from './types';
 import type { PostGate } from './gateConstants';
 import LocationHeader from './LocationHeader';
 import LocationTopBar from './LocationTopBar';
@@ -43,6 +43,9 @@ import RemainingText from '../../CommonComponents/RemainingText';
 import CaravanEscortModal from '../../CaravanEscort/CaravanEscortModal';
 import { fetchLawJail, type LawJailOut } from '../../../api/law';
 import { apiErrorMessage } from '../../../api/errors';
+import { SEA_MOVED_EVENTS, fetchDeck, onSeaNotice } from '../../../api/sea';
+import ShipDeckHeader from './ShipDeckHeader';
+import DockedShips from './DockedShips';
 
 /** FEAT-198/203: the law outcome of an entry (move_and_post / quick_move PostResponse). */
 interface LawArrivalResponse {
@@ -55,6 +58,13 @@ const LAW_SLIPPED_TOAST = 'Вы проскользнули мимо стражи
 /** FEAT-204: how often the «НПС» list is re-read so patrolling guards come and go without a reload. */
 const NPC_POLL_INTERVAL_MS = 60_000;
 const NPC_POLL_ERROR_TOAST = 'Не удалось обновить список НПС';
+
+/** FEAT-213: a port ↔ deck passage is walked by a post only — the move choice names the direction. */
+const PASSAGE_MOVE_LABELS: Record<string, string> = {
+  board: 'Подняться на борт постом',
+  disembark: 'Сойти на берег постом',
+};
+const HTTP_NOT_FOUND = 404;
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -199,6 +209,38 @@ const LocationPage = () => {
   useEffect(() => {
     fetchLocationData();
   }, [fetchLocationData]);
+
+  // --- FEAT-213: sea notices (departure, arrival, put ashore, own purchase) ---
+  // useWebSocket has already refreshed `/users/me`; a character put ashore from the deck being viewed follows
+  // himself to the port, otherwise the page just re-reads its details (passages open / close).
+  const seaStateRef = useRef<{ characterId: number | null; currentId: number | null; shipId: number | null }>({
+    characterId: null,
+    currentId: null,
+    shipId: null,
+  });
+  seaStateRef.current = {
+    characterId: character?.id ?? null,
+    currentId: character?.current_location?.id ?? null,
+    shipId: location?.ship_id ?? null,
+  };
+  useEffect(
+    () =>
+      onSeaNotice((data) => {
+        const st = seaStateRef.current;
+        const ownMove =
+          typeof data.event === 'string' &&
+          SEA_MOVED_EVENTS.has(data.event) &&
+          data.character_id === st.characterId &&
+          st.shipId !== null &&
+          data.ship_id === st.shipId;
+        if (ownMove && st.currentId !== null && String(st.currentId) !== locationId) {
+          navigate(`/location/${st.currentId}`);
+          return;
+        }
+        void fetchLocationData();
+      }),
+    [fetchLocationData, navigate, locationId],
+  );
 
   // --- FEAT-204: NPC list poll (patrolling guards) ---
   // Only `npcs` is merged into the location: no spinner, no full details
@@ -720,13 +762,60 @@ const LocationPage = () => {
   /** The neighbour move UI (post-to-move / quick move) is usable. */
   const moveUiAllowed = !actionsLocked || (inJail && prisonMoveAllowed);
 
+  // FEAT-213: a port page lists the «board» passage only for a pass holder, so a character on the deck of a ship
+  // docked here (maybe without a pass any more) learns his way ashore from the deck header (S5).
+  const [deckDisembark, setDeckDisembark] = useState<NeighborLocation | null>(null);
+  const currentLocationId = character?.current_location?.id ?? null;
+  const currentLocationName = character?.current_location?.name ?? '';
+  const dockedHere = (location?.docked_ships ?? []).length > 0;
+  const currentIsListed = Boolean(location?.neighbors.some((n) => n.id === currentLocationId));
+  useEffect(() => {
+    setDeckDisembark(null);
+    if (!character?.id || !location || !dockedHere || !currentLocationId) return;
+    if (isCharacterHere || currentIsListed) return;
+    let cancelled = false;
+    fetchDeck(currentLocationId, character.id)
+      .then((deck) => {
+        if (cancelled) return;
+        if (deck.ship.status === 'docked' && deck.ship.docked_port?.id === location.id) {
+          setDeckDisembark({
+            id: currentLocationId,
+            name: currentLocationName,
+            energy_cost: 0,
+            image_url: null,
+            recommended_level: 0,
+            passage: 'disembark',
+            ship_id: deck.ship.id,
+          });
+        }
+      })
+      .catch((err) => {
+        // 404 = the character's location is not a deck — nothing to offer.
+        if (cancelled || (axios.isAxiosError(err) && err.response?.status === HTTP_NOT_FOUND)) return;
+        toast.error(apiErrorMessage(err, 'Не удалось проверить, стоит ли здесь ваш корабль'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [character?.id, location?.id, dockedHere, currentLocationId, currentLocationName, isCharacterHere, currentIsListed]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Neighbor links are bidirectional with the same energy_cost.
   // If the character's current location appears in this location's neighbor list,
   // then this location is reachable from the character's current location.
+  // FEAT-213: a deck → port passage is missing on the port page for a character without a pass — see above.
   const neighborEntry = useMemo(() => {
     if (!character?.current_location?.id || isCharacterHere || !location) return null;
-    return location.neighbors.find((n) => n.id === character.current_location!.id) ?? null;
-  }, [character?.current_location?.id, isCharacterHere, location]);
+    return location.neighbors.find((n) => n.id === character.current_location!.id) ?? deckDisembark;
+  }, [character?.current_location?.id, isCharacterHere, location, deckDisembark]);
+  /**
+   * FEAT-213: this move is a port ↔ deck passage (by post only, no quick move). The entry describes the way back
+   * (the deck page lists «disembark» to the port), so the move itself is the opposite direction.
+   */
+  const passageMove: 'board' | 'disembark' | null = neighborEntry?.passage
+    ? neighborEntry.passage === 'disembark' && location?.ship_id != null
+      ? 'board'
+      : 'disembark'
+    : null;
 
   const isNeighborLocation = neighborEntry !== null;
 
@@ -817,6 +906,19 @@ const LocationPage = () => {
           The dimming wrapper carries the panel's own sizing classes: it is the
           flex child of the hero body, so without them `lg:self-stretch` would
           apply to the wrapper while the panel collapsed to content height. */}
+      {/* FEAT-213: the deck of a ship — where it is, the Captain, ships nearby, my place aboard */}
+      {location.ship_id != null && character?.id && (
+        <ShipDeckHeader
+          locationId={location.id}
+          shipId={location.ship_id}
+          characterId={character.id}
+          isCharacterHere={isCharacterHere}
+          onShipStatusChange={() => void fetchLocationData()}
+        />
+      )}
+      {/* FEAT-213: ships at the pier of this port */}
+      <DockedShips ships={location.docked_ships ?? []} />
+
       <LocationHeader
         location={location}
         aside={
@@ -965,18 +1067,25 @@ const LocationPage = () => {
                   }`}
                 >
                   <p className="text-white text-sm font-medium mb-1">
-                    Написать пост для перемещения
+                    {passageMove ? PASSAGE_MOVE_LABELS[passageMove] : 'Написать пост для перемещения'}
                   </p>
-                  <p className="text-stat-energy text-xs flex items-center gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    {neighborEntry.energy_cost} выносливости
-                  </p>
+                  {passageMove ? (
+                    <p className="text-site-blue text-xs flex items-center gap-1">
+                      <span aria-hidden>⚓</span>
+                      Без затрат выносливости; быстрого перемещения нет
+                    </p>
+                  ) : (
+                    <p className="text-stat-energy text-xs flex items-center gap-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      {neighborEntry.energy_cost} выносливости
+                    </p>
+                  )}
                 </button>
 
-                {/* Option 2: Quick move */}
-                {!location.no_quick_move && (
+                {/* Option 2: Quick move — never for a port ↔ deck passage (FEAT-213: the server refuses it too) */}
+                {!location.no_quick_move && !passageMove && (
                   <button
                     onClick={handleQuickMove}
                     disabled={quickMoving}

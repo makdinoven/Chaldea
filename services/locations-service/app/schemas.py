@@ -116,6 +116,12 @@ class LocationCreate(BaseModel):
     # FEAT-154 rule 18 — curated starting points for character creation.
     is_starting: bool = False
     starting_blurb: Optional[str] = Field(None, max_length=2000)
+    # FEAT-213: a port (ships stop here); null = not a port.
+    is_port: Optional[bool] = None
+    # FEAT-213: a sea zone (hidden country only); null = not a zone.
+    is_sea_zone: Optional[bool] = None
+    # FEAT-213: the zone a port opens to (ports only); null / 0 = none.
+    port_sea_zone_id: Optional[int] = Field(None, ge=0)
 
 class LocationCreateResponse(BaseModel):
     id: int
@@ -128,6 +134,9 @@ class LocationCreateResponse(BaseModel):
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
     no_quick_move: Optional[bool] = False
+    is_port: bool = False
+    is_sea_zone: bool = False
+    port_sea_zone_id: Optional[int] = None
     marker_type: str = "safe"
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
@@ -151,6 +160,12 @@ class LocationUpdate(BaseModel):
     # FEAT-154 rule 18 — curated starting points for character creation.
     is_starting: Optional[bool] = None
     starting_blurb: Optional[str] = Field(None, max_length=2000)
+    # FEAT-213: null = leave as is; unflagging a port on a ship's route is refused (409).
+    is_port: Optional[bool] = None
+    # FEAT-213: null = leave as is (3.12 validations).
+    is_sea_zone: Optional[bool] = None
+    # FEAT-213: null = leave as is, 0 = clear, else the zone id (ports only).
+    port_sea_zone_id: Optional[int] = Field(None, ge=0)
 
 class LocationRead(BaseModel):
     id: int
@@ -160,6 +175,9 @@ class LocationRead(BaseModel):
     recommended_level: int
     quick_travel_marker: bool
     no_quick_move: bool = False
+    is_port: bool = False
+    is_sea_zone: bool = False
+    port_sea_zone_id: Optional[int] = None
     image_url: Optional[str] = None
     parent_id: Optional[int] = None
     marker_type: str = "safe"
@@ -676,6 +694,14 @@ class NeighborClient(BaseModel):
     # FEAT-207: closed faction territory (None = open); allowed is viewer-aware only for the viewer's own character
     access_label: Optional[str] = None
     access_allowed: Optional[bool] = None
+    # FEAT-213: a port <-> deck passage of a docked ship (not a LocationNeighbors row)
+    passage: Optional[Literal["board", "disembark"]] = None
+    ship_id: Optional[int] = None
+
+class DockedShipClient(BaseModel):
+    """FEAT-213: a ship docked in this port («У причала: …»)."""
+    id: int
+    name: str
 
 class ClientPost(BaseModel):
     post_id: int
@@ -746,6 +772,12 @@ class LocationClientDetails(BaseModel):
     recommended_level: int
     quick_travel_marker: bool
     no_quick_move: bool = False
+    is_port: bool = False
+    # FEAT-213: sea zone flag, the ship whose deck this location is, ships at the pier
+    is_sea_zone: bool = False
+    port_sea_zone_id: Optional[int] = None
+    ship_id: Optional[int] = None
+    docked_ships: List[DockedShipClient] = []
     marker_type: Optional[str] = None
     district_id: Optional[int] = None
     region_id: Optional[int] = None
@@ -1776,6 +1808,30 @@ class FloatingStructurePublicRead(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+# -------------------------------
+#   SEA GEOGRAPHY (FEAT-213)
+# -------------------------------
+class SeaPortRead(BaseModel):
+    id: int
+    name: str
+    region_id: Optional[int] = None
+    region_name: Optional[str] = None
+    country_id: Optional[int] = None
+    country_name: Optional[str] = None
+    area_id: Optional[int] = None
+    port_sea_zone_id: Optional[int] = None
+    port_sea_zone_name: Optional[str] = None
+
+
+class SeaZoneRead(BaseModel):
+    id: int
+    name: str
+    region_id: Optional[int] = None
+    region_name: Optional[str] = None
+    country_name: Optional[str] = None
+    neighbor_ids: List[int] = []
 
 
 # -------------------------------

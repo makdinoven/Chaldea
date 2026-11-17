@@ -23,6 +23,7 @@ import econ_tick
 import faction_pass
 import law_pass
 import reputation_decay
+import sea_pass
 
 logger = logging.getLogger("character-service.econ_scheduler")
 
@@ -89,6 +90,16 @@ def run_faction_pass(factory: Callable[[], Session]) -> None:
         logger.exception("faction pass failed")
 
 
+def run_sea_pass(factory: Callable[[], Session]) -> None:
+    """FEAT-213 §3.8: the sea pass (own throttle, ~25 s): ship departures, zone stepping, arrivals, Captain placement.
+    Not economy: it runs even when the economy tick is switched off in the DB, and its failure never blocks the
+    tick."""
+    try:
+        sea_pass.run_pass(factory)
+    except Exception:
+        logger.exception("sea pass failed")
+
+
 def run_caravan_pass(factory: Callable[[], Session]) -> None:
     """FEAT-211 §3.3: the physical caravan pass (own throttle, ~55 s): steps caravans along their roads, delivers
     arrived ones, raid housekeeping. Economy: it skips itself while the economy tick is switched off in the DB; its
@@ -100,12 +111,13 @@ def run_caravan_pass(factory: Callable[[], Session]) -> None:
 
 
 def run_scheduled_once(session_factory: Optional[Callable[[], Session]] = None) -> Optional[econ_tick.RunSummary]:
-    """One scheduler iteration: the reputation decay pass, the law pass, the faction pass, the caravan pass, then
-    respects the DB switch and claims/runs the current economy slot (None = no economy run)."""
+    """One scheduler iteration: the reputation decay pass, the law pass, the faction pass, the sea pass, the caravan
+    pass, then respects the DB switch and claims/runs the current economy slot (None = no economy run)."""
     factory = session_factory or _default_factory()
     run_reputation_decay(factory)
     run_law_pass(factory)
     run_faction_pass(factory)
+    run_sea_pass(factory)
     run_caravan_pass(factory)
     session = factory()
     try:

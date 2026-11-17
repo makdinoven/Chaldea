@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import axios from 'axios';
 import toast from 'react-hot-toast';
 import LocationSearch from '../../../CommonComponents/LocationSearch/LocationSearch';
 import {
@@ -17,6 +18,8 @@ import LocationNeighborsEditor from './LocationNeighborsEditor/LocationNeighbors
 import GatheringNodesEditor from './GatheringNodesEditor/GatheringNodesEditor';
 import FactionAccessField from '../../../Admin/FactionsPage/FactionAccessField';
 import type { AppDispatch } from '../../../../redux/store';
+import { fetchSeaZones } from '../../../../api/seaAdmin';
+import type { SeaZone } from '../../../../types/seaAdmin';
 
 interface Neighbor {
   neighbor_id: number;
@@ -47,6 +50,11 @@ interface LocationFormData {
    */
   is_starting: boolean;
   starting_blurb: string;
+  /** FEAT-213: ships stop here; `port_sea_zone_id` = the sea zone the port opens to (ports only). */
+  is_port: boolean;
+  /** FEAT-213: a sea zone of a hidden country (never a port / starting point). */
+  is_sea_zone: boolean;
+  port_sea_zone_id: number | null;
   [key: string]: unknown;
 }
 
@@ -64,7 +72,18 @@ interface InitialData {
   id?: number;
   is_starting?: boolean;
   starting_blurb?: string | null;
+  is_port?: boolean;
+  is_sea_zone?: boolean;
+  port_sea_zone_id?: number | null;
 }
+
+/** Backend `detail` of a rejected thunk (`rejectWithValue(error.response?.data || error.message)`). */
+const rejectedMessage = (err: unknown, fallback: string): string => {
+  if (typeof err === 'string' && err.trim()) return err;
+  const detail = (err as { detail?: unknown } | null)?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  return fallback;
+};
 
 interface EditLocationFormProps {
   locationId?: number | string;
@@ -104,7 +123,14 @@ const EditLocationForm = ({
     ...initialData,
     is_starting: initialData?.is_starting ?? false,
     starting_blurb: initialData?.starting_blurb ?? '',
+    is_port: initialData?.is_port ?? false,
+    is_sea_zone: initialData?.is_sea_zone ?? false,
+    port_sea_zone_id: initialData?.port_sea_zone_id ?? null,
   });
+  const [seaZones, setSeaZones] = useState<SeaZone[]>([]);
+  const [seaZonesError, setSeaZonesError] = useState<string | null>(null);
+  /** Is the location's country hidden (sea zones live there); null = unknown (e.g. a new location). */
+  const [hiddenCountry, setHiddenCountry] = useState<boolean | null>(null);
 
   const [isUploading, setIsUploading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -129,6 +155,43 @@ const EditLocationForm = ({
     dispatch(fetchAllLocations() as unknown as ReturnType<typeof fetchAllLocations>);
   }, [dispatch]);
 
+  // FEAT-213: sea zones for the port's «выход в море» select (L8)
+  useEffect(() => {
+    let cancelled = false;
+    fetchSeaZones()
+      .then((rows) => {
+        if (!cancelled) setSeaZones(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setSeaZonesError('Не удалось загрузить морские зоны');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // FEAT-213: the «Морская зона» flag is offered only for locations of hidden countries
+  useEffect(() => {
+    if (locationId === 'new' || typeof locationId !== 'number') return undefined;
+    let cancelled = false;
+    Promise.all([
+      axios.get<{ country_id?: number | null }>(`/locations/${locationId}/client/details`),
+      axios.get<{ id: number; is_hidden?: boolean }[]>('/locations/countries/list'),
+    ])
+      .then(([details, countries]) => {
+        if (cancelled) return;
+        const country = countries.data.find((c) => c.id === details.data.country_id);
+        setHiddenCountry(country ? Boolean(country.is_hidden) : null);
+      })
+      .catch(() => {
+        // Unknown → the flag stays offered; the backend refuses it outside a hidden country (409 shown).
+        if (!cancelled) setHiddenCountry(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [locationId]);
+
   useEffect(() => {
     if (currentLocation && locationId !== 'new') {
       setFormData({
@@ -141,6 +204,9 @@ const EditLocationForm = ({
         // N6: these two only ever come back from `/details`.
         is_starting: (currentLocation.is_starting as boolean) ?? false,
         starting_blurb: (currentLocation.starting_blurb as string | null) ?? '',
+        is_port: Boolean(currentLocation.is_port),
+        is_sea_zone: Boolean(currentLocation.is_sea_zone),
+        port_sea_zone_id: (currentLocation.port_sea_zone_id as number | null) ?? null,
       });
       if (currentLocation.map_icon_url && !iconFile) {
         setIconPreview(currentLocation.map_icon_url as string);
@@ -197,6 +263,33 @@ const EditLocationForm = ({
       ...prev,
       is_starting: e.target.checked,
     }));
+  };
+
+  // FEAT-213: only valid combinations — a sea zone is never a port or a starting point.
+  const handleIsPortChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setFormData((prev) => ({
+      ...prev,
+      is_port: checked,
+      is_sea_zone: checked ? false : prev.is_sea_zone,
+      port_sea_zone_id: checked ? prev.port_sea_zone_id : null,
+    }));
+  };
+
+  const handleIsSeaZoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setFormData((prev) => ({
+      ...prev,
+      is_sea_zone: checked,
+      is_port: checked ? false : prev.is_port,
+      port_sea_zone_id: checked ? null : prev.port_sea_zone_id,
+      is_starting: checked ? false : prev.is_starting,
+    }));
+  };
+
+  const handlePortZoneChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const { value } = e.target;
+    setFormData((prev) => ({ ...prev, port_sea_zone_id: value ? Number(value) : null }));
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -256,6 +349,13 @@ const EditLocationForm = ({
         is_starting: Boolean(formData.is_starting),
         // An empty blurb is sent as null so the backend stores NULL, not ''.
         starting_blurb: formData.starting_blurb?.trim() ? formData.starting_blurb.trim() : null,
+        // FEAT-213: a port's zone 0 = clear; non-ports send null (the backend clears it).
+        is_port: Boolean(formData.is_port) && !formData.is_sea_zone,
+        is_sea_zone: Boolean(formData.is_sea_zone),
+        port_sea_zone_id:
+          formData.is_port && !formData.is_sea_zone
+            ? formData.port_sea_zone_id ?? (locationId === 'new' ? null : 0)
+            : null,
       };
 
       const action = locationId !== 'new' ? updateLocation : createLocation;
@@ -316,8 +416,9 @@ const EditLocationForm = ({
 
       toast.success(locationId === 'new' ? 'Локация создана' : 'Локация обновлена');
       onSuccess(formData.district_id, dispatch);
-    } catch {
-      toast.error('Ошибка при сохранении локации');
+    } catch (err) {
+      // 409s (ports / sea zones / decks) carry a Russian `detail` — show it as is.
+      toast.error(rejectedMessage(err, 'Ошибка при сохранении локации'));
     } finally {
       setIsUploading(false);
     }
@@ -416,6 +517,7 @@ const EditLocationForm = ({
                 name="is_starting"
                 checked={Boolean(formData.is_starting)}
                 onChange={handleIsStartingChange}
+                disabled={Boolean(formData.is_sea_zone)}
                 className="w-4 h-4 mt-0.5 flex-shrink-0"
               />
               <span>Стартовая точка Скитальцев</span>
@@ -438,6 +540,67 @@ const EditLocationForm = ({
                   placeholder="Короткий текст, который увидит игрок на шаге «Контракт»"
                   className="w-full p-2.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] transition-colors focus:border-site-blue/50 focus:outline-none resize-y"
                 />
+              </div>
+            )}
+          </div>
+
+          {/* FEAT-213: port / sea zone */}
+          <div className="mb-4 p-3 sm:p-4 rounded border border-white/10 bg-black/20 flex flex-col gap-3">
+            <div>
+              <label className="flex items-start gap-2 text-[#d4e6f3] cursor-pointer">
+                <input
+                  type="checkbox"
+                  name="is_port"
+                  checked={Boolean(formData.is_port)}
+                  onChange={handleIsPortChange}
+                  disabled={Boolean(formData.is_sea_zone)}
+                  className="w-4 h-4 mt-0.5 flex-shrink-0"
+                />
+                <span>Порт (здесь швартуются корабли)</span>
+              </label>
+              {formData.is_port && (
+                <div className="mt-3 sm:ml-6">
+                  <label className="block mb-2 text-[#8ab3d5] font-medium">ВЫХОД В МОРЕ (МОРСКАЯ ЗОНА):</label>
+                  <select
+                    value={formData.port_sea_zone_id ?? ''}
+                    onChange={handlePortZoneChange}
+                    className="w-full p-2.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] transition-colors focus:border-site-blue/50 focus:outline-none"
+                  >
+                    <option value="">— не задан (корабли сюда не заходят) —</option>
+                    {seaZones.map((z) => (
+                      <option key={z.id} value={z.id}>
+                        {z.name}
+                        {z.region_name ? ` (${z.region_name})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {seaZonesError && <p className="mt-1 text-site-red text-xs">{seaZonesError}</p>}
+                  {!seaZonesError && seaZones.length === 0 && (
+                    <p className="mt-1 text-[#8ab3d5]/70 text-xs">
+                      Морских зон пока нет — создайте их в скрытой стране (например, «Моря»).
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {(hiddenCountry !== false || formData.is_sea_zone) && (
+              <div>
+                <label className="flex items-start gap-2 text-[#d4e6f3] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="is_sea_zone"
+                    checked={Boolean(formData.is_sea_zone)}
+                    onChange={handleIsSeaZoneChange}
+                    disabled={Boolean(formData.is_port)}
+                    className="w-4 h-4 mt-0.5 flex-shrink-0"
+                  />
+                  <span>Морская зона</span>
+                </label>
+                <p className="mt-1 ml-6 text-[#8ab3d5]/70 text-xs">
+                  Только в скрытой стране (например, «Моря»): здесь ходят корабли, игроки сюда не заходят.
+                  Соединяется только с другими морскими зонами; не порт и не стартовая точка.
+                </p>
               </div>
             )}
           </div>

@@ -39,6 +39,8 @@ CRIME_PVP_ATTACK = "pvp_attack"
 CRIME_THEFT = "theft"
 # FEAT-207: an active member of a faction outlawed in the region (never carries the faction id / name)
 CRIME_FACTION_MEMBERSHIP = "faction_membership"
+# FEAT-213: a stowaway caught by a ship's crew at departure (crime in the port's region)
+CRIME_STOWAWAY = "stowaway"
 
 # crime statuses: 2a applies every crime at once; 2b (FEAT-199) defers unwitnessed / masked crimes
 CRIME_REPORTED = "reported"
@@ -72,8 +74,9 @@ SOURCE_MOVE = "move"
 SOURCE_QUICK_MOVE = "quick_move"
 SOURCE_TELEPORT = "teleport"
 SOURCE_PATROL = "patrol"                  # FEAT-204: a patrolling guard arrived where the character stands
+SOURCE_VOYAGE = "voyage"                  # FEAT-213: a ship's crew put a character ashore in the port (departure)
 MOVE_SOURCES = (SOURCE_MOVE, SOURCE_QUICK_MOVE)
-ENTRY_SOURCES = (SOURCE_MOVE, SOURCE_QUICK_MOVE, SOURCE_TELEPORT, SOURCE_PATROL)
+ENTRY_SOURCES = (SOURCE_MOVE, SOURCE_QUICK_MOVE, SOURCE_TELEPORT, SOURCE_PATROL, SOURCE_VOYAGE)
 
 # jail term statuses
 JAIL_SERVING = "serving"

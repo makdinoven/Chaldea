@@ -20,6 +20,7 @@ import econ_ledger
 import reputation_core
 import reputation_read
 import faction_read
+import sea_read
 import visibility
 import activity_lock
 from database import get_db, async_session
@@ -355,6 +356,15 @@ def _post_response(new_post, arrival: LawArrival = NO_LAW_ARRIVAL):
     data["law_encounter"] = arrival.encounter
     data["law_slipped"] = True if arrival.slipped else None
     return data
+
+
+async def _refuse_sea_zone_destination(db: AsyncSession, location_id: int) -> None:
+    """FEAT-213 (G2): a sea zone is never the destination of a move (400)."""
+    is_zone = (await db.execute(
+        select(models.Location.is_sea_zone).where(models.Location.id == location_id)
+    )).scalar()
+    if is_zone is True:  # Boolean column -> real bool; anything else (missing row) is not a zone
+        raise HTTPException(status_code=400, detail=sea_read.MSG_OPEN_SEA)
 
 
 async def check_not_in_battle(db: AsyncSession, character_id: int, message: str = "Действие заблокировано во время боя"):
@@ -772,6 +782,9 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
             "no_quick_move": getattr(db_location, 'no_quick_move', False),
+            "is_port": bool(getattr(db_location, 'is_port', False)),
+            "is_sea_zone": bool(getattr(db_location, 'is_sea_zone', False)),
+            "port_sea_zone_id": getattr(db_location, 'port_sea_zone_id', None),
             "parent_id": db_location.parent_id,
             "description": db_location.description,
             "marker_type": db_location.marker_type,
@@ -779,6 +792,8 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
             "map_x": db_location.map_x,
             "map_y": db_location.map_y,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -796,6 +811,9 @@ async def update_location_route(location_id: int, body: schemas.LocationUpdate, 
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
             "no_quick_move": getattr(db_location, 'no_quick_move', False),
+            "is_port": bool(getattr(db_location, 'is_port', False)),
+            "is_sea_zone": bool(getattr(db_location, 'is_sea_zone', False)),
+            "port_sea_zone_id": getattr(db_location, 'port_sea_zone_id', None),
             "parent_id": db_location.parent_id,
             "description": db_location.description or "",
             "marker_type": db_location.marker_type,
@@ -803,6 +821,8 @@ async def update_location_route(location_id: int, body: schemas.LocationUpdate, 
             "map_x": db_location.map_x,
             "map_y": db_location.map_y,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -842,6 +862,8 @@ async def delete_location_route(
     и со всеми соседними связями.
     """
     try:
+        # FEAT-213: a ship's deck / a port on a ship's route can't be deleted here (409).
+        await crud.check_location_deletable(session, location_id)
         await crud.delete_location_recursively(session, location_id)
         await session.commit()
         return {"status": "success", "message": f"Location {location_id} and its children have been deleted."}
@@ -1002,6 +1024,9 @@ async def update_location_neighbors(
             db, location_id, neighbors_data.neighbors
         )
         return updated_neighbors
+    except HTTPException:
+        # 404 / FEAT-213 409 (deck / sea zone links) reach the admin as they are.
+        raise
     except Exception as e:
         print(f"Ошибка при обновлении соседей для локации {location_id}: {e}")
         # Возвращаем пустой список вместо ошибки
@@ -1486,6 +1511,9 @@ async def move_and_post(
                 )
 
     # 2. Проверяем, можно ли переходить в целевую локацию
+    # FEAT-213 (G2): nobody may stand in a sea zone.
+    if current_location is None or int(current_location) != destination_location_id:
+        await _refuse_sea_zone_destination(session, destination_location_id)
     if current_location is None:
         # персонаж ещё ни разу не «стоял» в локации – позволяем перемещаться куда угодно
         movement_cost = 0
@@ -1501,12 +1529,21 @@ async def move_and_post(
             )
         )
         neighbor = q.scalars().first()
-        if not neighbor:
-            raise HTTPException(
-                status_code=400,
-                detail="Целевая локация не является соседней"
-            )
-        movement_cost = neighbor.energy_cost
+        if neighbor:
+            movement_cost = neighbor.energy_cost
+        else:
+            # FEAT-213 §3.6: the port <-> deck passage of a docked ship (character-service re-checks
+            # under the ship lock in update_location).
+            sea_passage = await sea_read.passage(
+                session, movement.character_id, int(current_location), destination_location_id)
+            if sea_passage is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Целевая локация не является соседней"
+                )
+            if not sea_passage.allowed:
+                raise HTTPException(status_code=sea_passage.status_code, detail=sea_passage.refusal)
+            movement_cost = sea_read.PASSAGE_ENERGY_COST
 
     # FEAT-207: closed faction territory — refused BEFORE the post is created (character-service re-checks)
     if current_location is None or int(current_location) != destination_location_id:
@@ -1792,6 +1829,9 @@ async def quick_move(
             status_code=400,
             detail="Быстрое перемещение в эту локацию запрещено",
         )
+    # FEAT-213 (G2): nobody may stand in a sea zone.
+    if getattr(dest_location, 'is_sea_zone', False) is True:
+        raise HTTPException(status_code=400, detail=sea_read.MSG_OPEN_SEA)
 
     # 3. Проверяем соседство и получаем стоимость перехода
     if current_location is None:
@@ -1807,6 +1847,13 @@ async def quick_move(
         )
         neighbor = q.scalars().first()
         if not neighbor:
+            # FEAT-213 §3.6: on board / ashore only by a post; a deck at sea has no way out.
+            sea_passage = await sea_read.passage(
+                session, body.character_id, int(current_location), destination_location_id)
+            if sea_passage is not None:
+                if sea_passage.kind is None:
+                    raise HTTPException(status_code=sea_passage.status_code, detail=sea_passage.refusal)
+                raise HTTPException(status_code=400, detail=sea_read.MSG_POST_ONLY)
             raise HTTPException(
                 status_code=400,
                 detail="Целевая локация не является соседней",
@@ -4346,6 +4393,31 @@ async def admin_delete_floating_structure(
 
 
 # --------------------------------------------------------------------
+# SEA GEOGRAPHY (FEAT-213)
+# --------------------------------------------------------------------
+# Ports and sea zones are edited as locations (locations:* permissions, no new
+# permission). Ships, stops and passes are character-service's; it reads
+# Locations.is_port / is_sea_zone / port_sea_zone_id by raw SQL.
+sea_router = APIRouter(prefix="/locations")
+
+
+@sea_router.get("/admin/sea-ports", response_model=List[schemas.SeaPortRead])
+async def admin_list_sea_ports(
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:read")),
+):
+    return await crud.list_sea_ports(session)
+
+
+@sea_router.get("/admin/sea-zones", response_model=List[schemas.SeaZoneRead])
+async def admin_list_sea_zones(
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:read")),
+):
+    return await crud.list_sea_zones(session)
+
+
+# --------------------------------------------------------------------
 # GATHERING NODES — ADMIN CRUD (FEAT-128, task #10)
 # --------------------------------------------------------------------
 # All routes require RBAC permission `gathering:<action>`.
@@ -4966,6 +5038,7 @@ import houses  # noqa: E402
 app.include_router(episodes.router)
 app.include_router(houses.router)
 app.include_router(registration_router)
+app.include_router(sea_router)
 app.include_router(router)
 app.include_router(rules_router)
 app.include_router(archive_router)

@@ -3061,3 +3061,121 @@ econ_accounts (asc) → character_attributes`. Репутация/слава/ф�
 - **Очки фракций за налёт** `raid_faction_points` (после `law_step` в колбэке и в `raid_followups`): игрокам долей
   `won`-налёта `faction_kills.apply_caravan_deed(kind='raid')` с ключом `faction:caravan_raid:r<raid>:<cid>` (свои
   транзакции, идемпотентно), затем отметка `faction_done = 1` (повтор после сбоя — пустые повторы).
+
+## Морские пути: корабли-локации (FEAT-213)
+
+Корабль — строка `sea_ships`, привязанная 1:1 к обычной локации-**палубе** (`deck_location_id`) и к НПС-**капитану**
+(`npc_role = 'captain'`). Пассажиры просто стоят на палубе (`characters.current_location_id = палуба`), поэтому посты,
+НПС, бои, сбор, отряды работают там без нового кода. Корабль «плывёт», меняя своё состояние; пассажиров система
+двигает только при высадке на берег. Блокировки активности «в плавании» нет: у палубы нет переходов, сойти можно
+только через проход порт↔палуба, который существует, пока корабль у причала.
+
+Модули: `sea_core.py` (чистые правила: порядок остановок туда-обратно / по кругу, рейсы, цена, ETA, право на борт,
+длина поста), `sea_crud.py` (план рейсов, капитан, билет/матрос/заяц, шапка палубы, проверка перемещения, высадка,
+возвраты), `sea_api.py` (S1–S5), `sea_pass.py` (проход планировщика), `sea_admin.py` (A1–A7 + схемы админки),
+`sea_schemas.py` (схемы игрока).
+
+### Миграция `052_sea_ships` (revises `051_caravan_escorts`; без FK, стиль econ-таблиц)
+
+- `sea_ships` — настройки (`name`, `captain_npc_id` UNIQUE, `deck_location_id` UNIQUE, `capacity` 0..200,
+  `crew_slots` 0..20, `boarding_minutes` 1..1440, `zone_minutes` 1..1440, `fare_base`, `fare_per_zone`, `is_loop`,
+  `is_active`) и состояние (`status` docked|sailing, `stop_index`, `next_stop_index`, `direction` ±1, `trip_no` —
+  число отплытий, следующее отплытие = рейс `trip_no + 1`; `docked_port_id`, `next_port_id`, `current_zone_id`,
+  `leg_path` JSON + `leg_pos`, `departs_at`, `next_zone_at`, `last_port_id`, `blocked_reason` no_path|no_valid_stop|
+  no_deck). Состояние пишут только `sea_crud` / `sea_pass` / `sea_admin` под блокировкой строки корабля.
+- `sea_ship_stops` (`ship_id`, `idx`, `port_location_id`, `path_override` JSON — ручной путь участка idx→idx+1, для
+  круга у последней остановки — последний→первый; обратный участок туда-обратно берёт его перевёрнутым).
+- `sea_passes` — права на борт: `kind` ticket|sailor|stowaway, `first_trip..last_trip`, снимки портов, `zones`,
+  `fare`, `fare_op_id` / `refund_op_id`, `post_floor_id` (матрос: считаются только посты с id больше), `status`
+  active|completed|burnt|ashore|caught|refunded|expired.
+- `sea_settings` (строка id=1): `pass_last_run_at` (захват прохода), `sailor_post_min_chars` 300..20000 (800),
+  `stowaway_base_pct` 0..100 (60), `stowaway_wanted_points` 1..1000 (50), `path_max_zones` 10..1000 (200).
+
+Locations-service (`060_sea_zones`) владеет географией: `Locations.is_port`, `is_sea_zone`, `port_sea_zone_id`;
+соседство зон — обычные `LocationNeighbors` между зонами скрытой страны «Моря». CS читает эти таблицы SQL-ом
+терпимо (нет колонки → «нет зоны»), LS читает `sea_ships` / `sea_passes` / `sea_ship_stops` в `sea_read.py`.
+
+### Путь участка и деньги
+
+Зоны от `port_sea_zone_id` порта отправления до зоны порта прибытия включительно: ручной путь, если он верен (цепочка
+соседних зон, концы — зоны портов), иначе BFS по графу только морских зон (`caravan_route.shortest_route`,
+детерминированно). Один и тот же порт-зона → `[z]`. Длительность = `len(path) × zone_minutes`. Путь фиксируется при
+отплытии в `leg_path` (правки графа влияют только на следующие участки). Цена билета = `fare_base + fare_per_zone ×
+Σ зон` покрытых участков; деньги — `sea_fare` в казну края порта отправления (+ налог стране, как телепорт),
+возврат — `sea_refund` (только при действиях админа и безопасной высадке, никогда по желанию игрока).
+
+### Эндпоинты игрока (JWT + владелец; `sea_api.py`)
+
+| # | Метод / путь | Что |
+|---|---|---|
+| S1 | `GET /characters/sea/captain/{npc_id}?character_id=` | диалог капитана (только присутствие рядом): корабль, направления с ценой/ETA/местами, матрос, заяц, мои места |
+| S2 | `POST /characters/sea/ships/{ship_id}/tickets` `{character_id, npc_id, to_trip}` | билет; ворота «Диалог с НПС» (503/403) + уровень репутации; 402 `insufficient_gold` |
+| S3 | `POST /characters/sea/ships/{ship_id}/sailor` `{character_id, npc_id}` | матрос на следующий рейс (бесплатно, нужен пост на палубе) |
+| S4 | `POST /characters/sea/ships/{ship_id}/stowaway` `{character_id}` | попытка «зайцем» — в порту стоянки или на палубе; ответ нейтральный |
+| S5 | `GET /characters/sea/decks/{location_id}?character_id=` | шапка палубы: корабль, зона/море, ETA, корабли рядом, пассажиры, мои места; 404 — не палуба |
+
+Перемещение (`PUT /characters/internal/{id}/update_location`): блокировка корабля(ей) палубы до блокировки персонажа
+(порядок ship → character, как у отплытия); морская зона — никогда не цель («В открытое море не выйти»); на палубу —
+только из порта стоянки активного корабля с правом на рейс `trip_no + 1`; с палубы — только в порт стоянки
+(«Корабль в море — сойти на берег нельзя»). Телепорт / свиток дома не ведут на палубу или в зону; админ-перенос — не в
+зону.
+
+### Проход `sea_pass` (планировщик)
+
+`econ_scheduler.run_scheduled_once` → `run_sea_pass` сразу после прохода фракций. Работает **и при выключенной
+экономике**. Захват — условный UPDATE `sea_settings.pass_last_run_at` (`RUN_INTERVAL_SECONDS = 25`; планировщик
+опрашивает раз в 60 с). Нет таблиц/строки → пропуск. Каждый корабль — своя короткая транзакция (сбой — в лог, повтор на
+следующем проходе). Тесты зовут `sea_pass.run_pass(factory, now=..., force=True)` / `process_ship`.
+
+1. **Палуба удалена** → безопасная высадка всех, кто числится на старом id палубы, корабль выключен, `no_deck`.
+2. **Отплытие** (у причала, активен, `departs_at <= now`), рейс `k = trip_no + 1`: план следующего участка (неверные
+   остановки пропускаются); нет пути / остановки → остаётся у причала с `blocked_reason`, повтор каждый проход.
+   Блокируются места, затем игроки на палубе (asc id). Для каждого: в активном бою — не трогаем, плывёт; билет — плывёт;
+   матрос — плывёт, если на палубе есть пост с `id > post_floor_id` длиной (без HTML) ≥ `sailor_post_min_chars`, иначе
+   место `ashore` и высадка без последствий; заяц — бросок (ниже); без права — высадка без последствий. Места с рейсом
+   `k` у тех, кого нет на палубе: билет `burnt` (без возврата), матрос/заяц `expired`. Корабль → `sailing`
+   (`trip_no = k`, `leg_path`, `current_zone_id = leg_path[0]`, `next_zone_at = now + zone_minutes`), капитан → палуба.
+3. **Бросок зайца** (машинерия FEAT-199/201): `chance = member_chance(stowaway_base_pct, снижение скрытности,
+   маска, слава)` в пределах `law_settings.detect_min_pct..detect_max_pct`, бросок `law_crud.detection_rng()`. Не
+   поймали — плывёт бесплатно, следов нет. Поймали — место `caught`, преступление `stowaway` в крае порта
+   (`wanted_points = stowaway_wanted_points`, ключ `law:stowaway:{pass_id}`, снимок шанса/броска/скрытности): без
+   маски (или при выключенных свидетелях) — `reported` (розыск сразу), в маске — `masked` + подозрение края
+   (`suspicion_masked`), затем высадка.
+4. **Высадка** (`sea_crud.put_ashore`): в порт стоянки (если его нет — запасной вариант без проверки закона),
+   `house_room_id = NULL`, журнал `sea`, `law_crud.check_entry(..., SOURCE_VOYAGE)` в той же транзакции. После
+   коммита (`sea_pass.after_commit`): отмена сбора (`cancel_gathering`, reason `sea`) для тех, кто собирал,
+   `notify_character_left_location_sync` (палуба), уведомления о встрече со стражей / «проскользнули», розыск,
+   уведомления `ws_type = "sea"` (события `departed`, `ashore`, `sailor_ashore`, `caught`, `burnt`, `arrived`,
+   `rerouted`, `safe_landing`, `refund`, `ship_deleted`).
+5. **Шаги по зонам** (в море, `next_zone_at <= now`): `leg_pos += 1`, `current_zone_id`, `next_zone_at += zone_minutes`;
+   догоняет пропущенное за один проход (ограничено длиной пути).
+6. **Прибытие**: следующая остановка верна → у причала (`departs_at = now + boarding_minutes`, если активен), капитан →
+   порт, места с `last_trip <= trip_no` → `completed` (их владельцам — «билет использован, купите новый до
+   отплытия, иначе высадят»). Остановка стала неверной → корабль идёт к следующей верной остановке из текущей зоны
+   (билеты до пропущенного порта заканчиваются при реальном прибытии). Верных остановок нет / нет пути →
+   **безопасная высадка** (`sea_crud.safe_land`: все с палубы — в последний порт → любой существующий порт маршрута →
+   стартовую локацию; неначатые места возвращены, корабль выключен, `blocked_reason`), корабль ставится «у причала» в
+   последнем порту, чтобы админ мог поправить маршрут.
+7. **Место капитана**: живой НПС с ролью `captain` стоит не там (у причала — порт, в море — палуба) → переставляется
+   (ручной перенос админом откатывается). Нет капитана / мёртв / снята роль / в бою → ничего (продажи закрыты, корабль
+   ходит).
+
+### Админка (`sea_admin.py`, префикс `/characters/admin/sea`; права `locations:*`, новых разрешений нет)
+
+| # | Метод / путь | Право | Что |
+|---|---|---|---|
+| A1 | `GET /ships` | `locations:read` | все корабли: настройки, состояние, капитан (+ `captain_problem`), палуба, остановки с ручными путями, участки (`legs`, как A5), `passengers_count`, `active_passes`, `blocked_reason` |
+| A2 | `POST /ships` | `locations:create` | `ShipCreate` → 201; у причала на остановке 0, отплытие через `boarding_minutes`, капитан переставлен в порт |
+| A3 | `PATCH /ships/{id}` | `locations:update` | `ShipUpdate` (всё необязательно; `captain_npc_id: null` — снять капитана; смена палубы → 409); маршрут/круг — только у причала, порт стоянки должен остаться в маршруте; смена маршрута: неначатые места — возврат, начатые — `completed`; выключение — возврат неначатых, у причала `departs_at = NULL`; включение — `departs_at = now + boarding_minutes` |
+| A4 | `DELETE /ships/{id}` | `locations:delete` | только у причала (иначе 409 «Корабль в море — выключите его и дождитесь швартовки»): все с палубы высажены в порт, неначатые места — возврат, начатые — `completed`, корабль и остановки удалены (места остаются историей, палуба — обычная локация) |
+| A5 | `POST /legs/preview` | `locations:read` | `{stops: [{port_location_id, path_override}], is_loop, zone_minutes?}` → `[{index, from, to, zones: [{id,name}], minutes_per_zone_hint, minutes, override, ok, problem, problem_text}]`; `problem`: no_zone / no_path / bad_override / same_port / not_port |
+| A6 | `GET /candidates?ship_id=` | `locations:read` | `{decks: [{id, name, region_name, country_name}], captains: [{id, name, avatar, location_name}]}` — свободные (свои у `ship_id` тоже) |
+| A7 | `GET/PUT /settings` | `locations:read` / `locations:update` | `{sailor_post_min_chars, stowaway_base_pct, stowaway_wanted_points, path_max_zones}` |
+
+Проверки сохранения (409 с русским текстом): палуба существует, в скрытой стране, не зона и не порт, без соседей и
+стрелок, не палуба другого корабля; капитан — НПС с ролью «Капитан», жив, не командует другим кораблём; 2..30
+остановок, соседние разные (и последняя ≠ первой для круга), каждая — порт с морской зоной; каждый участок (для круга
+и последний→первый) проходим, неверный ручной путь — 409. Диапазоны чисел — 422 (Pydantic). Ручной путь у последней
+остановки маршрута туда-обратно не хранится.
+
+Порядок блокировок: `sea_ships (asc id) → sea_passes → characters (asc id) → econ_accounts` → строки закона/тени.

@@ -3892,6 +3892,12 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     if not target or (target.npc_role or "") != TELEPORT_ROLE or target.current_location_id is None:
         raise HTTPException(status_code=422, detail="Связь телепорта недействительна")
 
+    # FEAT-213 G3: never onto a ship's deck or into a sea zone (a back door onto a ship at sea)
+    import sea_crud  # local: sea_crud imports crud lazily itself
+    sea_refusal = sea_crud.teleport_target_refusal(db, target.current_location_id)
+    if sea_refusal:
+        raise HTTPException(status_code=409, detail=sea_refusal)
+
     # FEAT-197: reputation gates in the source NPC's region (the NPC itself, then the link)
     import reputation_crud  # local: avoids an import cycle through the economy modules
     rep_region = reputation_crud.location_region(db, source.current_location_id)
@@ -4024,6 +4030,14 @@ def create_teleport_link(db: Session, data):
             status_code=422,
             detail="Оба NPC должны иметь роль Мастера Телепорта",
         )
+
+    # FEAT-213 G3: a teleport target can't be a ship's deck or a sea zone (both ends when bidirectional)
+    import sea_crud  # local: sea_crud imports crud lazily itself
+    targets = [dst] + ([src] if data.bidirectional else [])
+    for npc in targets:
+        sea_refusal = sea_crud.teleport_target_refusal(db, npc.current_location_id)
+        if sea_refusal:
+            raise HTTPException(status_code=422, detail=f"«{npc.name}»: {sea_refusal}")
 
     created = []
     try:

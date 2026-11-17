@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
+import sea_read
 from schemas import NeighborClient, LocationClientDetails
 
 BREADCRUMB_KEYS = {"country_id", "country_name", "region_name", "district_name"}
@@ -122,7 +123,8 @@ class TestNeighborClientSchema:
     def test_all_fields_present(self):
         """NeighborClient has all expected fields."""
         expected_fields = {"id", "name", "recommended_level", "image_url", "energy_cost",
-                           "access_label", "access_allowed"}  # FEAT-207 optional closed-territory marks
+                           "access_label", "access_allowed",  # FEAT-207 optional closed-territory marks
+                           "passage", "ship_id"}  # FEAT-213 port <-> deck passage (None for ordinary neighbours)
         assert set(NeighborClient.__fields__.keys()) == expected_fields
 
 
@@ -296,6 +298,8 @@ class TestGetLocationClientDetails:
             "id", "name", "type", "parent_id", "description", "image_url",
             "recommended_level", "quick_travel_marker", "no_quick_move", "marker_type",
             "district_id", "region_id", "is_favorited",
+            # FEAT-213: port / sea zone flags, the ship of a deck, ships at the pier
+            "is_port", "is_sea_zone", "port_sea_zone_id", "ship_id", "docked_ships",
             # FEAT-152: breadcrumb fields
             "country_id", "country_name", "region_name", "district_name",
             "neighbors", "players", "npcs", "posts", "loot", "gathering_nodes",
@@ -313,7 +317,8 @@ class TestGetLocationClientDetails:
 
         neighbor = response.json()["neighbors"][0]
         expected_neighbor_keys = {"id", "name", "recommended_level", "image_url", "energy_cost",
-                                  "access_label", "access_allowed"}  # FEAT-207
+                                  "access_label", "access_allowed",  # FEAT-207
+                                  "passage", "ship_id"}  # FEAT-213 (None for ordinary neighbours)
         assert set(neighbor.keys()) == expected_neighbor_keys
 
     @patch("main.get_optional_user", return_value=None)
@@ -430,6 +435,22 @@ class TestBreadcrumbEndpoint:
         assert len(data["neighbors"]) == 2
         assert data["neighbors"][0]["id"] == 73
 
+    @patch("main.get_optional_user", return_value=None)
+    @patch("crud.get_client_location_details", new_callable=AsyncMock)
+    def test_sea_fields_default_for_land_location(self, mock_crud, mock_user, client):
+        """FEAT-213 additions are additive: an old-shaped payload gets land defaults."""
+        mock_crud.return_value = _make_client_details()
+
+        response = client.get("/locations/72/client/details")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["is_sea_zone"] is False
+        assert data["port_sea_zone_id"] is None
+        assert data["ship_id"] is None
+        assert data["docked_ships"] == []
+        assert all(n["passage"] is None and n["ship_id"] is None for n in data["neighbors"])
+
 
 # ===========================================================================
 # CRUD unit tests — breadcrumb name resolution (FEAT-152, section 3.1)
@@ -485,6 +506,8 @@ def _make_session(loc, hierarchy_rows):
 @patch("crud.get_posts_by_location", new_callable=AsyncMock, return_value=[])
 @patch("crud.get_npcs_in_location", new_callable=AsyncMock, return_value=[])
 @patch("crud.get_players_in_location", new_callable=AsyncMock, return_value=[])
+# FEAT-213: the sea reads (raw SQL on CS tables) are not part of the hierarchy query sequence.
+@patch("crud.sea_read.passages_for", new_callable=AsyncMock, return_value=sea_read.LocationSea())
 class TestBreadcrumbResolution:
     """Unit tests for the district→region→country resolution in
     crud.get_client_location_details (inter-service and post/loot/gathering
@@ -636,6 +659,8 @@ def _assert_no_orphan_name(result):
 @patch("crud.get_posts_by_location", new_callable=AsyncMock, return_value=[])
 @patch("crud.get_npcs_in_location", new_callable=AsyncMock, return_value=[])
 @patch("crud.get_players_in_location", new_callable=AsyncMock, return_value=[])
+# FEAT-213: the sea reads (raw SQL on CS tables) are not part of the hierarchy query sequence.
+@patch("crud.sea_read.passages_for", new_callable=AsyncMock, return_value=sea_read.LocationSea())
 class TestBreadcrumbIdNameConsistency:
     """FEAT-153: breadcrumb ids must agree with the names shipped alongside them."""
 

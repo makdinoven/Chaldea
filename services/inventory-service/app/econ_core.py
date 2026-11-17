@@ -176,13 +176,19 @@ OP_FACTION_PAYOUT = "faction_payout"        # faction -> characters (debt queue:
 FACTION_OP_TYPES = frozenset({
     OP_FACTION_TICK, OP_FACTION_DONATION, OP_FACTION_QM_SALE, OP_FACTION_QM_REFUND, OP_FACTION_PAYOUT,
 })
+# FEAT-213 sea routes (ships are locations): a ticket bought from a ship's Captain - character -> region treasury of
+# the departure port (taxed like the teleport); a refund (only on admin actions on the ship / a safe landing, never on
+# the player's choice - a missed departure burns the ticket) reverses every posting of the fare (untaxed)
+OP_SEA_FARE = "sea_fare"
+OP_SEA_REFUND = "sea_refund"
+SEA_OP_TYPES = frozenset({OP_SEA_FARE, OP_SEA_REFUND})
 
 BANK_OP_TYPES = frozenset({
     OP_BANK_DEPOSIT, OP_BANK_WITHDRAW, OP_BANK_TRANSFER, OP_BANK_TICK, OP_BANK_CAPITAL,
     OP_LOAN_ISSUE, OP_LOAN_REPAY, OP_LOAN_COLLECT,
 })
 
-OP_TYPES = frozenset({
+OP_TYPES = (frozenset({
     OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST, OP_STARTER_KIT, OP_BATTLE_REWARD,
     OP_BATTLE_PASS_REWARD, OP_DUNGEON_REWARD, OP_DUNGEON_EXPENSE, OP_TELEPORT, OP_TRADE,
     OP_AUCTION_BID, OP_AUCTION_REFUND, OP_AUCTION_BUYOUT, OP_AUCTION_SETTLEMENT, OP_AUCTION_CLAIM,
@@ -191,6 +197,7 @@ OP_TYPES = frozenset({
     OP_CHARACTER_DELETED, OP_TREASURY_CLOSED, OP_REGION_TICK, OP_MERCHANT_TRADE,
     OP_REGION_EVENT,
 }) | BANK_OP_TYPES | MINT_OP_TYPES | CARAVAN_OP_TYPES | GUILD_OP_TYPES | LAW_OP_TYPES | FACTION_OP_TYPES
+    | SEA_OP_TYPES)
 
 # Only these operations may move money out of / into the source accounts.
 SOURCE_OP_TYPES = frozenset({OP_GENESIS, OP_ADMIN_EMISSION, OP_ADMIN_ADJUST}) | MINT_OP_TYPES

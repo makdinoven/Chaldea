@@ -139,9 +139,22 @@ class Location(Base):
     no_quick_move = Column(Boolean, nullable=False, default=False, server_default="0")
     is_starting = Column(Boolean, nullable=False, default=False, server_default="0")
     starting_blurb = Column(Text, nullable=True)
+    # FEAT-213: a port — ships (character-service sea_ships) stop here.
+    is_port = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-213: a sea zone (a location of the hidden «Моря» country); zones link only to zones.
+    is_sea_zone = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-213: the sea zone a port opens to (ports only).
+    port_sea_zone_id = Column(
+        BigInteger,
+        ForeignKey('Locations.id', ondelete='SET NULL', name='fk_locations_port_sea_zone'),
+        nullable=True,
+    )
 
     __table_args__ = (
         Index('ix_locations_is_starting', 'is_starting'),
+        Index('ix_locations_is_port', 'is_port'),
+        Index('ix_locations_is_sea_zone', 'is_sea_zone'),
+        Index('ix_locations_port_sea_zone', 'port_sea_zone_id'),
     )
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
@@ -158,7 +171,8 @@ class Location(Base):
     )
 
     # для иерархии self -> children
-    parent = relationship("Location", remote_side=[id], backref="children")
+    # foreign_keys: Locations has a second self-FK (port_sea_zone_id, FEAT-213).
+    parent = relationship("Location", remote_side=[id], foreign_keys=[parent_id], backref="children")
 
 
 class LocationNeighbor(Base):

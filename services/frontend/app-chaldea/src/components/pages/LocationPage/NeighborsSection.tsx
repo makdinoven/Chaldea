@@ -2,6 +2,12 @@ import { useNavigate } from 'react-router-dom';
 import { NeighborLocation } from './types';
 import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
 
+/** FEAT-213: port ↔ deck passages are labelled by direction instead of a stamina cost (they cost nothing). */
+const PASSAGE_LABELS: Record<string, string> = {
+  board: 'Подняться на борт',
+  disembark: 'Сойти на берег',
+};
+
 interface NeighborsSectionProps {
   neighbors: NeighborLocation[];
   /**
@@ -53,7 +59,7 @@ const NeighborsSection = ({ neighbors, enabledIds = null }: NeighborsSectionProp
             const blocked = (enabledIds !== null && !enabledIds.has(neighbor.id)) || closed;
             return (
             <button
-              key={neighbor.id}
+              key={`${neighbor.passage ?? 'road'}-${neighbor.id}`}
               type="button"
               disabled={blocked}
               title={closed && neighbor.access_label ? neighbor.access_label : undefined}
@@ -81,6 +87,12 @@ const NeighborsSection = ({ neighbors, enabledIds = null }: NeighborsSectionProp
                 <span className="text-white text-[13px] font-medium truncate">
                   {neighbor.name}
                 </span>
+                {neighbor.passage ? (
+                  <span className="flex items-center gap-1.5 text-site-blue text-[11px] font-medium min-w-0">
+                    <span aria-hidden>⚓</span>
+                    <span className="truncate">{PASSAGE_LABELS[neighbor.passage] ?? 'Переход на корабль'} · только постом</span>
+                  </span>
+                ) : (
                 <span className="flex items-center gap-3">
                   {hasRecommendedLevel(neighbor.recommended_level) && (
                     <span className="text-gold text-[11px] font-medium shrink-0">
@@ -94,6 +106,7 @@ const NeighborsSection = ({ neighbors, enabledIds = null }: NeighborsSectionProp
                     {neighbor.energy_cost}
                   </span>
                 </span>
+                )}
                 {neighbor.access_label && (
                   <span
                     className={`flex items-center gap-1 text-[11px] leading-tight min-w-0 ${

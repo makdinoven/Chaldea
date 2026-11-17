@@ -1093,6 +1093,58 @@ CASES += [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# FEAT-213 sea routes: a ticket from a port Captain (character -> region treasury of the departure port,
+# taxed to the country like the teleport); leaving the ship before departure posts every fare posting
+# reversed as one `sea_refund` op (untaxed, idempotent per ticket; treasuries may go negative)
+# ---------------------------------------------------------------------------
+
+# a runner checks == SEA_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES and
+# COMMENT_REQUIRED_OP_TYPES
+SEA_OP_TYPE_NAMES: Tuple[str, ...] = ("sea_fare", "sea_refund")
+
+CASES += [
+    # fare: char -> region + generated region -> country tax leg; refund reverses both postings, balances
+    # are back to the start; both ops idempotent per ticket key
+    ContractCase(
+        name="sea_fare_taxed_and_refund_restores_every_balance",
+        steps=[_fund((C1, 1000)),
+               Step("sea_fare", [Leg(C1, R10, 155)],
+                    {"location_id": 1000, "idempotency_key": "sea_fare:1",
+                     "metadata": {"voyage_id": 1, "ticket_id": 1}}),
+               Step("sea_fare", [Leg(C1, R10, 155)], {"location_id": 1000, "idempotency_key": "sea_fare:1"},
+                    error="DuplicateOperation"),
+               Step("sea_refund", [Leg(R10, C1, 155, "refund"), Leg(K1, R10, 15, "refund")],
+                    {"location_id": 1000, "apply_tax": False, "idempotency_key": "sea_refund:1",
+                     "metadata": {"voyage_id": 1, "ticket_id": 1}}),
+               Step("sea_refund", [Leg(R10, C1, 155, "refund"), Leg(K1, R10, 15, "refund")],
+                    {"location_id": 1000, "apply_tax": False, "idempotency_key": "sea_refund:1"},
+                    error="DuplicateOperation")],
+        expected_characters={1: 1000},
+        expected_accounts={("region_treasury", 10): 0, ("country_treasury", 1): 0},
+        expected_operations=3, expected_postings=5, expected_tax_legs=1,
+        expected_leg_counts={"refund": 2},
+    ),
+    # a fare needs the money; the sea ops never touch the sources; a refund never fails even when the
+    # treasury has already spent the fare (it goes negative)
+    ContractCase(
+        name="sea_fare_needs_funds_and_refund_may_drive_treasury_negative",
+        steps=[_fund((C1, 100)),
+               Step("sea_fare", [Leg(C2, R10, 1)], {"location_id": 1000}, error="InsufficientFunds"),
+               Step("sea_fare", [Leg(EMISSION, R10, 5)], {"location_id": 1000}, error="EconomyError"),
+               Step("sea_refund", [Leg(R10, ADJUSTMENT, 5)], {"apply_tax": False}, error="EconomyError"),
+               Step("sea_fare", [Leg(C1, R10, 100)], {"location_id": 1000, "idempotency_key": "sea_fare:2"}),
+               Step("quest_reward", [Leg(R10, C2, 90)], {"location_id": 1000}),
+               Step("sea_refund", [Leg(R10, C1, 100, "refund"), Leg(K1, R10, 10, "refund")],
+                    {"location_id": 1000, "apply_tax": False, "idempotency_key": "sea_refund:2"})],
+        expected_characters={1: 100, 2: 90},
+        # tax = floor(100 * 0.1) = 10; R10 = 90 - 90 - 100 + 10 = -90
+        expected_accounts={("region_treasury", 10): -90, ("country_treasury", 1): 0},
+        expected_operations=4, expected_postings=6, expected_tax_legs=1,
+        expected_leg_counts={"refund": 2},
+    ),
+]
+
 # location_id -> (region_id, country_id)
 RESOLVE_CASES: List[Tuple[Optional[int], Tuple[Optional[int], Optional[int]]]] = [
     (1000, (10, 1)),      # via district

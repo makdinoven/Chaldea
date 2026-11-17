@@ -12,6 +12,10 @@ export const NPC_DIALOGUE_HINT_CARAVANEER =
 export const NPC_DIALOGUE_HINT_GUILD =
   'Напишите в локации пост с намерением «Диалог с НПС», указав гильдию торговцев, и откройте окно снова.';
 
+/** FEAT-213: a ticket or a sailor job needs the dialogue post with the Captain (sneaking aboard does not). */
+export const NPC_DIALOGUE_HINT_CAPTAIN =
+  'Напишите в локации пост с намерением «Диалог с НПС», указав капитана, и откройте окно снова.';
+
 const HTTP_FORBIDDEN = 403;
 const GATE_MARKER = 'Диалог с НПС';
 

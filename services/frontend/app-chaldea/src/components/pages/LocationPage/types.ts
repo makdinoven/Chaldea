@@ -22,7 +22,16 @@ export interface NeighborLocation {
   access_label?: string | null;
   /** FEAT-207: false — the viewer's character may not enter; null — unknown (not his character / public). */
   access_allowed?: boolean | null;
+  /**
+   * FEAT-213: a port ↔ deck passage, not a road — «board» (port → deck, shown only to a pass holder) or
+   * «disembark» (deck → the port where the ship is docked). Moved by post only; never a quick move.
+   */
+  passage?: SeaPassage | null;
+  /** FEAT-213: the ship of the passage. */
+  ship_id?: number | null;
 }
+
+export type SeaPassage = 'board' | 'disembark';
 
 export interface Post {
   post_id: number;
@@ -128,6 +137,12 @@ export interface LocationData {
    * key may simply be absent and the frontend treats it as an empty list.
    */
   gathering_nodes?: import('../../../types/gathering').GatheringNode[];
+  /** FEAT-213: a sea zone (players never stand there). */
+  is_sea_zone?: boolean;
+  /** FEAT-213: this location is the deck of this ship; null — not a deck. */
+  ship_id?: number | null;
+  /** FEAT-213: ships at the pier of this port («У причала: …»). */
+  docked_ships?: { id: number; name: string }[];
 }
 
 export type MarkerType = 'safe' | 'dangerous' | 'dungeon' | 'farm';

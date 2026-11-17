@@ -2210,6 +2210,117 @@ class FactionItemStock(Base):
     updated_at = Column(DateTime, nullable=False)
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# FEAT-213 sea routes (052): ships are real locations. No FKs (style of the econ tables); see sea_core / sea_crud.
+# ---------------------------------------------------------------------------------------------------------------------
+
+class SeaShip(Base):
+    """A ship bound 1:1 to a deck location (LS ``Locations``) and to a Captain NPC. State columns are written only
+    by sea_crud / sea_pass under the ship row lock (lock order ship -> passes -> characters)."""
+
+    __tablename__ = "sea_ships"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    captain_npc_id = Column(Integer, nullable=True)                 # characters.id (npc_role 'captain')
+    deck_location_id = Column(BigInteger, nullable=False)           # Locations.id
+    capacity = Column(Integer, nullable=False, default=10, server_default="10")
+    crew_slots = Column(Integer, nullable=False, default=2, server_default="2")
+    boarding_minutes = Column(Integer, nullable=False, default=30, server_default="30")
+    zone_minutes = Column(Integer, nullable=False, default=10, server_default="10")
+    fare_base = Column(Integer, nullable=False, default=10, server_default="10")
+    fare_per_zone = Column(Integer, nullable=False, default=5, server_default="5")
+    is_loop = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    status = Column(String(10), nullable=False, default="docked", server_default="docked")  # docked | sailing
+    stop_index = Column(Integer, nullable=False, default=0, server_default="0")
+    next_stop_index = Column(Integer, nullable=True)
+    direction = Column(SmallInteger, nullable=False, default=1, server_default="1")       # +1 / -1
+    trip_no = Column(Integer, nullable=False, default=0, server_default="0")              # departures made
+    docked_port_id = Column(BigInteger, nullable=True)
+    next_port_id = Column(BigInteger, nullable=True)
+    current_zone_id = Column(BigInteger, nullable=True)
+    leg_path = Column(JSON, nullable=True)
+    leg_pos = Column(Integer, nullable=False, default=0, server_default="0")
+    departs_at = Column(DateTime, nullable=True)
+    next_zone_at = Column(DateTime, nullable=True)
+    last_port_id = Column(BigInteger, nullable=True)
+    blocked_reason = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("deck_location_id", name="uq_sea_ships_deck"),
+        UniqueConstraint("captain_npc_id", name="uq_sea_ships_captain"),
+        Index("ix_sea_ships_depart", "status", "departs_at"),
+        Index("ix_sea_ships_sail", "status", "next_zone_at"),
+        Index("ix_sea_ships_port", "docked_port_id"),
+        Index("ix_sea_ships_zone", "current_zone_id"),
+    )
+
+
+class SeaShipStop(Base):
+    """One port of a ship's line (ordered by ``idx``). ``path_override`` = manual zone ids of the leg
+    stops[idx] -> stops[idx+1] (loop: last -> first); the reverse leg of there-and-back uses it reversed."""
+
+    __tablename__ = "sea_ship_stops"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    ship_id = Column(BigInteger, nullable=False)
+    idx = Column(Integer, nullable=False)
+    port_location_id = Column(BigInteger, nullable=False)
+    path_override = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("ship_id", "idx", name="uq_sea_ship_stops"),
+        Index("ix_sea_ship_stops_port", "port_location_id"),
+    )
+
+
+class SeaPass(Base):
+    """The right to be aboard for trips first_trip..last_trip: kind ticket | sailor | stowaway; status active |
+    completed | burnt | ashore | caught | refunded | expired (sea_core)."""
+
+    __tablename__ = "sea_passes"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    ship_id = Column(BigInteger, nullable=False)
+    character_id = Column(Integer, nullable=False)
+    kind = Column(String(10), nullable=False)
+    first_trip = Column(Integer, nullable=False)
+    last_trip = Column(Integer, nullable=False)
+    from_port_id = Column(BigInteger, nullable=False)
+    to_port_id = Column(BigInteger, nullable=False)
+    from_name = Column(String(255), nullable=True)
+    to_name = Column(String(255), nullable=True)
+    zones = Column(Integer, nullable=False, default=0, server_default="0")
+    fare = Column(BigInteger, nullable=False, default=0, server_default="0")
+    fare_op_id = Column(BigInteger, nullable=True)
+    refund_op_id = Column(BigInteger, nullable=True)
+    post_floor_id = Column(BigInteger, nullable=True)
+    status = Column(String(12), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_sea_passes_ship", "ship_id", "status", "first_trip"),
+        Index("ix_sea_passes_char", "character_id", "status"),
+    )
+
+
+class SeaSetting(Base):
+    """The single global row (id = 1, seeded by 052): the sea pass claim + sea numbers."""
+
+    __tablename__ = "sea_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    pass_last_run_at = Column(DateTime, nullable=True)
+    sailor_post_min_chars = Column(Integer, nullable=False, default=800, server_default="800")
+    stowaway_base_pct = Column(Numeric(5, 2), nullable=False, default=60, server_default="60")
+    stowaway_wanted_points = Column(Integer, nullable=False, default=50, server_default="50")
+    path_max_zones = Column(Integer, nullable=False, default=200, server_default="200")
+
+
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the
 # ledger and raises EconomyError at flush. Strict since FEAT-181 B2 (no ORM writer is left; every
 # change goes through econ_ledger.post_operation). Fixtures/repair scripts that must seed a balance

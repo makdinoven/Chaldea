@@ -772,7 +772,10 @@ class TestSyncCrossRegionNeighborsUnit:
 
         mock_session.execute = AsyncMock(side_effect=mock_execute)
 
-        await sync_cross_region_neighbors(mock_session, arrow_id=10)
+        # FEAT-213: no decks / sea zones here (those reads are outside the mocked sequence)
+        with patch("crud.sea_read.ships_by_decks", new_callable=AsyncMock, return_value={}), \
+                patch("crud._zone_flags", new_callable=AsyncMock, return_value={}):
+            await sync_cross_region_neighbors(mock_session, arrow_id=10)
 
         # Should add 2 LocationNeighbor rows (forward + reverse)
         assert mock_session.add.call_count == 2
@@ -845,7 +848,10 @@ class TestSyncCrossRegionNeighborsUnit:
 
         mock_session.execute = AsyncMock(side_effect=mock_execute)
 
-        await sync_cross_region_neighbors(mock_session, arrow_id=10)
+        # FEAT-213: no decks / sea zones here (those reads are outside the mocked sequence)
+        with patch("crud.sea_read.ships_by_decks", new_callable=AsyncMock, return_value={}), \
+                patch("crud._zone_flags", new_callable=AsyncMock, return_value={}):
+            await sync_cross_region_neighbors(mock_session, arrow_id=10)
 
         # 2 local x 1 remote = 2 pairs, each bidirectional = 4 rows
         assert mock_session.add.call_count == 4

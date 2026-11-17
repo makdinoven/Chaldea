@@ -69,6 +69,7 @@ import MyHousesPage from "../pages/HousesPage/MyHousesPage";
 import HousePage from "../pages/HousesPage/HousePage";
 import HouseMarketPage from "../pages/HousesPage/HouseMarketPage";
 import HousesAdminPage from "../Admin/HousesAdminPage/HousesAdminPage";
+import ShipsPage from "../Admin/ShipsPage/ShipsPage";
 import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
 import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
 import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
@@ -188,6 +189,11 @@ const App = () => {
             <Route path="admin/houses" element={
               <ProtectedRoute requiredPermission="locations:read">
                 <HousesAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/ships" element={
+              <ProtectedRoute requiredPermission="locations:read">
+                <ShipsPage />
               </ProtectedRoute>
             } />
             <Route path="admin/economy" element={

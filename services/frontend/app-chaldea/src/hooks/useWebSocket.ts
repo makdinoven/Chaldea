@@ -53,6 +53,8 @@ import { getAccessToken, refreshAccessToken } from '../api/authToken';
 import toast from 'react-hot-toast';
 import { alertPlayer } from '../utils/alertPlayer';
 import { battlePath } from '../utils/battlePath';
+import { announceSeaNotice } from '../api/sea';
+import type { SeaNoticeData } from '../types/sea';
 
 /**
  * FEAT-204: law events that change the activity lock out of band (a patrol
@@ -68,6 +70,16 @@ const LAW_LOCK_REFRESH_TYPES: ReadonlySet<string> = new Set([
   // FEAT-212: hired / released / fell out / delivered — the escort lock changes.
   'caravan_escort',
 ]);
+
+/**
+ * FEAT-213: tone of a `ws_type="sea"` popup by its event. `ticket` / `sailor` are the player's own purchase —
+ * the Captain window already said so, the notice only goes to the bell (with the sound).
+ */
+const SEA_ERROR_EVENTS: ReadonlySet<string> = new Set(['caught', 'burnt', 'ashore', 'sailor_ashore']);
+const SEA_SUCCESS_EVENTS: ReadonlySet<string> = new Set(['arrived', 'refund']);
+const SEA_BELL_ONLY_EVENTS: ReadonlySet<string> = new Set(['ticket', 'sailor']);
+/** Sea texts are a sentence or two — keep them on screen long enough to read. */
+const SEA_TOAST_DURATION = 9000;
 
 const MAX_RECONNECT_DELAY = 30000;
 const INITIAL_RECONNECT_DELAY = 1000;
@@ -476,6 +488,30 @@ const useWebSocket = (): UseWebSocketReturn => {
             case 'ticket_new_message': {
               const ticketNewMsgData = parsed.data as { ticket_id: number };
               dispatch(receiveTicketNewMessage(ticketNewMsgData));
+              break;
+            }
+            case 'sea': {
+              // FEAT-213: departures, arrivals, put ashore, burnt tickets, refunds… The position may have
+              // changed (put ashore): refresh `/users/me` first, then tell the open location page / deck header.
+              const sea = (parsed.data ?? {}) as SeaNoticeData;
+              const event = typeof sea.event === 'string' ? sea.event : '';
+              if (sea.notification_id && typeof sea.message === 'string') {
+                dispatch(addNotification({
+                  id: sea.notification_id,
+                  user_id: 0,
+                  message: sea.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
+                alertPlayer({
+                  text: sea.message,
+                  silent: sea.silent,
+                  tone: SEA_ERROR_EVENTS.has(event) ? 'error' : SEA_SUCCESS_EVENTS.has(event) ? 'success' : 'default',
+                  duration: SEA_TOAST_DURATION,
+                  noToast: SEA_BELL_ONLY_EVENTS.has(event),
+                });
+              }
+              void dispatch(getMe()).finally(() => announceSeaNotice(sea));
               break;
             }
             case 'ping':

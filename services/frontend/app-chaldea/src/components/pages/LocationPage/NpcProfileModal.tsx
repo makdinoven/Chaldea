@@ -14,6 +14,7 @@ import MintModal from './MintModal/MintModal';
 import FenceModal from './FenceModal/FenceModal';
 import GuildModal from './GuildModal/GuildModal';
 import CaravaneerModal from './CaravaneerModal/CaravaneerModal';
+import CaptainModal from './CaptainModal/CaptainModal';
 import QuartermasterModal from './QuartermasterModal/QuartermasterModal';
 import { QM_SILENT_TEXT, probeQuartermaster, type QuartermasterProbeState } from '../../../api/factions';
 import TeleportMenu from './TeleportMenu';
@@ -55,6 +56,7 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   const [guildOpen, setGuildOpen] = useState(false);
   /** FEAT-212: «Караванщик» — hiring on as a caravan escort. */
   const [caravaneerOpen, setCaravaneerOpen] = useState(false);
+  const [captainOpen, setCaptainOpen] = useState(false);
   /** FEAT-206: faction quartermaster binding as seen by this character (none / silent / open). */
   const [qmState, setQmState] = useState<QuartermasterProbeState>('none');
   const [qmOpen, setQmOpen] = useState(false);
@@ -204,6 +206,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
         npcName={npc.name}
         npcAvatar={npc.avatar}
         onClose={() => setCaravaneerOpen(false)}
+      />
+    );
+  }
+
+  if (captainOpen && npc) {
+    return (
+      <CaptainModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setCaptainOpen(false)}
       />
     );
   }
@@ -499,6 +512,24 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 17h2m14 0h2M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0M9 17h6M3 13h18M5 13V8a2 2 0 012-2h10a2 2 0 012 2v5" />
               </svg>
               Караваны
+            </button>
+          )}
+
+          {/* Ship button — a «Капитан» NPC sells passage on his ship, in the port or on the deck (FEAT-213) */}
+          {npc.npc_role === 'captain' && isCharacterHere && characterId && (
+            <button
+              onClick={() => setCaptainOpen(true)}
+              className="
+                mt-2 w-full px-6 py-3 rounded-card
+                border border-gold/50 bg-gold/10
+                text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                hover:bg-gold/20 hover:border-gold/80
+                transition-all duration-200
+                flex items-center justify-center gap-2
+              "
+            >
+              <span aria-hidden className="text-lg leading-none">⚓</span>
+              Корабль
             </button>
           )}
 

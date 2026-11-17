@@ -20,6 +20,7 @@ import renown_crud
 import faction_territory
 import caravan_escort_crud
 import caravan_escort_public
+import sea_crud
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -1017,6 +1018,10 @@ async def admin_move_character(
     to_location_name = crud._get_location_name(db, data.new_location_id)
     if to_location_name is None:
         raise HTTPException(status_code=404, detail="Локация назначения не найдена")
+    # FEAT-213 G2: в морской зоне никто не стоит (на палубу корабля переносить можно — модерация).
+    if sea_crud.is_sea_zone(db, data.new_location_id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=sea_crud.MSG_OPEN_SEA)
 
     # 3. Та же локация — безусловный no-op ДО любых проверок и очисток:
     #    ни записи в журнале, ни гашения намерений, ни сброса кулдауна.
@@ -1089,6 +1094,11 @@ async def internal_home_teleport(
     to_location_name = crud._get_location_name(db, data.location_id)
     if to_location_name is None:
         raise HTTPException(status_code=404, detail="Локация назначения не найдена")
+    # FEAT-213 G3: a home teleport never lands on a ship's deck or in a sea zone (leaving a deck by scroll is fine)
+    sea_refusal = sea_crud.teleport_target_refusal(db, data.location_id)
+    if sea_refusal:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=sea_refusal)
     from_location_id = character.current_location_id
     if from_location_id is not None and int(from_location_id) == int(data.location_id):
         raise HTTPException(status_code=400, detail="Персонаж уже в этой локации")
@@ -2402,11 +2412,23 @@ def update_location(
     if source not in law_core.MOVE_SOURCES:
         source = law_core.SOURCE_MOVE
 
+    # FEAT-213 §3.6: lock order ship → character (the same as a departure). The current location is read without a
+    # lock, the ships whose deck is the current / new location are locked, then the character; a location changed
+    # in between → 409.
+    peek = db.query(models.Character.current_location_id).filter(models.Character.id == character_id).first()
+    if peek is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    ships = sea_crud.lock_ships_for_move(db, peek[0], new_location_id)
+
     # FEAT-198: the row is locked so a second tab / quick move cannot slip past a jail term or a pending
     # guard encounter, and the encounter is created in the same commit as the new location.
     character = db.query(models.Character).filter(models.Character.id == character_id).with_for_update().first()
     if not character:
+        db.rollback()
         raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if str(character.current_location_id) != str(peek[0]):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=sea_crud.MSG_RETRY)
     lock = activity_lock.lock_for_character(character)
     # FEAT-212 3.5: an escort rides with the caravan (defence in depth — locations-service refuses first)
     if lock["reason"] in (activity_lock.REASON_LAW_ENCOUNTER, activity_lock.REASON_CARAVAN_ESCORT) or (
@@ -2417,6 +2439,12 @@ def update_location(
     from_location_id = character.current_location_id
     moving = from_location_id is None or str(from_location_id) != str(new_location_id)
     if moving:
+        # FEAT-213 G1 / G2: a deck only through the passage of a docked ship (with a pass to board), never into a
+        # sea zone (authoritative; locations-service pre-checks first)
+        refusal = sea_crud.move_refusal(db, character, from_location_id, new_location_id, ships)
+        if refusal:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=refusal)
         # FEAT-207: a closed faction territory (players only; NPC patrols never pass here)
         refusal = faction_territory.location_refusal(db, character, new_location_id)
         if refusal:
@@ -4921,9 +4949,13 @@ from faction_api import router as faction_router  # noqa: E402
 from caravan_api import router as caravan_router  # noqa: E402
 from fence_api import router as fence_router  # noqa: E402
 from caravan_escort_api import router as caravan_escort_router  # noqa: E402
+from sea_api import router as sea_router  # noqa: E402
+from sea_admin import router as sea_admin_router  # noqa: E402
 app.include_router(economy_router)
 app.include_router(caravan_router)      # FEAT-211; after the economy router (its /admin/economy/caravans/overview)
 app.include_router(caravan_escort_router)  # FEAT-212; player escorts C1–C6 (static /caravans/escort... paths)
+app.include_router(sea_router)          # FEAT-213; sea routes S1–S5 (static /sea/... paths)
+app.include_router(sea_admin_router)    # FEAT-213; ship admin A1–A7 (static /admin/sea/... paths)
 app.include_router(reputation_router)   # FEAT-197; before the main router like the economy one
 app.include_router(law_router)          # FEAT-198; before the main router (static /law/..., /admin/law/... paths)
 app.include_router(shadow_router)       # FEAT-199; before the main router (static /renown/..., /admin/shadow/... paths)

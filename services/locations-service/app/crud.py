@@ -22,6 +22,7 @@ import econ_ledger
 import reputation_read
 import fame_read
 import faction_read
+import sea_read
 from econ_ledger import AccountRef, InsufficientFunds, Leg
 
 
@@ -405,6 +406,9 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
             "recommended_level": location.recommended_level,
             "quick_travel_marker": location.quick_travel_marker,
             "no_quick_move": getattr(location, 'no_quick_move', False),
+            "is_port": bool(getattr(location, 'is_port', False)),
+            "is_sea_zone": bool(getattr(location, 'is_sea_zone', False)),
+            "port_sea_zone_id": getattr(location, 'port_sea_zone_id', None),
             "description": location.description,
             "parent_id": location.parent_id,
             "children": children_list
@@ -419,6 +423,9 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
             "recommended_level": location.recommended_level,
             "quick_travel_marker": location.quick_travel_marker,
             "no_quick_move": getattr(location, 'no_quick_move', False),
+            "is_port": bool(getattr(location, 'is_port', False)),
+            "is_sea_zone": bool(getattr(location, 'is_sea_zone', False)),
+            "port_sea_zone_id": getattr(location, 'port_sea_zone_id', None),
             "description": location.description,
             "parent_id": location.parent_id,
             "children": []
@@ -730,6 +737,9 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
         "no_quick_move": getattr(loc, 'no_quick_move', False),
+        "is_port": bool(getattr(loc, 'is_port', False)),
+        "is_sea_zone": bool(getattr(loc, 'is_sea_zone', False)),
+        "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
         "description": loc.description,
         "parent_id": loc.parent_id,
         "marker_type": loc.marker_type,
@@ -1023,6 +1033,11 @@ async def create_location(session: AsyncSession, location_data: LocationCreate) 
         location_dict['recommended_level'] = location_dict.get('recommended_level', 1)
         location_dict['quick_travel_marker'] = location_dict.get('quick_travel_marker', False)
         location_dict['no_quick_move'] = location_dict.get('no_quick_move', False)
+        # is_port / is_sea_zone are NOT NULL — null on create means "no".
+        location_dict['is_port'] = bool(location_dict.get('is_port'))
+        location_dict['is_sea_zone'] = bool(location_dict.get('is_sea_zone'))
+        location_dict['port_sea_zone_id'] = location_dict.get('port_sea_zone_id') or None
+        await validate_sea_fields(session, None, location_dict)
         print(f"Данные после установки значений по умолчанию: {location_dict}")
 
         # Создаем новую локацию
@@ -1053,6 +1068,9 @@ async def create_location(session: AsyncSession, location_data: LocationCreate) 
 
         print("=== Создание локации завершено успешно ===")
         return new_location
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         print(f"=== ОШИБКА при создании локации ===")
         print(f"Тип ошибки: {type(e)}")
@@ -1083,13 +1101,24 @@ async def update_location(session: AsyncSession, location_id: int, location_data
         # is_starting is NOT NULL — an explicit null in the body means "leave as is".
         if 'is_starting' in update_data and update_data['is_starting'] is None:
             update_data.pop('is_starting')
-            
+        # FEAT-213: is_port / is_sea_zone are NOT NULL too — an explicit null means "leave as is";
+        # port_sea_zone_id: null = leave as is, 0 = clear. Then the §3.12 sea rules (409).
+        for flag in ('is_port', 'is_sea_zone', 'port_sea_zone_id'):
+            if flag in update_data and update_data[flag] is None:
+                update_data.pop(flag)
+        if update_data.get('port_sea_zone_id') == 0:
+            update_data['port_sea_zone_id'] = None
+        await validate_sea_fields(session, location, update_data)
+
         for field, value in update_data.items():
             setattr(location, field, value)
         
         await session.commit()
         await session.refresh(location)
         return location
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         print(f"Ошибка при обновлении локации: {str(e)}")
@@ -1105,6 +1134,8 @@ async def get_location_by_id(session: AsyncSession, location_id: int) -> Optiona
 # -------------------------------
 async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int, energy_cost: int, path_data=None) -> dict:
     """Добавляет соседа к локации"""
+    # FEAT-213 (G4): no transitions for a deck, sea zones link only to zones (409).
+    await check_neighbor_links(session, location_id, [neighbor_id])
     # Сериализуем path_data в формат для JSON-колонки
     path_data_json = [{"x": wp["x"], "y": wp["y"]} for wp in path_data] if path_data else None
 
@@ -1210,6 +1241,8 @@ async def update_neighbor_cost(
 
 async def update_neighbor_path(session: AsyncSession, from_id: int, to_id: int, path_data: list) -> Optional[dict]:
     """Обновляет path_data на обоих направлениях связи соседей"""
+    # FEAT-213 (G4): no transitions for a deck, sea zones link only to zones (409).
+    await check_neighbor_links(session, from_id, [to_id])
     path_data_json = [{"x": wp["x"], "y": wp["y"]} for wp in path_data] if path_data is not None else None
 
     # Ищем прямую связь
@@ -1280,6 +1313,9 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
         "no_quick_move": getattr(loc, 'no_quick_move', False),
+        "is_port": bool(getattr(loc, 'is_port', False)),
+        "is_sea_zone": bool(getattr(loc, 'is_sea_zone', False)),
+        "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
         "district_id": loc.district_id,
         "region_id": loc.region_id,
         "marker_type": loc.marker_type,
@@ -2340,7 +2376,11 @@ async def update_location_neighbors(
     локации кривые дорожки на карте региона становились прямыми.
     Удаляются только связи, которых нет в списке. Переходы через стрелки
     (is_auto_arrow) не трогаются и не копируются.
+
+    FEAT-213: палуба корабля не получает переходов, морская зона соединяется
+    только с морскими зонами — иначе 409 (до записи, ничего не меняется).
     """
+    await check_neighbor_links(db, location_id, [n.neighbor_id for n in neighbors])
     try:
         # Pairs already linked through a transition arrow. The arrow owns them:
         # re-creating them as manual rows duplicated the transition.
@@ -2684,6 +2724,11 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
                 "energy_cost": n.energy_cost
             })
 
+    # 2a. FEAT-213: port <-> deck passages of docked ships (tolerant raw reads of the CS sea tables).
+    #     «Сойти на берег» is public on a docked deck; «Подняться на борт» only for an entitled viewer.
+    sea = await sea_read.passages_for(session, location_id, viewer_character_id)
+    detailed_neighbors.extend(sea.disembark)
+
     # 2b. FEAT-207: closed faction territories among the neighbours (one batched read; tolerant)
     marks = await faction_read.access_marks(
         session, faction_read.ACCESS_LOCATION, [d["id"] for d in detailed_neighbors], viewer_character_id)
@@ -2691,6 +2736,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         mark = marks.get(int(d["id"]))
         d["access_label"] = mark.label if mark is not None else None
         d["access_allowed"] = mark.allowed if mark is not None else None
+    detailed_neighbors.extend(sea.board)
 
     # 3. Получаем список персонажей для локации через новый эндпоинт Character‑service
     players = await get_players_in_location(location_id)
@@ -2762,6 +2808,9 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
         "no_quick_move": getattr(loc, 'no_quick_move', False),
+        "is_port": bool(getattr(loc, 'is_port', False)),
+        "is_sea_zone": bool(getattr(loc, 'is_sea_zone', False)),
+        "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
         "marker_type": loc.marker_type,
         "district_id": loc.district_id,
         # FEAT-153: return the RESOLVED region id, not Location.region_id.
@@ -2780,6 +2829,8 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "region_name": region_name,
         "district_name": district_name,
         "is_favorited": favorited,
+        "ship_id": sea.ship_id,
+        "docked_ships": sea.docked_ships,
         "neighbors": detailed_neighbors,
         "players": players,
         "npcs": npcs,
@@ -3261,6 +3312,8 @@ async def get_world_graph(session: AsyncSession) -> dict:
         region_id = district_to_region.get(loc.district_id) if loc.district_id else loc.region_id
         if region_id not in region_to_country:
             continue  # belongs to a hidden country, or dangling FK
+        if getattr(loc, 'is_sea_zone', False) is True:
+            continue  # FEAT-213: sea zones are never on the land map (defence; their country is hidden)
         visible_location_ids.add(loc.id)
         location_nodes.append({
             "id": loc.id,
@@ -3271,6 +3324,9 @@ async def get_world_graph(session: AsyncSession) -> dict:
             "marker_type": loc.marker_type or "safe",
             "recommended_level": loc.recommended_level,
             "no_quick_move": bool(loc.no_quick_move),
+            "is_port": bool(getattr(loc, 'is_port', False)),
+            "is_sea_zone": False,  # zones are dropped above
+            "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
             "quick_travel_marker": bool(loc.quick_travel_marker),
         })
 
@@ -6744,9 +6800,21 @@ async def sync_cross_region_neighbors(session: AsyncSession, arrow_id: int) -> N
         )
     )
 
+    # FEAT-213 (G4): a deck never gets a transition and a sea zone links only to
+    # zones — such pairs are skipped (and logged), the rest of the arrow works.
+    all_ids = set(local_location_ids) | set(remote_location_ids)
+    decks = set(await sea_read.ships_by_decks(session, all_ids))
+    zone_flags = await _zone_flags(session, all_ids)
+
     # Create N x M bidirectional LocationNeighbors
     for local_an in local_ans:
         for remote_an in remote_ans:
+            a, b = local_an.location_id, remote_an.location_id
+            if (int(a) in decks or int(b) in decks
+                    or zone_flags.get(int(a), False) != zone_flags.get(int(b), False)):
+                logger.warning("Arrow %s: skipped transition %s <-> %s (deck or sea zone vs land)",
+                               arrow_id, a, b)
+                continue
             total_cost = local_an.energy_cost + remote_an.energy_cost
             # Forward: local -> remote
             session.add(LocationNeighbor(
@@ -6845,6 +6913,8 @@ async def create_arrow_neighbor(
     )
     if not loc_result.scalars().first():
         raise HTTPException(status_code=404, detail=f"Location {data.location_id} not found")
+    # FEAT-213 (G4): a ship's deck never gets a transition.
+    await check_not_deck(session, data.location_id)
 
     # Validate path_data limits
     if data.path_data and len(data.path_data) > 50:
@@ -7060,6 +7130,250 @@ async def delete_floating_structure(session: AsyncSession, structure_id: int) ->
         raise HTTPException(status_code=404, detail="Плавающая структура не найдена")
     await session.delete(obj)
     await session.commit()
+
+
+# -----------------------------------------------------------------------------
+# SEA GEOGRAPHY (FEAT-213)
+# -----------------------------------------------------------------------------
+# Ports (Locations.is_port), sea zones (Locations.is_sea_zone, locations of a
+# hidden country) and the zone a port opens to (Locations.port_sea_zone_id).
+# Ships, stops and passes are character-service's — read via sea_read.py.
+# Invariant G4: a deck has no LocationNeighbors / arrow links, a zone links
+# only to zones, so zones never join the land graph (caravans, patrols, map).
+
+SEA_ZONE_NOT_HIDDEN = "Морские зоны создаются в скрытой стране (например, «Моря»)"
+SEA_ZONE_LINKS_ONLY_ZONES = "Морские зоны соединяются только с морскими зонами"
+SEA_ZONE_NOT_PORT = "Морская зона не может быть портом"
+SEA_ZONE_NOT_STARTING = "Морская зона не может быть стартовой локацией"
+SEA_ZONE_NOT_DECK = "Палуба корабля «{name}» не может быть морской зоной"
+SEA_ZONE_HAS_LINKS = "Сначала уберите переходы этой морской зоны"
+SEA_ZONE_USED_BY_PORT = "Эта морская зона — выход в море для порта «{name}»"
+SEA_PORT_ZONE_PORTS_ONLY = "Выход в море задаётся только порту"
+SEA_PORT_ZONE_NOT_ZONE = "Выход в море — это морская зона (локация с флажком «Морская зона»)"
+SEA_PORT_ON_ROUTE = "Порт входит в маршрут корабля «{name}»"
+SEA_DECK_NO_LINKS = "Палуба корабля не соединяется переходами"
+SEA_DECK_DELETE = "Это палуба корабля «{name}» — сначала удалите корабль"
+
+
+async def _region_country_hidden(session: AsyncSession, district_id: Optional[int],
+                                 region_id: Optional[int]) -> bool:
+    """Is the country above this district / region hidden? Unresolvable = not hidden."""
+    if district_id:
+        region_id = (await session.execute(
+            select(District.region_id).where(District.id == district_id)
+        )).scalar()
+    if not region_id:
+        return False
+    hidden = (await session.execute(
+        select(Country.is_hidden)
+        .select_from(Region)
+        .join(Country, Country.id == Region.country_id)
+        .where(Region.id == region_id)
+    )).scalar()
+    return bool(hidden)
+
+
+async def _zone_flags(session: AsyncSession, location_ids) -> Dict[int, bool]:
+    ids = sorted({int(i) for i in location_ids if i is not None})
+    if not ids:
+        return {}
+    rows = (await session.execute(
+        select(Location.id, Location.is_sea_zone).where(Location.id.in_(ids))
+    )).all()
+    return {int(i): bool(z) for i, z in rows}
+
+
+async def validate_sea_fields(session: AsyncSession, location: Optional[Location], data: dict) -> None:
+    """FEAT-213 §3.12: port / sea zone rules for a location create (``location`` None) or update.
+
+    ``data`` holds only the fields being written; explicit nulls of the sea fields are already removed and a
+    ``port_sea_zone_id`` of 0 is already turned into None (= clear). Mutates ``data``: unflagging a port clears
+    its zone. Raises 409 with a Russian text."""
+    def prev(name, default=None):
+        return getattr(location, name, default) if location is not None else default
+
+    was_port, was_zone = bool(prev('is_port', False)), bool(prev('is_sea_zone', False))
+    is_port = bool(data.get('is_port', was_port))
+    is_zone = bool(data.get('is_sea_zone', was_zone))
+    is_starting = bool(data.get('is_starting', prev('is_starting', False)))
+    location_id = prev('id')
+
+    # Ports: a port on a ship's route stays a port; the zone link is for ports only.
+    if was_port and not is_port and location_id is not None:
+        on_route = await sea_read.ships_stopping_at(session, [location_id])
+        if on_route:
+            raise HTTPException(status_code=409, detail=SEA_PORT_ON_ROUTE.format(name=on_route[0].name))
+    if not is_port:
+        if data.get('port_sea_zone_id') is not None:
+            raise HTTPException(status_code=409, detail=SEA_PORT_ZONE_PORTS_ONLY)
+        if prev('port_sea_zone_id') is not None or 'port_sea_zone_id' in data:
+            data['port_sea_zone_id'] = None
+    zone_id = data.get('port_sea_zone_id')
+    if zone_id is not None:
+        if not (await _zone_flags(session, [zone_id])).get(int(zone_id)):
+            raise HTTPException(status_code=409, detail=SEA_PORT_ZONE_NOT_ZONE)
+
+    # Sea zones.
+    if is_zone:
+        if is_port:
+            raise HTTPException(status_code=409, detail=SEA_ZONE_NOT_PORT)
+        if is_starting:
+            raise HTTPException(status_code=409, detail=SEA_ZONE_NOT_STARTING)
+        district_id = data.get('district_id', prev('district_id'))
+        region_id = data.get('region_id', prev('region_id'))
+        if not await _region_country_hidden(session, district_id, region_id):
+            raise HTTPException(status_code=409, detail=SEA_ZONE_NOT_HIDDEN)
+        if not was_zone and location_id is not None:
+            ship = await sea_read.ship_by_deck(session, location_id)
+            if ship is not None:
+                raise HTTPException(status_code=409, detail=SEA_ZONE_NOT_DECK.format(name=ship.name))
+            land_neighbor = (await session.execute(
+                select(LocationNeighbor.id)
+                .join(Location, Location.id == LocationNeighbor.neighbor_id)
+                .where(LocationNeighbor.location_id == location_id, Location.is_sea_zone.is_(False))
+                .limit(1)
+            )).scalar()
+            if land_neighbor is not None:
+                raise HTTPException(status_code=409, detail=SEA_ZONE_LINKS_ONLY_ZONES)
+    elif was_zone and location_id is not None:
+        has_links = (await session.execute(
+            select(LocationNeighbor.id).where(
+                (LocationNeighbor.location_id == location_id) | (LocationNeighbor.neighbor_id == location_id)
+            ).limit(1)
+        )).scalar()
+        if has_links is not None:
+            raise HTTPException(status_code=409, detail=SEA_ZONE_HAS_LINKS)
+        port_name = (await session.execute(
+            select(Location.name).where(Location.port_sea_zone_id == location_id).order_by(Location.id).limit(1)
+        )).scalar()
+        if port_name is not None:
+            raise HTTPException(status_code=409, detail=SEA_ZONE_USED_BY_PORT.format(name=port_name))
+
+
+async def check_neighbor_links(session: AsyncSession, location_id: int, other_ids) -> None:
+    """G4: a deck gets no transitions, a sea zone links only to zones (409 otherwise)."""
+    others = sorted({int(i) for i in other_ids if i is not None and int(i) != int(location_id)})
+    if not others:
+        return
+    if await sea_read.ships_by_decks(session, [location_id, *others]):
+        raise HTTPException(status_code=409, detail=SEA_DECK_NO_LINKS)
+    flags = await _zone_flags(session, [location_id, *others])
+    mine = flags.get(int(location_id), False)
+    if any(flags.get(o, mine) != mine for o in others):
+        raise HTTPException(status_code=409, detail=SEA_ZONE_LINKS_ONLY_ZONES)
+
+
+async def check_not_deck(session: AsyncSession, location_id: int) -> None:
+    """A deck is never linked to a transition arrow (G4)."""
+    if await sea_read.ship_by_deck(session, location_id) is not None:
+        raise HTTPException(status_code=409, detail=SEA_DECK_NO_LINKS)
+
+
+async def check_location_deletable(session: AsyncSession, location_id: int) -> None:
+    """A ship's deck or a port on a ship's route can't be deleted from the locations admin (409).
+    Deleting a zone used by ports is allowed (FK SET NULL; ships skip such a port until fixed)."""
+    ship = await sea_read.ship_by_deck(session, location_id)
+    if ship is not None:
+        raise HTTPException(status_code=409, detail=SEA_DECK_DELETE.format(name=ship.name))
+    on_route = await sea_read.ships_stopping_at(session, [location_id])
+    if on_route:
+        raise HTTPException(status_code=409, detail=SEA_PORT_ON_ROUTE.format(name=on_route[0].name))
+
+
+async def _sea_location_infos(session: AsyncSession, location_ids) -> Dict[int, dict]:
+    """Location → region → country (+ area) for the given ids, one query.
+
+    A location hangs off a district or, standalone, a region directly;
+    District.region_id is NOT NULL even for nested districts.
+    """
+    ids = sorted({int(i) for i in location_ids if i is not None})
+    if not ids:
+        return {}
+    region_id_expr = sa_func.coalesce(District.region_id, Location.region_id)
+    stmt = (
+        select(
+            Location.id, Location.name, Location.port_sea_zone_id,
+            Region.id, Region.name,
+            Country.id, Country.name, Country.area_id,
+        )
+        .select_from(Location)
+        .outerjoin(District, District.id == Location.district_id)
+        .outerjoin(Region, Region.id == region_id_expr)
+        .outerjoin(Country, Country.id == Region.country_id)
+        .where(Location.id.in_(ids))
+    )
+    rows = (await session.execute(stmt)).all()
+    infos = {}
+    for (loc_id, name, zone_id, region_id, region_name,
+         country_id, country_name, area_id) in rows:
+        infos[int(loc_id)] = {
+            "id": int(loc_id),
+            "name": name,
+            "port_sea_zone_id": int(zone_id) if zone_id is not None else None,
+            "region_id": region_id,
+            "region_name": region_name,
+            "country_id": country_id,
+            "country_name": country_name,
+            "area_id": area_id,
+        }
+    return infos
+
+
+async def list_sea_ports(session: AsyncSession) -> List[dict]:
+    """L5: every port with its region / country and the zone it opens to."""
+    ids = (
+        await session.execute(
+            select(Location.id).where(Location.is_port.is_(True)).order_by(Location.name.asc(), Location.id.asc())
+        )
+    ).scalars().all()
+    infos = await _sea_location_infos(session, ids)
+    zone_names = {}
+    zone_ids = {i["port_sea_zone_id"] for i in infos.values() if i["port_sea_zone_id"] is not None}
+    if zone_ids:
+        zone_names = {int(i): n for i, n in (await session.execute(
+            select(Location.id, Location.name).where(Location.id.in_(sorted(zone_ids)))
+        )).all()}
+    out = []
+    for loc_id in ids:
+        info = infos.get(int(loc_id))
+        if info is None:
+            continue
+        out.append({**info, "port_sea_zone_name": zone_names.get(info["port_sea_zone_id"])})
+    return out
+
+
+async def list_sea_zones(session: AsyncSession) -> List[dict]:
+    """L8: every sea zone with its sea (region), country and its neighbour zones."""
+    ids = (
+        await session.execute(
+            select(Location.id).where(Location.is_sea_zone.is_(True)).order_by(Location.name.asc(), Location.id.asc())
+        )
+    ).scalars().all()
+    if not ids:
+        return []
+    infos = await _sea_location_infos(session, ids)
+    neighbors: Dict[int, set] = {int(i): set() for i in ids}
+    rows = (await session.execute(
+        select(LocationNeighbor.location_id, LocationNeighbor.neighbor_id)
+        .where(LocationNeighbor.location_id.in_(list(ids)))
+    )).all()
+    for a, b in rows:
+        if int(b) in neighbors and int(a) != int(b):
+            neighbors[int(a)].add(int(b))
+    out = []
+    for loc_id in ids:
+        info = infos.get(int(loc_id))
+        if info is None:
+            continue
+        out.append({
+            "id": info["id"],
+            "name": info["name"],
+            "region_id": info["region_id"],
+            "region_name": info["region_name"],
+            "country_name": info["country_name"],
+            "neighbor_ids": sorted(neighbors[int(loc_id)]),
+        })
+    return out
 
 
 # -----------------------------------------------------------------------------

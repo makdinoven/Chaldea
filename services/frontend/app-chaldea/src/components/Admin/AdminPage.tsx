@@ -21,6 +21,7 @@ const sections: AdminSection[] = [
   { label: 'Экипировка классов', path: '/admin/equipment-rules', description: 'Что может носить каждый класс и подкласс: броня, основная и доп. рука', module: 'items' },
   { label: 'Локации', path: '/admin/locations', description: 'Редактирование мира, регионов и локаций', module: 'locations' },
   { label: 'Дома и участки', path: '/admin/houses', description: 'Участки под дома игроков: цена, комнаты, точка на карте', module: 'locations' },
+  { label: 'Корабли', path: '/admin/ships', description: 'Корабли-локации, капитаны, маршруты между портами и настройки моря', module: 'locations' },
   { label: 'Плавающие структуры', path: '/admin/floating-structures', description: 'Управление плавающими структурами и телепортами', module: 'locations' },
   { label: 'Навыки', path: '/home/admin/skills', description: 'Редактирование деревьев навыков', module: 'skills' },
   { label: 'Деревья классов', path: '/admin/class-trees', description: 'Визуальный редактор деревьев навыков классов и подклассов', module: 'skill_trees' },
