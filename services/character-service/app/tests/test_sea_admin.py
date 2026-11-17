@@ -466,13 +466,17 @@ def test_candidates_list_free_decks_and_captains(admin, sea):
 # =============================================================================================== A7 settings
 
 def test_settings_defaults_and_save(admin, sea):
-    assert admin.get(SETTINGS).json() == {"sailor_post_min_chars": 800, "stowaway_base_pct": 60.0,
-                                          "stowaway_wanted_points": 50, "path_max_zones": 200}
+    def base(body):  # the FEAT-213 four (FEAT-214 adds the storm / raid numbers to the same object)
+        return {k: body[k] for k in ("sailor_post_min_chars", "stowaway_base_pct", "stowaway_wanted_points",
+                                     "path_max_zones")}
+
+    assert base(admin.get(SETTINGS).json()) == {"sailor_post_min_chars": 800, "stowaway_base_pct": 60.0,
+                                                "stowaway_wanted_points": 50, "path_max_zones": 200}
     new = {"sailor_post_min_chars": 1200, "stowaway_base_pct": 33.33, "stowaway_wanted_points": 75,
            "path_max_zones": 40}
     r = admin.put(SETTINGS, json=new)
-    assert r.status_code == 200 and r.json() == new
-    assert admin.get(SETTINGS).json() == new
+    assert r.status_code == 200 and base(r.json()) == new
+    assert base(admin.get(SETTINGS).json()) == new
 
 
 @pytest.mark.parametrize("field, value", [

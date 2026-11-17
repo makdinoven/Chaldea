@@ -143,6 +143,8 @@ export interface LocationData {
   ship_id?: number | null;
   /** FEAT-213: ships at the pier of this port («У причала: …»). */
   docked_ships?: { id: number; name: string }[];
+  /** FEAT-214: a port whose sea zone is under an active storm («В море неспокойно»). */
+  sea_unrest?: boolean;
 }
 
 export type MarkerType = 'safe' | 'dangerous' | 'dungeon' | 'farm';

@@ -10,15 +10,20 @@
 * A5 ``POST   /legs/preview``     (locations:read)   — zone paths of the legs of a stop list (with problems);
 * A6 ``GET    /candidates``       (locations:read)   — free decks (locations of hidden countries without links) and
   free Captains (NPCs with the role «captain»);
-* A7 ``GET/PUT /settings``        (locations:read / locations:update) — the sea numbers.
+* A7 ``GET/PUT /settings``        (locations:read / locations:update) — the sea numbers (+ FEAT-214 storm / raid
+  numbers, optional on PUT);
+* FEAT-214 §3.11: ``GET /weather`` (locations:read) — season, seas with their storm config, active storms, raids;
+  ``PUT /seas/{region_id}``, ``POST /storms``, ``DELETE /storms/{id}`` (locations:update).
 
 Existing permissions only (no RBAC migration, §3.16). Russian ``detail`` on every error; DB errors → 500 with a generic
 text (details logged). Lock order ship → passes → characters (``sea_crud``). Notices and the LS cleanup of the deck
 are done after the commit (``sea_pass.after_commit``).
 """
 
+import json
 import logging
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
@@ -27,12 +32,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+import econ_core
 import econ_ledger
 import law_notify
 import models
 import sea_core
 import sea_crud
 import sea_pass
+import sea_weather
 from auth_http import UserRead, require_permission
 from economy_api import get_db
 from economy_crud import EconomyApiError
@@ -65,6 +72,14 @@ MSG_BAD_OVERRIDE = "Ручной путь участка {n} («{a}» → «{b}�
 MSG_ROUTE_AT_SEA = "Маршрут меняется только когда корабль у причала"
 MSG_DOCKED_PORT_KEPT = "Порт, где корабль сейчас стоит («{name}»), должен остаться в маршруте"
 MSG_DELETE_AT_SEA = "Корабль в море — выключите его и дождитесь швартовки"
+MSG_DELETE_BATTLE = "На палубе идёт бой — списать корабль можно после его окончания"
+MSG_STORM_MINUTES = "Максимальная длительность шторма меньше минимальной"
+MSG_WEATHER_UNAVAILABLE = "Шторма пока недоступны"
+MSG_SEA_NOT_FOUND = "Море не найдено"
+MSG_NOT_SEA_ZONE = "Это не морская зона"
+MSG_STORM_NOT_FOUND = "Шторм не найден или уже закончился"
+
+RAIDS_FINAL_LIMIT = 20                     # finished raids shown in the weather view
 
 PROBLEM_TEXTS = {
     sea_core.LEG_NO_ZONE: "У порта нет выхода в море (морской зоны)",
@@ -229,19 +244,140 @@ class CandidatesOut(BaseModel):
     captains: List[CaptainCandidateOut]
 
 
+# FEAT-214 storm / raid numbers of ``sea_settings``: name → (bounds, is_decimal).
+STORM_SETTING_FIELDS: Dict[str, Tuple[Tuple[int, int], bool]] = {
+    "storm_min_minutes": (_R.STORM_MINUTES_RANGE, False),
+    "storm_max_minutes": (_R.STORM_MINUTES_RANGE, False),
+    "storm_move_pct": (_R.STORM_MOVE_PCT_RANGE, True),
+    "storm_max_moves": (_R.STORM_MAX_MOVES_RANGE, False),
+    "storm_slow_mult": (_R.STORM_SLOW_MULT_RANGE, True),
+    "storm_drift_pct": (_R.STORM_DRIFT_PCT_RANGE, True),
+    "storm_hp_pct": (_R.STORM_HP_PCT_RANGE, True),
+    "storm_stamina_pct": (_R.STORM_STAMINA_PCT_RANGE, True),
+    "storm_postpone_minutes": (_R.STORM_POSTPONE_MINUTES_RANGE, False),
+    "storm_postpone_max_minutes": (_R.STORM_POSTPONE_MAX_MINUTES_RANGE, False),
+    "storm_sailor_relief_pct": (_R.STORM_SAILOR_RELIEF_PCT_RANGE, True),
+    "season_mult_spring": (_R.SEASON_MULT_RANGE, True),
+    "season_mult_summer": (_R.SEASON_MULT_RANGE, True),
+    "season_mult_autumn": (_R.SEASON_MULT_RANGE, True),
+    "season_mult_winter": (_R.SEASON_MULT_RANGE, True),
+    "raid_chance_mult": (_R.RAID_CHANCE_MULT_RANGE, True),
+    "raid_hold_max_minutes": (_R.RAID_HOLD_MAX_MINUTES_RANGE, False),
+    "raid_repelled_delay_minutes": (_R.RAID_REPELLED_DELAY_MINUTES_RANGE, False),
+}
+
+
+def _opt(name: str):
+    """An optional bounded FEAT-214 settings field (omitted / null = keep the saved value)."""
+    lo, hi = STORM_SETTING_FIELDS[name][0]
+    return Field(None, ge=lo, le=hi)
+
+
 class SeaSettingsOut(BaseModel):
     sailor_post_min_chars: int
     stowaway_base_pct: float
     stowaway_wanted_points: int
     path_max_zones: int
+    # FEAT-214
+    storm_min_minutes: int
+    storm_max_minutes: int
+    storm_move_pct: float
+    storm_max_moves: int
+    storm_slow_mult: float
+    storm_drift_pct: float
+    storm_hp_pct: float
+    storm_stamina_pct: float
+    storm_postpone_minutes: int
+    storm_postpone_max_minutes: int
+    storm_sailor_relief_pct: float
+    season_mult_spring: float
+    season_mult_summer: float
+    season_mult_autumn: float
+    season_mult_winter: float
+    raid_chance_mult: float
+    raid_hold_max_minutes: int
+    raid_repelled_delay_minutes: int
 
 
 class SeaSettingsIn(BaseModel):
+    """The FEAT-213 four are required; the FEAT-214 numbers are optional (omitted / null = keep the saved value)."""
     sailor_post_min_chars: int = Field(..., ge=_R.SAILOR_POST_MIN_CHARS_RANGE[0], le=_R.SAILOR_POST_MIN_CHARS_RANGE[1])
     stowaway_base_pct: float = Field(..., ge=_R.STOWAWAY_BASE_PCT_RANGE[0], le=_R.STOWAWAY_BASE_PCT_RANGE[1])
     stowaway_wanted_points: int = Field(..., ge=_R.STOWAWAY_WANTED_POINTS_RANGE[0],
                                         le=_R.STOWAWAY_WANTED_POINTS_RANGE[1])
     path_max_zones: int = Field(..., ge=_R.PATH_MAX_ZONES_RANGE[0], le=_R.PATH_MAX_ZONES_RANGE[1])
+    storm_min_minutes: Optional[int] = _opt("storm_min_minutes")
+    storm_max_minutes: Optional[int] = _opt("storm_max_minutes")
+    storm_move_pct: Optional[float] = _opt("storm_move_pct")
+    storm_max_moves: Optional[int] = _opt("storm_max_moves")
+    storm_slow_mult: Optional[float] = _opt("storm_slow_mult")
+    storm_drift_pct: Optional[float] = _opt("storm_drift_pct")
+    storm_hp_pct: Optional[float] = _opt("storm_hp_pct")
+    storm_stamina_pct: Optional[float] = _opt("storm_stamina_pct")
+    storm_postpone_minutes: Optional[int] = _opt("storm_postpone_minutes")
+    storm_postpone_max_minutes: Optional[int] = _opt("storm_postpone_max_minutes")
+    storm_sailor_relief_pct: Optional[float] = _opt("storm_sailor_relief_pct")
+    season_mult_spring: Optional[float] = _opt("season_mult_spring")
+    season_mult_summer: Optional[float] = _opt("season_mult_summer")
+    season_mult_autumn: Optional[float] = _opt("season_mult_autumn")
+    season_mult_winter: Optional[float] = _opt("season_mult_winter")
+    raid_chance_mult: Optional[float] = _opt("raid_chance_mult")
+    raid_hold_max_minutes: Optional[int] = _opt("raid_hold_max_minutes")
+    raid_repelled_delay_minutes: Optional[int] = _opt("raid_repelled_delay_minutes")
+
+
+# ---------------------------------------------------------------------------------------------------- FEAT-214 weather
+
+class StormSeaIn(BaseModel):
+    is_enabled: bool
+    chance_per_hour_pct: float = Field(..., ge=_R.STORM_CHANCE_PER_HOUR_RANGE[0], le=_R.STORM_CHANCE_PER_HOUR_RANGE[1])
+    radius: int = Field(..., ge=_R.STORM_RADIUS_RANGE[0], le=_R.STORM_RADIUS_RANGE[1])
+
+
+class StormCreateIn(BaseModel):
+    zone_id: int = Field(..., ge=1)
+    minutes: int = Field(..., ge=_R.STORM_MINUTES_RANGE[0], le=_R.STORM_MINUTES_RANGE[1])
+
+
+class StormSeaOut(BaseModel):
+    region_id: int
+    name: Optional[str]
+    zones_count: int
+    is_enabled: bool
+    chance_per_hour_pct: float
+    radius: int
+
+
+class StormAdminOut(BaseModel):
+    id: int
+    region_id: Optional[int]
+    sea_name: Optional[str]
+    center_zone: RefOut
+    zones: List[RefOut]
+    started_at: datetime
+    ends_at: datetime
+    moves: int
+    source: str                            # auto | admin
+
+
+class RaidAdminOut(BaseModel):
+    id: int
+    ship_id: int
+    ship_name: Optional[str]               # None when the ship was deleted
+    zone: RefOut
+    monster_name: Optional[str]
+    players: List[RefOut]                  # placed players (planned group until BS placed them)
+    battle_id: Optional[int]
+    status: str                            # starting | fighting | won | lost | aborted | expired
+    created_at: datetime
+
+
+class SeaWeatherOut(BaseModel):
+    season: Optional[str]                  # spring | summer | autumn | winter; None = no game calendar
+    season_mult: float
+    seas: List[StormSeaOut]
+    storms: List[StormAdminOut]
+    raids: List[RaidAdminOut]              # active first (newest first), then the last 20 finished
 
 
 # =====================================================================================================================
@@ -566,6 +702,15 @@ def update_ship(db: Session, ship_id: int, body: ShipUpdate,
     return ship, notices
 
 
+def _deck_battle(db: Session, ship: "models.SeaShip") -> bool:
+    """FEAT-214 §3.9: a deck player in an active battle, or an active monster raid of the ship."""
+    if any(sea_pass.in_battle(db, ch.id) for ch in sea_crud.deck_players(db, ship, lock=False)):
+        return True
+    rows = sea_crud._rows(db, "SELECT 1 FROM sea_raids WHERE ship_id = :s AND status IN (:a, :b) LIMIT 1",
+                          {"s": int(ship.id), "a": sea_core.RAID_STARTING, "b": sea_core.RAID_FIGHTING})
+    return bool(rows)
+
+
 def delete_ship(db: Session, ship_id: int, now: Optional[datetime] = None) -> sea_pass.ShipOutcome:
     now = now or sea_crud.now_utc()
     sea_crud.require_available(db)
@@ -574,6 +719,8 @@ def delete_ship(db: Session, ship_id: int, now: Optional[datetime] = None) -> se
         raise SeaError(404, sea_crud.MSG_SHIP_NOT_FOUND)
     if ship.status != sea_core.STATUS_DOCKED:
         raise SeaError(409, MSG_DELETE_AT_SEA)
+    if _deck_battle(db, ship):
+        raise SeaError(409, MSG_DELETE_BATTLE)
     out = sea_pass.ShipOutcome(int(ship.id), deck_location_id=int(ship.deck_location_id))
     stops = sea_crud.load_stops(db, ship.id)
     out.notices.extend(sea_crud.refund_not_started(db, ship, now))
@@ -634,12 +781,21 @@ def candidates(db: Session, ship_id: Optional[int] = None) -> dict:
 def settings_out(db: Session) -> dict:
     sea_crud.require_available(db)
     p = sea_crud.load_params(db)
-    return {"sailor_post_min_chars": p.sailor_post_min_chars, "stowaway_base_pct": float(p.stowaway_base_pct),
-            "stowaway_wanted_points": p.stowaway_wanted_points, "path_max_zones": p.path_max_zones}
+    out = {"sailor_post_min_chars": p.sailor_post_min_chars, "stowaway_base_pct": float(p.stowaway_base_pct),
+           "stowaway_wanted_points": p.stowaway_wanted_points, "path_max_zones": p.path_max_zones}
+    for name, (_bounds, is_dec) in STORM_SETTING_FIELDS.items():
+        value = getattr(p, name)
+        out[name] = float(value) if is_dec else int(value)
+    return out
 
 
 def save_settings(db: Session, body: SeaSettingsIn) -> None:
     sea_crud.require_available(db)
+    current = sea_crud.load_params(db)
+    lo = body.storm_min_minutes if body.storm_min_minutes is not None else current.storm_min_minutes
+    hi = body.storm_max_minutes if body.storm_max_minutes is not None else current.storm_max_minutes
+    if int(hi) < int(lo):
+        raise SeaError(400, MSG_STORM_MINUTES)
     row = db.get(models.SeaSetting, 1)
     if row is None:
         row = models.SeaSetting(id=1)
@@ -648,7 +804,178 @@ def save_settings(db: Session, body: SeaSettingsIn) -> None:
     row.stowaway_base_pct = round(float(body.stowaway_base_pct), 2)
     row.stowaway_wanted_points = int(body.stowaway_wanted_points)
     row.path_max_zones = int(body.path_max_zones)
+    for name, (_bounds, is_dec) in STORM_SETTING_FIELDS.items():
+        value = getattr(body, name)
+        if value is not None:
+            setattr(row, name, Decimal(str(round(float(value), 2))) if is_dec else int(value))
     db.flush()
+
+
+# =====================================================================================================================
+# FEAT-214 weather admin (§3.11)
+# =====================================================================================================================
+
+def _require_weather(db: Session) -> None:
+    sea_crud.require_available(db)
+    if not sea_weather.weather_available(db):
+        raise SeaError(503, MSG_WEATHER_UNAVAILABLE)
+
+
+def _region_names(db: Session, ids) -> Dict[int, Optional[str]]:
+    ids = sorted({int(i) for i in ids if i})
+    if not ids:
+        return {}
+    ph, params = econ_core.in_params("r", ids)
+    rows = sea_crud._rows(db, f"SELECT id, name FROM Regions WHERE id IN ({ph})", params) or []
+    return {int(r[0]): r[1] for r in rows}
+
+
+def _sea_zones(db: Session) -> Tuple[sea_crud.ZoneGraph, Dict[int, Optional[int]]]:
+    """The sea-zone graph and ``{zone_id: region_id}`` (the sea of every zone)."""
+    graph = sea_crud.zone_graph(db)
+    return graph, sea_weather.zone_seas(db, graph.zone_ids)
+
+
+def _sea_out(region_id: int, name: Optional[str], zones_count: int, row: Optional["models.SeaStormSea"]) -> dict:
+    """A sea without a config row reads as «off, 0 %, default radius»."""
+    return {"region_id": int(region_id), "name": name, "zones_count": int(zones_count),
+            "is_enabled": bool(row.is_enabled) if row is not None else False,
+            "chance_per_hour_pct": float(row.chance_per_hour_pct or 0) if row is not None else 0.0,
+            "radius": int(row.radius) if row is not None and row.radius is not None else sea_weather.DEFAULT_RADIUS}
+
+
+def _storms_out(db: Session, storms: Sequence["models.SeaStorm"]) -> List[dict]:
+    if not storms:
+        return []
+    ids = [int(s.id) for s in storms]
+    zone_rows = (db.query(models.SeaStormZone).filter(models.SeaStormZone.storm_id.in_(ids))
+                 .order_by(models.SeaStormZone.zone_id).all())
+    by_storm: Dict[int, List[int]] = {}
+    for z in zone_rows:
+        by_storm.setdefault(int(z.storm_id), []).append(int(z.zone_id))
+    locs = sea_crud.location_infos(db, [z.zone_id for z in zone_rows] + [s.center_zone_id for s in storms])
+    seas = _region_names(db, [s.region_id for s in storms])
+
+    def ref(zone_id) -> dict:
+        info = locs.get(int(zone_id))
+        return {"id": int(zone_id), "name": info.name if info is not None else None}
+
+    return [{"id": int(s.id), "region_id": int(s.region_id) if s.region_id is not None else None,
+             "sea_name": seas.get(int(s.region_id)) if s.region_id is not None else None,
+             "center_zone": ref(s.center_zone_id), "zones": [ref(z) for z in by_storm.get(int(s.id), [])],
+             "started_at": s.started_at, "ends_at": s.ends_at, "moves": int(s.moves or 0), "source": s.source}
+            for s in storms]
+
+
+def _id_list(value) -> List[int]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    return [int(v) for v in value] if isinstance(value, list) else []
+
+
+def _raids_out(db: Session, raids: Sequence["models.SeaRaid"]) -> List[dict]:
+    if not raids:
+        return []
+    ship_ids = sorted({int(r.ship_id) for r in raids})
+    ships = {int(s.id): s.name for s in db.query(models.SeaShip).filter(models.SeaShip.id.in_(ship_ids)).all()}
+    players = {int(r.id): _id_list(r.placed_ids) if r.placed_ids is not None else _id_list(r.player_ids)
+               for r in raids}
+    char_ids = sorted({c for ids in players.values() for c in ids})
+    names = {int(row[0]): row[1] for row in db.query(models.Character.id, models.Character.name)
+             .filter(models.Character.id.in_(char_ids)).all()} if char_ids else {}
+    locs = sea_crud.location_infos(db, [r.zone_id for r in raids])
+    return [{"id": int(r.id), "ship_id": int(r.ship_id), "ship_name": ships.get(int(r.ship_id)),
+             "zone": {"id": int(r.zone_id), "name": (locs.get(int(r.zone_id)) or sea_crud.LocInfo(0, None)).name},
+             "monster_name": r.monster_name,
+             "players": [{"id": c, "name": names.get(c)} for c in players[int(r.id)]],
+             "battle_id": int(r.battle_id) if r.battle_id else None, "status": r.status,
+             "created_at": r.created_at} for r in raids]
+
+
+def weather_out(db: Session, now: Optional[datetime] = None) -> dict:
+    """§3.11 ``GET /admin/sea/weather``: seas = regions holding ≥ 1 sea zone; raids = active + the last 20 final."""
+    now = now or sea_crud.now_utc()
+    _require_weather(db)
+    params = sea_crud.load_params(db)
+    season = sea_weather.current_season(db, now)
+    _graph, zone_sea = _sea_zones(db)
+    counts: Dict[int, int] = {}
+    for region_id in zone_sea.values():
+        if region_id:
+            counts[int(region_id)] = counts.get(int(region_id), 0) + 1
+    names = _region_names(db, counts)
+    rows = {int(r.region_id): r for r in db.query(models.SeaStormSea).all()}
+    seas = [_sea_out(rid, names.get(rid), counts[rid], rows.get(rid)) for rid in sorted(counts)]
+    storms = (db.query(models.SeaStorm).filter(models.SeaStorm.status == sea_core.STORM_ACTIVE)
+              .order_by(models.SeaStorm.id).all())
+    active = (db.query(models.SeaRaid).filter(models.SeaRaid.status.in_(sea_core.RAID_ACTIVE_STATUSES))
+              .order_by(models.SeaRaid.id.desc()).all())
+    final = (db.query(models.SeaRaid).filter(models.SeaRaid.status.in_(sea_core.RAID_FINAL_STATUSES))
+             .order_by(models.SeaRaid.id.desc()).limit(RAIDS_FINAL_LIMIT).all())
+    return {"season": season, "season_mult": float(sea_core.season_mult(season, params)), "seas": seas,
+            "storms": _storms_out(db, storms), "raids": _raids_out(db, list(active) + list(final))}
+
+
+def _sea_count(zone_sea: Dict[int, Optional[int]], region_id: int) -> int:
+    return sum(1 for r in zone_sea.values() if r and int(r) == int(region_id))
+
+
+def save_sea(db: Session, region_id: int, body: StormSeaIn, now: Optional[datetime] = None) -> None:
+    now = now or sea_crud.now_utc()
+    _require_weather(db)
+    _graph, zone_sea = _sea_zones(db)
+    if not _sea_count(zone_sea, region_id):
+        raise SeaError(404, MSG_SEA_NOT_FOUND)
+    row = db.get(models.SeaStormSea, int(region_id))
+    if row is None:
+        row = models.SeaStormSea(region_id=int(region_id))
+        db.add(row)
+    row.is_enabled = bool(body.is_enabled)
+    row.chance_per_hour_pct = Decimal(str(round(float(body.chance_per_hour_pct), 2)))
+    row.radius = int(body.radius)
+    row.updated_at = now
+    db.flush()
+
+
+def sea_one(db: Session, region_id: int) -> dict:
+    _graph, zone_sea = _sea_zones(db)
+    return _sea_out(region_id, _region_names(db, [region_id]).get(int(region_id)), _sea_count(zone_sea, region_id),
+                    db.get(models.SeaStormSea, int(region_id)))
+
+
+def start_storm(db: Session, body: StormCreateIn, now: Optional[datetime] = None) -> int:
+    """An admin storm over ``zone_id`` + its sea's radius (bypasses the one-storm-per-sea rule). Returns its id."""
+    now = now or sea_crud.now_utc()
+    _require_weather(db)
+    graph, zone_sea = _sea_zones(db)
+    zone_id = int(body.zone_id)
+    if zone_id not in graph.zone_ids:
+        raise SeaError(400, MSG_NOT_SEA_ZONE)
+    region_id = zone_sea.get(zone_id)
+    zones = sea_core.storm_zones(graph.adj, zone_sea, zone_id, sea_weather.sea_radius(db, region_id))
+    storm = sea_weather.create_storm(db, region_id=region_id, center_zone_id=zone_id, zones=zones,
+                                     minutes=int(body.minutes), now=now, source=sea_core.STORM_ADMIN)
+    logger.info("sea storm %s started over zone %s (%d zones, %d min)", storm.id, zone_id, len(zones), body.minutes)
+    return int(storm.id)
+
+
+def storm_one(db: Session, storm_id: int) -> dict:
+    storm = db.get(models.SeaStorm, int(storm_id))
+    if storm is None:
+        raise SeaError(404, MSG_STORM_NOT_FOUND)
+    return _storms_out(db, [storm])[0]
+
+
+def stop_storm(db: Session, storm_id: int, now: Optional[datetime] = None) -> None:
+    now = now or sea_crud.now_utc()
+    _require_weather(db)
+    storm = sea_crud._locked(db.query(models.SeaStorm).filter(models.SeaStorm.id == int(storm_id)), db).first()
+    if storm is None or storm.status != sea_core.STORM_ACTIVE:
+        raise SeaError(404, MSG_STORM_NOT_FOUND)
+    sea_weather.end_storm(db, storm, now)
 
 
 # =====================================================================================================================
@@ -752,3 +1079,34 @@ def put_settings(body: SeaSettingsIn, db: Session = Depends(get_db),
     _write(db, lambda: save_settings(db, body))
     logger.info("sea settings saved by user=%s", user.id)
     return _read(db, lambda: settings_out(db))
+
+
+# ---------------------------------------------------------------------------------------------------- FEAT-214 weather
+
+@router.get("/admin/sea/weather", response_model=SeaWeatherOut)
+def get_weather(db: Session = Depends(get_db), user: UserRead = Depends(require_permission("locations:read"))):
+    return _read(db, lambda: weather_out(db))
+
+
+@router.put("/admin/sea/seas/{region_id}", response_model=StormSeaOut)
+def put_sea(body: StormSeaIn, region_id: int = Path(..., ge=1), db: Session = Depends(get_db),
+            user: UserRead = Depends(require_permission("locations:update"))):
+    _write(db, lambda: save_sea(db, region_id, body))
+    logger.info("sea %s storm config saved by user=%s", region_id, user.id)
+    return _read(db, lambda: sea_one(db, region_id))
+
+
+@router.post("/admin/sea/storms", response_model=StormAdminOut, status_code=201)
+def post_storm(body: StormCreateIn, db: Session = Depends(get_db),
+               user: UserRead = Depends(require_permission("locations:update"))):
+    storm_id = _write(db, lambda: start_storm(db, body))
+    logger.info("sea storm %s started by user=%s", storm_id, user.id)
+    return _read(db, lambda: storm_one(db, storm_id))
+
+
+@router.delete("/admin/sea/storms/{storm_id}", status_code=204)
+def delete_storm(storm_id: int = Path(..., ge=1), db: Session = Depends(get_db),
+                 user: UserRead = Depends(require_permission("locations:update"))):
+    _write(db, lambda: stop_storm(db, storm_id))
+    logger.info("sea storm %s ended by user=%s", storm_id, user.id)
+    return Response(status_code=204)

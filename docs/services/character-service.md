@@ -3112,7 +3112,7 @@ Locations-service (`060_sea_zones`) владеет географией: `Locati
 | S2 | `POST /characters/sea/ships/{ship_id}/tickets` `{character_id, npc_id, to_trip}` | билет; ворота «Диалог с НПС» (503/403) + уровень репутации; 402 `insufficient_gold` |
 | S3 | `POST /characters/sea/ships/{ship_id}/sailor` `{character_id, npc_id}` | матрос на следующий рейс (бесплатно, нужен пост на палубе) |
 | S4 | `POST /characters/sea/ships/{ship_id}/stowaway` `{character_id}` | попытка «зайцем» — в порту стоянки или на палубе; ответ нейтральный |
-| S5 | `GET /characters/sea/decks/{location_id}?character_id=` | шапка палубы: корабль, зона/море, ETA, корабли рядом, пассажиры, мои места; 404 — не палуба |
+| S5 | `GET /characters/sea/decks/{location_id}?character_id=` | шапка палубы: корабль, зона/море, ETA, корабли рядом, пассажиры, мои места; 404 — не палуба; поля шторма/налёта FEAT-214 в `ship` |
 
 Перемещение (`PUT /characters/internal/{id}/update_location`): блокировка корабля(ей) палубы до блокировки персонажа
 (порядок ship → character, как у отплытия); морская зона — никогда не цель («В открытое море не выйти»); на палубу —
@@ -3170,7 +3170,7 @@ Locations-service (`060_sea_zones`) владеет географией: `Locati
 | A4 | `DELETE /ships/{id}` | `locations:delete` | только у причала (иначе 409 «Корабль в море — выключите его и дождитесь швартовки»): все с палубы высажены в порт, неначатые места — возврат, начатые — `completed`, корабль и остановки удалены (места остаются историей, палуба — обычная локация) |
 | A5 | `POST /legs/preview` | `locations:read` | `{stops: [{port_location_id, path_override}], is_loop, zone_minutes?}` → `[{index, from, to, zones: [{id,name}], minutes_per_zone_hint, minutes, override, ok, problem, problem_text}]`; `problem`: no_zone / no_path / bad_override / same_port / not_port |
 | A6 | `GET /candidates?ship_id=` | `locations:read` | `{decks: [{id, name, region_name, country_name}], captains: [{id, name, avatar, location_name}]}` — свободные (свои у `ship_id` тоже) |
-| A7 | `GET/PUT /settings` | `locations:read` / `locations:update` | `{sailor_post_min_chars, stowaway_base_pct, stowaway_wanted_points, path_max_zones}` |
+| A7 | `GET/PUT /settings` | `locations:read` / `locations:update` | `{sailor_post_min_chars, stowaway_base_pct, stowaway_wanted_points, path_max_zones}` + 18 чисел FEAT-214 (см. ниже; в PUT необязательны — не переданы = прежние) |
 
 Проверки сохранения (409 с русским текстом): палуба существует, в скрытой стране, не зона и не порт, без соседей и
 стрелок, не палуба другого корабля; капитан — НПС с ролью «Капитан», жив, не командует другим кораблём; 2..30
@@ -3179,3 +3179,99 @@ Locations-service (`060_sea_zones`) владеет географией: `Locati
 остановки маршрута туда-обратно не хранится.
 
 Порядок блокировок: `sea_ships (asc id) → sea_passes → characters (asc id) → econ_accounts` → строки закона/тени.
+
+## Шторма и морские монстры (FEAT-214)
+
+Продолжение морских путей. Модули: `sea_core.py` (чистые хелперы: `season_mult`, `pass_chance`, `split_groups`,
+`pack_size`, `storm_zones`, `storm_extra`, `relief`, `pick_drift`, `weather_rng` — шов для тестов), `sea_weather.py`
+(шаг погоды, поиск шторма по зоне, админские хелперы, клиент урона CAS), `sea_raid_crud.py` (жизненный цикл налёта),
+хуки в `sea_pass.py`, поля вида в `sea_crud.ship_public`, админка в `sea_admin.py`, колбэк в `sea_api.py`. Новых прав
+нет (`locations:*`), блокировки активности и копии `activity_lock.py` / `econ_core.py` не менялись.
+
+### Миграция `053_sea_storms_raids` (revises `052_sea_ships`; без FK)
+
+- `sea_settings` + `weather_last_run_at` и 18 чисел (диапазоны — `sea_core.*_RANGE`, по умолчанию):
+  `storm_min_minutes` 10..1440 (60), `storm_max_minutes` 10..1440 (180, ≥ min), `storm_move_pct` 0..100 (30),
+  `storm_max_moves` 0..10 (2), `storm_slow_mult` 1..10 (2.0 — время зоны в шторм), `storm_drift_pct` 0..100 (15),
+  `storm_hp_pct` 0..100 (10 % max HP за вход), `storm_stamina_pct` 0..100 (20), `storm_postpone_minutes` 1..240 (15),
+  `storm_postpone_max_minutes` 0..1440 (240), `storm_sailor_relief_pct` 0..100 (50), `season_mult_spring/summer/
+  autumn/winter` 0..10 (1.0 / 0.5 / 1.5 / 2.0), `raid_chance_mult` 0..10 (1.0; 0 = налётов нет),
+  `raid_hold_max_minutes` 0..1440 (120), `raid_repelled_delay_minutes` 0..120 (5).
+- `sea_ships` + `hold_until` (стоянка на время боя), `storm_hold_since` (отплытие отложено штормом с …),
+  `storm_extra_minutes`, `storm_post_floor_id` (пост матроса после входа в шторм).
+- `sea_storm_seas` (PK `region_id` = регион LS скрытой страны «Моря»): `is_enabled`, `chance_per_hour_pct` 0..100,
+  `radius` 0..5. Нет строки = море выключено, радиус 1.
+- `sea_storms` (`region_id`, `center_zone_id`, `status` active|ended, `source` auto|admin, `moves`, `started_at`,
+  `ends_at`, `ended_at`) + `sea_storm_zones` (`storm_id`, `zone_id`; индекс по зоне — его читает и locations-service).
+- `sea_raids` — строка на группу боя: `attack_key` (`ship:trip:leg_pos:drift`) + `group_no` UNIQUE (идемпотентность),
+  `player_ids` / `placed_ids` / `mob_ids` (JSON), `battle_id`, `status` starting|fighting|won|lost|aborted|expired,
+  `mobs_despawned`.
+
+Код терпим к отсутствию 053: шторма и налёты «молчат», вид корабля отдаёт `storm: null`, `raid: null`.
+
+### Погода (`sea_weather.run_weather`, раз за проход до кораблей, своя транзакция)
+
+1. Истёкшие шторма: бросок `storm_move_pct` (если `moves < storm_max_moves` и у центра есть соседняя зона того же
+   моря) → сдвиг центра, новые зоны по радиусу, новая длительность; иначе `ended`. Смена сезона идущий шторм не трогает.
+2. Новые: по каждому включённому морю без активного шторма (не больше одного на море) — шанс
+   `pass_chance(chance_per_hour_pct, season_mult, прошедшие минуты ≤ 60)`; центр — случайная зона моря, длительность
+   `uniform(min, max)`. Сезон — `economy_mint_crud.current_period` (нет календаря → множитель 1.0).
+3. `weather_last_run_at = now`. Уведомлений нет — о шторме сообщает корабль при входе в зону.
+
+### Хуки прохода кораблей (`sea_pass.process_ship`, без HTTP под блокировкой)
+
+- **Отложенное отплытие**: шторм над зоной порта → `departs_at = now + storm_postpone_minutes`, первый раз —
+  уведомление палубе (`storm_delay`); после `storm_postpone_max_minutes` корабль уходит всё равно. Места рейса в силе.
+- **Вход в зону** (только «настоящий» шаг, догонялка после простоя тихая; не у причала, `leg_pos >= 1`): в шторм — время
+  зоны × `storm_slow_mult`, урон `storm_hp_pct` / `storm_stamina_pct` всем на палубе **не в бою** (после коммита, CAS
+  `POST /attributes/internal/storm-damage`, HP не ниже 1), уведомление `storm`, бросок сноса `storm_drift_pct` в
+  соседнюю зону (новый путь от неё, `drift`). Затем бросок налёта (если нет активного).
+- **Матросы**: пост матроса на палубе после входа в шторм (длина ≥ `sailor_post_min_chars`) снимает
+  `storm_sailor_relief_pct` % задержки (`storm_relief`), один раз на зону.
+- **Удержание на время боя**: пока есть активные налёты — корабль стоит (`hold_until`, ≤ `raid_hold_max_minutes`); бои
+  кончились раньше — неиспользованное время возвращается (`hold_released`); срок вышел — корабль идёт дальше, бой на
+  палубе продолжается (`hold_expired`).
+- WS `ws_type = "sea"`, новые `data.event`: `storm`, `drift`, `storm_delay`, `storm_relief`, `raid`, `raid_repelled`,
+  `raid_won`, `raid_lost`, `hold_released`, `hold_expired`; у `raid` после старта боя ещё `battle_id` и `location_id`
+  (палуба) — ссылка «К бою».
+
+### Налёты монстров (`sea_raid_crud.py`)
+
+- **Бросок** (в транзакции корабля): кандидаты — включённые `location_mob_spawns` текущей зоны (редактор мобов); шанс
+  шаблона = `spawn_chance × raid_chance_mult`, первый успешный (в случайном порядке) нападает. Участники — игроки на
+  палубе не в бою, без блокировки активности, с HP > 0, не на сборе; капитан никогда. Никого → `raid_repelled`,
+  `next_zone_at += raid_repelled_delay_minutes`. Иначе группы `split_groups` (≤ 5, поровну: 6 → 3+3, 11 → 4+4+3),
+  строка на группу, удержание корабля, уведомление `raid`.
+- **Старт** (после коммита): мобы шаблона (`pack_size = min(max_active ≤ 5, размер группы)`, скрытые, `dungeon`) →
+  `battle_client.create_sea_raid_battle` (BS `POST /battles/internal/sea-raid`) → `fighting` + `battle_id` +
+  `placed_ids`; отказ BS → `aborted` + деспаун.
+- **Итог** — `POST /characters/internal/sea/raid-result` (`X-Internal-Token`; `{battle_id, sea_raid_id, winner_team,
+  aborted}` → `{status}`: won | lost | aborted | already | unknown); победа команды 0 = `won`. Уведомления
+  `raid_won` / `raid_lost` поставленным игрокам, деспаун мобов (`mobs_despawned`). Корабль колбэк не блокирует —
+  удержание снимает следующий проход.
+- **Страховки прохода**: `starting` > 10 мин → привязать найденный бой или `expired` + деспаун; `fighting` > 2 мин →
+  опрос `GET /battles/internal/{id}/result`; финальные без деспауна → деспаун. Пачка 200.
+- Позднее вступление — обычная заявка, только за команду 0 (проверяет battle-service).
+- `safe_land` не трогает игроков в бою (их высадит следующий проход); списание корабля при бое на палубе или активном
+  налёте → 409 «На палубе идёт бой — списать корабль можно после его окончания».
+
+### Вид корабля для игрока (S1 капитан, S5 палуба — `ShipPublicOut`, поля добавлены)
+
+```
+storm:               {zone_id, zone_name, ends_at} | null    # активный шторм над current_zone_id
+departure_postponed: bool                                    # у причала и storm_hold_since не NULL
+raid:                {monster_name, hold_until | null, battles: [{battle_id}]} | null
+                                                             # активные налёты; battles — только fighting
+```
+
+### Админка погоды (`sea_admin.py`, префикс `/characters/admin/sea`)
+
+| Метод / путь | Право | Что |
+|---|---|---|
+| `GET /weather` | `locations:read` | `{season (spring/summer/autumn/winter/null), season_mult, seas: [{region_id, name, zones_count, is_enabled, chance_per_hour_pct, radius}], storms: [{id, region_id, sea_name, center_zone: {id,name}, zones: [{id,name}], started_at, ends_at, moves, source}], raids: [{id, ship_id, ship_name, zone: {id,name}, monster_name, players: [{id,name}], battle_id, status, created_at}]}`; моря = регионы с ≥ 1 морской зоной; шторма — активные; налёты — активные (новые сначала) + 20 последних завершённых; `players` — поставленные (до старта — запланированная группа) |
+| `PUT /seas/{region_id}` | `locations:update` | `{is_enabled, chance_per_hour_pct 0..100, radius 0..5}` → строка моря (как в `seas`); регион без морских зон → 404 «Море не найдено» |
+| `POST /storms` | `locations:update` | `{zone_id ≥ 1, minutes 10..1440}` → 201 шторм (как в `storms`, `source = "admin"`): центр + радиус его моря, правило «один шторм на море» не действует; не морская зона → 400 «Это не морская зона» |
+| `DELETE /storms/{storm_id}` | `locations:update` | 204; не найден / уже закончился → 404 «Шторм не найден или уже закончился» |
+| `GET/PUT /settings` (A7) | `locations:read` / `locations:update` | + 18 чисел выше; `storm_max_minutes < storm_min_minutes` (с учётом сохранённых) → 400 «Максимальная длительность шторма меньше минимальной»; вне диапазона → 422 |
+
+Нет таблиц 053 → 503 «Шторма пока недоступны».

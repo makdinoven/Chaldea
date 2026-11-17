@@ -48,6 +48,20 @@ class CaravanRaidBattleCreated(BattleCreated):
     escort_character_ids: List[int] = Field(default_factory=list)
 
 
+class SeaRaidBattleCreate(BaseModel):
+    """FEAT-214: internal create used by character-service only (sea monsters on a ship deck).
+    Team 0 = the deck players (unavailable ones are silently skipped), team 1 = the monsters."""
+    sea_raid_id: int
+    location_id: int
+    player_character_ids: List[int] = Field(..., min_items=1, max_items=5)
+    mob_character_ids: List[int] = Field(..., min_items=1, max_items=5)
+
+
+class SeaRaidBattleCreated(BattleCreated):
+    """FEAT-214: BattleCreated + the deck players actually placed on team 0."""
+    player_character_ids: List[int]
+
+
 class BattleCreate(BaseModel):
     players: List[PlayerIn]
     battle_type: Optional[str] = None

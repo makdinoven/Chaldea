@@ -19,6 +19,7 @@ notices are returned and published by the caller after the commit.
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import inspect as sa_inspect, text
@@ -217,14 +218,52 @@ class SeaParams:
     stowaway_base_pct: float = 60.0
     stowaway_wanted_points: int = 50
     path_max_zones: int = sea_core.DEFAULT_PATH_MAX_ZONES
+    # FEAT-214 storms and raids (053; defaults = the migration defaults)
+    storm_min_minutes: int = 60
+    storm_max_minutes: int = 180
+    storm_move_pct: Decimal = Decimal("30")
+    storm_max_moves: int = 2
+    storm_slow_mult: Decimal = Decimal("2.00")
+    storm_drift_pct: Decimal = Decimal("15")
+    storm_hp_pct: Decimal = Decimal("10")
+    storm_stamina_pct: Decimal = Decimal("20")
+    storm_postpone_minutes: int = 15
+    storm_postpone_max_minutes: int = 240
+    storm_sailor_relief_pct: Decimal = Decimal("50")
+    season_mult_spring: Decimal = Decimal("1.00")
+    season_mult_summer: Decimal = Decimal("0.50")
+    season_mult_autumn: Decimal = Decimal("1.50")
+    season_mult_winter: Decimal = Decimal("2.00")
+    raid_chance_mult: Decimal = Decimal("1.00")
+    raid_hold_max_minutes: int = 120
+    raid_repelled_delay_minutes: int = 5
+
+
+_PARAM_INTS = ("storm_min_minutes", "storm_max_minutes", "storm_max_moves", "storm_postpone_minutes",
+               "storm_postpone_max_minutes", "raid_hold_max_minutes", "raid_repelled_delay_minutes")
+_PARAM_DECIMALS = ("storm_move_pct", "storm_slow_mult", "storm_drift_pct", "storm_hp_pct", "storm_stamina_pct",
+                   "storm_sailor_relief_pct", "season_mult_spring", "season_mult_summer", "season_mult_autumn",
+                   "season_mult_winter", "raid_chance_mult")
+
+
+def _dec(value, default: Decimal) -> Decimal:
+    if value is None:
+        return default
+    return value if isinstance(value, Decimal) else Decimal(str(value))
 
 
 def load_params(db: Session) -> SeaParams:
     row = db.get(models.SeaSetting, 1)
     if row is None:
         return SeaParams()
-    return SeaParams(_i(row.sailor_post_min_chars), float(row.stowaway_base_pct or 0),
-                     _i(row.stowaway_wanted_points), _i(row.path_max_zones) or sea_core.DEFAULT_PATH_MAX_ZONES)
+    defaults = SeaParams()
+    extra = {name: (int(getattr(row, name)) if getattr(row, name, None) is not None else getattr(defaults, name))
+             for name in _PARAM_INTS}
+    extra.update({name: _dec(getattr(row, name, None), getattr(defaults, name)) for name in _PARAM_DECIMALS})
+    return SeaParams(sailor_post_min_chars=_i(row.sailor_post_min_chars),
+                     stowaway_base_pct=float(row.stowaway_base_pct or 0),
+                     stowaway_wanted_points=_i(row.stowaway_wanted_points),
+                     path_max_zones=_i(row.path_max_zones) or sea_core.DEFAULT_PATH_MAX_ZONES, **extra)
 
 
 def get_ship(db: Session, ship_id: int, *, lock: bool = False) -> Optional["models.SeaShip"]:
@@ -441,6 +480,22 @@ def ship_public(db: Session, ship: "models.SeaShip", stops: Sequence["models.Sea
         "direction": _i(ship.direction) or 1,
         "is_loop": bool(ship.is_loop),
         "server_now": now,
+        **sea_state_public(db, ship, zone, docked, now),
+    }
+
+
+def sea_state_public(db: Session, ship: "models.SeaShip", zone: Optional[dict], docked: bool,
+                     now: datetime) -> dict:
+    """FEAT-214 §3.10: ``storm`` over the current zone, ``departure_postponed``, ``raid`` (tolerant of a missing 053:
+    no storm, no raid)."""
+    import sea_raid_crud  # late: both modules import this one
+    import sea_weather
+    storm = sea_weather.storm_at(db, ship.current_zone_id, now)
+    return {
+        "storm": {"zone_id": storm.zone_id, "zone_name": zone["name"] if zone else None, "ends_at": storm.ends_at}
+        if storm is not None else None,
+        "departure_postponed": bool(docked and getattr(ship, "storm_hold_since", None) is not None),
+        "raid": sea_raid_crud.raid_state(db, ship),
     }
 
 
@@ -972,13 +1027,15 @@ class LandingResult:
     ashore: List[AshoreResult] = field(default_factory=list)
     notices: List[law_notify.Notice] = field(default_factory=list)
     deck_location_id: Optional[int] = None
+    kept_in_battle: List[int] = field(default_factory=list)     # FEAT-214: never moved out of a battle
 
 
 def safe_land(db: Session, ship: "models.SeaShip", reason: str, now: Optional[datetime] = None,
               *, deck_location_id: Optional[int] = None) -> LandingResult:
     """Broken data (no valid stop / the deck vanished): every player on the deck → put ashore at
     :func:`landing_target`, not-started passes refunded, the ship switched off with ``blocked_reason`` (no
-    commit; the ship row is locked by the caller)."""
+    commit; the ship row is locked by the caller). FEAT-214 §3.9: a player in an active battle is not moved (no
+    notice; the sea pass lands him after the battle)."""
     now = now or now_utc()
     deck = int(deck_location_id or ship.deck_location_id)
     result = LandingResult(deck_location_id=deck)
@@ -988,6 +1045,12 @@ def safe_land(db: Session, ship: "models.SeaShip", reason: str, now: Optional[da
     players = (_locked(db.query(models.Character).filter(models.Character.current_location_id == deck,
                                                          models.Character.is_npc.is_(False))
                        .order_by(models.Character.id), db).all())
+    import sea_pass  # local: sea_pass imports this module
+    fighting = [ch for ch in players if sea_pass.in_battle(db, ch.id)]
+    if fighting:
+        result.kept_in_battle = [int(ch.id) for ch in fighting]
+        players = [ch for ch in players if int(ch.id) not in set(result.kept_in_battle)]
+        logger.info("sea ship %s: safe landing keeps %s aboard (in a battle)", ship.id, result.kept_in_battle)
     if target is not None:
         names = location_infos(db, [target])
         port_name = names[target].name if target in names else "—"

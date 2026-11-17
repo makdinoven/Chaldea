@@ -30,6 +30,21 @@ export interface SeaStop {
   port_name: string | null;
 }
 
+/** FEAT-214: the active storm over the ship's current zone. */
+export interface StormRef {
+  zone_id: number;
+  zone_name: string | null;
+  ends_at: string;
+}
+
+/** FEAT-214: the ship's active monster raid — one or more deck battles (none yet right after the roll). */
+export interface RaidState {
+  monster_name: string | null;
+  /** The ship holds (does not sail on) until then; null — it sails on. */
+  hold_until: string | null;
+  battles: { battle_id: number }[];
+}
+
 export interface ShipPublic {
   id: number;
   name: string;
@@ -46,6 +61,10 @@ export interface ShipPublic {
   direction: number;
   is_loop: boolean;
   server_now: string;
+  /** FEAT-214 */
+  storm?: StormRef | null;
+  departure_postponed?: boolean;
+  raid?: RaidState | null;
 }
 
 export interface SeaPass {
@@ -132,5 +151,8 @@ export interface SeaNoticeData {
   message?: string;
   notification_id?: number;
   silent?: boolean;
+  /** FEAT-214: a deck battle with monsters — the notice leads to it. */
+  battle_id?: number;
+  location_id?: number;
   [key: string]: unknown;
 }

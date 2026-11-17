@@ -1219,12 +1219,16 @@ class TestMigration010:
         assert mig.down_revision == "009_battle_law_encounter"
         assert len(mig.revision) <= 32                         # alembic_version varchar(32)
 
-    def test_single_head_is_010(self):
+    def test_single_head_descends_from_010(self):
+        # FEAT-214: 011_battle_sea_raid now sits on top of 010 — keep the chain linear
+        # instead of pinning the head to 010.
         revs = _revisions()
         assert "009_battle_law_encounter" in revs
+        assert "010_battle_caravan_raid" in revs
         parents = {d for d in revs.values() if d}
         heads = [r for r in revs if r not in parents]
-        assert heads == ["010_battle_caravan_raid"]
+        assert len(heads) == 1
+        assert "010_battle_caravan_raid" in parents             # 010 is no longer a dangling head
         assert all(len(r) <= 32 for r in revs)
 
     def _run(self, fn, columns, indexes):

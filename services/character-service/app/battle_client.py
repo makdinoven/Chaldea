@@ -2,7 +2,8 @@
 
 * :func:`create_guard_battle` — ``POST /battles/internal/guard`` (async; the encounter choice «драться»);
 * :func:`get_battle_result`   — ``GET /battles/internal/{id}/result`` (sync; the law pass polls lost callbacks);
-* :func:`create_caravan_raid_battle` — ``POST /battles/internal/caravan-raid`` (async; FEAT-211 raid start, B1).
+* :func:`create_caravan_raid_battle` — ``POST /battles/internal/caravan-raid`` (async; FEAT-211 raid start, B1);
+* :func:`create_sea_raid_battle` — ``POST /battles/internal/sea-raid`` (async; FEAT-214 sea monsters on a deck).
 
 Both send ``X-Internal-Token``. Errors are raised as :class:`BattleServiceError` (the caller decides what the player
 sees); a 404 battle is reported as :data:`BATTLE_NOT_FOUND`.
@@ -93,6 +94,33 @@ async def create_caravan_raid_battle(caravan_raid_id: int, caravan_id: int, lead
         return {"battle_id": int(data["battle_id"]),
                 "attacker_character_ids": [int(a) for a in (data.get("attacker_character_ids") or [])],
                 "escort_character_ids": [int(e) for e in (data.get("escort_character_ids") or [])]}
+    except Exception as e:
+        raise BattleServiceError("bad battle-service answer", response.status_code) from e
+
+
+async def create_sea_raid_battle(sea_raid_id: int, location_id: int, player_character_ids,
+                                 mob_character_ids) -> dict:
+    """FEAT-214: start a forced deck fight (team 0 the deck players — battle-service silently skips the busy ones,
+    team 1 the spawned monsters). Returns ``{"battle_id": int, "player_character_ids": [int]}`` (the players actually
+    placed). Raises :class:`BattleServiceError` (409 «Некому защищать палубу» / «Морские монстры недоступны»)."""
+    url = f"{_base_url()}/battles/internal/sea-raid"
+    payload = {"sea_raid_id": int(sea_raid_id), "location_id": int(location_id),
+               "player_character_ids": [int(p) for p in player_character_ids],
+               "mob_character_ids": [int(m) for m in mob_character_ids]}
+    try:
+        async with httpx.AsyncClient(timeout=BATTLE_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=payload, headers=_internal_headers())
+    except Exception as e:
+        logger.error("sea raid battle create failed (raid %s): %s", sea_raid_id, e)
+        raise BattleServiceError("battle-service unavailable") from e
+    if response.status_code >= 400:
+        logger.warning("sea raid battle create refused (raid %s): %s %s", sea_raid_id, response.status_code,
+                       response.text[:200])
+        raise BattleServiceError("sea raid battle refused", response.status_code, _detail(response))
+    try:
+        data = response.json()
+        return {"battle_id": int(data["battle_id"]),
+                "player_character_ids": [int(p) for p in (data.get("player_character_ids") or [])]}
     except Exception as e:
         raise BattleServiceError("bad battle-service answer", response.status_code) from e
 

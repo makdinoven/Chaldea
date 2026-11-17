@@ -11,10 +11,13 @@ import ConfirmDialog from '../../pages/LocationPage/ConfirmDialog';
 import { ExpandableRow, ExpandedPanelShell } from '../ExpandableList';
 import ShipForm from './ShipForm';
 import SeaSettingsCard from './SeaSettingsCard';
+import SeaWeatherCard from './SeaWeatherCard';
 
-type Tab = 'ships' | 'settings';
+type Tab = 'ships' | 'weather' | 'settings';
 
-const TAB_LABEL: Record<Tab, string> = { ships: 'Корабли', settings: 'Настройки моря' };
+const TABS: Tab[] = ['ships', 'weather', 'settings'];
+
+const TAB_LABEL: Record<Tab, string> = { ships: 'Корабли', weather: 'Погода', settings: 'Настройки моря' };
 
 const BLOCKED_LABEL: Record<string, string> = {
   no_path: 'Нет морского пути к следующему порту',
@@ -96,6 +99,7 @@ const ShipsPage = () => {
   useEffect(load, [load]);
 
   const zonesById = useMemo(() => new Map(zones.map((z) => [z.id, z])), [zones]);
+  const deckByShip = useMemo(() => new Map((ships ?? []).map((s) => [s.id, s.deck.id])), [ships]);
 
   const onSaved = (saved: SeaShipAdmin) => {
     setShips((prev) => {
@@ -151,7 +155,7 @@ const ShipsPage = () => {
       </div>
 
       <div className="flex gap-1 sm:gap-2 border-b border-white/10 overflow-x-auto gold-scrollbar">
-        {(['ships', 'settings'] as Tab[]).map((t) => (
+        {TABS.map((t) => (
           <button
             key={t}
             type="button"
@@ -166,6 +170,13 @@ const ShipsPage = () => {
       </div>
 
       {tab === 'settings' && <SeaSettingsCard canUpdate={canUpdate} />}
+
+      {tab === 'weather' && (
+        <>
+          {geoError && <p className="text-site-red text-sm">{geoError}</p>}
+          <SeaWeatherCard canUpdate={canUpdate} zones={zones} deckByShip={deckByShip} />
+        </>
+      )}
 
       {tab === 'ships' && (
         <>

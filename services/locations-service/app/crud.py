@@ -2726,7 +2726,9 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
 
     # 2a. FEAT-213: port <-> deck passages of docked ships (tolerant raw reads of the CS sea tables).
     #     «Сойти на берег» is public on a docked deck; «Подняться на борт» only for an entitled viewer.
-    sea = await sea_read.passages_for(session, location_id, viewer_character_id)
+    sea = await sea_read.passages_for(
+        session, location_id, viewer_character_id,
+        port_sea_zone_id=getattr(loc, 'port_sea_zone_id', None) if getattr(loc, 'is_port', False) else None)
     detailed_neighbors.extend(sea.disembark)
 
     # 2b. FEAT-207: closed faction territories among the neighbours (one batched read; tolerant)
@@ -2831,6 +2833,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "is_favorited": favorited,
         "ship_id": sea.ship_id,
         "docked_ships": sea.docked_ships,
+        "sea_unrest": sea.sea_unrest,
         "neighbors": detailed_neighbors,
         "players": players,
         "npcs": npcs,

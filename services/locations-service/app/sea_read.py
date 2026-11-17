@@ -15,6 +15,7 @@ Deploy-order tolerance (§3.15): every read treats a missing table / SQL error a
 """
 
 import logging
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
@@ -57,6 +58,13 @@ SQL_SHIPS_STOPPING_AT = text(
     "SELECT DISTINCT s.id, s.name FROM sea_ship_stops st JOIN sea_ships s ON s.id = st.ship_id "
     "WHERE st.port_location_id IN :ids ORDER BY s.id"
 ).bindparams(bindparam("ids", expanding=True))
+# FEAT-214: storms belong to character-service (migration ``053_sea_storms_raids``). ``ends_at > now`` is checked in
+# Python (naive UTC, as CS writes it) like CS ``sea_weather.storms_for``.
+STORM_ACTIVE = "active"
+SQL_STORM_ENDS_OVER_ZONE = text(
+    "SELECT s.ends_at FROM sea_storm_zones z JOIN sea_storms s ON s.id = z.storm_id "
+    "WHERE z.zone_id = :zone AND s.status = :active"
+)
 SQL_LOCATIONS = text(
     "SELECT id, name, image_url, recommended_level FROM Locations WHERE id IN :ids"
 ).bindparams(bindparam("ids", expanding=True))
@@ -98,6 +106,7 @@ class LocationSea:
     disembark: List[dict] = field(default_factory=list)
     board: List[dict] = field(default_factory=list)
     docked_ships: List[dict] = field(default_factory=list)
+    sea_unrest: bool = False                          # FEAT-214: the port's sea zone is under an active storm
 
 
 def _ids(values: Iterable) -> List[int]:
@@ -110,6 +119,15 @@ async def _rows(session: AsyncSession, stmt, params: dict, what: str) -> Optiona
         return (await session.execute(stmt, params)).fetchall()
     except SQLAlchemyError as exc:
         logger.warning("Sea read (%s) failed, treated as no ships: %s", what, exc)
+        return None
+
+
+def _as_dt(value) -> Optional[datetime]:
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
         return None
 
 
@@ -174,6 +192,20 @@ async def ships_stopping_at(session: AsyncSession, port_ids: Iterable) -> List[S
     return [ShipInfo(int(r[0]), str(r[1]), 0, False, "", 0, None) for r in rows]
 
 
+async def zone_in_storm(session: AsyncSession, zone_id: Optional[int], now: Optional[datetime] = None) -> bool:
+    """FEAT-214: True when an active, not yet expired storm covers the sea zone. Missing tables → False."""
+    if not zone_id:
+        return False
+    now = now or datetime.utcnow()
+    rows = await _rows(session, SQL_STORM_ENDS_OVER_ZONE,
+                       {"zone": int(zone_id), "active": STORM_ACTIVE}, "storms over zone") or []
+    for (ends_at,) in rows:
+        ends_at = _as_dt(ends_at)
+        if ends_at is not None and ends_at > now:
+            return True
+    return False
+
+
 # --------------------------------------------------------------------------------------------------- passages
 
 async def passage(session: AsyncSession, character_id: int, current_id: int,
@@ -214,12 +246,14 @@ async def _location_cards(session: AsyncSession, ids: Iterable) -> Dict[int, dic
 
 
 async def passages_for(session: AsyncSession, location_id: int,
-                       viewer_character_id: Optional[int]) -> LocationSea:
+                       viewer_character_id: Optional[int],
+                       port_sea_zone_id: Optional[int] = None) -> LocationSea:
     """Sea data of the location page.
 
     * On a deck of a docked ship: a «disembark» entry to the port, for any viewer.
     * In a port: «board» entries only for docked ACTIVE ships on which the viewer is entitled (others don't see
       them), plus the public list of every ship at the pier.
+    * FEAT-214: ``sea_unrest`` — the port's sea zone (``port_sea_zone_id``, pass it only for a port) is in a storm.
     """
     location_id = int(location_id)
     out = LocationSea()
@@ -242,6 +276,7 @@ async def passages_for(session: AsyncSession, location_id: int,
             })
 
     out.docked_ships = [{"id": s.id, "name": s.name} for s in docked]
+    out.sea_unrest = await zone_in_storm(session, port_sea_zone_id)
     entitled = await entitled_ship_ids(session, viewer_character_id, [s for s in docked if s.is_active])
     for ship in docked:
         deck = cards.get(ship.deck_location_id)

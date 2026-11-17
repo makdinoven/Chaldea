@@ -2248,6 +2248,11 @@ class SeaShip(Base):
     blocked_reason = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
+    # FEAT-214 (053): raid hold / storm state
+    hold_until = Column(DateTime, nullable=True)                    # sailing: raid hold end; NULL = not holding
+    storm_hold_since = Column(DateTime, nullable=True)              # docked: departure postponed by a storm since
+    storm_extra_minutes = Column(Integer, nullable=False, default=0, server_default="0")  # storm delay of the zone
+    storm_post_floor_id = Column(BigInteger, nullable=True)         # MAX(posts.id) at the stormy entry (relief)
 
     __table_args__ = (
         UniqueConstraint("deck_location_id", name="uq_sea_ships_deck"),
@@ -2319,6 +2324,108 @@ class SeaSetting(Base):
     stowaway_base_pct = Column(Numeric(5, 2), nullable=False, default=60, server_default="60")
     stowaway_wanted_points = Column(Integer, nullable=False, default=50, server_default="50")
     path_max_zones = Column(Integer, nullable=False, default=200, server_default="200")
+    # FEAT-214 (053): storms and raids (ranges in sea_core)
+    weather_last_run_at = Column(DateTime, nullable=True)
+    storm_min_minutes = Column(Integer, nullable=False, default=60, server_default="60")
+    storm_max_minutes = Column(Integer, nullable=False, default=180, server_default="180")
+    storm_move_pct = Column(Numeric(5, 2), nullable=False, default=30, server_default="30")
+    storm_max_moves = Column(Integer, nullable=False, default=2, server_default="2")
+    storm_slow_mult = Column(Numeric(4, 2), nullable=False, default=2, server_default="2.00")
+    storm_drift_pct = Column(Numeric(5, 2), nullable=False, default=15, server_default="15")
+    storm_hp_pct = Column(Numeric(5, 2), nullable=False, default=10, server_default="10")
+    storm_stamina_pct = Column(Numeric(5, 2), nullable=False, default=20, server_default="20")
+    storm_postpone_minutes = Column(Integer, nullable=False, default=15, server_default="15")
+    storm_postpone_max_minutes = Column(Integer, nullable=False, default=240, server_default="240")
+    storm_sailor_relief_pct = Column(Numeric(5, 2), nullable=False, default=50, server_default="50")
+    season_mult_spring = Column(Numeric(4, 2), nullable=False, default=1, server_default="1.00")
+    season_mult_summer = Column(Numeric(4, 2), nullable=False, default=0.5, server_default="0.50")
+    season_mult_autumn = Column(Numeric(4, 2), nullable=False, default=1.5, server_default="1.50")
+    season_mult_winter = Column(Numeric(4, 2), nullable=False, default=2, server_default="2.00")
+    raid_chance_mult = Column(Numeric(4, 2), nullable=False, default=1, server_default="1.00")
+    raid_hold_max_minutes = Column(Integer, nullable=False, default=120, server_default="120")
+    raid_repelled_delay_minutes = Column(Integer, nullable=False, default=5, server_default="5")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# FEAT-214 storms and sea monster raids (053). No FKs; see sea_core / sea_weather / sea_raid_crud.
+# ---------------------------------------------------------------------------------------------------------------------
+
+class SeaStormSea(Base):
+    """Per-sea storm config, keyed by the locations-service ``Regions.id`` of the sea (hidden country «Моря»)."""
+
+    __tablename__ = "sea_storm_seas"
+
+    region_id = Column(BigInteger, primary_key=True, autoincrement=False)
+    is_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
+    chance_per_hour_pct = Column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    radius = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_at = Column(DateTime, nullable=False)
+
+
+class SeaStorm(Base):
+    """A storm over ``center_zone_id`` and its neighbours (``sea_storm_zones``): status active | ended,
+    source auto | admin."""
+
+    __tablename__ = "sea_storms"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    region_id = Column(BigInteger, nullable=True)
+    center_zone_id = Column(BigInteger, nullable=False)
+    status = Column(String(10), nullable=False)
+    source = Column(String(10), nullable=False)
+    moves = Column(Integer, nullable=False, default=0, server_default="0")
+    started_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_sea_storms_active", "status", "ends_at"),
+        Index("ix_sea_storms_region", "region_id", "status"),
+    )
+
+
+class SeaStormZone(Base):
+    """A zone covered by a storm."""
+
+    __tablename__ = "sea_storm_zones"
+
+    storm_id = Column(BigInteger, primary_key=True, autoincrement=False)
+    zone_id = Column(BigInteger, primary_key=True, autoincrement=False)
+
+    __table_args__ = (
+        Index("ix_sea_storm_zones_zone", "zone_id"),
+    )
+
+
+class SeaRaid(Base):
+    """One monster battle group on a deck: status starting | fighting | won | lost | aborted | expired."""
+
+    __tablename__ = "sea_raids"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    ship_id = Column(BigInteger, nullable=False)
+    attack_key = Column(String(48), nullable=False)       # f"{ship_id}:{trip_no}:{leg_pos}:{drift_n}"
+    group_no = Column(Integer, nullable=False)
+    deck_location_id = Column(BigInteger, nullable=False)
+    zone_id = Column(BigInteger, nullable=False)
+    mob_template_id = Column(Integer, nullable=False)
+    monster_name = Column(String(255), nullable=True)
+    player_ids = Column(JSON, nullable=False)
+    placed_ids = Column(JSON, nullable=True)
+    mob_ids = Column(JSON, nullable=True)
+    battle_id = Column(BigInteger, nullable=True)
+    status = Column(String(10), nullable=False)
+    mobs_despawned = Column(Boolean, nullable=False, default=False, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("attack_key", "group_no", name="uq_sea_raids_group"),
+        Index("ix_sea_raids_ship", "ship_id", "status"),
+        Index("ix_sea_raids_status", "status", "created_at"),
+        Index("ix_sea_raids_battle", "battle_id"),
+    )
 
 
 # Balance guard: a persistent Character.currency_balance changed through the ORM is a bypass of the

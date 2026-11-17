@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { fetchDeck, onSeaNotice, seaErrorMessage } from '../../../api/sea';
 import type { DeckView, SeaPass } from '../../../types/sea';
 import { ShipStatusLine, seaPassTitle } from './CaptainModal/CaptainModal';
+import SeaShipAlerts from './SeaShipAlerts';
 
 interface ShipDeckHeaderProps {
   /** The deck location. */
@@ -30,8 +31,8 @@ const passLine = (p: SeaPass, docked: boolean, sailorMinChars: number): string =
 /**
  * FEAT-213 — the head of a ship's deck (the deck is an ordinary location): the ship, its Captain, where it is
  * («У причала X» / «В море: зона, море → порт»), departure or arrival countdown, ships nearby, the character's own
- * place aboard and a warning when he has none for the next trip. Polls every 30 s, on a countdown end and on
- * `ws_type="sea"` notices of this ship.
+ * place aboard and a warning when he has none for the next trip. FEAT-214: storm / postponed departure / monsters on
+ * the deck with the battle links. Polls every 30 s, on a countdown end and on `ws_type="sea"` notices of this ship.
  */
 const ShipDeckHeader = ({ locationId, shipId, characterId, isCharacterHere, onShipStatusChange }: ShipDeckHeaderProps) => {
   const [view, setView] = useState<DeckView | null>(null);
@@ -124,6 +125,8 @@ const ShipDeckHeader = ({ locationId, shipId, characterId, isCharacterHere, onSh
           )}
         </div>
       </div>
+
+      <SeaShipAlerts ship={ship} withBattleLinks />
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/60">
         <span className="flex items-center gap-1.5 min-w-0">

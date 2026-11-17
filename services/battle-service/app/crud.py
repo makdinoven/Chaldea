@@ -22,6 +22,7 @@ async def create_battle(
     dungeon_session_id: int = None,
     law_encounter_id: int = None,
     caravan_raid_id: int = None,
+    sea_raid_id: int = None,
 ) -> tuple[models.Battle, list[models.BattleParticipant]]:
 
     battle = models.Battle(
@@ -29,6 +30,7 @@ async def create_battle(
         dungeon_session_id=dungeon_session_id,
         law_encounter_id=law_encounter_id,  # FEAT-198: guard battles only
         caravan_raid_id=caravan_raid_id,  # FEAT-211: caravan raid battles only
+        sea_raid_id=sea_raid_id,  # FEAT-214: sea raid battles only
     )
     db.add(battle)
     await db.flush()

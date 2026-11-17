@@ -1412,6 +1412,10 @@ Optional[int]` (null = не менять, `0` = очистить). Все сер
   зритель (`character_id`, принадлежащий пользователю) с правом на следующий рейс.
 - Чтения терпимы: нет таблиц character-service (разъезд деплоя, тесты) → нет проходов, `ship_id = null`,
   `docked_ships = []`, WARNING в лог; проверки админки в этом случае ничего не запрещают.
+- FEAT-214: `sea_unrest: bool` — локация-порт (`is_port`), чья `port_sea_zone_id` сейчас накрыта активным штормом
+  (`sea_storm_zones` ⋈ `sea_storms`, `status = 'active'` и `ends_at > now` в UTC, проверка в Python —
+  `sea_read.zone_in_storm`). Фронт показывает «В море неспокойно». Нет таблиц штормов (миграция CS `053`) →
+  `false` + WARNING.
 
 ### Эндпоинты
 

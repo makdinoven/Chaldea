@@ -5,7 +5,9 @@ Included from main.py before the main ``/characters`` router (static ``/characte
 * S2 ``POST /characters/sea/ships/{ship_id}/tickets`` — buy a ticket (201 ``PassOut``; 402 not enough money);
 * S3 ``POST /characters/sea/ships/{ship_id}/sailor`` — hire as a sailor (201 ``PassOut``);
 * S4 ``POST /characters/sea/ships/{ship_id}/stowaway`` — try to sneak aboard (201, a neutral message);
-* S5 ``GET  /characters/sea/decks/{location_id}?character_id=`` — the deck header.
+* S5 ``GET  /characters/sea/decks/{location_id}?character_id=`` — the deck header;
+* FEAT-214 ``POST /characters/internal/sea/raid-result`` — the battle-service callback of a monster fight on a deck
+  (X-Internal-Token; nginx blocks ``/characters/internal/`` outside).
 
 Auth: JWT + the character's owner on every call. S2 / S3 gate order (caravaneer template): owner + player, the
 Captain exists / role / alive / bound to a ship, same location (read transaction closed) → the FEAT-145
@@ -24,8 +26,9 @@ from sqlalchemy.orm import Session
 import law_notify
 import locations_client
 import sea_crud
+import sea_raid_crud
 import sea_schemas as schemas
-from auth_http import UserRead, get_current_user_via_http
+from auth_http import UserRead, get_current_user_via_http, verify_internal_token
 from economy_api import get_db
 from economy_crud import EconomyApiError
 
@@ -35,6 +38,7 @@ router = APIRouter(prefix="/characters", tags=["sea"])
 
 MSG_LOAD_FAILED = "Не удалось загрузить данные корабля"
 MSG_WRITE_FAILED = "Не удалось выполнить действие с кораблём"
+MSG_SETTLE_FAILED = "Не удалось завершить бой с морскими монстрами"
 
 
 def _read(db: Session, action):
@@ -160,3 +164,23 @@ def get_deck(
     current_user: UserRead = Depends(get_current_user_via_http),
 ):
     return _read(db, lambda: sea_crud.deck_view(db, location_id, character_id, current_user.id))
+
+
+# ---------------------------------------------------------------------------------------------------- FEAT-214
+
+@router.post("/internal/sea/raid-result", response_model=schemas.SeaRaidResultOut)
+def post_sea_raid_result(
+    body: schemas.SeaRaidResultIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """The monster fight on a deck ended (or was force-finished). Idempotent; an unknown raid answers ``unknown``.
+    The ship's hold is released by the next sea pass."""
+    try:
+        status = sea_raid_crud.battle_result(db, battle_id=body.battle_id, raid_id=body.sea_raid_id,
+                                             winner_team=body.winner_team, aborted=body.aborted)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("sea raid %s: settlement failed (the sea pass polls it)", body.sea_raid_id)
+        raise HTTPException(status_code=500, detail=MSG_SETTLE_FAILED)
+    return {"status": status}

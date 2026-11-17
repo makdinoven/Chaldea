@@ -9,6 +9,10 @@ import type {
   SeaShipAdmin,
   SeaShipCreate,
   SeaShipUpdate,
+  SeaStormAdmin,
+  SeaStormSea,
+  SeaStormSeaUpdate,
+  SeaWeather,
   SeaZone,
 } from '../types/seaAdmin';
 
@@ -34,6 +38,29 @@ export const SEA_LIMITS = {
   stowaway_base_pct: [0, 100],
   stowaway_wanted_points: [1, 1000],
   path_max_zones: [10, 1000],
+  // FEAT-214 settings
+  storm_min_minutes: [10, 1440],
+  storm_max_minutes: [10, 1440],
+  storm_move_pct: [0, 100],
+  storm_max_moves: [0, 10],
+  storm_slow_mult: [1, 10],
+  storm_drift_pct: [0, 100],
+  storm_hp_pct: [0, 100],
+  storm_stamina_pct: [0, 100],
+  storm_postpone_minutes: [1, 240],
+  storm_postpone_max_minutes: [0, 1440],
+  storm_sailor_relief_pct: [0, 100],
+  season_mult_spring: [0, 10],
+  season_mult_summer: [0, 10],
+  season_mult_autumn: [0, 10],
+  season_mult_winter: [0, 10],
+  raid_chance_mult: [0, 10],
+  raid_hold_max_minutes: [0, 1440],
+  raid_repelled_delay_minutes: [0, 120],
+  // FEAT-214 weather
+  chance_per_hour_pct: [0, 100],
+  radius: [0, 5],
+  minutes: [10, 1440],
 } as const;
 
 export type SeaLimitKey = keyof typeof SEA_LIMITS;
@@ -58,6 +85,29 @@ export const SEA_FIELD_LABELS: Record<string, string> = {
   stowaway_base_pct: 'Шанс поймать зайца',
   stowaway_wanted_points: 'Очки розыска за зайца',
   path_max_zones: 'Предел зон на участок',
+  storm_min_minutes: 'Шторм длится минимум (мин)',
+  storm_max_minutes: 'Шторм длится максимум (мин)',
+  storm_move_pct: 'Шанс шторма сместиться',
+  storm_max_moves: 'Смещений шторма за жизнь',
+  storm_slow_mult: 'Замедление в шторм',
+  storm_drift_pct: 'Шанс сноса с курса',
+  storm_hp_pct: 'Урон здоровью в шторм',
+  storm_stamina_pct: 'Урон выносливости в шторм',
+  storm_postpone_minutes: 'Перенос отплытия (мин)',
+  storm_postpone_max_minutes: 'Предел переноса отплытия (мин)',
+  storm_sailor_relief_pct: 'Облегчение за матроса',
+  season_mult_spring: 'Множитель весны',
+  season_mult_summer: 'Множитель лета',
+  season_mult_autumn: 'Множитель осени',
+  season_mult_winter: 'Множитель зимы',
+  raid_chance_mult: 'Множитель шанса нападения',
+  raid_hold_max_minutes: 'Стоянка на время боя (мин)',
+  raid_repelled_delay_minutes: 'Задержка после «отбились» (мин)',
+  is_enabled: 'Шторма включены',
+  chance_per_hour_pct: 'Шанс шторма в час',
+  radius: 'Радиус шторма',
+  zone_id: 'Морская зона',
+  minutes: 'Длительность (мин)',
 };
 
 /** «Поле «X»: допустимо от A до B» when the field has known limits. */
@@ -143,4 +193,27 @@ export const fetchSeaPorts = async (): Promise<SeaPort[]> => {
 export const fetchSeaZones = async (): Promise<SeaZone[]> => {
   const { data } = await axios.get<SeaZone[]>('/locations/admin/sea-zones');
   return data;
+};
+
+// ---------- FEAT-214 weather (character-service) ----------
+
+/** Seasons, multipliers, seas with their storm settings, active storms and recent monster raids. */
+export const fetchSeaWeather = async (): Promise<SeaWeather> => {
+  const { data } = await axios.get<SeaWeather>(`${BASE}/weather`);
+  return data;
+};
+
+export const putSeaStormSea = async (regionId: number, body: SeaStormSeaUpdate): Promise<SeaStormSea> => {
+  const { data } = await axios.put<SeaStormSea>(`${BASE}/seas/${regionId}`, body);
+  return data;
+};
+
+/** A storm centred on `zone_id` (plus the sea's radius) for `minutes`. */
+export const createSeaStorm = async (body: { zone_id: number; minutes: number }): Promise<SeaStormAdmin> => {
+  const { data } = await axios.post<SeaStormAdmin>(`${BASE}/storms`, body);
+  return data;
+};
+
+export const endSeaStorm = async (stormId: number): Promise<void> => {
+  await axios.delete(`${BASE}/storms/${stormId}`);
 };

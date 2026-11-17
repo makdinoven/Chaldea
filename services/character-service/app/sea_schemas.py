@@ -23,6 +23,24 @@ class ZoneRefOut(BaseModel):
     sea_name: Optional[str]               # the zone's region (a sea of the hidden «Моря» country)
 
 
+class StormRefOut(BaseModel):
+    """FEAT-214 §3.10: the active storm over the ship's current zone."""
+    zone_id: int
+    zone_name: Optional[str]
+    ends_at: datetime
+
+
+class RaidBattleRefOut(BaseModel):
+    battle_id: int
+
+
+class RaidStateOut(BaseModel):
+    """FEAT-214 §3.10: the ship's active monster raid (one or more deck battles)."""
+    monster_name: Optional[str]
+    hold_until: Optional[datetime]        # the ship holds (does not sail on) until then; None = sails on
+    battles: List[RaidBattleRefOut]       # fighting groups only (a just-rolled raid may have none yet)
+
+
 class StopOut(BaseModel):
     index: int
     port_id: int
@@ -45,6 +63,10 @@ class ShipPublicOut(BaseModel):
     direction: int
     is_loop: bool
     server_now: datetime
+    # FEAT-214 (additive)
+    storm: Optional[StormRefOut] = None
+    departure_postponed: bool = False     # docked and the departure is postponed by a storm
+    raid: Optional[RaidStateOut] = None
 
 
 class PassOut(BaseModel):
@@ -130,3 +152,17 @@ class StowawayIn(BaseModel):
 
 class MessageOut(BaseModel):
     message: str
+
+
+# ---------------------------------------------------------------------------------------------------- FEAT-214
+
+class SeaRaidResultIn(BaseModel):
+    """battle-service → ``POST /characters/internal/sea/raid-result`` (X-Internal-Token)."""
+    battle_id: int = Field(..., ge=1)
+    sea_raid_id: int = Field(..., ge=1)
+    winner_team: Optional[int] = None
+    aborted: bool = False
+
+
+class SeaRaidResultOut(BaseModel):
+    status: str                           # won | lost | aborted | expired | already | unknown

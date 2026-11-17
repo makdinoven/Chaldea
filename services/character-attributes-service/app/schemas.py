@@ -406,3 +406,38 @@ class SettleRegenRequest(BaseModel):
 class SettleRegenResponse(BaseModel):
     settled: List[int]
     missing: List[int]
+
+
+# FEAT-214 §3.7: storm damage on a ship deck (internal, character-service → CAS).
+STORM_DAMAGE_MAX_ITEMS = 200
+
+
+class StormDamageItem(BaseModel):
+    character_id: int = Field(..., ge=1)
+    health_pct: float = Field(0.0, ge=0, le=100)
+    stamina_pct: float = Field(0.0, ge=0, le=100)
+
+
+class StormDamageRequest(BaseModel):
+    items: conlist(StormDamageItem, min_items=1, max_items=STORM_DAMAGE_MAX_ITEMS)
+    min_health: int = Field(1, ge=1)
+
+    @validator("items")
+    def _unique_character_ids(cls, value):
+        ids = [item.character_id for item in value]
+        if len(set(ids)) != len(ids):
+            raise ValueError("character_id в items должны быть уникальными")
+        return value
+
+
+class StormDamageApplied(BaseModel):
+    character_id: int
+    health_before: int
+    health_after: int
+    stamina_before: int
+    stamina_after: int
+
+
+class StormDamageResponse(BaseModel):
+    applied: List[StormDamageApplied]
+    missing: List[int]

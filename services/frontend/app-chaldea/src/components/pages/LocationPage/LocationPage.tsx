@@ -917,7 +917,7 @@ const LocationPage = () => {
         />
       )}
       {/* FEAT-213: ships at the pier of this port */}
-      <DockedShips ships={location.docked_ships ?? []} />
+      <DockedShips ships={location.docked_ships ?? []} seaUnrest={Boolean(location.sea_unrest)} />
 
       <LocationHeader
         location={location}

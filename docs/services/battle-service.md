@@ -46,7 +46,7 @@ battle-service/app/
 ## Хранение данных
 
 ### MySQL (постоянное)
-- **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, `dungeon_session_id` (FEAT-175), `law_encounter_id` (FEAT-198, миграция `009_battle_law_encounter`), `caravan_raid_id` (FEAT-211, миграция `010_battle_caravan_raid`), timestamps
+- **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, `dungeon_session_id` (FEAT-175), `law_encounter_id` (FEAT-198, миграция `009_battle_law_encounter`), `caravan_raid_id` (FEAT-211, миграция `010_battle_caravan_raid`), `sea_raid_id` (FEAT-214, миграция `011_battle_sea_raid`), timestamps
 - **battle_participants** - battle_id, character_id, team, `dropped_out_at`, `joined_at` (FEAT-164, миграция `007_participant_joined_at`; ставится при создании боя и при одобрении заявки на вступление, NULL у старых строк)
 - **battle_turns** - battle_id, actor_id, turn_number, attack/defense/support_rank_id, item_id, deadline
 
@@ -310,6 +310,7 @@ battle-service/app/
 | character:8005 | PUT `/characters/internal/npc-status/{id}` | Смерть побеждённого NPC (не моба) в `_finalize_battle`, `X-Internal-Token`. **FEAT-197:** тело `{status: "dead", battle_id, killer_character_ids}` — `killer_character_ids` = отсортированные уникальные `character_id` **всех** участников победившей команды (живых и павших). character-service оставляет из них только игроков (`is_npc = 0`), начисляет каждому полный вес репутации за убийство в регионе NPC и делает это только при реальном переходе `alive → dead` (ключ `npc_kill:{npc}:{battle_id}:{killer}`), так что повторный отчёт ничего не добавляет; ответ `{ok, status, killed}`. Выборка NPC — `is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')`. Ошибка только логируется |
 | character:8005 | POST `/characters/internal/law/battle-result` | **FEAT-198:** итог боя со стражей (`_notify_law_battle_end`, только бои с `law_encounter_id`), `{battle_id, law_encounter_id, winner_team, aborted}`, `X-Internal-Token`, фоновая задача, 3 попытки при 5xx/сети. У стражника npc-status даёт нокаут вместо смерти — это решает character-service |
 | character:8005 | POST `/characters/internal/caravans/raid-result` | **FEAT-211:** итог налёта на караван (`_notify_caravan_battle_end`, только бои с `caravan_raid_id`), `{battle_id, caravan_raid_id, winner_team, aborted}`, `X-Internal-Token`, фоновая задача, 3 попытки при 5xx/сети. Добычу, преступление и деспаун охраны делает character-service |
+| character:8005 | POST `/characters/internal/sea/raid-result` | **FEAT-214:** итог боя с морскими монстрами на палубе (`_notify_sea_battle_end`, только бои с `sea_raid_id`), `{battle_id, sea_raid_id, winner_team, aborted}`, `X-Internal-Token`, фоновая задача, 3 попытки при 5xx/сети. Строку налёта, уведомления, снятие стоянки корабля и деспаун монстров делает character-service |
 | party:8014 | POST `/party/internal/xp-bonus` | Отрядный бонус опыта за бой. **FEAT-169:** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
 | party:8014 | GET `/party/internal/active-members` | Состав отряда в локации (групповой PvE/PvP). **FEAT-169:** весь префикс `/party/internal/` закрыт токеном, заголовок обязателен на всех трёх вызовах (`main.py`) |
 | character-attributes:8002 | POST `/attributes/cumulative_stats/increment` | Кумулятивная статистика по итогам боя (`_track_cumulative_stats`). **FEAT-167 задача #17: роут стал internal-only** — обязателен `X-Internal-Token` (`main._internal_token_headers()`, читает env в момент вызова). Вызов fire-and-forget: ошибка логируется и глотается, поэтому потеря заголовка молча остановила бы учёт побед, убийств и разблокировку перков — покрыто тестами в `tests/test_cumulative_stats.py` |
@@ -654,8 +655,9 @@ FEAT-171 объявила приватным.
   `POST /dungeons/internal/battle-callback` `{battle_id, session_id, winner_team, defeated_characters, aborted}`
   (фоновая задача, 3 попытки при 5xx/сетевой ошибке; промах подстрахован опросом).
 * `GET /battles/internal/{id}/result` (X-Internal-Token) — итог после истечения Redis-состояния:
-  `{battle_id, status, winner_team, aborted, dungeon_session_id, law_encounter_id, caravan_raid_id}` (победитель — по
-  `battle_history`; `law_encounter_id` — FEAT-198, `caravan_raid_id` — FEAT-211, аддитивно).
+  `{battle_id, status, winner_team, aborted, dungeon_session_id, law_encounter_id, caravan_raid_id, sea_raid_id}`
+  (победитель — по `battle_history`; `law_encounter_id` — FEAT-198, `caravan_raid_id` — FEAT-211, `sea_raid_id` —
+  FEAT-214, аддитивно).
 * `_ensure_not_activity_locked` отказывает (409) во всех путях создания боя, PvP-вызовах/нападениях,
   лобби, заявках на вступление и их одобрении; заблокированные соотрядцы тихо исключаются из
   групповых атак (`_filter_available`, party mob/pack attack).
@@ -749,6 +751,33 @@ battle-service только проводит бой и сообщает итог
   если оно живо; иначе строки `dropped_out_at IS NOT NULL` ∪ вся проигравшая команда), для остальных боёв — `[]`.
 * Блокировка активности: причина `caravan_escort`, см. «Блокировка активности» в locations-service.md (файл
   `activity_lock.py` побайтно одинаков).
+
+## Морские монстры на палубе (FEAT-214)
+
+Шторма, нападения, строки `sea_raids`, спавн монстров и стоянку корабля ведёт character-service (см.
+`docs/services/character-service.md`). battle-service только проводит бой и сообщает итог — копия схемы налёта на караван.
+
+* **Миграция `011_battle_sea_raid`:** `battles.sea_raid_id` INT NULL + индекс `ix_battles_sea_raid_id` (без FK —
+  строка `sea_raids` принадлежит character-service). `crud.create_battle(..., sea_raid_id=None)`,
+  `_assemble_battle(..., sea_raid_id=None)` — метка передаётся только когда задана.
+* **`POST /battles/internal/sea-raid`** (X-Internal-Token) `SeaRaidBattleCreate {sea_raid_id, location_id,
+  player_character_ids (1..5), mob_character_ids (1..5)}` → 201 `SeaRaidBattleCreated {battle_id, participants,
+  next_actor, deadline_at, player_character_ids}` (кого реально поставили). Бой начинает сервер: без гейта поста и
+  без проверки владения. Монстры проверяются `_ensure_caravan_guards(..., message=SEA_MOBS_UNAVAILABLE)` — разные NPC
+  на палубе, не мертвы, не оглушены, не в бою, без блокировки (иначе 409 «Морские монстры недоступны»;
+  у `_ensure_caravan_guards` появился необязательный `message`, караван по-прежнему получает свой текст).
+  Игроки **молча пропускаются** (`_sea_fighter_available`), если не `is_npc = 0`, не стоят в `location_id`, уже в
+  бою, под блокировкой активности или с `character_attributes.current_health <= 0`; дубли убираются. Никого не
+  осталось → 409 «Некому защищать палубу». Бой `pve`: команда 0 — игроки, команда 1 — монстры (регистрируются в
+  автобое как обычные NPC). Награды и поражение — обычный конец PvE (`_distribute_pve_rewards`), ничего сверху.
+* **Колбэк:** `_finalize_battle` сразу после колбэка каравана вызывает `_notify_sea_battle_end`,
+  `_force_finish_battle` — с `aborted=True`. Для боя без метки — no-op. Фоновая задача шлёт
+  `POST /characters/internal/sea/raid-result` `{battle_id, sea_raid_id, winner_team, aborted}` с `X-Internal-Token`,
+  до 3 попыток при 5xx/сетевой ошибке. Промах страхует морской проход character-service (опрос
+  `GET /battles/internal/{id}/result`, поле `sea_raid_id`).
+* **Вступление в бой:** `POST /battles/{id}/join-request` для боя с `sea_raid_id` — только команда 0 (экипаж);
+  команда 1 → 400 «Против морских монстров можно встать только на сторону экипажа». Команда 0 — обычный поток с
+  одобрением модератора.
 
 ## FEAT-188: пассивки подклассов
 

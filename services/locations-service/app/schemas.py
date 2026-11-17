@@ -778,6 +778,8 @@ class LocationClientDetails(BaseModel):
     port_sea_zone_id: Optional[int] = None
     ship_id: Optional[int] = None
     docked_ships: List[DockedShipClient] = []
+    # FEAT-214: the port's sea zone is under an active storm («В море неспокойно»)
+    sea_unrest: bool = False
     marker_type: Optional[str] = None
     district_id: Optional[int] = None
     region_id: Optional[int] = None

@@ -151,6 +151,83 @@ export interface SeaSettings {
   stowaway_base_pct: number;
   stowaway_wanted_points: number;
   path_max_zones: number;
+  // FEAT-214 — storms and sea monsters
+  storm_min_minutes: number;
+  storm_max_minutes: number;
+  storm_move_pct: number;
+  storm_max_moves: number;
+  storm_slow_mult: number;
+  storm_drift_pct: number;
+  storm_hp_pct: number;
+  storm_stamina_pct: number;
+  storm_postpone_minutes: number;
+  storm_postpone_max_minutes: number;
+  storm_sailor_relief_pct: number;
+  season_mult_spring: number;
+  season_mult_summer: number;
+  season_mult_autumn: number;
+  season_mult_winter: number;
+  raid_chance_mult: number;
+  raid_hold_max_minutes: number;
+  raid_repelled_delay_minutes: number;
+}
+
+// ---------- FEAT-214 weather (GET /admin/sea/weather) ----------
+
+export type SeaSeason = 'spring' | 'summer' | 'autumn' | 'winter';
+
+/** A sea (region with sea zones) and its storm settings. */
+export interface SeaStormSea {
+  region_id: number;
+  name: string | null;
+  zones_count: number;
+  is_enabled: boolean;
+  chance_per_hour_pct: number;
+  radius: number;
+}
+
+export interface SeaStormAdmin {
+  id: number;
+  region_id: number | null;
+  sea_name: string | null;
+  center_zone: SeaRef;
+  zones: SeaRef[];
+  started_at: string;
+  ends_at: string;
+  moves: number;
+  /** auto | admin */
+  source: string;
+}
+
+export type SeaRaidStatus = 'starting' | 'fighting' | 'won' | 'lost' | 'aborted' | 'expired';
+
+export interface SeaRaidAdmin {
+  id: number;
+  ship_id: number;
+  /** null when the ship was deleted */
+  ship_name: string | null;
+  zone: SeaRef;
+  monster_name: string | null;
+  players: SeaRef[];
+  battle_id: number | null;
+  status: SeaRaidStatus | string;
+  created_at: string;
+}
+
+export interface SeaWeather {
+  /** null — no game calendar */
+  season: SeaSeason | null;
+  season_mult: number;
+  seas: SeaStormSea[];
+  storms: SeaStormAdmin[];
+  /** active first (newest first), then the last 20 finished */
+  raids: SeaRaidAdmin[];
+}
+
+export interface SeaStormSeaUpdate {
+  is_enabled: boolean;
+  chance_per_hour_pct: number;
+  radius: number;
 }
 
 /** L5 row */

@@ -17,6 +17,13 @@ logged and the ship is retried on the next pass. Per ship, in order:
 4. Captain placement — an alive Captain standing elsewhere than expected (port while docked, deck at sea) is moved
    back (admin manual moves are reverted).
 
+FEAT-214 (§3.6) adds, in the same ship transaction (no HTTP): the **raid hold** release / expiry before anything else;
+the **storm postpone** of a departure from a port whose zone is stormy; **zone effects** on the effective zone entry
+(slowdown ``storm_extra``, storm damage targets, drift, the monster roll — steps skipped through by an offline catch-up
+are quiet); the **sailor relief** of a storm delay; the re-landing of players kept aboard by a battle. The weather step
+runs once per pass before the ships, the raid fallbacks after them. After the commit: the CAS storm damage and the raid
+start (``sea_raid_crud.start_pending``).
+
 After the commit (best effort): LS «character left the location» cleanup + gathering cancel for everyone put ashore,
 law encounter / slip / wanted notices, the sea notices (``ws_type="sea"``). :func:`after_commit` is shared with the
 ship admin (delete ship). Never started under pytest by the scheduler; tests call :func:`run_pass` directly
@@ -39,6 +46,8 @@ import law_notify
 import models
 import sea_core
 import sea_crud
+import sea_raid_crud
+import sea_weather
 
 logger = logging.getLogger("character-service.sea_pass")
 
@@ -55,6 +64,17 @@ EV_CAUGHT = "caught"
 EV_BURNT = "burnt"
 EV_REROUTED = "rerouted"
 EV_SAFE_LANDING = "safe_landing"
+# FEAT-214
+EV_STORM = "storm"
+EV_DRIFT = "drift"
+EV_STORM_DELAY = "storm_delay"
+EV_STORM_RELIEF = "storm_relief"
+EV_RAID = sea_raid_crud.EV_RAID
+EV_RAID_REPELLED = sea_raid_crud.EV_RAID_REPELLED
+EV_RAID_WON = sea_raid_crud.EV_RAID_WON
+EV_RAID_LOST = sea_raid_crud.EV_RAID_LOST
+EV_HOLD_RELEASED = "hold_released"
+EV_HOLD_EXPIRED = "hold_expired"
 
 
 # =====================================================================================================================
@@ -70,6 +90,12 @@ class ShipOutcome:
     deck_location_id: Optional[int] = None
     gathering_ids: Set[int] = field(default_factory=set)       # put ashore while gathering (cancel after commit)
     wanted_changes: list = field(default_factory=list)
+    # FEAT-214 (acted upon after the commit)
+    now: Optional[datetime] = None
+    storm_damage_ids: List[int] = field(default_factory=list)  # rocked deck players (never those in a battle)
+    storm_hp_pct: Decimal = Decimal("0")
+    storm_stamina_pct: Decimal = Decimal("0")
+    raids_planned: bool = False                                 # starting raid rows to start
 
 
 def claim_run(db: Session, now: datetime) -> bool:
@@ -360,6 +386,7 @@ def depart(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome)
     ship.docked_port_id = None
     ship.departs_at = None
     ship.blocked_reason = None
+    _clear_storm_state(ship)
     ship.updated_at = now
     db.flush()
     place_captain(db, ship, "departure")
@@ -383,6 +410,14 @@ def _i(value) -> int:
     return int(value or 0)
 
 
+def _clear_storm_state(ship: "models.SeaShip") -> None:
+    """Leg-bound FEAT-214 state: raid hold, storm delay of the zone, pending relief, departure postpone."""
+    ship.hold_until = None
+    ship.storm_extra_minutes = 0
+    ship.storm_post_floor_id = None
+    ship.storm_hold_since = None
+
+
 def _dock(db: Session, ship: "models.SeaShip", stop_idx: int, port_id: int, zone_id: int, now: datetime,
           out: ShipOutcome) -> None:
     trip = _i(ship.trip_no)
@@ -399,6 +434,7 @@ def _dock(db: Session, ship: "models.SeaShip", stop_idx: int, port_id: int, zone
     ship.departs_at = now + timedelta(minutes=max(1, _i(ship.boarding_minutes))) if ship.is_active else None
     if ship.is_active:
         ship.blocked_reason = None
+    _clear_storm_state(ship)
     ship.updated_at = now
     completed: Set[int] = set()
     still_covered: Set[int] = set()
@@ -437,6 +473,7 @@ def _land_broken(db: Session, ship: "models.SeaShip", reason: str, now: datetime
     ship.leg_path = None
     ship.leg_pos = 0
     ship.next_zone_at = None
+    _clear_storm_state(ship)
     ship.docked_port_id = int(last) if last and int(last) in sea_crud.location_infos(db, [last]) else None
     for s in stops:
         if ship.docked_port_id and int(s.port_location_id) == int(ship.docked_port_id):
@@ -506,11 +543,98 @@ def arrive(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome)
     logger.warning("sea ship %s: stop %s is invalid, rerouted to stop %s (%s)", ship.id, j, to_idx, to_port)
 
 
+def _deck_notice(db: Session, ship: "models.SeaShip", message: str, event: str, out: ShipOutcome,
+                 players: Optional[Sequence["models.Character"]] = None, **data) -> None:
+    for ch in players if players is not None else sea_crud.deck_players(db, ship, lock=False):
+        out.notices.append(sea_crud.notice(ch.user_id, message, ch.id, ship.id, event, **data))
+
+
+def _zone_effects(db: Session, ship: "models.SeaShip", storm: Optional["sea_weather.StormInfo"],
+                  params: "sea_crud.SeaParams", now: datetime, out: ShipOutcome) -> bool:
+    """The effective entry into ``current_zone_id`` (§3.6.2): storm damage targets + notice, the drift roll, the
+    monster roll. True = stop the stepping loop (a drift or an attack happened)."""
+    rng = sea_core.weather_rng()
+    players = sea_crud.deck_players(db, ship, lock=False)
+    stop = False
+    if storm is not None:
+        zone_name = _name(sea_crud.location_infos(db, [ship.current_zone_id]), ship.current_zone_id)
+        out.storm_damage_ids.extend(int(ch.id) for ch in players if not in_battle(db, ch.id))
+        out.storm_hp_pct, out.storm_stamina_pct = params.storm_hp_pct, params.storm_stamina_pct
+        _deck_notice(db, ship, f"Корабль «{ship.name}» попал в шторм в «{zone_name}»: качка выматывает всех на "
+                               f"палубе, корабль идёт медленнее", EV_STORM, out, players,
+                     zone_id=int(storm.zone_id), storm_ends_at=storm.ends_at.isoformat())
+        out.events.append(EV_STORM)
+        if rng.random() * 100 < float(params.storm_drift_pct or 0):
+            stop = _drift(db, ship, params, rng, now, out, players)
+    if sea_raid_crud.has_active_raid(db, ship.id):
+        return stop
+    pick = sea_raid_crud.roll_monster(db, _i(ship.current_zone_id), params, rng)
+    if pick is None:
+        return stop
+    eligible = sea_raid_crud.eligible_players(db, players)
+    if not eligible:
+        delay = sea_core.clamp(params.raid_repelled_delay_minutes, sea_core.RAID_REPELLED_DELAY_MINUTES_RANGE)
+        ship.next_zone_at = ship.next_zone_at + timedelta(minutes=delay)
+        _deck_notice(db, ship, sea_raid_crud.MSG_REPELLED.format(ship=ship.name, monster=pick.name),
+                     EV_RAID_REPELLED, out, players)
+        out.events.append(EV_RAID_REPELLED)
+        logger.info("sea ship %s: «%s» attacked in zone %s, nobody could fight — repelled (+%s min)", ship.id,
+                    pick.name, ship.current_zone_id, delay)
+        return stop
+    rows = sea_raid_crud.plan_raid(db, ship, pick, eligible, now)
+    if not rows:
+        return stop
+    hold = sea_core.clamp(params.raid_hold_max_minutes, sea_core.RAID_HOLD_MAX_MINUTES_RANGE)
+    if hold > 0:
+        ship.hold_until = now + timedelta(minutes=hold)
+        ship.next_zone_at = ship.next_zone_at + timedelta(minutes=hold)
+    out.raids_planned = True
+    _deck_notice(db, ship, sea_raid_crud.MSG_RAID.format(ship=ship.name, monster=pick.name), EV_RAID, out, players)
+    out.events.append(EV_RAID)
+    logger.info("sea ship %s: «%s» attacks in zone %s — %d battle group(s) for %s", ship.id, pick.name,
+                ship.current_zone_id, len(rows), eligible)
+    return True
+
+
+def _drift(db: Session, ship: "models.SeaShip", params: "sea_crud.SeaParams", rng, now: datetime,
+           out: ShipOutcome, players: Sequence["models.Character"]) -> bool:
+    """The storm blows the ship into a neighbour zone (not the next one on the path); the course is re-laid from
+    there to the same port zone (the zone timer is unchanged). False when there is no neighbour / no path."""
+    path = ship.leg_path if isinstance(ship.leg_path, list) else []
+    if not path:
+        return False
+    pos = _i(ship.leg_pos)
+    graph = sea_crud.zone_graph(db)
+    nxt = int(path[pos + 1]) if pos + 1 < len(path) else None
+    drift_zone = sea_core.pick_drift(graph.adj, _i(ship.current_zone_id), nxt, rng)
+    if drift_zone is None:
+        return False
+    new_path, _problem, _used = sea_core.leg_path(graph.adj, graph.zone_ids, drift_zone, int(path[-1]), None,
+                                                  params.path_max_zones)
+    if new_path is None:
+        return False
+    old_zone = ship.current_zone_id
+    ship.leg_path = [int(z) for z in new_path]
+    ship.leg_pos = 0
+    ship.current_zone_id = int(drift_zone)
+    ship.updated_at = now
+    zone_name = _name(sea_crud.location_infos(db, [drift_zone]), drift_zone)
+    _deck_notice(db, ship, f"Шторм снёс корабль «{ship.name}» с курса — в «{zone_name}». Капитан прокладывает "
+                           f"путь заново", EV_DRIFT, out, players, zone_id=int(drift_zone))
+    out.events.append(EV_DRIFT)
+    logger.info("sea ship %s: drifted %s -> %s, new path %s", ship.id, old_zone, drift_zone, new_path)
+    return True
+
+
 def step(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome) -> None:
-    """Zone stepping of a sailing ship with offline catch-up (bounded by the path length), then the arrival."""
+    """Zone stepping of a sailing ship with offline catch-up (bounded by the path length), then the arrival.
+    FEAT-214: a stormy zone takes ``storm_extra`` minutes longer; only the effective entry (the ship really is in that
+    zone now) applies the storm damage, the drift and the monster roll — a drift or an attack ends the loop."""
     path = ship.leg_path if isinstance(ship.leg_path, list) else []
     zone_minutes = max(1, _i(ship.zone_minutes))
     guard = len(path) + 2
+    params: Optional[sea_crud.SeaParams] = None
+    weather = sea_weather.weather_available(db)
     while ship.status == sea_core.STATUS_SAILING and ship.next_zone_at is not None and ship.next_zone_at <= now \
             and guard > 0:
         guard -= 1
@@ -518,9 +642,20 @@ def step(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome) -
         if pos < len(path):
             ship.leg_pos = pos
             ship.current_zone_id = int(path[pos])
-            ship.next_zone_at = ship.next_zone_at + timedelta(minutes=zone_minutes)
             ship.updated_at = now
+            storm = sea_weather.storm_at(db, ship.current_zone_id, now) if weather else None
+            extra = 0
+            if storm is not None:
+                params = params or sea_crud.load_params(db)
+                extra = sea_core.storm_extra(zone_minutes, params.storm_slow_mult)
+            ship.next_zone_at = ship.next_zone_at + timedelta(minutes=zone_minutes + extra)
+            ship.storm_extra_minutes = extra
+            ship.storm_post_floor_id = sea_crud.max_post_id(db) if extra > 0 else None
             out.events.append("zone")
+            if weather and ship.next_zone_at > now:     # the effective entry (pos >= 1: never at the pier)
+                params = params or sea_crud.load_params(db)
+                if _zone_effects(db, ship, storm, params, now, out):
+                    break
             continue
         arrive(db, ship, now, out)
         return
@@ -532,28 +667,131 @@ def step(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome) -
 # one ship
 # =====================================================================================================================
 
+def _free_players(db: Session, deck_id: int) -> int:
+    """Players standing on the deck id who are not in an active battle."""
+    ids = [int(r[0]) for r in db.query(models.Character.id).filter(
+        models.Character.current_location_id == int(deck_id), models.Character.is_npc.is_(False)).all()]
+    return sum(1 for cid in ids if not in_battle(db, cid))
+
+
+# =====================================================================================================================
+# FEAT-214: departure postpone, raid hold, sailor relief (§3.6)
+# =====================================================================================================================
+
+def postpone_departure(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome) -> bool:
+    """A storm over the port's zone postpones a due departure by ``storm_postpone_minutes`` (tickets keep their trip),
+    at most ``storm_postpone_max_minutes`` in total; the deck is told once. True = postponed (no departure now)."""
+    if not sea_weather.weather_available(db):
+        return False
+    params = sea_crud.load_params(db)
+    cap = sea_core.clamp(params.storm_postpone_max_minutes, sea_core.STORM_POSTPONE_MAX_MINUTES_RANGE)
+    port = sea_crud.location_infos(db, [ship.docked_port_id]).get(_i(ship.docked_port_id))
+    storm = sea_weather.storm_at(db, port.port_zone_id if port is not None else None, now)
+    since = ship.storm_hold_since
+    if storm is None or cap <= 0 or (since is not None and now - since >= timedelta(minutes=cap)):
+        if storm is not None and since is not None:
+            logger.info("sea ship %s: storm postpone cap reached — sails anyway", ship.id)
+        return False
+    step_minutes = sea_core.clamp(params.storm_postpone_minutes, sea_core.STORM_POSTPONE_MINUTES_RANGE)
+    ship.departs_at = now + timedelta(minutes=step_minutes)
+    ship.updated_at = now
+    if since is None:
+        ship.storm_hold_since = now
+        _deck_notice(db, ship, f"Капитан корабля «{ship.name}» откладывает отплытие: в море шторм. Билеты "
+                               f"остаются в силе", EV_STORM_DELAY, out)
+        logger.info("sea ship %s: departure postponed by storm %s", ship.id, storm.storm_id)
+    out.events.append(EV_STORM_DELAY)
+    return True
+
+
+def release_hold(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome) -> None:
+    """The raid hold (§3.6.4): no active raid left → the unused hold is given back (``next_zone_at`` earlier); the
+    hold ran out while raids still fight → the ship sails on, the battles go on aboard."""
+    try:
+        active = sea_raid_crud.has_active_raid(db, ship.id)
+    except DBAPIError:
+        active = False
+    if not active:
+        if ship.next_zone_at is not None:
+            shift = max(timedelta(0), ship.hold_until - now)
+            ship.next_zone_at = ship.next_zone_at - shift
+        ship.hold_until = None
+        ship.updated_at = now
+        out.events.append(EV_HOLD_RELEASED)
+        return
+    if ship.hold_until <= now:
+        ship.hold_until = None
+        ship.updated_at = now
+        _deck_notice(db, ship, f"Корабль «{ship.name}» идёт дальше — бой на палубе продолжается", EV_HOLD_EXPIRED,
+                     out)
+        out.events.append(EV_HOLD_EXPIRED)
+
+
+def sailor_relief(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome) -> None:
+    """Sailors «hold the sails» (§3.6.3): an aboard sailor of this trip with a deck post written after the stormy
+    entry (plain length ≥ ``sailor_post_min_chars``) wins back ``storm_sailor_relief_pct`` of the storm delay. Once per
+    zone."""
+    extra = _i(ship.storm_extra_minutes)
+    if extra <= 0:
+        ship.storm_post_floor_id = None
+        return
+    params = sea_crud.load_params(db)
+    deck = int(ship.deck_location_id)
+    aboard = {int(ch.id) for ch in sea_crud.deck_players(db, ship, lock=False)}
+    worked = False
+    for p in sea_crud.active_passes(db, ship.id, lock=False):
+        if p.kind != sea_core.KIND_SAILOR or int(p.character_id) not in aboard \
+                or not sea_core.covers(p.first_trip, p.last_trip, _i(ship.trip_no)):
+            continue
+        if sailor_worked(db, int(p.character_id), deck, ship.storm_post_floor_id, params.sailor_post_min_chars):
+            worked = True
+            break
+    if not worked:
+        return
+    minutes = sea_core.relief(extra, params.storm_sailor_relief_pct)
+    ship.storm_post_floor_id = None
+    if minutes <= 0 or ship.next_zone_at is None:
+        return
+    ship.next_zone_at = max(now, ship.next_zone_at - timedelta(minutes=minutes))
+    ship.updated_at = now
+    _deck_notice(db, ship, f"Матросы удержали паруса — корабль «{ship.name}» идёт быстрее", EV_STORM_RELIEF, out)
+    out.events.append(EV_STORM_RELIEF)
+    logger.info("sea ship %s: sailors won back %s min of the storm delay", ship.id, minutes)
+
+
 def process_ship(db: Session, ship_id: int, now: datetime) -> Optional[ShipOutcome]:
     """One ship in the caller's transaction (no commit). None = the ship is gone."""
     ship = sea_crud.get_ship(db, ship_id, lock=True)
     if ship is None:
         return None
-    out = ShipOutcome(int(ship.id), deck_location_id=int(ship.deck_location_id))
+    out = ShipOutcome(int(ship.id), deck_location_id=int(ship.deck_location_id), now=now)
     deck_ok = int(ship.deck_location_id) in sea_crud.location_infos(db, [ship.deck_location_id])
     if not deck_ok:
-        on_old_deck = db.query(models.Character.id).filter(
-            models.Character.current_location_id == int(ship.deck_location_id),
-            models.Character.is_npc.is_(False)).count()
+        on_old_deck = _free_players(db, int(ship.deck_location_id))
         if ship.is_active or on_old_deck or ship.blocked_reason != sea_core.BLOCKED_NO_DECK:
             result = sea_crud.safe_land(db, ship, sea_core.BLOCKED_NO_DECK, now)
             _collect_landing(db, result, out)
             out.events.append(EV_SAFE_LANDING)
             logger.warning("sea ship %s: deck %s is gone — safe landing of %d players, ship off", ship.id,
                            ship.deck_location_id, len(result.ashore))
+    elif not ship.is_active and ship.blocked_reason and ship.status == sea_core.STATUS_DOCKED \
+            and not ship.docked_port_id and _free_players(db, int(ship.deck_location_id)):
+        # FEAT-214 §3.9: players a battle kept aboard a broken ship (no port to step off to) — land them now
+        result = sea_crud.safe_land(db, ship, ship.blocked_reason, now)
+        _collect_landing(db, result, out)
+        out.events.append(EV_SAFE_LANDING)
+        logger.warning("sea ship %s: %d players kept aboard by a battle landed", ship.id, len(result.ashore))
+    if ship.status == sea_core.STATUS_SAILING and ship.hold_until is not None:
+        release_hold(db, ship, now, out)
     if ship.status == sea_core.STATUS_DOCKED and ship.is_active and deck_ok and ship.departs_at is not None \
             and ship.departs_at <= now:
-        depart(db, ship, now, out)
-    elif ship.status == sea_core.STATUS_SAILING and (ship.next_zone_at is None or ship.next_zone_at <= now):
+        if not postpone_departure(db, ship, now, out):
+            depart(db, ship, now, out)
+    elif ship.status == sea_core.STATUS_SAILING and (ship.next_zone_at is None or ship.next_zone_at <= now) \
+            and not (ship.hold_until is not None and ship.hold_until > now):
         step(db, ship, now, out)
+    if ship.status == sea_core.STATUS_SAILING and ship.storm_post_floor_id is not None:
+        sailor_relief(db, ship, now, out)
     if place_captain(db, ship, "placement"):
         out.events.append("captain_moved")
     return out
@@ -588,6 +826,17 @@ def after_commit(db: Session, out: Optional[ShipOutcome]) -> None:
     notices.extend(law_notify.wanted_notices(out.wanted_changes))
     notices.extend(out.notices)
     law_notify.publish(notices)
+    if out.storm_damage_ids:                       # FEAT-214 §3.7: CAS, after the ship commit
+        try:
+            sea_weather.apply_storm_damage(out.storm_damage_ids, out.storm_hp_pct, out.storm_stamina_pct)
+        except Exception:
+            logger.warning("sea ship %s: storm damage failed", out.ship_id, exc_info=True)
+    if out.raids_planned:                          # FEAT-214 §3.8: spawn + battle-service, after the ship commit
+        try:
+            sea_raid_crud.start_pending(db, out.ship_id, out.now)
+        except Exception:
+            db.rollback()
+            logger.exception("sea ship %s: raid start failed (the pass retries)", out.ship_id)
 
 
 def _ship_ids(db: Session) -> List[int]:
@@ -608,6 +857,7 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
         ids = _ship_ids(db)
     finally:
         db.close()
+    weather = sea_weather.weather_step(factory, now)   # FEAT-214 §3.5: own transaction, never stops the ships
     stats: Dict[str, int] = {"ships": len(ids), "failed": 0, EV_DEPARTED: 0, EV_ARRIVED: 0, EV_REROUTED: 0,
                              EV_SAFE_LANDING: 0, "zone": 0, "ashore": 0, "captain_moved": 0}
     for ship_id in ids:
@@ -632,4 +882,16 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
                 logger.exception("sea pass: post-commit work of ship %s failed", ship_id)
         finally:
             db.close()
+    for key, value in (weather or {}).items():
+        stats[f"storm_{key}"] = value
+    try:
+        db = factory()
+        try:
+            raids = sea_weather.weather_available(db)
+        finally:
+            db.close()
+        if raids:
+            stats.update(sea_raid_crud.raid_followups(factory, now))
+    except Exception:
+        logger.exception("sea pass: raid follow-ups failed")
     return stats

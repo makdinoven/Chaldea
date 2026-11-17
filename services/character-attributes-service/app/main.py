@@ -1,4 +1,5 @@
 import os
+import math
 import asyncio
 import threading
 from typing import Optional
@@ -553,6 +554,70 @@ def settle_regen_bulk(
         else:
             settled.append(character_id)
     return schemas.SettleRegenResponse(settled=settled, missing=missing)
+
+
+def _storm_damage_amount(maximum: int, pct: float) -> int:
+    """ceil(max × pct / 100) without float noise (e.g. 100 × 10 % → 10, not 11)."""
+    if maximum <= 0 or pct <= 0:
+        return 0
+    return math.ceil(round(maximum * pct / 100, 6))
+
+
+@router.post("/internal/storm-damage", response_model=schemas.StormDamageResponse)
+def apply_storm_damage(
+    payload: schemas.StormDamageRequest,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Internal (FEAT-214 §3.7): storm rocking on a ship deck.
+
+    Per character, one short transaction: lock → settle regen → subtract a share
+    of max HP / stamina. HP never drops below `min_health` and is never raised
+    (a character already at/below the floor keeps their HP); stamina floors at 0.
+
+    Только service-to-service: требует заголовок `X-Internal-Token`.
+    """
+    applied, missing = [], []
+    for item in payload.items:
+        character_id = item.character_id
+        try:
+            attr = regen.lock_attributes(db, character_id)
+            if attr is None:
+                db.rollback()
+                missing.append(character_id)
+                continue
+
+            stats_changed = regen.settle_regen(db, attr)
+
+            hp_before = int(attr.current_health or 0)
+            st_before = int(attr.current_stamina or 0)
+            dh = _storm_damage_amount(int(attr.max_health or 0), item.health_pct)
+            ds = _storm_damage_amount(int(attr.max_stamina or 0), item.stamina_pct)
+
+            if hp_before <= payload.min_health:
+                hp_after = hp_before
+            else:
+                hp_after = max(payload.min_health, hp_before - dh)
+            st_after = max(0, st_before - ds)
+
+            attr.current_health = hp_after
+            attr.current_stamina = st_after
+            db.commit()
+        except SQLAlchemyError as e:
+            db.rollback()
+            logger.error(f"storm-damage: ошибка для персонажа {character_id}: {e}")
+            raise HTTPException(status_code=500, detail="Ошибка применения урона от шторма")
+
+        if stats_changed:
+            regen.reconcile_perks_after_expiry(db, character_id)
+        applied.append(schemas.StormDamageApplied(
+            character_id=character_id,
+            health_before=hp_before,
+            health_after=hp_after,
+            stamina_before=st_before,
+            stamina_after=st_after,
+        ))
+    return schemas.StormDamageResponse(applied=applied, missing=missing)
 
 
 @router.post(

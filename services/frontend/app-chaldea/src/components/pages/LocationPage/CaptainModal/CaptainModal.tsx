@@ -14,6 +14,7 @@ import type { CaptainView, SeaDestination, SeaPass, ShipPublic } from '../../../
 import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 import RemainingText from '../../../CommonComponents/RemainingText';
 import { NPC_DIALOGUE_HINT_CAPTAIN, isNpcDialogueGateError } from '../npcDialogueGate';
+import SeaShipAlerts from '../SeaShipAlerts';
 
 interface CaptainModalProps {
   npcId: number;
@@ -213,6 +214,7 @@ const CaptainModal = ({ npcId, npcName, npcAvatar, onClose }: CaptainModalProps)
               <ShipStatusLine ship={ship} onTimer={() => void load()} />
             </p>
             {!ship.is_active && <p className="text-site-red text-xs sm:text-sm">Корабль сейчас не ходит.</p>}
+            <SeaShipAlerts ship={ship} />
             {ship.stops.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="text-white/45 shrink-0" title={ship.is_loop ? 'По кругу' : 'Туда и обратно'}>

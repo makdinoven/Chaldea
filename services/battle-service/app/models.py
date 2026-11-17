@@ -85,6 +85,11 @@ class Battle(Base):
     caravan_raid_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, index=True
     )
+    # FEAT-214: set for sea raid battles (character-service `sea_raids` id);
+    # the outcome is reported to POST /characters/internal/sea/raid-result.
+    sea_raid_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
 
     participants = relationship(
         "BattleParticipant",

@@ -15,6 +15,7 @@ from schemas import (
     BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
     PackAttack, PartyPackAttack,
     CaravanRaidBattleCreate, CaravanRaidBattleCreated,
+    SeaRaidBattleCreate, SeaRaidBattleCreated,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
     CancelInvitationResponse, InBattleResponse,
@@ -946,7 +947,7 @@ async def _is_activity_locked(db, character_id: int) -> bool:
 
 async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dungeon_session_id=None,
                           law_encounter_id=None, caravan_raid_id=None,
-                          autobattle_forbidden_character_ids=None):
+                          autobattle_forbidden_character_ids=None, sea_raid_id=None):
     """Create the Battle + participants, init Redis state, register NPCs.
 
     Shared by the public create endpoint and the party-start flow. Validation
@@ -960,6 +961,9 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id, dung
     # FEAT-211: the caravan-raid tag, same rule.
     if caravan_raid_id is not None:
         tag["caravan_raid_id"] = caravan_raid_id
+    # FEAT-214: the sea-raid tag, same rule.
+    if sea_raid_id is not None:
+        tag["sea_raid_id"] = sea_raid_id
     battle_obj, participant_objs = await create_battle(
         db, player_ids, teams, battle_type=battle_type, location_id=location_id,
         dungeon_session_id=dungeon_session_id, **tag,
@@ -1867,11 +1871,13 @@ CARAVAN_GATE_REQUIRED = "Нужен боевой пост с этим карав
 CARAVAN_JOIN_FORBIDDEN = "К налёту на караван нельзя присоединиться"
 
 
-async def _ensure_caravan_guards(db, guard_ids: list, location_id: int) -> None:
+async def _ensure_caravan_guards(db, guard_ids: list, location_id: int,
+                                 message: str = CARAVAN_GUARDS_UNAVAILABLE) -> None:
     """Every guard must be an NPC at the raid location, alive, not knocked out, not in a
-    battle and not activity-locked; ids must be distinct. Otherwise 409."""
+    battle and not activity-locked; ids must be distinct. Otherwise 409 with `message`
+    (FEAT-214: the sea raid reuses it for its monsters with its own text)."""
     if len(set(guard_ids)) != len(guard_ids):
-        raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+        raise HTTPException(409, message)
     for gid in guard_ids:
         row = (await db.execute(
             text(
@@ -1881,13 +1887,13 @@ async def _ensure_caravan_guards(db, guard_ids: list, location_id: int) -> None:
             {"gid": gid},
         )).fetchone()
         if not row or row[0] not in (1, True):
-            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+            raise HTTPException(409, message)
         if row[1] == "dead" or _is_ko(row[2]) or row[3] != location_id:
-            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+            raise HTTPException(409, message)
         if await get_active_battle_for_character(db, gid):
-            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+            raise HTTPException(409, message)
         if await _is_activity_locked(db, gid):
-            raise HTTPException(409, CARAVAN_GUARDS_UNAVAILABLE)
+            raise HTTPException(409, message)
 
 
 async def _escort_available(db, character_id: int, location_id: int) -> bool:
@@ -2065,6 +2071,137 @@ async def _notify_caravan_battle_end(db, battle_id: int, winner_team, aborted: b
     asyncio.create_task(_post_caravan_callback(payload))
 
 
+# ---------------------------------------------------------------------------
+# FEAT-214: sea raid battles. character-service rolls the attack on a ship deck, spawns the
+# hidden monsters there and asks battle-service for the fight; the end is reported back.
+# ---------------------------------------------------------------------------
+SEA_CREW_TEAM = 0
+SEA_MONSTER_TEAM = 1
+SEA_MOBS_UNAVAILABLE = "Морские монстры недоступны"
+SEA_NO_FIGHTERS = "Некому защищать палубу"
+SEA_JOIN_TEAM = "Против морских монстров можно встать только на сторону экипажа"
+
+
+async def _sea_fighter_available(db, character_id: int, location_id: int) -> bool:
+    """FEAT-214: may this deck player be pulled into the sea raid?
+
+    A player (`is_npc = 0`) standing on the deck, not in an active battle, not
+    activity-locked (unconscious, jail, reading, asleep, ...) and with `current_health > 0`."""
+    row = (await db.execute(
+        text("SELECT is_npc, current_location_id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )).fetchone()
+    if not row or row[0] not in (0, False):
+        return False
+    if row[1] is None or row[1] != location_id:
+        return False
+    if await get_active_battle_for_character(db, character_id):
+        return False
+    if await _is_activity_locked(db, character_id):
+        return False
+    hp_row = (await db.execute(
+        text("SELECT current_health FROM character_attributes WHERE character_id = :cid"),
+        {"cid": character_id},
+    )).fetchone()
+    if not hp_row or hp_row[0] is None or hp_row[0] <= 0:
+        return False
+    return True
+
+
+@router.post(
+    "/internal/sea-raid",
+    response_model=SeaRaidBattleCreated,
+    status_code=201,
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_create_sea_raid_battle(
+    body: SeaRaidBattleCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-214 section 3.8: a forced deck fight against sea monsters (character-service only).
+
+    Server-initiated: no post gate, no ownership. Team 0 = the deck players, each silently
+    skipped unless `_sea_fighter_available` (none left -> 409); team 1 = the monsters (NPCs
+    spawned by character-service on the deck, checked like caravan guards -> 409). The battle
+    is `pve`, tagged with `sea_raid_id`, so its end is reported to character-service
+    (`_notify_sea_battle_end`). Rewards / loss = the ordinary PvE end."""
+    loc = body.location_id
+    mob_ids = list(body.mob_character_ids)
+    await _ensure_caravan_guards(db, mob_ids, loc, message=SEA_MOBS_UNAVAILABLE)
+
+    mob_set = set(mob_ids)
+    placed = []
+    for cid in dict.fromkeys(body.player_character_ids):  # dedupe, keep order
+        if cid in mob_set:
+            continue
+        if await _sea_fighter_available(db, cid, loc):
+            placed.append(cid)
+    if not placed:
+        raise HTTPException(409, SEA_NO_FIGHTERS)
+
+    player_ids = placed + mob_ids
+    teams = [SEA_CREW_TEAM] * len(placed) + [SEA_MONSTER_TEAM] * len(mob_ids)
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", loc, sea_raid_id=body.sea_raid_id,
+    )
+    return SeaRaidBattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+        player_character_ids=placed,
+    )
+
+
+async def _get_sea_raid_id(db, battle_id: int):
+    row = (await db.execute(
+        text("SELECT sea_raid_id FROM battles WHERE id = :bid"),
+        {"bid": battle_id},
+    )).fetchone()
+    value = row[0] if row else None
+    return value if isinstance(value, int) else None
+
+
+async def _post_sea_callback(payload: dict) -> None:
+    """Fire-and-forget POST to character-service with 3 retries. A miss is not fatal: the
+    sea pass polls GET /battles/internal/{id}/result for `fighting` raids."""
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/sea/raid-result"
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=payload, headers=_internal_token_headers())
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Sea raid callback for battle %s answered %s: %s",
+                        payload.get("battle_id"), resp.status_code, resp.text[:200],
+                    )
+                return
+        except httpx.RequestError as e:
+            logger.warning("Sea raid callback for battle %s failed: %s", payload.get("battle_id"), e)
+        await asyncio.sleep(1 + attempt * 2)
+    logger.error("Sea raid callback for battle %s gave up after retries", payload.get("battle_id"))
+
+
+async def _notify_sea_battle_end(db, battle_id: int, winner_team, aborted: bool = False) -> None:
+    """FEAT-214: if this is a sea raid battle, report the outcome to character-service.
+    No-op for every battle without the `sea_raid_id` tag."""
+    try:
+        raid_id = await _get_sea_raid_id(db, battle_id)
+    except Exception as e:  # never break the battle ending over the callback
+        logger.error("Sea raid callback lookup failed for battle %s: %s", battle_id, e)
+        return
+    if raid_id is None:
+        return
+    payload = {
+        "battle_id": battle_id,
+        "sea_raid_id": raid_id,
+        "winner_team": winner_team,
+        "aborted": aborted,
+    }
+    asyncio.create_task(_post_sea_callback(payload))
+
+
 async def _post_faction_callback(payload: dict) -> None:
     """FEAT-207: fire-and-forget POST of a finished battle to character-service (kill points), 3 retries. A miss
     only loses the points of that battle (the endpoint is idempotent per battle, so retries are safe)."""
@@ -2232,12 +2369,15 @@ async def internal_battle_result(battle_id: int, db: AsyncSession = Depends(get_
     fallen_character_ids = (
         await _fallen_for_result(db, battle_id, winner_team) if caravan_raid_id is not None else []
     )
+    sea_raid_id = getattr(battle, "sea_raid_id", None)
+    sea_raid_id = sea_raid_id if isinstance(sea_raid_id, int) else None
     return {
         "battle_id": battle_id,
         "status": status,
         "dungeon_session_id": battle.dungeon_session_id,
         "law_encounter_id": law_encounter_id,  # FEAT-198 (additive)
         "caravan_raid_id": caravan_raid_id,  # FEAT-211 (additive)
+        "sea_raid_id": sea_raid_id,  # FEAT-214 (additive)
         "winner_team": winner_team,
         "fallen_character_ids": fallen_character_ids,  # FEAT-212 (additive, caravan raids only)
         # Finished without history = force-finished (admin / abandonment).
@@ -3116,6 +3256,8 @@ async def _finalize_battle(
     await _notify_law_battle_end(db_session, battle_id, winner_team)
     # FEAT-211: a caravan raid reports its outcome (loot / crime are settled by character-service).
     await _notify_caravan_battle_end(db_session, battle_id, winner_team, state=battle_state)
+    # FEAT-214: a sea raid reports its outcome (character-service settles the raid row, despawns).
+    await _notify_sea_battle_end(db_session, battle_id, winner_team)
     # FEAT-207: faction kill points (fire-and-forget; character-service decides who gets what)
     if winner_team is not None:
         await _notify_faction_battle_end(db_session, battle_id, battle_state, winner_team)
@@ -6014,6 +6156,8 @@ async def _force_finish_battle(
     await _notify_law_battle_end(db, battle_id, None, aborted=True)
     # FEAT-211: an aborted caravan raid releases the caravan (no loot).
     await _notify_caravan_battle_end(db, battle_id, None, aborted=True)
+    # FEAT-214: an aborted sea raid releases the ship hold and despawns the monsters.
+    await _notify_sea_battle_end(db, battle_id, None, aborted=True)
 
     logger.info("Battle %s force-finished (reason=%s)", battle_id, reason)
 
@@ -6575,6 +6719,9 @@ async def create_join_request(
         # FEAT-211: the raid team is fixed at the start (the loot split relies on it).
         if isinstance(getattr(battle, "caravan_raid_id", None), int):
             raise HTTPException(400, CARAVAN_JOIN_FORBIDDEN)
+        # FEAT-214: late boarders may only stand with the crew against the sea monsters.
+        if isinstance(getattr(battle, "sea_raid_id", None), int) and req.team != SEA_CREW_TEAM:
+            raise HTTPException(400, SEA_JOIN_TEAM)
 
         # 3. Character belongs to current user
         await verify_character_ownership(db, req.character_id, current_user.id)

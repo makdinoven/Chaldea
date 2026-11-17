@@ -1,4 +1,5 @@
-"""FEAT-213 sea routes — pure rules (no DB, no clock, no RNG; features/FEAT-213 §3.4, §3.5).
+"""FEAT-213 sea routes — pure rules (no DB, no clock; features/FEAT-213 §3.4, §3.5). FEAT-214 adds the storm /
+raid helpers (§3.4 of FEAT-214); their only RNG is the patchable :func:`weather_rng` seam.
 
 A ship is a real location (its deck). It sails a line of ports ``stops[0..n-1]`` (n >= 2): there-and-back by default
 (0,1,…,n-1,n-2,…,0,1,…) or a loop (0,1,…,n-1,0,…). Every departure is a **trip**; ``trip_no`` counts the departures
@@ -7,9 +8,13 @@ made, so the next departure is always ``trip_no + 1``. A pass (ticket / sailor j
 (both inclusive); its duration is ``len(path) × zone_minutes``.
 """
 
+import math
+import random
 import re
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import caravan_route
@@ -59,6 +64,48 @@ PATH_MAX_ZONES_RANGE = (10, 1000)
 
 DEFAULT_SAILOR_POST_MIN_CHARS = 800
 DEFAULT_PATH_MAX_ZONES = 200
+
+# ---------------------------------------------------------------------------------------------------------------------
+# FEAT-214 storms and raids (§3.3, §3.4)
+# ---------------------------------------------------------------------------------------------------------------------
+
+# sea_storms.status / source
+STORM_ACTIVE = "active"
+STORM_ENDED = "ended"
+STORM_AUTO = "auto"
+STORM_ADMIN = "admin"
+
+# sea_raids.status
+RAID_STARTING = "starting"
+RAID_FIGHTING = "fighting"
+RAID_WON = "won"
+RAID_LOST = "lost"
+RAID_ABORTED = "aborted"
+RAID_EXPIRED = "expired"
+RAID_ACTIVE_STATUSES = (RAID_STARTING, RAID_FIGHTING)
+RAID_FINAL_STATUSES = (RAID_WON, RAID_LOST, RAID_ABORTED, RAID_EXPIRED)
+
+SEA_RAID_TEAM_MAX = 5            # mirrors battle-service BATTLE_MAX_TEAM_SIZE
+SEASONS = ("spring", "summer", "autumn", "winter")
+MINUTES_PER_HOUR = 60
+
+# admin ranges (§3.3); the admin API validates against them
+STORM_MINUTES_RANGE = (10, 1440)
+STORM_MOVE_PCT_RANGE = (0, 100)
+STORM_MAX_MOVES_RANGE = (0, 10)
+STORM_SLOW_MULT_RANGE = (1, 10)
+STORM_DRIFT_PCT_RANGE = (0, 100)
+STORM_HP_PCT_RANGE = (0, 100)
+STORM_STAMINA_PCT_RANGE = (0, 100)
+STORM_POSTPONE_MINUTES_RANGE = (1, 240)
+STORM_POSTPONE_MAX_MINUTES_RANGE = (0, 1440)
+STORM_SAILOR_RELIEF_PCT_RANGE = (0, 100)
+SEASON_MULT_RANGE = (0, 10)
+RAID_CHANCE_MULT_RANGE = (0, 10)
+RAID_HOLD_MAX_MINUTES_RANGE = (0, 1440)
+RAID_REPELLED_DELAY_MINUTES_RANGE = (0, 120)
+STORM_CHANCE_PER_HOUR_RANGE = (0, 100)
+STORM_RADIUS_RANGE = (0, 5)
 
 # leg problems (admin preview / blocked reasons)
 LEG_NO_ZONE = "no_zone"            # an end port has no (valid) sea zone
@@ -246,3 +293,106 @@ def arrivals(first_departure: Optional[datetime], legs_zones: Sequence[int], zon
 def clamp(value: int, bounds: Tuple[int, int]) -> int:
     lo, hi = bounds
     return max(lo, min(hi, int(value)))
+
+
+# =====================================================================================================================
+# FEAT-214 storms and raids — pure helpers (§3.4)
+# =====================================================================================================================
+
+def weather_rng() -> random.Random:
+    """THE seam of every storm / drift / raid roll (tests patch it)."""
+    return random.Random()
+
+
+def _dec(value) -> Decimal:
+    return value if isinstance(value, Decimal) else Decimal(str(value if value is not None else 0))
+
+
+def season_mult(season: Optional[str], params) -> Decimal:
+    """Storm chance multiplier of a game season (``params.season_mult_<season>``); unknown / None → 1.0."""
+    if not season or season not in SEASONS:
+        return Decimal("1")
+    value = getattr(params, f"season_mult_{season}", None)
+    return Decimal("1") if value is None else max(Decimal("0"), _dec(value))
+
+
+def pass_chance(per_hour_pct, mult, elapsed_minutes) -> Decimal:
+    """Chance of an event with ``per_hour_pct`` × ``mult`` per real hour within ``elapsed_minutes``:
+    ``1 − (1 − p)^(elapsed/60)``, ``p = min(1, pct × mult / 100)``; ``elapsed`` clamped to [0, 60] (no burst after a
+    downtime)."""
+    p = min(Decimal("1"), max(Decimal("0"), _dec(per_hour_pct) * _dec(mult) / Decimal("100")))
+    elapsed = min(Decimal(MINUTES_PER_HOUR), max(Decimal("0"), _dec(elapsed_minutes)))
+    if p <= 0 or elapsed <= 0:
+        return Decimal("0")
+    if p >= 1:
+        return Decimal("1")
+    keep = (1.0 - float(p)) ** (float(elapsed) / MINUTES_PER_HOUR)
+    return Decimal(str(round(1.0 - keep, 10)))
+
+
+def split_groups(ids: Iterable[int], cap: int = SEA_RAID_TEAM_MAX) -> List[List[int]]:
+    """``ceil(n / cap)`` groups of ascending distinct ids, sizes differ by at most 1 (6 → 3+3, 11 → 4+4+3)."""
+    ordered = sorted({int(i) for i in ids})
+    n = len(ordered)
+    if n == 0:
+        return []
+    count = math.ceil(n / max(1, int(cap)))
+    base, extra = divmod(n, count)
+    out: List[List[int]] = []
+    pos = 0
+    for g in range(count):
+        size = base + (1 if g < extra else 0)
+        out.append(ordered[pos:pos + size])
+        pos += size
+    return out
+
+
+def pack_size(max_active, group_len: int) -> int:
+    """Monsters of one battle group: ``min(clamp(max_active, 1, 5), group_len)`` (never 0 for a non-empty group)."""
+    per_zone = max(1, min(int(max_active or 0), SEA_RAID_TEAM_MAX))
+    return max(1, min(per_zone, int(group_len))) if int(group_len) > 0 else 0
+
+
+def storm_zones(adj: Mapping[int, Sequence[int]], zone_sea: Mapping[int, Optional[int]], center: int,
+                radius: int) -> List[int]:
+    """Zones within ``radius`` steps of ``center`` (BFS), only through zones of the centre's sea; ascending ids.
+    A centre without a sea covers only itself plus neighbours that have no sea either."""
+    center = int(center)
+    sea = zone_sea.get(center)
+    radius = max(0, int(radius or 0))
+    seen = {center}
+    queue = deque([(center, 0)])
+    while queue:
+        zone, dist = queue.popleft()
+        if dist >= radius:
+            continue
+        for nb in adj.get(zone, ()):
+            nb = int(nb)
+            if nb in seen or nb not in zone_sea or zone_sea.get(nb) != sea:
+                continue
+            seen.add(nb)
+            queue.append((nb, dist + 1))
+    return sorted(seen)
+
+
+def storm_extra(zone_minutes: int, slow_mult) -> int:
+    """Storm delay of one zone: ``round(zone_minutes × (slow_mult − 1))`` (never negative)."""
+    extra = _dec(max(1, int(zone_minutes or 0))) * (max(Decimal("1"), _dec(slow_mult)) - 1)
+    return max(0, int(extra.quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+
+
+def relief(extra: int, pct) -> int:
+    """Minutes of the storm delay the sailors win back: ``floor(extra × pct / 100)``."""
+    pct = min(Decimal("100"), max(Decimal("0"), _dec(pct)))
+    return max(0, int((_dec(max(0, int(extra or 0))) * pct / 100).to_integral_value(rounding=ROUND_FLOOR)))
+
+
+def pick_drift(adj: Mapping[int, Sequence[int]], current: int, next_zone: Optional[int],
+               rng: random.Random) -> Optional[int]:
+    """A random zone adjacent to ``current`` other than ``next_zone`` (None if there is none). ``adj`` must be the
+    sea-zone graph (only sea zones)."""
+    options = sorted({int(z) for z in adj.get(int(current), ()) if int(z) != int(current)
+                      and (next_zone is None or int(z) != int(next_zone))})
+    if not options:
+        return None
+    return options[rng.randrange(len(options))]

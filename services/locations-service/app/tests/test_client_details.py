@@ -300,6 +300,8 @@ class TestGetLocationClientDetails:
             "district_id", "region_id", "is_favorited",
             # FEAT-213: port / sea zone flags, the ship of a deck, ships at the pier
             "is_port", "is_sea_zone", "port_sea_zone_id", "ship_id", "docked_ships",
+            # FEAT-214: the port's sea zone is in a storm
+            "sea_unrest",
             # FEAT-152: breadcrumb fields
             "country_id", "country_name", "region_name", "district_name",
             "neighbors", "players", "npcs", "posts", "loot", "gathering_nodes",

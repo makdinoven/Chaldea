@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../redux/store';
 import {
   addNotification,
@@ -53,6 +54,7 @@ import { getAccessToken, refreshAccessToken } from '../api/authToken';
 import toast from 'react-hot-toast';
 import { alertPlayer } from '../utils/alertPlayer';
 import { battlePath } from '../utils/battlePath';
+import { showBattleLinkToast } from '../utils/battleLinkToast';
 import { announceSeaNotice } from '../api/sea';
 import type { SeaNoticeData } from '../types/sea';
 
@@ -75,8 +77,18 @@ const LAW_LOCK_REFRESH_TYPES: ReadonlySet<string> = new Set([
  * FEAT-213: tone of a `ws_type="sea"` popup by its event. `ticket` / `sailor` are the player's own purchase —
  * the Captain window already said so, the notice only goes to the bell (with the sound).
  */
-const SEA_ERROR_EVENTS: ReadonlySet<string> = new Set(['caught', 'burnt', 'ashore', 'sailor_ashore']);
-const SEA_SUCCESS_EVENTS: ReadonlySet<string> = new Set(['arrived', 'refund']);
+const SEA_ERROR_EVENTS: ReadonlySet<string> = new Set([
+  'caught',
+  'burnt',
+  'ashore',
+  'sailor_ashore',
+  // FEAT-214: storms and sea monsters
+  'storm',
+  'raid',
+  'raid_lost',
+  'drift',
+]);
+const SEA_SUCCESS_EVENTS: ReadonlySet<string> = new Set(['arrived', 'refund', 'raid_won', 'storm_relief', 'raid_repelled']);
 const SEA_BELL_ONLY_EVENTS: ReadonlySet<string> = new Set(['ticket', 'sailor']);
 /** Sea texts are a sentence or two — keep them on screen long enough to read. */
 const SEA_TOAST_DURATION = 9000;
@@ -177,6 +189,10 @@ export const sendWsMessage = (action: string, data: Record<string, unknown>): bo
 const useWebSocket = (): UseWebSocketReturn => {
   const [connected, setConnected] = useState(false);
   const dispatch = useAppDispatch();
+  // FEAT-214: the «К бою» popup navigates inside the app (the Toaster itself is outside the Router).
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const currentUserId = useAppSelector((state) => state.user.id);
   const currentUserIdRef = useRef(currentUserId);
   useEffect(() => {
@@ -495,6 +511,11 @@ const useWebSocket = (): UseWebSocketReturn => {
               // changed (put ashore): refresh `/users/me` first, then tell the open location page / deck header.
               const sea = (parsed.data ?? {}) as SeaNoticeData;
               const event = typeof sea.event === 'string' ? sea.event : '';
+              // FEAT-214: a deck battle with sea monsters — the popup and the bell lead to it.
+              const seaBattle =
+                typeof sea.battle_id === 'number' && typeof sea.location_id === 'number'
+                  ? battlePath(sea.location_id, sea.battle_id)
+                  : undefined;
               if (sea.notification_id && typeof sea.message === 'string') {
                 dispatch(addNotification({
                   id: sea.notification_id,
@@ -502,14 +523,26 @@ const useWebSocket = (): UseWebSocketReturn => {
                   message: sea.message,
                   status: 'unread',
                   created_at: new Date().toISOString(),
+                  link: seaBattle,
                 } as NotificationItem));
+                const tone = SEA_ERROR_EVENTS.has(event) ? 'error' : SEA_SUCCESS_EVENTS.has(event) ? 'success' : 'default';
                 alertPlayer({
                   text: sea.message,
                   silent: sea.silent,
-                  tone: SEA_ERROR_EVENTS.has(event) ? 'error' : SEA_SUCCESS_EVENTS.has(event) ? 'success' : 'default',
+                  tone,
                   duration: SEA_TOAST_DURATION,
-                  noToast: SEA_BELL_ONLY_EVENTS.has(event),
+                  sound: seaBattle ? 'battle' : undefined,
+                  noToast: SEA_BELL_ONLY_EVENTS.has(event) || Boolean(seaBattle),
                 });
+                if (seaBattle && !sea.silent) {
+                  showBattleLinkToast({
+                    text: sea.message,
+                    path: seaBattle,
+                    onGo: (path) => navigateRef.current(path),
+                    tone: tone === 'error' ? 'error' : 'default',
+                    duration: SEA_TOAST_DURATION,
+                  });
+                }
               }
               void dispatch(getMe()).finally(() => announceSeaNotice(sea));
               break;

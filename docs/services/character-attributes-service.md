@@ -41,6 +41,7 @@ character-attributes-service/app/
 | GET | `/attributes/{character_id}/rest-status` | FEAT-164: состояние восстановления в покое и активная сытость. **FEAT-171 (A5): приватно** |
 | POST | `/attributes/internal/{character_id}/satiety` | FEAT-164, internal: применить сытость (вызывает inventory-service `/eat-food`). **FEAT-169: `X-Internal-Token`** |
 | POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id). **FEAT-169: `X-Internal-Token`** |
+| POST | `/attributes/internal/storm-damage` | **FEAT-214**, internal (`X-Internal-Token`): урон от шторма на палубе (доля max HP/выносливости, HP не ниже `min_health` и не поднимается, выносливость ≥ 0, восстановление досчитывается первым). Вызывающий — character-service |
 | POST | `/attributes/internal/{character_id}/reconcile-perks` | FEAT-143, internal: пересчёт активности перков. **FEAT-169: `X-Internal-Token`** |
 | GET | `/attributes/internal/{character_id}` | **FEAT-171 (A1i):** двойник `GET /attributes/{character_id}` для межсервисных вызовов (общий хелпер `_build_full_attributes`, тело идентично). `X-Internal-Token`, fail-closed. Вызывающие — battle-service, character-service, locations-service, skills-service |
 | POST | `/attributes/internal/{character_id}/sync-level` | **FEAT-196**, internal (`X-Internal-Token`), без тела: перечитать `level`/`id_class` из `characters` и выставить максимумы ресурсов (см. «Рост ресурсов за уровень»). 404 «Атрибуты персонажа не найдены», 500 «Не удалось обновить ресурсы персонажа». Ответ `{character_id, level, id_class, max_health, max_mana, max_energy, max_stamina}`. Вызывающий — character-service |
@@ -192,6 +193,14 @@ character-service, inventory-service и (в async-варианте) skills-servi
 
 ### `POST /attributes/internal/settle-regen`
 Тело `{"character_ids": [1, 2]}` (1..50 уникальных) → `{"settled": [...], "missing": [...]}`; каждый id в своей короткой транзакции. Вызывается party-service перед чтением ресурсов участников.
+
+### `POST /attributes/internal/storm-damage` (FEAT-214)
+Качка в шторм на палубе корабля. `X-Internal-Token` (fail-closed, как у остальных `/internal/*`), nginx блокирует префикс снаружи. Вызывающий — character-service (`sea_weather.apply_storm_damage`, после коммита морского прохода; игроки в бою туда не попадают — их ресурсы перезапишет battle-service).
+
+Тело: `{"items": [{"character_id": 5, "health_pct": 10, "stamina_pct": 20}], "min_health": 1}` — 1..200 элементов с уникальными `character_id >= 1`, проценты 0..100 (по умолчанию 0), `min_health >= 1` (по умолчанию 1); нарушения → 422.
+Ответ 200: `{"applied": [{character_id, health_before, health_after, stamina_before, stamina_after}], "missing": [ids без строки атрибутов]}`.
+
+Каждый персонаж — своя короткая транзакция: `SELECT … FOR UPDATE` → `settle_regen` (восстановление в покое досчитывается **до** урона) → `dh = ceil(max_health × health_pct / 100)`, `ds = ceil(max_stamina × stamina_pct / 100)` → HP: если `current <= min_health`, не меняется (урон никогда не поднимает HP), иначе `max(min_health, current − dh)`; выносливость `max(0, current − ds)` → commit (+ сверка перков, если истекла сытость). Ошибка БД → 500 «Ошибка применения урона от шторма». `*_before` — значения уже после досчёта восстановления.
 
 **Откат миграции 008:** перед `downgrade` снять активные бонусы: `UPDATE character_satiety SET expires_at = UTC_TIMESTAMP();`, затем `POST /attributes/internal/settle-regen` для всех `character_id` из таблицы.
 
