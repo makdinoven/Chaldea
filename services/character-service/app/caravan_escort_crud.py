@@ -67,6 +67,7 @@ STATE_ON_ROAD = "on_road"
 STATE_HELD = "held"
 STATE_UNDER_ATTACK = "under_attack"
 STATE_ARRIVED = "arrived"
+SEA_NO_COUNTDOWN = (caravan_crud.SEA_WAITING, caravan_crud.SEA_ABOARD)   # FEAT-215: leaves with a ship, no timer
 
 MESSAGE_MAX_LEN = 500
 MESSAGES_PAGE = 100
@@ -248,7 +249,7 @@ def pools(seller_part: int, params, repelled: bool) -> Tuple[int, int]:
 def _seller_part(caravan: "models.EconCaravan") -> int:
     seller, _duty = econ_caravan.remaining_payout(_i(caravan.value), _i(caravan.duty),
                                                   _i(caravan.paid_purse) + _i(caravan.paid_treasury),
-                                                  _i(caravan.raid_paid))
+                                                  _i(caravan.raid_paid), freight=_i(caravan.freight))
     return seller
 
 
@@ -464,8 +465,9 @@ def escort_job(db: Session, character_id: int, now: Optional[datetime] = None) -
         return None
     params = _params(db)
     route_ids = [int(x) for x in caravan_crud._json_list(caravan.route)]
-    names = caravan_crud._location_names(db, route_ids + ([caravan.current_location_id]
-                                                          if caravan.current_location_id else []))
+    sea_ports = [int(p) for p in (caravan.sea_board_port_id, caravan.sea_alight_port_id) if p]
+    names = caravan_crud._location_names(db, route_ids + sea_ports + ([caravan.current_location_id]
+                                                                      if caravan.current_location_id else []))
     regions = caravan_crud._region_names(db, [caravan.from_region_id, caravan.to_region_id])
     raid = db.query(models.EconCaravanRaid).filter(models.EconCaravanRaid.caravan_id == int(caravan.id)).first()
     raid_status = raid.status if raid is not None else None
@@ -480,7 +482,8 @@ def escort_job(db: Session, character_id: int, now: Optional[datetime] = None) -
     else:
         state = STATE_ON_ROAD
     next_move = None
-    if state in (STATE_PREPARING, STATE_ON_ROAD) and caravan.next_move_at is not None:
+    if (state in (STATE_PREPARING, STATE_ON_ROAD) and caravan.next_move_at is not None
+            and caravan.sea_stage not in SEA_NO_COUNTDOWN):
         next_move = max(0, int((caravan.next_move_at - now).total_seconds()))
     escorts = _escorts_of(db, caravan.id)
     fee, bonus = pools(_seller_part(caravan), params, raid_status == RAID_REPELLED)
@@ -499,7 +502,24 @@ def escort_job(db: Session, character_id: int, now: Optional[datetime] = None) -
         "state": state, "next_move_in_sec": next_move, "seats_total": _seats(params), "escorts": escorts,
         "pay_estimate": (fee + bonus) // max(1, len(escorts)), "raid_status": raid_status, "battle_id": battle_id,
         "joined_at": row.joined_at,
+        # FEAT-215 §3.9: the sea part of the route (all None for a land caravan)
+        "sea_stage": caravan.sea_stage,
+        "sea_split_index": int(caravan.sea_split_index) if caravan.sea_split_index is not None else None,
+        "sea_board_port_name": names.get(int(caravan.sea_board_port_id)) if caravan.sea_board_port_id else None,
+        "sea_alight_port_name": names.get(int(caravan.sea_alight_port_id)) if caravan.sea_alight_port_id else None,
+        "ship_name": _ship_name(db, caravan.sea_ship_id),
     }
+
+
+def _ship_name(db: Session, ship_id) -> Optional[str]:
+    """Plain read of the ship's name (FEAT-215); None without a ship / the sea tables."""
+    if not ship_id:
+        return None
+    try:
+        with db.begin_nested():
+            return db.execute(text("SELECT name FROM sea_ships WHERE id = :s"), {"s": int(ship_id)}).scalar()
+    except DBAPIError:
+        return None
 
 
 @dataclass

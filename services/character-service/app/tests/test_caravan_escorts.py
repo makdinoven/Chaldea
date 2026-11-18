@@ -286,11 +286,14 @@ def test_a_leaver_stays_behind(esc, rw):
 
 def test_pools_robbery_cut_and_caps():
     params = econ_sim.SimParams(caravan_escort_fee_share=0.05, caravan_escort_bonus_share=0.03)
-    caravan = SimpleNamespace(value=400, duty=0, paid_purse=400, paid_treasury=0, raid_paid=0)
+    caravan = SimpleNamespace(value=400, duty=0, paid_purse=400, paid_treasury=0, raid_paid=0, freight=0)
     assert escorts.pools(escorts._seller_part(caravan), params, False) == (20, 0)
     assert escorts.pools(escorts._seller_part(caravan), params, True) == (20, 12)
     caravan.raid_paid = 100                                         # robbed: the shares shrink with the rest
     assert escorts._seller_part(caravan) == 300
+    caravan.freight = 20                                            # FEAT-215: the sea freight is never the seller's
+    assert escorts._seller_part(caravan) == 280
+    caravan.freight = 0
     assert escorts.pools(300, params, True) == (15, 9)
     greedy = econ_sim.SimParams(caravan_escort_fee_share=0.5, caravan_escort_bonus_share=0.5)
     assert escorts.pools(7, greedy, True) == (3, 3)                 # never more than the seller part

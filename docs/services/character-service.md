@@ -3275,3 +3275,121 @@ raid:                {monster_name, hold_until | null, battles: [{battle_id}]} |
 | `GET/PUT /settings` (A7) | `locations:read` / `locations:update` | + 18 чисел выше; `storm_max_minutes < storm_min_minutes` (с учётом сохранённых) → 400 «Максимальная длительность шторма меньше минимальной»; вне диапазона → 422 |
 
 Нет таблиц 053 → 503 «Шторма пока недоступны».
+
+## Караваны по морю (FEAT-215)
+
+Этап 2 морских путей: торговля между регионами без сухопутной дороги идёт физически — по суше до порта, на корабле
+(одним рейсом, без пересадок), по суше до покупателя. Модули: `sea_cargo.py` (пары портов, посадка / выгрузка /
+высадка, фрахт), `sea_core.serves` / `reached_from` (чистые), `econ_caravan.py` (план с фрахтом,
+`cargo_loss_units`), `economy_caravan_crud.RoutePlanner.sea_route` / `reach`, `caravan_pass._sea_housekeeping`,
+хуки в `sea_pass.py` / `sea_admin.py`, потеря груза в `sea_raid_crud.py`. Новых эндпоинтов и прав нет.
+
+### Миграция `054_sea_caravans` (revises `053_sea_storms_raids`; без ENUM)
+
+- `econ_caravans` + `sea_stage` (NULL = сухопутный; `to_port` → `waiting` → `aboard` → `landed`; `stranded`),
+  `sea_split_index` (индекс порта посадки в `route`, `route[i + 1]` — порт высадки), `sea_board_port_id`,
+  `sea_alight_port_id`, `sea_ship_id`, `sea_waiting_since`, `sea_boarded_at`, `sea_unloaded_at`, `freight`
+  (зарезервированный фрахт, внутри `paid_purse + paid_treasury`), `freight_paid` (0 или `freight`), `freight_op_id`,
+  `sunk_units` (утонуло). Индексы `ix_econ_caravans_sea_wait`, `ix_econ_caravans_sea_ship`. Новые `cancel_reason`:
+  `sea_wait_expired`, `sea_route_lost` (`no_path` — только метка).
+- `sea_ships.cargo_capacity` (караванов за рейс, 0..20, по умолчанию 2; 0 = без трюма).
+- `sea_raids.caravan_ids` (JSON: караваны в трюме на момент планирования налёта, на каждой строке группы),
+  `sea_raids.cargo_settled_at` (потеря груза применена / нечего применять).
+- `econ_caravan_sea_losses` (`caravan_id` FK CASCADE, `ship_id`, `attack_key`, `lost_groups`, `decided_groups`,
+  `loss_pct`, `units_lost`, `created_at`; UNIQUE `(caravan_id, attack_key)` — потеря одного налёта применяется один раз).
+- Откат: `alembic downgrade 053_sea_storms_raids` (морские караваны в пути лучше сначала отменить).
+
+### Параметры (JSON `econ_sim_settings.params`, группа «Морские караваны»)
+
+`caravan_sea_freight_pct` 0..50 (5.0 — фрахт = `floor(стоимость × pct / 100)`), `caravan_sea_wait_hours` 1..168
+(24 — ожидание корабля в порту, потом отмена с возвратом), `caravan_sea_loss_pct` 0..100 (25.0 — доля груза, которую
+уносят монстры, если проиграли все группы защитников; при нескольких группах — пропорционально доле проигравших среди
+решённых: `pct × lost / (won + lost)`).
+`caravan_no_path_abstract` 0..1 (1 — пара без сухопутной дороги и без морского пути торгует по-старому, абстрактным
+караваном без фрахта, пока мир не дорисован; 0 — такой сделки нет).
+
+### Планирование и отправка
+
+| Пара (ворота продавца ↔ ворота покупателя) | Итог |
+|---|---|
+| Есть сухопутная дорога | как раньше: физический или абстрактный (`choose_physical`) |
+| Дороги нет, есть морской путь | всегда физический морской караван (нужны `caravan_physical_enabled = 1` и свободный слот `caravan_physical_max_active`) |
+| Ни того, ни другого | **сделки нет** (регионы без ворот торговать перестают) |
+
+- Морские пары (`sea_cargo.sea_pairs`, раз за прогон): по каждому активному кораблю с трюмом план на `2 × stops`
+  рейсов; пара (A, B) — если B достижим из A без возврата в A; минимальное число зон. `RoutePlanner.sea_route` выбирает
+  минимум `len(суша1) + len(суша2) + зоны`. Планировщик строится всегда; сбой → в этом прогоне караваны не идут.
+- Фрахт платит **покупатель** при отправке: `cost = value + duty + freight`. Морская строка: `route = суша1 + суша2`,
+  `sea_stage = "to_port"`, порты, `freight`. Путь пропал к отправке → `skipped` (сделки нет).
+
+### Этапы морского каравана
+
+```
+to_port (шаги по суше) ──► waiting (в порту посадки, next_move_at NULL)
+waiting ──► aboard  (sea pass: отплытие корабля, который идёт в порт высадки, есть место в трюме)
+waiting ──(caravan_sea_wait_hours)──► cancelled sea_wait_expired      (caravan pass)
+aboard  ──► landed  (sea pass: у причала порта высадки, нет активного налёта игроков; фрахт списан)
+aboard  ──(корабль удалён / выключен / сменил маршрут / аварийная высадка)──► stranded ──► cancelled sea_route_lost
+landed  ──► arrived ──► deliver_physical
+```
+
+- Отмена (`cancel_physical`): товар `units − stolen_units − sunk_units` — продавцу, `paid − raid_paid −
+  freight_paid` — покупателю, охрана без оплаты. Доставка: платёж из `paid − freight − raid_paid`; невзятый фрахт
+  (теоретически) — обратно покупателю.
+- Морской проход игнорирует выключатель экономики (груз не застревает на палубе); шаги по суше, отмены по сроку /
+  «застрял» и доставка — по выключателю (проход караванов).
+- Охрана-игроки плывут с караваном без билета (блокировка `caravan_escort`), сходят с ним. По решению пользователя
+  **охрана-игроки дерутся с морскими монстрами** наравне со всеми на палубе (CS и battle-service не отсеивают
+  блокировку `caravan_escort` для морского налёта); NPC-охрана каравана с монстрами не дерётся.
+
+### Деньги: фрахт (операция `caravan_freight`, «Фрахт каравана»)
+
+При выгрузке (в транзакции корабля): эскроу → казна региона **порта посадки** `F − налог` + казна страны
+`core.tax_amount(F, country_tax_rate)` (явная нога — `caravan_escrow` не источник налога); порт без страны / региона —
+всё в регион / мир. Ключ `caravan:c<id>:freight`, `apply_tax=False`; затем `freight_paid = F`. Сорвавшийся рейс фрахт
+не берёт. Под-инвариант эскроу: `escrow == Σ(paid_purse + paid_treasury − raid_paid − freight_paid)` по `in_transit`.
+`caravan_freight` добавлен в `CARAVAN_OP_TYPES` всех 4 копий `econ_core.py` (`scripts/check_econ_copies.sh`).
+
+### Налёт игроков в море (`caravan_raid_crud`)
+
+- Налёт на караван в трюме (`sea_stage = "aboard"`) идёт на палубе как на суше (охрана, пост B1, добыча, репутация),
+  но **преступление — по законам края порта отправления**: `raid.region_id` = регион `ship.docked_port_id` (у причала)
+  или `ship.last_port_id` (в море) — `crime_location` / `departure_port`, чтение `sea_ships` без блокировки; корабль
+  не найден → регион локации налёта. Налёт на ждущий в порту караван — как на суше.
+- Добыча (`_pay_out`): остаток считается как `units − stolen_units − sunk_units`, марки ограничены
+  `econ_caravan.raid_marks_cap(paid, freight, raid_paid)` — фрахт порта налётчикам не достаётся.
+- A1 `caravans_here`: + `sea_stage`; у `waiting` / `aboard` `departs_in_sec = null` (уходит с кораблём, не по
+  таймеру). Вид охраны C3 (`escort_job`): + `sea_stage`, `sea_split_index`, `sea_board_port_name`,
+  `sea_alight_port_name`, `ship_name`; у `waiting` / `aboard` `next_move_in_sec = null`.
+
+### Потеря груза от монстров (`sea_raid_crud.apply_cargo_loss`)
+
+- Когда **все** строки налёта (`attack_key`) финальны: `lost` = проигравшие группы, `decided` = выигравшие +
+  проигравшие (aborted / expired не считаются; 0 решённых → потерь нет). Каждый караван из `caravan_ids` в пути теряет
+  `econ_caravan.cargo_loss_units(units − stolen − sunk, caravan_sea_loss_pct, lost, decided)` =
+  `floor3(остаток × pct/100 × lost/decided)` → `sunk_units`, строка `econ_caravan_sea_losses`. Затем
+  `cargo_settled_at` на всех строках налёта. Деньги не двигаются: продавцу платят полностью, покупатель получает меньше.
+- Вызывается после `settle` в колбэке (`battle_result`) и опросе (`_poll_one`), страховка — `cargo_followups` в
+  `raid_followups` (финальные налёты без `cargo_settled_at`, пачка 200; статистика прохода `cargo_settled`).
+  Повтор / гонка — no-op (UNIQUE + `cargo_settled_at`).
+- Пустая палуба → нападения нет (`raid_repelled`, строк нет) → груз цел.
+- Охране — WS `caravan_escort`, `event = "cargo_sunk"`: «Часть груза утащили в пучину: …».
+
+### Глобальный порядок блокировок (заменяет FEAT-212 3.15 / FEAT-213 3.7 для этих таблиц)
+
+`sea_ships (asc) → sea_passes → econ_regions → econ_region_goods → econ_region_events → econ_caravans (asc) →
+econ_caravan_raids → econ_caravan_escorts (asc) → econ_caravan_sea_losses → sea_raids → … (цепочка FEAT-207) … →
+characters (asc, ОДИН отсортированный вызов на транзакцию) → econ_accounts (asc) → character_attributes`.
+Коротко: корабль → места → караваны → охрана → персонажи → счета. Транзакция корабля не берёт блокировки регионов /
+товаров / налётов на караваны; ни один путь караванов / налётов / доставки не блокирует `sea_ships`.
+
+### API (дополнения, обратно совместимы)
+
+- Админ: список / карточка каравана — `sea_stage`, `sea_split_index`, `sea_board_port_id/_name`,
+  `sea_alight_port_id/_name`, `sea_ship_id/_name`, `sea_waiting_since`, `sea_wait_deadline`, `sea_boarded_at`,
+  `sea_unloaded_at`, `freight`, `freight_paid`, `sunk_units`; в карточке ещё `sea_losses: [{attack_key, units_lost,
+  loss_pct, created_at}]`; фильтр `kind=sea`. Карточка дорог: `no_road` — только пары без суши и моря, новый `by_sea:
+  [{from_region_id, from_name, to_region_id, to_name, directions, board_port_name, alight_port_name}]`.
+- Корабли: `cargo_capacity` в create / update / out, `cargo_aboard` (только чтение); удаление корабля высаживает груз
+  (`stranded`), при налёте на караван в трюме → 409 «На корабле идёт налёт на караван — удалите корабль позже».
+- Палуба S5: `cargo: [{caravan_id, group_name, alight_port_name}]`; `passengers_count` без охраны каравана.

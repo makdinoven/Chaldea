@@ -1654,20 +1654,26 @@ def _caravan_pass(session_factory: SessionFactory, run_id: int, summary: RunSumm
     finally:
         session.rollback()
         session.close()
-    plans = econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params)
-    planner = None
-    if plans and int(params.caravan_physical_enabled):
-        # FEAT-211 3.2: one route planner per pass; a failure only keeps this run's caravans abstract
-        session = session_factory()
-        try:
-            planner = caravan_crud.build_planner(session, params)
-        except Exception as exc:
-            logger.warning("economy tick run %s: caravan road planner unavailable (%s), caravans stay abstract",
-                           run_id, type(exc).__name__)
-            planner = None
-        finally:
-            session.rollback()
-            session.close()
+    # FEAT-215 3.3: the route planner (land roads + sea pairs) is always built before planning — without it nobody
+    # knows whether a pair has any path, so a failure sends no caravans this run (never "everything abstract").
+    # A path-blind pre-plan that finds nothing means nothing to trade at all (reach only removes candidates and the
+    # freight only shrinks budgets) — then the graph is not loaded.
+    if not econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params):
+        return
+    session = session_factory()
+    try:
+        planner = caravan_crud.build_planner(session, params)
+    except Exception as exc:
+        summary.caravans_failed += 1
+        logger.error("economy tick run %s: caravan route planner unavailable (%s), no caravans sent this run",
+                     run_id, type(exc).__name__, exc_info=True)
+        return
+    finally:
+        session.rollback()
+        session.close()
+    sea_slots = planner.sea_slots() if int(params.caravan_physical_enabled) else 0
+    plans = econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params,
+                                       reach=planner.reach, sea_slots=sea_slots)
     for plan in plans:
         try:
             result = caravan_crud.dispatch_tx(session_factory, plan, run_id=run_id, params=params, now=now,

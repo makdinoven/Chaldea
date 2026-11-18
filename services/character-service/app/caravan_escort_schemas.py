@@ -64,6 +64,12 @@ class EscortJobOut(BaseModel):
     raid_status: Optional[str]            # null | starting | fighting | won | repelled | aborted | expired
     battle_id: Optional[int]              # the raid battle when this escort fights in it
     joined_at: datetime
+    # FEAT-215 §3.9: sea caravans (all null for a land caravan)
+    sea_stage: Optional[str] = None       # to_port | waiting | aboard | landed | stranded
+    sea_split_index: Optional[int] = None
+    sea_board_port_name: Optional[str] = None
+    sea_alight_port_name: Optional[str] = None
+    ship_name: Optional[str] = None
 
 
 class EscortJobWrapOut(BaseModel):

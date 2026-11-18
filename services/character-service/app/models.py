@@ -1074,6 +1074,20 @@ class EconCaravan(Base):
     guard_count = Column(SmallInteger, nullable=False, default=0, server_default="0")
     stolen_units = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
     raid_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # FEAT-215 sea caravans (migration 054): NULL stage = land caravan; to_port | waiting | aboard | landed | stranded.
+    # route[sea_split_index] = boarding port, route[sea_split_index + 1] = landing port. Ports / ship: no FK.
+    sea_stage = Column(String(12), nullable=True)
+    sea_split_index = Column(Integer, nullable=True)
+    sea_board_port_id = Column(BigInteger, nullable=True)
+    sea_alight_port_id = Column(BigInteger, nullable=True)
+    sea_ship_id = Column(BigInteger, nullable=True)
+    sea_waiting_since = Column(DateTime, nullable=True)
+    sea_boarded_at = Column(DateTime, nullable=True)
+    sea_unloaded_at = Column(DateTime, nullable=True)
+    freight = Column(Integer, nullable=False, default=0, server_default="0")        # reserved (in paid_purse+treasury)
+    freight_paid = Column(Integer, nullable=False, default=0, server_default="0")   # charged: 0 or freight
+    freight_op_id = Column(BigInteger, nullable=True)                               # the caravan_freight operation
+    sunk_units = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")  # lost to sea monsters
 
     __table_args__ = (
         UniqueConstraint("dispatch_run_id", "from_region_id", "to_region_id", "group_code",
@@ -1084,6 +1098,28 @@ class EconCaravan(Base):
         Index("ix_econ_caravans_finished", "finished_at"),
         Index("ix_econ_caravans_move", "is_physical", "status", "next_move_at"),
         Index("ix_econ_caravans_loc", "current_location_id", "status"),
+        Index("ix_econ_caravans_sea_wait", "sea_stage", "sea_board_port_id"),
+        Index("ix_econ_caravans_sea_ship", "sea_ship_id", "sea_stage"),
+    )
+
+
+class EconCaravanSeaLoss(Base):
+    """FEAT-215: cargo of a sea caravan lost to one monster attack (UNIQUE caravan + attack = loss applied once)."""
+
+    __tablename__ = "econ_caravan_sea_losses"
+
+    id = Column(_EconId, primary_key=True, autoincrement=True)
+    caravan_id = Column(BigInteger, ForeignKey("econ_caravans.id", ondelete="CASCADE"), nullable=False)
+    ship_id = Column(BigInteger, nullable=True)
+    attack_key = Column(String(48), nullable=False)
+    lost_groups = Column(Integer, nullable=False, default=0, server_default="0")
+    decided_groups = Column(Integer, nullable=False, default=0, server_default="0")
+    loss_pct = Column(Numeric(6, 2), nullable=False, default=0, server_default="0")
+    units_lost = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("caravan_id", "attack_key", name="uq_caravan_sea_loss"),
     )
 
 
@@ -2253,6 +2289,8 @@ class SeaShip(Base):
     storm_hold_since = Column(DateTime, nullable=True)              # docked: departure postponed by a storm since
     storm_extra_minutes = Column(Integer, nullable=False, default=0, server_default="0")  # storm delay of the zone
     storm_post_floor_id = Column(BigInteger, nullable=True)         # MAX(posts.id) at the stormy entry (relief)
+    # FEAT-215 (054): hold size in caravans per trip (0 = the ship carries no cargo)
+    cargo_capacity = Column(Integer, nullable=False, default=2, server_default="2")
 
     __table_args__ = (
         UniqueConstraint("deck_location_id", name="uq_sea_ships_deck"),
@@ -2419,6 +2457,9 @@ class SeaRaid(Base):
     created_at = Column(DateTime, nullable=False)
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
+    # FEAT-215 (054): caravans in the hold when the attack was planned; cargo loss applied (or nothing to apply)
+    caravan_ids = Column(JSON, nullable=True)
+    cargo_settled_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("attack_key", "group_no", name="uq_sea_raids_group"),

@@ -19,6 +19,8 @@ export interface CaravanHere {
   can_attack: boolean;
   /** Why the attack is not possible right now (Russian, from the server). */
   reason: string | null;
+  /** FEAT-215: sea stage (`waiting` in a port, `aboard` on a deck); null / absent on land. */
+  sea_stage?: 'to_port' | 'waiting' | 'aboard' | 'landed' | 'stranded' | string | null;
 }
 
 /** `GET /characters/caravans/here` (A1). */

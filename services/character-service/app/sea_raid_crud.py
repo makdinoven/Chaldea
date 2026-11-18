@@ -11,9 +11,17 @@
 * **settle** — :func:`battle_result` (the battle-service callback ``/characters/internal/sea/raid-result``) and the
   poll: :func:`settle` (conditional, idempotent) + notices + :func:`despawn_mobs`. The ship hold is released by the
   next sea pass — nothing here locks the ship;
+* **cargo loss** (FEAT-215 §3.8) — :func:`apply_cargo_loss` once every group row of an attack is final (after the
+  callback / poll settlement, and as a pass fallback): each caravan named in ``caravan_ids`` (in the hold when the
+  attack was planned) loses ``econ_caravan.cargo_loss_units(left, caravan_sea_loss_pct, lost, decided)`` units
+  (``sunk_units``; one ``econ_caravan_sea_losses`` row per caravan and attack — UNIQUE = applied once). No money
+  moves: the seller is paid in full, the buyer receives fewer units. An empty deck plans no attack → no loss;
 * **pass fallbacks** — :func:`raid_followups` (called at the end of ``sea_pass.run_pass``): unstarted rows, stale
   ``starting`` rows (> 10 min: attach a tagged battle or expire), ``fighting`` rows polled after 2 min (lost callbacks),
-  final rows with monsters still spawned.
+  final rows with monsters still spawned, final attacks whose cargo is not settled yet.
+
+Lock order of the cargo loss (§3.6): ``econ_caravans (asc) → econ_caravan_sea_losses (insert) → sea_raids (UPDATE)``;
+the ship row is never locked here, escorts are a plain read.
 
 Player team = 0, monster team = 1. Rewards / loss are the ordinary PvE end of battle-service.
 """
@@ -30,7 +38,10 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 import activity_lock
+import caravan_escort_crud as escort_crud
+import econ_caravan
 import econ_core as core
+import economy_caravan_crud as caravan_crud
 import law_notify
 import models
 import sea_core
@@ -65,6 +76,8 @@ MSG_RAID_BATTLE = "Бой на палубе с «{monster}» — защищай�
 MSG_REPELLED = "Команда корабля «{ship}» отбилась от «{monster}»"
 MSG_WON = "Монстры отбиты! «{monster}» больше не угрожает кораблю"
 MSG_LOST = "Монстры одолели вас — «{monster}» хозяйничает на палубе"
+MSG_CARGO_SUNK = "Часть груза утащили в пучину: «{monster}» унёс {units} ед. с корабля «{ship}»"
+EV_CARGO_SUNK = "cargo_sunk"               # escort WS event (``caravan_escort`` channel)
 
 
 def now_utc() -> datetime:
@@ -142,14 +155,16 @@ def _health(db: Session, character_id: int) -> Optional[int]:
 
 def eligible_players(db: Session, players: Sequence["models.Character"]) -> List[int]:
     """Deck players that are pulled into the fight: not in an active battle, not activity-locked (unconscious, jail,
-    reading, asleep …), HP > 0, not gathering. Ascending ids."""
+    reading, asleep …), HP > 0, not gathering. Ascending ids. FEAT-215 (user decision): a caravan escort sailing with
+    its cargo fights the monsters like everyone on deck — the ``caravan_escort`` lock is the only exemption (the
+    battle-service ``/internal/sea-raid`` check mirrors it). NPC caravan guards never fight monsters (NPCs)."""
     import sea_pass                                     # late: sea_pass imports this module
     out: List[int] = []
     for ch in players:
         cid = int(ch.id)
         if ch.is_npc or sea_pass.in_battle(db, cid):
             continue
-        if activity_lock.lock_for_character(ch).get("locked"):
+        if activity_lock.lock_for_character(ch).get("reason") not in (None, activity_lock.REASON_CARAVAN_ESCORT):
             continue
         hp = _health(db, cid)
         if hp is not None and hp <= 0:
@@ -173,10 +188,12 @@ def attack_key(ship: "models.SeaShip") -> str:
 
 
 def plan_raid(db: Session, ship: "models.SeaShip", pick: MonsterPick, player_ids: Sequence[int],
-              now: datetime) -> List["models.SeaRaid"]:
+              now: datetime, caravan_ids: Optional[Sequence[int]] = None) -> List["models.SeaRaid"]:
     """Insert one ``starting`` row per battle group (no commit). A duplicate entry (UNIQUE attack_key + group) →
-    ``[]`` — the attack has already been planned."""
+    ``[]`` — the attack has already been planned. FEAT-215 §3.5: ``caravan_ids`` = the caravans in the hold at this
+    moment, written on every group row (None / empty → NULL: no cargo to lose)."""
     key = attack_key(ship)
+    cargo = sorted({int(c) for c in caravan_ids}) if caravan_ids else None
     rows: List["models.SeaRaid"] = []
     try:
         with db.begin_nested():
@@ -185,7 +202,8 @@ def plan_raid(db: Session, ship: "models.SeaShip", pick: MonsterPick, player_ids
                                      deck_location_id=int(ship.deck_location_id), zone_id=_i(ship.current_zone_id),
                                      mob_template_id=int(pick.template_id), monster_name=pick.name,
                                      player_ids=[int(c) for c in group], status=sea_core.RAID_STARTING,
-                                     mobs_despawned=False, created_at=now)
+                                     mobs_despawned=False, created_at=now,
+                                     caravan_ids=list(cargo) if cargo else None)
                 db.add(row)
                 rows.append(row)
             db.flush()
@@ -454,6 +472,7 @@ def battle_result(db: Session, *, battle_id: int, raid_id: int, winner_team: Opt
         except Exception:
             db.rollback()
             logger.exception("sea raid %s: monsters not despawned, retried by the sea pass", raid_id)
+        settle_cargo_of_raid(db, raid_id, now)
     return result.status
 
 
@@ -540,6 +559,7 @@ def _poll_one(db: Session, raid_id: int, now: datetime) -> bool:
         law_notify.publish(outcome.notices)
     if outcome.status in sea_core.RAID_FINAL_STATUSES:
         despawn_mobs(db, raid_id)
+        settle_cargo_of_raid(db, raid_id, now)
         return True
     return False
 
@@ -548,7 +568,7 @@ def raid_followups(factory: SessionFactory, now: Optional[datetime] = None) -> D
     """End of the sea pass (each step best effort): unstarted rows, stale ``starting`` rows, lost callbacks of
     ``fighting`` rows, final rows with monsters still spawned."""
     now = now or now_utc()
-    stats = {"raid_started": 0, "raid_expired": 0, "raid_polled": 0, "raid_despawned": 0}
+    stats = {"raid_started": 0, "raid_expired": 0, "raid_polled": 0, "raid_despawned": 0, "cargo_settled": 0}
     db = factory()
     try:
         stats["raid_started"] = sum(1 for r in start_pending(db, None, now) if r.status == START_FIGHTING)
@@ -566,7 +586,160 @@ def raid_followups(factory: SessionFactory, now: Optional[datetime] = None) -> D
     stats["raid_despawned"] = _each(
         factory, f"SELECT id FROM sea_raids WHERE mobs_despawned = 0 AND status IN ({final}) ORDER BY id LIMIT :n",
         {f"f{i}": s for i, s in enumerate(sea_core.RAID_FINAL_STATUSES)}, despawn_mobs, "despawn")
+    stats["cargo_settled"] = cargo_followups(factory, now)
     return stats
+
+
+# =====================================================================================================================
+# FEAT-215 §3.8: cargo lost to the monsters (own transaction; after the settlement)
+# =====================================================================================================================
+
+CARGO_APPLIED = "applied"
+CARGO_PENDING = "pending"                             # a group of the attack still fights (or the call failed)
+CARGO_ALREADY = "already"
+CARGO_NONE = "none"                                   # no such attack
+
+
+@dataclass
+class CargoLoss:
+    status: str                                       # applied | pending | already | none
+    caravans: List[int] = field(default_factory=list)
+    notices: List[law_notify.Notice] = field(default_factory=list)
+
+
+def _loss_pct(db: Session) -> float:
+    import econ_tick                                  # late: econ_tick imports most of the service
+    return float(getattr(econ_tick.load_params(db), "caravan_sea_loss_pct", 0.0) or 0.0)
+
+
+def _escorts_by_caravan(db: Session, caravan_ids: Sequence[int]) -> Dict[int, List[tuple]]:
+    """Active escorts ``{caravan_id: [(character_id, user_id)]}`` (plain read — notices only)."""
+    ids = sorted({int(c) for c in caravan_ids})
+    if not ids:
+        return {}
+    ph, params = core.in_params("c", ids)
+    rows = db.execute(text(
+        f"SELECT e.caravan_id, e.character_id, ch.user_id FROM econ_caravan_escorts e "
+        f"LEFT JOIN characters ch ON ch.id = e.character_id WHERE e.caravan_id IN ({ph}) AND e.status = :st "
+        f"ORDER BY e.id"), {**params, "st": escort_crud.STATUS_ACTIVE}).fetchall()
+    out: Dict[int, List[tuple]] = {}
+    for r in rows:
+        out.setdefault(int(r[0]), []).append((int(r[1]), int(r[2]) if r[2] is not None else None))
+    return out
+
+
+def apply_cargo_loss(db: Session, key: str, now: Optional[datetime] = None) -> CargoLoss:
+    """Apply the cargo loss of the attack ``key`` once all its group rows are final (commits; never twice):
+    ``lost`` / ``decided`` = lost / (won + lost) groups (aborted / expired ignored; 0 decided → no loss). Every
+    in-transit caravan of ``caravan_ids`` loses ``cargo_loss_units(units − stolen − sunk, caravan_sea_loss_pct,
+    lost, decided)``; the UNIQUE ``(caravan_id, attack_key)`` row makes a concurrent / repeated call a no-op. Then
+    ``cargo_settled_at`` is set on every row of the attack (also when nothing was lost). No money moves."""
+    now = now or now_utc()
+    rows = db.query(models.SeaRaid).filter(models.SeaRaid.attack_key == str(key)).order_by(models.SeaRaid.id).all()
+    if not rows:
+        db.rollback()
+        return CargoLoss(CARGO_NONE)
+    if any(r.cargo_settled_at is not None for r in rows):
+        db.rollback()
+        return CargoLoss(CARGO_ALREADY)
+    if any(r.status not in sea_core.RAID_FINAL_STATUSES for r in rows):
+        db.rollback()
+        return CargoLoss(CARGO_PENDING)
+    lost = sum(1 for r in rows if r.status == sea_core.RAID_LOST)
+    decided = lost + sum(1 for r in rows if r.status == sea_core.RAID_WON)
+    cargo = sorted({c for r in rows for c in _ids(r.caravan_ids)})
+    ship_id = int(rows[0].ship_id)
+    monster = rows[0].monster_name or "монстр"
+    result = CargoLoss(CARGO_APPLIED)
+    hit: List[tuple] = []
+    if cargo and lost > 0:
+        pct = max(0.0, min(100.0, _loss_pct(db)))
+        C = models.EconCaravan
+        caravans = sea_crud._locked(db.query(C).filter(C.id.in_(cargo), C.status == caravan_crud.STATUS_IN_TRANSIT)
+                                    .order_by(C.id), db).all()
+        for caravan in caravans:
+            units = econ_caravan.cargo_loss_units(caravan_crud._remaining_units(caravan), pct, lost, decided)
+            if units <= 0:
+                continue
+            try:
+                with db.begin_nested():
+                    db.add(models.EconCaravanSeaLoss(
+                        caravan_id=int(caravan.id), ship_id=ship_id, attack_key=str(key), lost_groups=lost,
+                        decided_groups=decided, loss_pct=round(pct, 2), units_lost=units, created_at=now))
+                    db.flush()
+            except IntegrityError:                    # this attack already took its share of this caravan
+                continue
+            caravan.sunk_units = caravan_crud._dec3(caravan_crud._dec3(caravan.sunk_units) + caravan_crud._dec3(units))
+            hit.append((int(caravan.id), units))
+    db.execute(text("UPDATE sea_raids SET cargo_settled_at = :now WHERE attack_key = :k AND cargo_settled_at IS NULL"),
+               {"now": now, "k": str(key)})
+    if hit:
+        ship_name = db.execute(text("SELECT name FROM sea_ships WHERE id = :s"), {"s": ship_id}).scalar() or "корабль"
+        escorts = _escorts_by_caravan(db, [c for c, _u in hit])
+        for caravan_id, units in hit:
+            message = MSG_CARGO_SUNK.format(monster=monster, units=f"{units:g}", ship=ship_name)
+            for character_id, user_id in escorts.get(caravan_id, []):
+                result.notices.append(escort_crud._notice(user_id, message, character_id, caravan_id,
+                                                          event=EV_CARGO_SUNK, ship_id=ship_id))
+        result.caravans = [c for c, _u in hit]
+    db.commit()
+    if hit:
+        logger.info("sea attack %s: cargo lost %s (lost %s of %s groups)", key, hit, lost, decided)
+    return result
+
+
+def apply_cargo_loss_tx(factory: SessionFactory, key: str, now: Optional[datetime] = None) -> CargoLoss:
+    """:func:`apply_cargo_loss` in its own session; publishes the escort notices. Never raises."""
+    db = factory()
+    try:
+        result = apply_cargo_loss(db, key, now)
+    except Exception:
+        db.rollback()
+        logger.exception("sea attack %s: cargo loss failed (the sea pass retries)", key)
+        return CargoLoss(CARGO_PENDING)
+    finally:
+        db.close()
+    if result.notices:
+        law_notify.publish(result.notices)
+    return result
+
+
+def settle_cargo_of_raid(db: Session, raid_id: int, now: Optional[datetime] = None) -> Optional[CargoLoss]:
+    """After a raid row became final (callback / poll, ``db`` clean): the cargo loss of its attack. Never raises —
+    a failure is retried by :func:`cargo_followups`."""
+    try:
+        key = db.query(models.SeaRaid.attack_key).filter(models.SeaRaid.id == int(raid_id)).scalar()
+        if key is None:
+            db.rollback()
+            return None
+        result = apply_cargo_loss(db, key, now)
+    except Exception:
+        db.rollback()
+        logger.exception("sea raid %s: cargo loss failed (the sea pass retries)", raid_id)
+        return None
+    if result.notices:
+        law_notify.publish(result.notices)
+    return result
+
+
+def cargo_followups(factory: SessionFactory, now: Optional[datetime] = None) -> int:
+    """Pass fallback: attacks with a final row whose cargo is not settled yet (lost callbacks, crashes, rows closed
+    by ``abandon``). Returns the attacks settled now."""
+    now = now or now_utc()
+    final = ", ".join(f":f{i}" for i in range(len(sea_core.RAID_FINAL_STATUSES)))
+    db = factory()
+    try:
+        keys = [r[0] for r in db.execute(text(
+            f"SELECT attack_key FROM sea_raids WHERE cargo_settled_at IS NULL AND status IN ({final}) "
+            f"GROUP BY attack_key ORDER BY MIN(id) LIMIT :n"),
+            {**{f"f{i}": st for i, st in enumerate(sea_core.RAID_FINAL_STATUSES)}, "n": BATCH_SIZE}).fetchall()]
+    except DBAPIError:
+        db.rollback()
+        logger.warning("sea pass: unsettled cargo attacks unreadable", exc_info=True)
+        return 0
+    finally:
+        db.close()
+    return sum(1 for k in keys if apply_cargo_loss_tx(factory, k, now).status == CARGO_APPLIED)
 
 
 # =====================================================================================================================

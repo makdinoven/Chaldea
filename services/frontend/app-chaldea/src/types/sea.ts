@@ -121,11 +121,21 @@ export interface CaptainView {
   my_passes: SeaPass[];
 }
 
+/** FEAT-215: one caravan in the ship's hold (S5). */
+export interface SeaDeckCargo {
+  caravan_id: number;
+  group_name: string | null;
+  alight_port_name: string | null;
+}
+
 export interface DeckView {
   ship: ShipPublic;
   /** Sailing: ships in the same sea zone; docked: ships at the same pier. */
   ships_nearby: { id: number; name: string }[];
+  /** FEAT-215: hidden caravan escorts are not counted. */
   passengers_count: number;
+  /** FEAT-215: caravans in the hold — optional on an older backend */
+  cargo?: SeaDeckCargo[];
   my_passes: SeaPass[];
   /** Minimum plain length of the sailor's deck post. */
   sailor_post_min_chars: number;

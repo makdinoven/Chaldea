@@ -32,11 +32,19 @@ interface ShipFormProps {
   onCancel?: () => void;
 }
 
-type NumKey = 'capacity' | 'crew_slots' | 'boarding_minutes' | 'zone_minutes' | 'fare_base' | 'fare_per_zone';
+type NumKey =
+  | 'capacity'
+  | 'crew_slots'
+  | 'cargo_capacity'
+  | 'boarding_minutes'
+  | 'zone_minutes'
+  | 'fare_base'
+  | 'fare_per_zone';
 
 const NUM_FIELDS: { key: NumKey; label: string; hint: string }[] = [
   { key: 'capacity', label: 'Мест для пассажиров', hint: 'Билетов на один рейс (0 — билеты не продаются)' },
   { key: 'crew_slots', label: 'Мест для матросов', hint: 'Наём на один рейс (0 — матросов не берут)' },
+  { key: 'cargo_capacity', label: 'Трюм (караванов за рейс)', hint: 'Сколько караванов берёт за рейс (0 — грузы не возит)' },
   { key: 'boarding_minutes', label: 'Сборы в порту, мин', hint: 'Сколько корабль стоит у причала в каждом порту' },
   { key: 'zone_minutes', label: 'Время на морскую зону, мин', hint: 'Скорость: сколько идёт одна морская зона' },
   { key: 'fare_base', label: 'Базовая цена билета', hint: 'Билет = база + цена за зону × число зон пути' },
@@ -46,6 +54,7 @@ const NUM_FIELDS: { key: NumKey; label: string; hint: string }[] = [
 const DEFAULTS: Record<NumKey, number> = {
   capacity: 10,
   crew_slots: 2,
+  cargo_capacity: 2,
   boarding_minutes: 30,
   zone_minutes: 10,
   fare_base: 10,
@@ -68,7 +77,8 @@ const ShipForm = ({ ship, ports, zones, canSave, onSaved, onCancel }: ShipFormPr
   const [deckId, setDeckId] = useState<string>(ship ? String(ship.deck.id) : '');
   const [captainId, setCaptainId] = useState<string>(ship?.captain_npc_id ? String(ship.captain_npc_id) : '');
   const [nums, setNums] = useState<Record<NumKey, string>>(() =>
-    Object.fromEntries(NUM_FIELDS.map(({ key }) => [key, String(ship ? ship[key] : DEFAULTS[key])])) as Record<NumKey, string>,
+    // `?? DEFAULTS` — an older backend does not send `cargo_capacity` yet.
+    Object.fromEntries(NUM_FIELDS.map(({ key }) => [key, String(ship?.[key] ?? DEFAULTS[key])])) as Record<NumKey, string>,
   );
   const [isLoop, setIsLoop] = useState(ship?.is_loop ?? false);
   const [isActive, setIsActive] = useState(ship?.is_active ?? true);
@@ -151,7 +161,7 @@ const ShipForm = ({ ship, ports, zones, canSave, onSaved, onCancel }: ShipFormPr
         if (newCaptain !== (ship.captain_npc_id ?? null)) patch.captain_npc_id = newCaptain;
         const n = numbers();
         NUM_FIELDS.forEach(({ key }) => {
-          if (n[key] !== ship[key]) patch[key] = n[key];
+          if (n[key] !== (ship[key] ?? DEFAULTS[key])) patch[key] = n[key];
         });
         if (isActive !== ship.is_active) patch.is_active = isActive;
         if (routeSig(stops, isLoop) !== routeSig(stopsOf(ship), ship.is_loop)) {

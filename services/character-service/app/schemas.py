@@ -2114,6 +2114,11 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "caravan_escort_fee_share": (0.0, 0.5),
     "caravan_escort_bonus_share": (0.0, 0.5),
     "caravan_escort_defense_fame": (0, 1_000),
+    # FEAT-215 sea caravans
+    "caravan_sea_freight_pct": (0.0, 50.0),
+    "caravan_sea_wait_hours": (1, 168),
+    "caravan_sea_loss_pct": (0.0, 100.0),
+    "caravan_no_path_abstract": (0, 1),
     # FEAT-193 guild orders
     "guild_enabled": (0, 1),
     "guild_markup_pct": (0.0, 200.0),
@@ -2162,6 +2167,7 @@ ECON_SIM_INT_PARAMS = frozenset({
     "caravan_route_max_steps", "caravan_post_hold_max_min", "caravan_raid_battle_max_hours",
     "caravan_guard_count_base", "caravan_guard_value_per_extra", "caravan_guard_count_max",
     "caravan_departure_minutes", "caravan_escort_seats", "caravan_escort_defense_fame",
+    "caravan_sea_wait_hours", "caravan_no_path_abstract",
     "guild_enabled", "guild_min_order_value", "guild_xp_daily_cap",
     "classes_enabled",
 })
@@ -2581,6 +2587,10 @@ class EconSimParamsIn(BaseModel):
     caravan_escort_fee_share: Optional[float] = None
     caravan_escort_bonus_share: Optional[float] = None
     caravan_escort_defense_fame: Optional[int] = None
+    caravan_sea_freight_pct: Optional[float] = None
+    caravan_sea_wait_hours: Optional[int] = None
+    caravan_sea_loss_pct: Optional[float] = None
+    caravan_no_path_abstract: Optional[int] = None
     guild_enabled: Optional[int] = None
     guild_markup_pct: Optional[float] = None
     guild_open_threshold_pct: Optional[float] = None
@@ -3306,6 +3316,11 @@ class CaravanParamsOut(BaseModel):
     caravan_escort_fee_share: float
     caravan_escort_bonus_share: float
     caravan_escort_defense_fame: int
+    # FEAT-215 sea caravans
+    caravan_sea_freight_pct: float
+    caravan_sea_wait_hours: int
+    caravan_sea_loss_pct: float
+    caravan_no_path_abstract: int
 
 
 class CaravanEscrowOut(BaseModel):
@@ -3366,7 +3381,7 @@ class CaravanOut(BaseModel):
     runs_left: int
     dispatch_run_id: int
     finished_run_id: Optional[int]
-    cancel_reason: Optional[str]                 # destination_left | destination_deleted
+    cancel_reason: Optional[str]                 # destination_left | destination_deleted | sea_wait_expired | sea_route_lost
     goods_returned: Optional[bool]
     created_at: datetime
     finished_at: Optional[datetime]
@@ -3384,6 +3399,22 @@ class CaravanOut(BaseModel):
     raid_paid: int = 0
     raid_status: Optional[str] = None            # starting | fighting | won | repelled | aborted | expired
     escort_count: int = 0                        # FEAT-212: active player escorts
+    # FEAT-215 sea caravans (§3.9, admin only); sea_stage null = land caravan
+    sea_stage: Optional[str] = None              # to_port | waiting | aboard | landed | stranded
+    sea_split_index: Optional[int] = None        # route[i] = boarding port, route[i + 1] = landing port
+    sea_board_port_id: Optional[int] = None
+    sea_board_port_name: Optional[str] = None
+    sea_alight_port_id: Optional[int] = None
+    sea_alight_port_name: Optional[str] = None
+    sea_ship_id: Optional[int] = None
+    sea_ship_name: Optional[str] = None
+    sea_waiting_since: Optional[datetime] = None
+    sea_wait_deadline: Optional[datetime] = None  # waiting only: since + caravan_sea_wait_hours
+    sea_boarded_at: Optional[datetime] = None
+    sea_unloaded_at: Optional[datetime] = None
+    freight: int = 0                             # reserved freight (part of paid_purse + paid_treasury)
+    freight_paid: int = 0                        # charged at unloading: 0 or freight
+    sunk_units: float = 0                        # units lost to sea monsters
 
 
 class CaravanListOut(BaseModel):
@@ -3395,7 +3426,7 @@ class CaravanListOut(BaseModel):
 # FEAT-211 physical caravans — admin (contract 3.13 A4–A9; app/caravan_api.py)
 # ===========================================================================
 
-CARAVAN_KIND_RE = r"^(all|physical|abstract)$"
+CARAVAN_KIND_RE = r"^(all|physical|abstract|sea)$"   # FEAT-215: sea
 CARAVAN_GUARD_POOL_MAX = 20
 
 
@@ -3446,11 +3477,20 @@ class CaravanEscortAdminOut(BaseModel):
     in_raid: bool
 
 
+class CaravanSeaLossOut(BaseModel):
+    """FEAT-215 A5: cargo lost to one sea monster attack."""
+    attack_key: str
+    units_lost: float
+    loss_pct: float
+    created_at: datetime
+
+
 class CaravanDetailOut(CaravanOut):
     route: List[CaravanRoutePointOut] = []
     held_by: Optional[str] = None                # post | raid | null
     raid: Optional[CaravanRaidAdminOut] = None
     escorts: List[CaravanEscortAdminOut] = []    # FEAT-212
+    sea_losses: List[CaravanSeaLossOut] = []     # FEAT-215
 
 
 class CaravanGateRegionOut(BaseModel):
@@ -3474,9 +3514,21 @@ class CaravanNoRoadOut(BaseModel):
     reason: str                                  # no_gate | no_path | too_long
 
 
+class CaravanBySeaOut(BaseModel):
+    """FEAT-215 §3.9: a pair without a land road but with a sea route in at least one direction."""
+    from_region_id: int
+    from_name: Optional[str]
+    to_region_id: int
+    to_name: Optional[str]
+    directions: str                              # both | forward | backward
+    board_port_name: Optional[str]
+    alight_port_name: Optional[str]
+
+
 class CaravanRoadsOut(BaseModel):
     regions: List[CaravanGateRegionOut]
     no_road: List[CaravanNoRoadOut]
+    by_sea: List[CaravanBySeaOut] = []           # FEAT-215
 
 
 class CaravanGateIn(BaseModel):
@@ -3521,9 +3573,10 @@ class CaravanHereOut(BaseModel):
     group_name: Optional[str]
     guard_count: int
     state: str                                   # on_road | held | under_attack | raided
-    departs_in_sec: Optional[int]
+    departs_in_sec: Optional[int]                # null while waiting for a ship / in a hold (FEAT-215)
     can_attack: bool
     reason: Optional[str]
+    sea_stage: Optional[str] = None              # FEAT-215: to_port | waiting | aboard | landed | stranded
 
 
 class CaravansHereOut(BaseModel):

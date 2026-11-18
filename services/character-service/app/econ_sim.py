@@ -180,6 +180,11 @@ class SimParams:
     caravan_escort_fee_share: float = 0.05    # escort pay pool = share of the seller's remaining proceeds
     caravan_escort_bonus_share: float = 0.03  # extra pool when the caravan's raid was repelled (same source)
     caravan_escort_defense_fame: int = 5      # fame per escort for a repelled raid (paid on delivery)
+    # FEAT-215 sea caravans (3.2). Not in a seed either.
+    caravan_sea_freight_pct: float = 5.0      # freight = floor(value × pct / 100), paid by the buyer, charged on unload
+    caravan_sea_wait_hours: int = 24          # max wait for a ship at the boarding port, then the deal is cancelled
+    caravan_sea_loss_pct: float = 25.0        # share of the cargo lost when every defender group lost to sea monsters
+    caravan_no_path_abstract: int = 1         # 1 = a pair with neither a road nor a sea route trades abstractly; 0 = no deal
     # FEAT-193 guild orders (3.4). Not in a seed either.
     guild_enabled: int = 1                    # 0 = no orders (open ones close on the next recount)
     guild_markup_pct: float = 20.0            # markup over the local price

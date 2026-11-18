@@ -29,6 +29,8 @@ export const SEA_LIMITS = {
   name: [1, 100],
   capacity: [0, 200],
   crew_slots: [0, 20],
+  // FEAT-215 cargo hold: caravans per trip
+  cargo_capacity: [0, 20],
   boarding_minutes: [1, 1440],
   zone_minutes: [1, 1440],
   fare_base: [0, 1_000_000],
@@ -72,6 +74,7 @@ export const SEA_FIELD_LABELS: Record<string, string> = {
   deck_location_id: 'Палуба',
   capacity: 'Мест для пассажиров',
   crew_slots: 'Мест для матросов',
+  cargo_capacity: 'Трюм (караванов за рейс)',
   boarding_minutes: 'Сборы в порту (мин)',
   zone_minutes: 'Время на морскую зону (мин)',
   fare_base: 'Базовая цена',

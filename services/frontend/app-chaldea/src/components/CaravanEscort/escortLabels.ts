@@ -29,3 +29,26 @@ export const ESCORT_RAID_LABEL: Record<string, string> = {
 export const ACTIVE_RAID: ReadonlySet<string> = new Set(['starting', 'fighting']);
 
 export const stateLabel = (state: string): string => ESCORT_STATE_LABEL[state] ?? state;
+
+/** FEAT-215: the sea stage of the escorted caravan in plain words; null on land / unknown stage. */
+export const seaStageLabel = (
+  stage: string | null | undefined,
+  board: string | null | undefined,
+  alight: string | null | undefined,
+  ship: string | null | undefined,
+): string | null => {
+  switch (stage) {
+    case 'to_port':
+      return `Едет в порт ${board ?? ''}`.trim() + ' — там погрузится на корабль';
+    case 'waiting':
+      return `Ждёт корабль в порту ${board ?? ''}`.trim();
+    case 'aboard':
+      return `В трюме корабля${ship ? ` «${ship}»` : ''}${alight ? ` — плывёт в ${alight}` : ''}`;
+    case 'landed':
+      return `Сошёл в порту ${alight ?? ''}`.trim() + ' — дальше по суше';
+    case 'stranded':
+      return 'Корабль потерян — караван возвращается';
+    default:
+      return null;
+  }
+};

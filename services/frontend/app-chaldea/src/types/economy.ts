@@ -616,6 +616,11 @@ export interface EconSimParams {
   caravan_escort_fee_share: number;
   caravan_escort_bonus_share: number;
   caravan_escort_defense_fame: number;
+  /* FEAT-215 sea caravans (feature file 3.2) — older backends may not send them yet */
+  caravan_sea_freight_pct: number;
+  caravan_sea_wait_hours: number;
+  caravan_sea_loss_pct: number;
+  caravan_no_path_abstract: number;
   /* FEAT-193 guild orders (feature file 3.4) — older backends may not send them yet */
   guild_enabled: number;
   guild_markup_pct: number;
@@ -1333,6 +1338,11 @@ export interface CaravanParams {
   caravan_escort_fee_share?: number;
   caravan_escort_bonus_share?: number;
   caravan_escort_defense_fame?: number;
+  /* FEAT-215 sea caravans (feature file 3.2) — optional: an older backend does not send them */
+  caravan_sea_freight_pct?: number;
+  caravan_sea_wait_hours?: number;
+  caravan_sea_loss_pct?: number;
+  caravan_no_path_abstract?: number;
 }
 
 export interface CaravanCountry {
@@ -1411,6 +1421,27 @@ export interface CaravanRow {
   raid_status?: CaravanRaidStatus | null;
   /** FEAT-212 (A4): active player escorts — optional on an older backend */
   escort_count?: number;
+  /* FEAT-215 sea caravans (feature file 3.9) — optional: absent on an older backend; null = land caravan */
+  sea_stage?: CaravanSeaStage | string | null;
+  /** Index of the boarding port in `route`; `route[sea_split_index + 1]` is the landing port. */
+  sea_split_index?: number | null;
+  sea_board_port_id?: number | null;
+  sea_board_port_name?: string | null;
+  sea_alight_port_id?: number | null;
+  sea_alight_port_name?: string | null;
+  sea_ship_id?: number | null;
+  sea_ship_name?: string | null;
+  sea_waiting_since?: string | null;
+  /** `sea_waiting_since` + `caravan_sea_wait_hours` — the deal is cancelled after it. */
+  sea_wait_deadline?: string | null;
+  sea_boarded_at?: string | null;
+  sea_unloaded_at?: string | null;
+  /** Reserved freight (part of `paid_purse + paid_treasury`). */
+  freight?: number;
+  /** Freight actually charged at unloading (0 or `freight`). */
+  freight_paid?: number;
+  /** Units lost to sea monsters. */
+  sunk_units?: number;
 }
 
 export interface CaravanList {
@@ -1430,7 +1461,18 @@ export interface CaravanListQuery {
 
 /* ============================================================================ FEAT-211 physical caravans (3.13) */
 
-export type CaravanKindFilter = 'all' | 'physical' | 'abstract';
+export type CaravanKindFilter = 'all' | 'physical' | 'abstract' | 'sea';
+
+/** FEAT-215 (3.4): stage of a sea caravan; null on a land caravan. */
+export type CaravanSeaStage = 'to_port' | 'waiting' | 'aboard' | 'landed' | 'stranded';
+
+/** FEAT-215 (3.9): one monster attack that took part of the cargo. */
+export interface CaravanSeaLoss {
+  attack_key: string;
+  units_lost: number;
+  loss_pct: number;
+  created_at: string;
+}
 
 export type CaravanRaidStatus = 'starting' | 'fighting' | 'won' | 'repelled' | 'aborted' | 'expired';
 
@@ -1492,6 +1534,8 @@ export interface CaravanDetail extends CaravanRow {
   raid: CaravanRaidAdmin | null;
   /** FEAT-212 — optional on an older backend */
   escorts?: CaravanEscortAdmin[];
+  /** FEAT-215 — optional on an older backend */
+  sea_losses?: CaravanSeaLoss[];
 }
 
 export type CaravanGateSource = 'override' | 'station' | 'none';
@@ -1519,10 +1563,24 @@ export interface CaravanNoRoad {
   reason: CaravanNoRoadReason;
 }
 
+/** FEAT-215 (3.9): a pair without a land road but with a sea route in at least one direction. */
+export interface CaravanBySea {
+  from_region_id: number;
+  from_name: string | null;
+  to_region_id: number;
+  to_name: string | null;
+  directions: 'both' | 'forward' | 'backward' | string;
+  board_port_name: string | null;
+  alight_port_name: string | null;
+}
+
 /** A6 — trade gates of the participating regions and the pairs with no road. */
 export interface CaravanRoads {
   regions: CaravanRoadRegion[];
+  /** FEAT-215: only pairs with neither a land road nor a sea route. */
   no_road: CaravanNoRoad[];
+  /** FEAT-215 — optional on an older backend */
+  by_sea?: CaravanBySea[];
 }
 
 export interface CaravanGuardTemplate {

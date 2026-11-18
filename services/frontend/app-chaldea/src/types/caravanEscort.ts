@@ -68,6 +68,13 @@ export interface EscortJob {
   /** The raid battle when this escort fights in it. */
   battle_id: number | null;
   joined_at: string;
+  /* FEAT-215 sea caravans (feature file 3.9) — optional on an older backend; null = land caravan */
+  sea_stage?: 'to_port' | 'waiting' | 'aboard' | 'landed' | 'stranded' | string | null;
+  sea_board_port_name?: string | null;
+  sea_alight_port_name?: string | null;
+  /** Index of the boarding port in `route`; the next point is the landing port. */
+  sea_split_index?: number | null;
+  ship_name?: string | null;
 }
 
 export interface EscortJobWrap {

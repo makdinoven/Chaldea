@@ -24,9 +24,9 @@ import type {
   EconSimParams,
   TradePair,
 } from '../../../types/economy';
-import { formatDateTime, formatDecimal, formatQty } from './economyLabels';
+import { caravanCancelReasonLabel, formatDateTime, formatDecimal, formatQty } from './economyLabels';
 import { FieldHint, SimParamHint } from './ParamHint';
-import CaravanDetail, { RaidBadge } from './CaravanDetail';
+import CaravanDetail, { isSeaCaravan, RaidBadge, seaStageCls, seaStageText } from './CaravanDetail';
 import CaravanRoadsCard from './CaravanRoadsCard';
 import CaravanGuardsCard from './CaravanGuardsCard';
 
@@ -87,11 +87,20 @@ const ESCORT_PARAMS: CaravanParamDef[] = [
   { key: 'caravan_escort_defense_fame', label: 'Слава за отбитый налёт', def: 5, min: 0, max: 1000, integer: true },
 ];
 
-const ALL_PARAMS: CaravanParamDef[] = [...CARAVAN_PARAMS, ...PHYSICAL_PARAMS, ...ESCORT_PARAMS];
+/** FEAT-215 — «Морские караваны» (feature file 3.2; bounds mirror `schemas.py`). */
+const SEA_PARAMS: CaravanParamDef[] = [
+  { key: 'caravan_sea_freight_pct', label: 'Фрахт, % стоимости груза', def: 5, min: 0, max: 50 },
+  { key: 'caravan_sea_wait_hours', label: 'Ожидание корабля в порту, часов', def: 24, min: 1, max: 168, integer: true },
+  { key: 'caravan_sea_loss_pct', label: 'Потеря груза при поражении монстрам, %', def: 25, min: 0, max: 100 },
+  { key: 'caravan_no_path_abstract', label: 'Невидимая торговля без дороги и моря', def: 1, min: 0, max: 1, integer: true, toggle: true },
+];
+
+const ALL_PARAMS: CaravanParamDef[] = [...CARAVAN_PARAMS, ...PHYSICAL_PARAMS, ...ESCORT_PARAMS, ...SEA_PARAMS];
 
 const KIND_TABS: { id: CaravanKindFilter; label: string }[] = [
   { id: 'all', label: 'Все' },
   { id: 'physical', label: 'Физические' },
+  { id: 'sea', label: 'По морю' },
   { id: 'abstract', label: 'Абстрактные' },
 ];
 
@@ -114,11 +123,6 @@ const STATUS_LABEL: Record<CaravanStatus, string> = {
   in_transit: 'в пути',
   delivered: 'доставлен',
   cancelled: 'отменён',
-};
-
-const CANCEL_REASON_LABEL: Record<string, string> = {
-  destination_left: 'регион назначения вышел из пересчёта',
-  destination_deleted: 'регион назначения удалён',
 };
 
 const SELECT_CLASS =
@@ -293,7 +297,7 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
               disabled={!canEdit || saving}
               onChange={(e) => setForm({ ...form, [d.key]: e.target.checked ? '1' : '0' })}
             />
-            {on ? 'Включены' : 'Выключены (все новые — абстрактные)'}
+            {on ? 'Включены' : 'Выключены (новые сухопутные — абстрактные, за море не ходят)'}
           </label>
         </div>
       );
@@ -363,6 +367,14 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
         </p>
       </div>
       {renderGrid(ESCORT_PARAMS)}
+      <div className="flex flex-col gap-1 border-t border-white/10 pt-4">
+        <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">Морские караваны</h3>
+        <p className="text-white/50 text-xs">
+          Если дороги по суше нет, караван едет в порт, ждёт корабль и плывёт в трюме. Нет ни суши, ни моря — сделки
+          нет. Нужны включённые физические караваны.
+        </p>
+      </div>
+      {renderGrid(SEA_PARAMS)}
       {canEdit ? (
         <button
           type="button"
@@ -588,7 +600,7 @@ const routeText = (c: CaravanRow) => {
 const resultText = (c: CaravanRow): string => {
   if (c.status === 'in_transit') return c.runs_left > 0 ? `ещё пересчётов: ${c.runs_left}` : 'приедет в следующем пересчёте';
   if (c.status === 'delivered') return c.finished_run_id ? `доставлен в пересчёте №${c.finished_run_id}` : 'доставлен';
-  const reason = (c.cancel_reason && CANCEL_REASON_LABEL[c.cancel_reason]) || c.cancel_reason || 'причина неизвестна';
+  const reason = caravanCancelReasonLabel(c.cancel_reason);
   const goods = c.goods_returned === false ? 'товар списан' : 'товар вернулся продавцу';
   return `${reason}; ${goods}, деньги возвращены покупателю`;
 };
@@ -596,14 +608,22 @@ const resultText = (c: CaravanRow): string => {
 const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => string }) => {
   const route = routeText(c);
   const [open, setOpen] = useState(false);
+  const sea = isSeaCaravan(c);
+  const inTransit = c.status === 'in_transit';
   return (
     <li className="flex flex-col gap-2 rounded-card border border-white/10 bg-white/[0.03] p-3 min-w-0">
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={c.status} />
-        {c.is_physical && (
-          <span className="inline-flex rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold whitespace-nowrap">
-            по дорогам
+        {sea ? (
+          <span className="inline-flex rounded-full border border-site-blue/40 bg-site-blue/10 px-2 py-0.5 text-[11px] text-site-blue whitespace-nowrap">
+            по морю
           </span>
+        ) : (
+          c.is_physical && (
+            <span className="inline-flex rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold whitespace-nowrap">
+              по дорогам
+            </span>
+          )
         )}
         {c.raid_status && <RaidBadge status={c.raid_status} />}
         {(c.escort_count ?? 0) > 0 && (
@@ -639,6 +659,12 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
         <span>
           В пути: {c.travel_runs} пересч. · отправлен в №{c.dispatch_run_id}
         </span>
+        {(c.freight ?? 0) > 0 && (
+          <span>
+            Фрахт: <span className="text-white">{format(c.freight ?? 0)}</span>
+            {(c.freight_paid ?? 0) > 0 ? ' (списан)' : inTransit ? ' (в резерве)' : ''}
+          </span>
+        )}
       </div>
       {c.is_physical && c.status === 'in_transit' && (
         <p className="text-xs text-white/60 break-words">
@@ -650,13 +676,19 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
           {c.arrived_at && <span className="text-stat-energy"> · прибыл, ждёт расчёта</span>}
         </p>
       )}
+      {sea && inTransit && (
+        <p className={`text-xs break-words ${seaStageCls(c.sea_stage)}`}>{seaStageText(c)}</p>
+      )}
       {(c.stolen_units ?? 0) > 0 && (
         <p className="text-xs text-site-red">
           Украдено: {formatQty(c.stolen_units ?? 0)} ед., денег {format(c.raid_paid ?? 0)}
         </p>
       )}
+      {(c.sunk_units ?? 0) > 0 && (
+        <p className="text-xs text-site-red">Утащили в пучину: {formatQty(c.sunk_units ?? 0)} ед.</p>
+      )}
       <p className={`text-xs ${c.status === 'cancelled' ? 'text-site-red' : 'text-white/50'}`}>
-        {c.is_physical && c.status === 'in_transit' ? 'едет по дорогам' : resultText(c)}
+        {c.is_physical && inTransit ? (sea ? 'едет по суше и морю' : 'едет по дорогам') : resultText(c)}
         {c.finished_at && ` · ${formatDateTime(c.finished_at)}`}
       </p>
       <button

@@ -12,7 +12,7 @@ import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import RemainingText from '../CommonComponents/RemainingText';
 import CaravanEscortChannel from './CaravanEscortChannel';
 import CaravanEscortRoute from './CaravanEscortRoute';
-import { ACTIVE_RAID, ESCORT_RAID_LABEL, ESCORT_STATE_CLS, stateLabel } from './escortLabels';
+import { ACTIVE_RAID, ESCORT_RAID_LABEL, ESCORT_STATE_CLS, seaStageLabel, stateLabel } from './escortLabels';
 
 interface CaravanEscortModalProps {
   characterId: number;
@@ -99,6 +99,10 @@ const CaravanEscortModal = ({ characterId, onClose }: CaravanEscortModalProps) =
   };
 
   const raidActive = Boolean(job?.raid_status && ACTIVE_RAID.has(job.raid_status));
+  const seaStage = job?.sea_stage ?? null;
+  const seaLine = job ? seaStageLabel(seaStage, job.sea_board_port_name, job.sea_alight_port_name, job.ship_name) : null;
+  /** Waiting for a ship / in the hold: the caravan does not move on its own timer. */
+  const seaPaused = seaStage === 'waiting' || seaStage === 'aboard';
   const battleLink =
     job?.battle_id != null && job.current_location_id != null ? battlePath(job.current_location_id, job.battle_id) : null;
 
@@ -137,7 +141,7 @@ const CaravanEscortModal = ({ characterId, onClose }: CaravanEscortModalProps) =
             </span>
             <span className={`text-sm font-medium ${ESCORT_STATE_CLS[job.state] ?? 'text-white/80'}`}>
               {stateLabel(job.state)}
-              {nextMoveAt && (job.state === 'preparing' || job.state === 'on_road') && (
+              {nextMoveAt && !seaPaused && (job.state === 'preparing' || job.state === 'on_road') && (
                 <span className="text-white/70 font-normal">
                   {' — '}
                   <RemainingText
@@ -148,6 +152,13 @@ const CaravanEscortModal = ({ characterId, onClose }: CaravanEscortModalProps) =
                 </span>
               )}
             </span>
+            {seaLine && <span className="text-site-blue text-sm break-words">⚓ {seaLine}</span>}
+            {seaStage === 'aboard' && (
+              <span className="text-white/50 text-xs">
+                Если на корабль нападут морские монстры, вы бьётесь вместе со всеми на палубе. Проиграете — часть груза
+                утащат в пучину.
+              </span>
+            )}
             {loadError && <p className="text-site-red text-xs">{loadError}</p>}
           </div>
 
@@ -187,7 +198,13 @@ const CaravanEscortModal = ({ characterId, onClose }: CaravanEscortModalProps) =
                 </span>
                 {job.route.length > 0 && ` (${job.route_index + 1} из ${job.route.length})`}
               </p>
-              <CaravanEscortRoute route={job.route} routeIndex={job.route_index} />
+              <CaravanEscortRoute
+                route={job.route}
+                routeIndex={job.route_index}
+                seaSplitIndex={job.sea_split_index ?? null}
+                aboard={seaStage === 'aboard'}
+                shipName={job.ship_name ?? null}
+              />
             </section>
 
             {/* Escorts and pay */}

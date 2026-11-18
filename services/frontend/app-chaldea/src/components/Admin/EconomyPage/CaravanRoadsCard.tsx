@@ -8,6 +8,7 @@ import type { CaravanGateSource, CaravanNoRoadReason, CaravanRoadRegion, Caravan
 /*
   FEAT-211 — «Дороги и ворота» (A6/A7): where every participating region's
   caravans start and end, the admin override, and the region pairs with no road.
+  FEAT-215: pairs reachable only by sea (`by_sea`); `no_road` = neither land nor sea.
 */
 
 const SOURCE_LABEL: Record<CaravanGateSource, string> = {
@@ -26,6 +27,14 @@ const SEARCH_MIN = 2;
 const SEARCH_LIMIT = 20;
 const SEARCH_DELAY_MS = 300;
 const NO_ROAD_PAGE = 30;
+
+/** FEAT-215: direction of a sea-only pair (from → to = «forward»). */
+const seaDirectionText = (d: string, from: string, to: string): string => {
+  if (d === 'both') return 'в обе стороны';
+  if (d === 'forward') return `только ${from} → ${to}`;
+  if (d === 'backward') return `только ${to} → ${from}`;
+  return d;
+};
 
 const regionLabel = (name: string | null, id: number) => name ?? `Край #${id}`;
 
@@ -226,6 +235,7 @@ const CaravanRoadsCard = ({ canEdit, reloadKey }: { canEdit: boolean; reloadKey:
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [shownNoRoad, setShownNoRoad] = useState(NO_ROAD_PAGE);
+  const [shownBySea, setShownBySea] = useState(NO_ROAD_PAGE);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -259,7 +269,8 @@ const CaravanRoadsCard = ({ canEdit, reloadKey }: { canEdit: boolean; reloadKey:
         <h2 className="gold-text text-lg font-medium uppercase tracking-[0.06em]">Дороги и ворота</h2>
         <p className="text-white/50 text-sm">
           Физический караван едет от торговых ворот края-продавца до ворот края-покупателя по связям локаций (без
-          подземелий). По умолчанию ворота — отделение стражи края. Если дороги нет, караван остаётся абстрактным.
+          подземелий). По умолчанию ворота — отделение стражи края. Если дороги нет — едет в порт и плывёт на
+          корабле; если нет ни дороги, ни корабля между портами — края друг с другом не торгуют.
         </p>
       </div>
 
@@ -274,12 +285,64 @@ const CaravanRoadsCard = ({ canEdit, reloadKey }: { canEdit: boolean; reloadKey:
         <div className="w-6 h-6 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
       ) : (
         <div className={`flex flex-col gap-4 ${loading ? 'opacity-60' : ''}`}>
+          {data.by_sea !== undefined && (
+            <div className="flex flex-col gap-2">
+              <span className="text-white/60 text-xs uppercase tracking-[0.06em]">
+                Только по морю ({data.by_sea.length})
+              </span>
+              {data.by_sea.length === 0 ? (
+                <p className="text-white/40 text-sm">Пар, связанных только морем, нет.</p>
+              ) : (
+                <>
+                  <ul className="flex flex-col gap-1">
+                    {data.by_sea.slice(0, shownBySea).map((p) => {
+                      const from = regionLabel(p.from_name, p.from_region_id);
+                      const to = regionLabel(p.to_name, p.to_region_id);
+                      return (
+                        <li
+                          key={`${p.from_region_id}-${p.to_region_id}`}
+                          className="flex flex-col gap-0.5 text-xs text-white/70 rounded-card border border-site-blue/20 bg-site-blue/[0.04] px-3 py-1.5 break-words"
+                        >
+                          <span>
+                            {from} <span className="text-gold/70">↔</span> {to}:{' '}
+                            <span className="text-site-blue">⚓ {seaDirectionText(p.directions, from, to)}</span>
+                          </span>
+                          {(p.board_port_name || p.alight_port_name) && (
+                            <span className="text-white/45">
+                              Порты: {p.board_port_name ?? '—'} → {p.alight_port_name ?? '—'}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {data.by_sea.length > shownBySea && (
+                    <button
+                      type="button"
+                      className="btn-line self-start !text-sm"
+                      onClick={() => setShownBySea((n) => n + NO_ROAD_PAGE)}
+                    >
+                      Показать ещё ({data.by_sea.length - shownBySea})
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col gap-2">
             <span className="text-white/60 text-xs uppercase tracking-[0.06em]">
-              Нет дороги ({data.no_road.length})
+              {data.by_sea !== undefined ? 'Нет ни суши, ни моря' : 'Нет дороги'} ({data.no_road.length})
             </span>
+            {data.no_road.length > 0 && data.by_sea !== undefined && (
+              <p className="text-white/45 text-xs">Эти края друг с другом не торгуют, пока не появится дорога или корабль.</p>
+            )}
             {data.no_road.length === 0 ? (
-              <p className="text-stat-energy text-sm">Все пары торгующих краёв соединены дорогами.</p>
+              <p className="text-stat-energy text-sm">
+                {data.by_sea !== undefined
+                  ? 'Все пары торгующих краёв связаны дорогой или морем.'
+                  : 'Все пары торгующих краёв соединены дорогами.'}
+              </p>
             ) : (
               <>
                 <ul className="flex flex-col gap-1">

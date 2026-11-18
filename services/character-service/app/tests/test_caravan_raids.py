@@ -57,7 +57,8 @@ TOKEN = "test-internal-token"
 INTERNAL = {"X-Internal-Token": TOKEN}
 HERE = "/characters/caravans/here"
 RESULT = "/characters/internal/caravans/raid-result"
-A1_KEYS = {"id", "group_code", "group_name", "guard_count", "state", "departs_in_sec", "can_attack", "reason"}
+A1_KEYS = {"id", "group_code", "group_name", "guard_count", "state", "departs_in_sec", "can_attack", "reason",
+           "sea_stage"}                                     # FEAT-215: null for a land caravan
 
 
 def _raid_url(caravan_id):

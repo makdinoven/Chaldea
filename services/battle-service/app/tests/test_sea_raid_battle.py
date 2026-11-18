@@ -177,11 +177,12 @@ def _clean(monkeypatch):
     app.dependency_overrides.clear()
 
 
-def _locks(monkeypatch, locked=()):
-    locked = set(locked)
+def _locks(monkeypatch, locked=(), escorts=()):
+    locked, escorts = set(locked), set(escorts)
 
     async def get_lock(db, cid):
-        return activity_lock.compute_lock(7 if cid in locked else None, None)
+        return activity_lock.compute_lock(7 if cid in locked else None, None,
+                                          escort_caravan_id=42 if cid in escorts else None)
 
     monkeypatch.setattr(activity_lock, "get_activity_lock", get_lock)
 
@@ -193,8 +194,8 @@ def _payload(**kw):
     return body
 
 
-def _post(monkeypatch, chars=None, body=None, busy=(), locked=(), headers=HDR):
-    _locks(monkeypatch, locked)
+def _post(monkeypatch, chars=None, body=None, busy=(), locked=(), headers=HDR, escorts=()):
+    _locks(monkeypatch, locked, escorts)
     holder = _Chars(_world() if chars is None else chars)
     body = body or _payload()
 
@@ -344,6 +345,14 @@ class TestSeaRaidPlayerSkips:
         r, assemble, _ = _post(monkeypatch, locked={P2})
         assert r.status_code == 201, r.text
         assert r.json()["player_character_ids"] == [P1]
+
+    def test_caravan_escort_fights_monsters(self, monkeypatch):
+        """FEAT-215: the caravan-escort lock is the only exemption — an escort aboard is placed,
+        any other lock still skips."""
+        r, assemble, _ = _post(monkeypatch, locked={P1}, escorts={P2})
+        assert r.status_code == 201, r.text
+        assert r.json()["player_character_ids"] == [P2]
+        assert assemble.call_args.args[1] == [P2, M1, M2]
 
     def test_hp_one_is_enough(self, monkeypatch):
         r, _, _ = _post(monkeypatch, chars=_world(c2=_player(hp=1)))

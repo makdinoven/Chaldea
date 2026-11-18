@@ -416,23 +416,48 @@ def test_small_domestic_caravan_by_chance(world):
     assert _row(world).is_physical
 
 
-@pytest.mark.parametrize("setup", ["off", "small", "no_station", "no_path", "cap", "no_graph"])
+@pytest.mark.parametrize("setup", ["off", "small", "cap"])
 def test_abstract_cases(world, setup):
     params = {"off": {"caravan_physical_enabled": 0},
               "small": {"caravan_physical_min_value": 10 ** 6, "caravan_physical_small_chance": 0},
-              "cap": {"caravan_physical_max_active": 0}}.get(setup, {})
+              "cap": {"caravan_physical_max_active": 0}}[setup]
     _physical_world(world, **params)
-    if setup == "no_station":
-        _exec(world, "UPDATE Regions SET jail_location_id = NULL WHERE id = 2")
-    elif setup == "no_path":
-        _exec(world, "DELETE FROM LocationNeighbors WHERE location_id = :l OR neighbor_id = :l", l=L_GATE2)
-    elif setup == "no_graph":
-        _exec(world, "DROP TABLE LocationNeighbors")              # planner unavailable -> abstract, tick not failed
     s = _dispatch(world)
     assert (s.caravans_dispatched, s.caravans_failed) == (1, 0)
     row = _row(world)
     assert not row.is_physical and row.route is None and row.current_location_id is None
     assert row.next_move_at is None and row.guard_count == 0
+
+
+@pytest.mark.parametrize("setup", ["no_station", "no_path", "no_graph"])
+def test_no_path_means_no_deal(world, setup):
+    """FEAT-215: with ``caravan_no_path_abstract`` off, neither a land road nor a sea route -> the pair does not
+    trade; a planner that cannot be built sends nothing this run."""
+    _physical_world(world, caravan_no_path_abstract=0)
+    if setup == "no_station":
+        _exec(world, "UPDATE Regions SET jail_location_id = NULL WHERE id = 2")
+    elif setup == "no_path":
+        _exec(world, "DELETE FROM LocationNeighbors WHERE location_id = :l OR neighbor_id = :l", l=L_GATE2)
+    else:
+        _exec(world, "DROP TABLE LocationNeighbors")              # planner unavailable -> nothing sent
+    s = _dispatch(world)
+    assert (s.caravans_dispatched, s.caravans_failed) == (0, 1 if setup == "no_graph" else 0)
+    assert _scalar(world, "SELECT COUNT(*) FROM econ_caravans") == 0
+
+
+@pytest.mark.parametrize("setup", ["no_station", "no_path"])
+def test_no_path_trades_abstractly_by_default(world, setup):
+    """FEAT-215 (option «б»): while the world is not fully drawn, a pair with neither a road nor a sea route keeps
+    the old abstract trade (``caravan_no_path_abstract`` = 1 by default)."""
+    _physical_world(world)
+    if setup == "no_station":
+        _exec(world, "UPDATE Regions SET jail_location_id = NULL WHERE id = 2")
+    else:
+        _exec(world, "DELETE FROM LocationNeighbors WHERE location_id = :l OR neighbor_id = :l", l=L_GATE2)
+    s = _dispatch(world)
+    assert (s.caravans_dispatched, s.caravans_failed) == (1, 0)
+    row = _row(world)
+    assert not row.is_physical and row.route is None and row.sea_stage is None and int(row.freight) == 0
 
 
 def test_cap_counts_caravans_already_on_the_road(world):
@@ -881,6 +906,7 @@ def test_a4_list_kind_filter_and_fields(world, api_admin):
     _dispatch(world)
     _set_params(world, caravan_physical_enabled=0)
     _region(world, 3)
+    _stations(world, r3=L_GATE3)                    # FEAT-215: an abstract caravan still needs a land road
     _good(world, 3, "food", 50, 300)
     _dispatch(world, 2)
     all_items = api_admin.get(CARAVANS).json()["items"]

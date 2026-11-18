@@ -10,7 +10,13 @@ caravans frozen) or before migration 035. Every step is best effort, every carav
 3. ``_raid_followups``  — won raids: law step, bale deliveries, guard despawn;
    (steps 1–3 are the raid stage — ``caravan_raid_crud`` (FEAT-211 task 3) provides them; until it exists they are
    no-ops);
-4. ``_step_caravans``   — due physical caravans move one location along their route unless held (3.4);
+3a. ``_sea_housekeeping`` — FEAT-215 §3.4: sea caravans waiting at the boarding port longer than
+   ``caravan_sea_wait_hours`` → cancelled ``sea_wait_expired``; ``stranded`` ones (ship lost) → cancelled
+   ``sea_route_lost`` (``economy_caravan_crud.cancel_physical``, own transaction each; a raided caravan waits for its
+   raid to end; skipped while an economy run is ``running``, like deliveries);
+4. ``_step_caravans``   — due physical caravans move one location along their route unless held (3.4); FEAT-215: a
+   sea caravan reaching its boarding port (``route_index == sea_split_index``) stops there — stage ``waiting``,
+   ``next_move_at`` NULL; the sea pass (``sea_cargo``) boards and unloads it;
 5. ``_deliver_arrived`` — arrived caravans are delivered / cancelled (``economy_caravan_crud.deliver_physical``);
    skipped entirely while an economy run is ``running`` (a region never changes in the middle of a resumable run);
    FEAT-212: escorts are paid / cancelled inside that op, their notices published after the commit;
@@ -88,6 +94,62 @@ def _raid_followups(factory: Callable[[], Session], now: datetime, params) -> in
     return _raid_step(RAID_STEP_FOLLOWUPS, factory, now, params)
 
 
+# --------------------------------------------------------------------------------------------- step 3a (sea)
+
+def _sea_cancel_ids(db: Session, now: datetime, wait_hours: int, after_id: int) -> List[tuple]:
+    """``(id, reason)`` of sea caravans to cancel: waiting past the limit, or stranded (ship lost)."""
+    cutoff = now - timedelta(hours=int(wait_hours))
+    rows = db.execute(text(
+        "SELECT id, sea_stage FROM econ_caravans WHERE is_physical = 1 AND status = :s AND id > :after "
+        "AND ((sea_stage = :waiting AND sea_waiting_since IS NOT NULL AND sea_waiting_since <= :cutoff) "
+        "OR sea_stage = :stranded) ORDER BY id LIMIT :n"),
+        {"s": caravan_crud.STATUS_IN_TRANSIT, "after": int(after_id), "waiting": caravan_crud.SEA_WAITING,
+         "stranded": caravan_crud.SEA_STRANDED, "cutoff": cutoff, "n": BATCH_SIZE}).fetchall()
+    db.rollback()
+    return [(int(r[0]), caravan_crud.REASON_SEA_ROUTE_LOST if r[1] == caravan_crud.SEA_STRANDED
+             else caravan_crud.REASON_SEA_WAIT_EXPIRED) for r in rows]
+
+
+def _sea_cancel_condition(reason: str, now: datetime, wait_hours: int) -> Callable:
+    """Re-check of :func:`_sea_cancel_ids` under the caravan row lock (the sea pass may have boarded it meanwhile)."""
+    cutoff = now - timedelta(hours=int(wait_hours))
+    if reason == caravan_crud.REASON_SEA_ROUTE_LOST:
+        return lambda row: row.sea_stage == caravan_crud.SEA_STRANDED
+    return lambda row: (row.sea_stage == caravan_crud.SEA_WAITING and row.sea_waiting_since is not None
+                        and row.sea_waiting_since <= cutoff)
+
+
+def _sea_housekeeping(factory: Callable[[], Session], now: datetime, params, stats: Dict[str, int]) -> None:
+    """FEAT-215 §3.4 step 3a: cancel overdue waiting and stranded sea caravans (own transaction each)."""
+    wait_hours = caravan_crud.sea_wait_hours(params)
+    db = factory()
+    try:
+        if _economy_run_in_progress(db):
+            return                              # the origin's goods never change in the middle of a resumable run
+        last = 0
+        while True:
+            items = _sea_cancel_ids(db, now, wait_hours, last)
+            if not items:
+                return
+            for caravan_id, reason in items:
+                last = caravan_id
+                try:
+                    result = caravan_crud.cancel_physical_tx(factory, caravan_id, reason, now,
+                                                             _sea_cancel_condition(reason, now, wait_hours))
+                except Exception:
+                    stats["failed"] += 1
+                    logger.exception("caravan pass: sea caravan %s not cancelled, retried next pass", caravan_id)
+                    continue
+                if result.status == caravan_crud.STATUS_CANCELLED:
+                    stats["sea_cancelled"] += 1
+                    if result.notices:
+                        law_notify.publish(result.notices)
+            if len(items) < BATCH_SIZE:
+                return
+    finally:
+        db.close()
+
+
 # --------------------------------------------------------------------------------------------- step 4 (moving)
 
 def _due_ids(db: Session, now: datetime, after_id: int) -> List[int]:
@@ -99,12 +161,24 @@ def _due_ids(db: Session, now: datetime, after_id: int) -> List[int]:
     return [int(r[0]) for r in rows]
 
 
+def _wait_at_port(row, now: datetime) -> str:
+    """FEAT-215 §3.4: the sea caravan reached its boarding port — it waits for a ship (not stepped any more)."""
+    row.sea_stage = caravan_crud.SEA_WAITING
+    row.sea_waiting_since = now
+    row.next_move_at = None
+    return "at_port"
+
+
 def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
                  gates_available: bool = True) -> Optional[str]:
-    """One caravan (caller commits). Returns ``held`` | ``moved`` | ``arrived`` | None (not due / gone)."""
+    """One caravan (caller commits). Returns ``held`` | ``moved`` | ``arrived`` | ``at_port`` | None (not due /
+    gone / at sea)."""
     row = caravan_crud._lock_caravan(db, caravan_id)
     if (row is None or not row.is_physical or row.status != caravan_crud.STATUS_IN_TRANSIT
             or row.arrived_at is not None or row.next_move_at is None or row.next_move_at > now):
+        return None
+    if row.sea_stage in (caravan_crud.SEA_WAITING, caravan_crud.SEA_ABOARD, caravan_crud.SEA_STRANDED):
+        row.next_move_at = None                 # boarded / unloaded by the sea pass, cancelled by housekeeping
         return None
     route = [int(x) for x in caravan_crud._json_list(row.route)]
     if caravan_crud.held_by(db, row, now, params, gates_available) is not None:
@@ -112,6 +186,9 @@ def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
             row.hold_started_at = now
         return "held"
     index = int(row.route_index or 0)
+    to_port = row.sea_stage == caravan_crud.SEA_TO_PORT and row.sea_split_index is not None
+    if to_port and index >= int(row.sea_split_index):
+        return _wait_at_port(row, now)          # sea_split_index == 0: dispatched right at the boarding port
     if len(route) < 2 or index >= len(route) - 1:
         row.route_index = max(0, len(route) - 1)
         row.arrived_at = now
@@ -121,6 +198,8 @@ def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
     row.route_index = index
     row.current_location_id = route[index]
     escort_crud.move_escorts(db, row)          # FEAT-212: escorts ride inside the wagon
+    if to_port and index >= int(row.sea_split_index):
+        return _wait_at_port(row, now)          # sea_split_index < len(route) - 1 always: never "arrived" here
     if index == len(route) - 1:
         row.arrived_at = now
         row.next_move_at = None
@@ -224,7 +303,8 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
     finally:
         db.close()
     stats = {"stale_raids": 0, "raid_battles": 0, "raid_followups": 0, "held": 0, "moved": 0, "arrived": 0,
-             "delivered": 0, "cancelled": 0, "escort_rewards": 0, "escort_housekeeping": 0, "failed": 0}
+             "delivered": 0, "cancelled": 0, "escort_rewards": 0, "escort_housekeeping": 0, "failed": 0,
+             "at_port": 0, "sea_cancelled": 0}
     for key, step in (("stale_raids", _stale_raids), ("raid_battles", _raid_battles),
                       ("raid_followups", _raid_followups)):
         try:
@@ -232,6 +312,11 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
         except Exception:
             stats["failed"] += 1
             logger.exception("caravan pass: raid step %s failed", key)
+    try:
+        _sea_housekeeping(factory, now, params, stats)
+    except Exception:
+        stats["failed"] += 1
+        logger.exception("caravan pass: sea housekeeping failed")
     try:
         _step_caravans(factory, now, params, rng, stats)
     except Exception:

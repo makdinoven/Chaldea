@@ -36,6 +36,7 @@ import econ_core
 import econ_ledger
 import law_notify
 import models
+import sea_cargo
 import sea_core
 import sea_crud
 import sea_pass
@@ -73,6 +74,7 @@ MSG_ROUTE_AT_SEA = "Маршрут меняется только когда ко
 MSG_DOCKED_PORT_KEPT = "Порт, где корабль сейчас стоит («{name}»), должен остаться в маршруте"
 MSG_DELETE_AT_SEA = "Корабль в море — выключите его и дождитесь швартовки"
 MSG_DELETE_BATTLE = "На палубе идёт бой — списать корабль можно после его окончания"
+MSG_DELETE_CARAVAN_RAID = "На корабле идёт налёт на караван — удалите корабль позже"
 MSG_STORM_MINUTES = "Максимальная длительность шторма меньше минимальной"
 MSG_WEATHER_UNAVAILABLE = "Шторма пока недоступны"
 MSG_SEA_NOT_FOUND = "Море не найдено"
@@ -113,6 +115,8 @@ class ShipCreate(BaseModel):
     captain_npc_id: Optional[int] = Field(None, ge=1)
     deck_location_id: int = Field(..., ge=1)
     capacity: int = Field(10, ge=_R.CAPACITY_RANGE[0], le=_R.CAPACITY_RANGE[1])
+    cargo_capacity: int = Field(_R.DEFAULT_CARGO_CAPACITY, ge=_R.CARGO_CAPACITY_RANGE[0],
+                                le=_R.CARGO_CAPACITY_RANGE[1])           # FEAT-215: caravans per trip
     crew_slots: int = Field(2, ge=_R.CREW_SLOTS_RANGE[0], le=_R.CREW_SLOTS_RANGE[1])
     boarding_minutes: int = Field(30, ge=_R.BOARDING_MINUTES_RANGE[0], le=_R.BOARDING_MINUTES_RANGE[1])
     zone_minutes: int = Field(10, ge=_R.ZONE_MINUTES_RANGE[0], le=_R.ZONE_MINUTES_RANGE[1])
@@ -129,6 +133,7 @@ class ShipUpdate(BaseModel):
     captain_npc_id: Optional[int] = Field(None, ge=1)
     deck_location_id: Optional[int] = None
     capacity: Optional[int] = Field(None, ge=_R.CAPACITY_RANGE[0], le=_R.CAPACITY_RANGE[1])
+    cargo_capacity: Optional[int] = Field(None, ge=_R.CARGO_CAPACITY_RANGE[0], le=_R.CARGO_CAPACITY_RANGE[1])
     crew_slots: Optional[int] = Field(None, ge=_R.CREW_SLOTS_RANGE[0], le=_R.CREW_SLOTS_RANGE[1])
     boarding_minutes: Optional[int] = Field(None, ge=_R.BOARDING_MINUTES_RANGE[0], le=_R.BOARDING_MINUTES_RANGE[1])
     zone_minutes: Optional[int] = Field(None, ge=_R.ZONE_MINUTES_RANGE[0], le=_R.ZONE_MINUTES_RANGE[1])
@@ -195,6 +200,8 @@ class ShipAdminOut(BaseModel):
     captain_problem: Optional[str]         # «капитана нет» reasons (sales closed)
     deck: RefOut
     capacity: int
+    cargo_capacity: int                    # FEAT-215: caravans per trip (0 = no cargo)
+    cargo_aboard: int                      # FEAT-215: caravans in the hold now (read-only)
     crew_slots: int
     boarding_minutes: int
     zone_minutes: int
@@ -549,6 +556,8 @@ def ship_admin_out(db: Session, ship: "models.SeaShip", *, graph: Optional[sea_c
         "captain_problem": captain_problem(db, ship),
         "deck": {"id": int(ship.deck_location_id), "name": deck_info.name if deck_info else None},
         "capacity": int(ship.capacity), "crew_slots": int(ship.crew_slots),
+        "cargo_capacity": int(ship.cargo_capacity if ship.cargo_capacity is not None else 0),
+        "cargo_aboard": sea_cargo.cargo_aboard(db, ship.id),
         "boarding_minutes": int(ship.boarding_minutes), "zone_minutes": int(ship.zone_minutes),
         "fare_base": int(ship.fare_base), "fare_per_zone": int(ship.fare_per_zone), "is_loop": bool(ship.is_loop),
         "is_active": bool(ship.is_active), "status": ship.status, "stop_index": int(ship.stop_index or 0),
@@ -602,7 +611,8 @@ def create_ship(db: Session, body: ShipCreate, now: Optional[datetime] = None) -
     port0 = int(body.stops[0].port_location_id)
     ship = models.SeaShip(
         name=name, captain_npc_id=body.captain_npc_id, deck_location_id=int(body.deck_location_id),
-        capacity=body.capacity, crew_slots=body.crew_slots, boarding_minutes=body.boarding_minutes,
+        capacity=body.capacity, cargo_capacity=body.cargo_capacity, crew_slots=body.crew_slots,
+        boarding_minutes=body.boarding_minutes,
         zone_minutes=body.zone_minutes, fare_base=body.fare_base, fare_per_zone=body.fare_per_zone,
         is_loop=body.is_loop, is_active=body.is_active, status=sea_core.STATUS_DOCKED, stop_index=0,
         next_stop_index=None, direction=sea_core.DIRECTION_FORWARD, trip_no=0, docked_port_id=port0,
@@ -645,7 +655,8 @@ def update_ship(db: Session, ship_id: int, body: ShipUpdate,
         if not name:
             raise SeaError(400, MSG_NAME)
         ship.name = name
-    for key in ("capacity", "crew_slots", "boarding_minutes", "zone_minutes", "fare_base", "fare_per_zone"):
+    for key in ("capacity", "cargo_capacity", "crew_slots", "boarding_minutes", "zone_minutes", "fare_base",
+                "fare_per_zone"):
         if key in fields and getattr(body, key) is not None:
             setattr(ship, key, int(getattr(body, key)))
     if "captain_npc_id" in fields:
@@ -719,10 +730,14 @@ def delete_ship(db: Session, ship_id: int, now: Optional[datetime] = None) -> se
         raise SeaError(404, sea_crud.MSG_SHIP_NOT_FOUND)
     if ship.status != sea_core.STATUS_DOCKED:
         raise SeaError(409, MSG_DELETE_AT_SEA)
+    if sea_cargo.raided_aboard(db, ship.id):
+        raise SeaError(409, MSG_DELETE_CARAVAN_RAID)
     if _deck_battle(db, ship):
         raise SeaError(409, MSG_DELETE_BATTLE)
     out = sea_pass.ShipOutcome(int(ship.id), deck_location_id=int(ship.deck_location_id))
     stops = sea_crud.load_stops(db, ship.id)
+    # FEAT-215 §3.5: the hold lands first (escorts with their caravan; passes → caravans → escorts → characters)
+    sea_cargo.strand_all(db, ship, sea_crud.landing_target(db, ship, stops)[0], now, out)
     out.notices.extend(sea_crud.refund_not_started(db, ship, now))
     db.flush()                                   # see _end_passes_for_route_change
     for p in sea_crud.active_passes(db, ship.id, lock=True):

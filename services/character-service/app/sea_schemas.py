@@ -127,12 +127,20 @@ class ShipNearbyOut(BaseModel):
     name: str
 
 
+class DeckCargoOut(BaseModel):
+    """FEAT-215 §3.9: a caravan in the hold (never value / origin / destination region)."""
+    caravan_id: int
+    group_name: Optional[str]
+    alight_port_name: Optional[str]
+
+
 class DeckViewOut(BaseModel):
     ship: ShipPublicOut
     ships_nearby: List[ShipNearbyOut]
-    passengers_count: int
+    passengers_count: int                  # FEAT-215: without the hidden caravan escorts
     my_passes: List[PassOut]
     sailor_post_min_chars: int
+    cargo: List[DeckCargoOut] = []         # FEAT-215
 
 
 class TicketIn(BaseModel):

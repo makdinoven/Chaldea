@@ -15,11 +15,16 @@ Rules (user decisions, section 1 of the feature file):
   price ``base_price x price_mult``.
 
 Money is int (floored), units are 3-decimal floats (``econ_region_goods.stock`` is DECIMAL(16,3)).
+
+FEAT-215 sea caravans (§3.3): ``plan_caravans`` may get a pure reachability callable ``reach(from_region,
+to_region) -> Reach | None`` (land road / sea route / nothing) and a number of free physical slots for sea caravans.
+A sea caravan carries a freight ``floor(value x freight_pct / 100)`` paid by the buyer on top of value and duty, so
+``paid_purse + paid_treasury == value + duty + freight``; the freight leaves the escrow only on unloading.
 """
 
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from econ_sim import GroupDef, SimParams
 
@@ -67,9 +72,21 @@ class Route:
     duty_pct: float
 
 
+REACH_LAND = "land"
+REACH_SEA = "sea"
+
+
+@dataclass(frozen=True)
+class Reach:
+    """How a seller region reaches a buyer region (FEAT-215 §3.3): by land road or by sea (with its freight)."""
+
+    kind: str                   # REACH_LAND | REACH_SEA
+    freight_pct: float = 0.0
+
+
 @dataclass(frozen=True)
 class CaravanPlan:
-    """One caravan to dispatch. ``paid_purse + paid_treasury == value + duty``."""
+    """One caravan to dispatch. ``paid_purse + paid_treasury == value + duty + freight`` (FEAT-215)."""
 
     from_region_id: int
     to_region_id: int
@@ -85,10 +102,17 @@ class CaravanPlan:
     travel_runs: int
     paid_purse: int
     paid_treasury: int
+    freight: int = 0                 # FEAT-215: reserved sea freight (inside the paid parts)
+    freight_pct: float = 0.0
+    kind: str = REACH_LAND           # REACH_LAND | REACH_SEA (the reach the planner chose)
 
     @property
     def cost(self) -> int:
-        return self.value + self.duty
+        return self.value + self.duty + self.freight
+
+    @property
+    def is_sea(self) -> bool:
+        return self.kind == REACH_SEA
 
 
 # --------------------------------------------------------------------------------------------- helpers
@@ -147,10 +171,17 @@ def price_caravan(units, price, duty_pct) -> Tuple[int, int]:
     return max(0, value), max(0, duty)
 
 
+def freight_amount(value, freight_pct) -> int:
+    """FEAT-215 sea freight: ``floor(value x freight_pct / 100)`` (>= 0)."""
+    pct = max(_dec(freight_pct), Decimal(0))
+    return max(0, int((_dec(max(0, int(value or 0))) * pct / _HUNDRED).to_integral_value(rounding=ROUND_FLOOR)))
+
+
 def affordable_units(budget, price, duty_pct) -> float:
     """The most units a budget pays for, price and duty included: ``floor3(budget / (price x (1 + duty%)))``.
 
-    ``price_caravan`` of the result never exceeds the budget (both parts are floored).
+    ``price_caravan`` of the result never exceeds the budget (both parts are floored). FEAT-215: pass
+    ``duty_pct + freight_pct`` for a sea caravan — value + duty + freight then never exceeds the budget either.
     """
     budget_d, price_d = _dec(budget), _dec(price)
     if budget_d <= 0 or price_d <= 0:
@@ -189,8 +220,15 @@ def plan_caravans(
     inbound: Mapping[Tuple[int, str], float],
     pairs: Mapping[Tuple[int, int], PairRule],
     params: SimParams,
+    reach: Optional[Callable[[int, int], Optional[Reach]]] = None,
+    sea_slots: Optional[int] = None,
 ) -> List[CaravanPlan]:
-    """Match surplus regions with deficit regions (3.5). Deterministic: same input -> same plan."""
+    """Match surplus regions with deficit regions (3.5). Deterministic: same input -> same plan.
+
+    FEAT-215: ``reach is None`` = the legacy behaviour (no geography). Otherwise a seller is a candidate only when the
+    country / pair rule allows the trade **and** ``reach(seller, buyer)`` is not None; land candidates sort before
+    sea ones of the same trip length; a sea plan uses one of ``sea_slots`` (None = unlimited) and carries a freight.
+    """
     if not int(params.caravans_enabled):
         return []
     max_count = max(0, int(params.caravan_max_per_run))
@@ -209,6 +247,7 @@ def plan_caravans(
     plans: List[CaravanPlan] = []
     if max_count <= 0:
         return plans
+    sea_left: Optional[int] = None if sea_slots is None else max(0, int(sea_slots))
     region_ids = sorted(markets)
 
     for group in _group_order(groups):
@@ -245,21 +284,31 @@ def plan_caravans(
                 way = route(markets[seller_id].country_id, buyer.country_id, pairs, params)
                 if way is None:
                     continue
-                candidates.append((way.travel_runs, prices[seller_id], seller_id, way))
-            candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+                how = Reach(REACH_LAND) if reach is None else reach(seller_id, buyer_id)
+                if how is None:
+                    continue
+                candidates.append((way.travel_runs, 0 if how.kind == REACH_LAND else 1, prices[seller_id],
+                                   seller_id, way, how))
+            candidates.sort(key=lambda c: (c[0], c[1], c[2], c[3]))
 
-            for _travel, price, seller_id, way in candidates:
+            for _travel, _kind, price, seller_id, way, how in candidates:
                 if len(plans) >= max_count:
                     return plans
                 if supply[seller_id] <= 0:
                     continue
+                is_sea = how.kind == REACH_SEA
+                if is_sea and sea_left is not None and sea_left <= 0:
+                    continue
+                freight_pct = max(0.0, float(how.freight_pct)) if is_sea else 0.0
                 want = min(need[buyer_id], supply[seller_id])
                 budget = purse_left[buyer_id] + (treasury_left[buyer_id] if group.is_food else 0)
-                units = min(want, affordable_units(budget, price, way.duty_pct))
+                units = min(want, affordable_units(budget, price, way.duty_pct + freight_pct))
                 value, duty = price_caravan(units, price, way.duty_pct)
+                freight = freight_amount(value, freight_pct)
                 if units <= 0 or value < min_value:
                     continue
-                parts = split_payment(value + duty, purse_left[buyer_id], treasury_left[buyer_id], group.is_food)
+                parts = split_payment(value + duty + freight, purse_left[buyer_id], treasury_left[buyer_id],
+                                      group.is_food)
                 if parts is None:       # cannot happen (affordable_units), kept as a guard
                     continue
                 paid_purse, paid_treasury = parts
@@ -273,7 +322,10 @@ def plan_caravans(
                     to_country_id=int(buyer.country_id), group_code=code, is_food=bool(group.is_food),
                     units=units, unit_price=price, value=value, duty=duty, duty_pct=float(way.duty_pct),
                     travel_runs=int(way.travel_runs), paid_purse=paid_purse, paid_treasury=paid_treasury,
+                    freight=freight, freight_pct=freight_pct, kind=how.kind,
                 ))
+                if is_sea and sea_left is not None:
+                    sea_left -= 1
                 left = purse_left[buyer_id] + (treasury_left[buyer_id] if group.is_food else 0)
                 if need[buyer_id] <= 0 or left <= 0:
                     break
@@ -290,7 +342,8 @@ def clamp_dispatch(plan: CaravanPlan, seller_stock, seller_norm, purse_balance, 
     * the purse pays at most ``min(plan.paid_purse, purse balance)``, the treasury at most
       ``min(plan.paid_treasury, positive treasury)`` (food only) — so a caravan never spends more than planned
       and ``InsufficientFunds`` cannot happen;
-    * value / duty / parts recomputed with the plan's price and duty; below ``min_value`` -> None.
+    * value / duty / parts recomputed with the plan's price and duty; below ``min_value`` -> None;
+    * FEAT-215: the freight is recomputed with the plan's ``freight_pct`` (0 for a land caravan).
     """
     room = floor3(_dec(seller_stock) - _dec(seller_norm))
     units = min(float(plan.units), room)
@@ -298,14 +351,17 @@ def clamp_dispatch(plan: CaravanPlan, seller_stock, seller_norm, purse_balance, 
         return None
     purse_cap = max(0, min(int(plan.paid_purse), int(purse_balance or 0)))
     treasury_cap = max(0, min(int(plan.paid_treasury), int(treasury_balance or 0))) if plan.is_food else 0
-    units = min(units, affordable_units(purse_cap + treasury_cap, plan.unit_price, plan.duty_pct))
+    freight_pct = max(0.0, float(plan.freight_pct or 0.0))
+    units = min(units, affordable_units(purse_cap + treasury_cap, plan.unit_price, plan.duty_pct + freight_pct))
     value, duty = price_caravan(units, plan.unit_price, plan.duty_pct)
+    freight = freight_amount(value, freight_pct)
     if units <= 0 or value < max(1, int(min_value)):
         return None
-    parts = split_payment(value + duty, purse_cap, treasury_cap, plan.is_food)
+    parts = split_payment(value + duty + freight, purse_cap, treasury_cap, plan.is_food)
     if parts is None:
         return None
-    return replace(plan, units=units, value=value, duty=duty, paid_purse=parts[0], paid_treasury=parts[1])
+    return replace(plan, units=units, value=value, duty=duty, freight=freight, paid_purse=parts[0],
+                   paid_treasury=parts[1])
 
 
 # --------------------------------------------------------------------------------------------- FEAT-211 physical
@@ -349,10 +405,11 @@ def guard_multiplier(value: int, marker_type: Optional[str], params: SimParams) 
     return float(max(Decimal(1), mult).quantize(_THOUSANDTH, rounding=ROUND_HALF_UP))
 
 
-def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int) -> Tuple[int, int]:
-    """Delivery after a raid (§3.3): the rest of the escrow ``R = paid_total - raid_paid`` goes to the seller and the
-    duty; ``duty' = floor(duty x R / (value + duty))`` (the full duty when nothing was raided). ``(seller, duty)``."""
-    rest = max(0, int(paid_total) - max(0, int(raid_paid)))
+def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int, freight: int = 0) -> Tuple[int, int]:
+    """Delivery after a raid (§3.3): the rest of the escrow ``R = paid_total - freight - raid_paid`` goes to the seller
+    and the duty; ``duty' = floor(duty x R / (value + duty))`` (the full duty when nothing was raided).
+    ``(seller, duty)``. FEAT-215: ``freight`` = the reserved sea freight (it goes to the port, never to the seller)."""
+    rest = max(0, int(paid_total) - max(0, int(freight or 0)) - max(0, int(raid_paid)))
     duty = max(0, int(duty))
     cost = max(0, int(value)) + duty
     if int(raid_paid) <= 0:
@@ -364,15 +421,33 @@ def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int) -> 
     return rest - duty_part, duty_part
 
 
-def refund_split(paid_purse: int, paid_treasury: int, raid_paid: int) -> Tuple[int, int]:
-    """Cancel after a raid (§3.3): ``(purse_back, treasury_back)``; the raid takes from both payers pro rata."""
+def refund_split(paid_purse: int, paid_treasury: int, raid_paid: int, freight_paid: int = 0) -> Tuple[int, int]:
+    """Cancel after a raid (§3.3): ``(purse_back, treasury_back)``; the raid takes from both payers pro rata.
+    FEAT-215: a freight already charged (``freight_paid``) is gone as well (pro rata like the raid); a reserved but
+    uncharged freight is refunded with the rest."""
     paid_purse, paid_treasury = max(0, int(paid_purse)), max(0, int(paid_treasury))
     total = paid_purse + paid_treasury
-    raid = min(max(0, int(raid_paid)), total)
+    raid = min(max(0, int(raid_paid)) + max(0, int(freight_paid or 0)), total)
     if total <= 0:
         return 0, 0
     purse_back = paid_purse - (raid * paid_purse) // total
     return purse_back, total - raid - purse_back
+
+
+def raid_marks_cap(paid_total: int, freight: int, raid_paid: int) -> int:
+    """FEAT-215: the most marks a raid may still take out of the escrow: ``paid_total - freight - raid_paid``."""
+    return max(0, int(paid_total) - max(0, int(freight or 0)) - max(0, int(raid_paid)))
+
+
+def cargo_loss_units(units_left, loss_pct, lost_groups: int, decided_groups: int) -> float:
+    """FEAT-215 §3.8 sea monster loss of one attack: ``floor3(left x loss_pct/100 x lost/decided)``; ``decided`` =
+    won + lost groups (aborted / expired ignored) — nothing decided, nothing lost, or no units → 0."""
+    lost, decided = max(0, int(lost_groups or 0)), max(0, int(decided_groups or 0))
+    left, pct = max(Decimal(0), _dec(units_left)), max(Decimal(0), min(_dec(loss_pct), Decimal(100)))
+    if decided <= 0 or lost <= 0 or left <= 0 or pct <= 0:
+        return 0.0
+    lost = min(lost, decided)
+    return floor3(left * pct * lost / (Decimal(100) * decided))
 
 
 def stolen(units, price, share) -> Tuple[float, int]:

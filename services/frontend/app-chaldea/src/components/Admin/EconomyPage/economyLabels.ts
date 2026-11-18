@@ -46,6 +46,7 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   caravan_delivery: 'Караван: доставка',
   caravan_cancel: 'Караван: возврат',
   caravan_raid: 'Караван: налёт',
+  caravan_freight: 'Фрахт каравана',
   sea_fare: 'Морской билет',
   sea_refund: 'Возврат за морской билет',
   guild_order: 'Заказ гильдии',
@@ -57,6 +58,18 @@ export const OP_TYPE_LABELS: Record<string, string> = {
 };
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
+
+/** Russian labels of `econ_caravans.cancel_reason` (FEAT-192 / FEAT-215). */
+export const CARAVAN_CANCEL_REASON_LABELS: Record<string, string> = {
+  destination_left: 'регион назначения вышел из пересчёта',
+  destination_deleted: 'регион назначения удалён',
+  sea_wait_expired: 'не дождался корабля',
+  sea_route_lost: 'корабль потерян',
+  no_path: 'нет ни дороги, ни морского пути',
+};
+
+export const caravanCancelReasonLabel = (reason: string | null | undefined): string =>
+  (reason && CARAVAN_CANCEL_REASON_LABELS[reason]) || reason || 'причина неизвестна';
 
 export const ACCOUNT_KIND_LABELS: Record<EconAccountKind, string> = {
   character: 'Персонаж',

@@ -22,8 +22,8 @@ import models
 from auth_http import UserRead, get_current_user_via_http
 from main import app
 from tests.test_econ_tick import T0, _add_region, _rows, _scalar, factory  # noqa: F401  (factory: fixture)
-from tests.test_econ_tick_caravans import (
-    _caravans, _exec, _good, _pair, _pass, _region, _two_regions,
+from tests.test_econ_tick_caravans import (  # noqa: F401  (_abstract_caravans: autouse fixture)
+    _abstract_caravans, _caravans, _exec, _good, _pair, _pass, _region, _two_regions,
 )
 
 BASE = "/characters/admin/economy"
@@ -293,7 +293,12 @@ def test_list_newest_first_with_names(listed):
                           "next_move_at", "arrived_at", "hold_started_at", "guard_count", "stolen_units", "raid_paid",
                           "raid_status",
                           # FEAT-212 A4
-                          "escort_count"}
+                          "escort_count",
+                          # FEAT-215 §3.9
+                          "sea_stage", "sea_split_index", "sea_board_port_id", "sea_board_port_name",
+                          "sea_alight_port_id", "sea_alight_port_name", "sea_ship_id", "sea_ship_name",
+                          "sea_waiting_since", "sea_wait_deadline", "sea_boarded_at", "sea_unloaded_at",
+                          "freight", "freight_paid", "sunk_units"}
     assert (first["status"], first["group_name"], first["from_region_name"], first["to_region_name"],
             first["from_country_name"], first["finished_run_id"], first["cancel_reason"], first["goods_returned"]) == \
         ("delivered", "Продовольствие", "Регион 1", "Регион 2", "Мидденгерд", 2, None, None)

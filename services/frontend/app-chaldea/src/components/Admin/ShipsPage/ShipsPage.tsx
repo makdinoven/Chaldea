@@ -232,6 +232,7 @@ const ShipsPage = () => {
                         </span>
                         <span className="pl-[52px] sm:pl-0 text-white/70 text-xs sm:text-sm">
                           {ship.passengers_count} чел. · мест {ship.active_passes}/{ship.capacity + ship.crew_slots}
+                          {ship.cargo_aboard !== undefined && ` · трюм ${ship.cargo_aboard}/${ship.cargo_capacity ?? '—'}`}
                         </span>
                         <span className="pl-[52px] sm:pl-0 text-xs min-w-0">
                           {problems.length ? (
@@ -291,6 +292,8 @@ const ShipsPage = () => {
                             <span className="text-white/50 text-xs">
                               На палубе {ship.passengers_count} чел. · действующих мест {ship.active_passes} · рейсов{' '}
                               {ship.trip_no}
+                              {ship.cargo_aboard !== undefined &&
+                                ` · в трюме караванов ${ship.cargo_aboard} из ${ship.cargo_capacity ?? '—'}`}
                             </span>
                           </div>
                           <div className="flex flex-col gap-1 rounded-card border border-white/[0.07] bg-white/[0.03] p-3">

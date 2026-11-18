@@ -70,9 +70,36 @@ def _groups(f):
         db.close()
 
 
-def _region(f, rid, *, country=1, purse=PURSE, template="rural"):
+ROAD_HUB = 99_000      # FEAT-215: every region of these tests reaches the others by land through one hub location
+
+
+def _road_tables(f):
+    """The locations-service road tables the route planner reads (``Locations.marker_type``, ``LocationNeighbors``)."""
+    cols = {r[1] for r in _rows(f, "PRAGMA table_info(Locations)")}
+    if "marker_type" not in cols:
+        _exec(f, "ALTER TABLE Locations ADD COLUMN marker_type VARCHAR(20) NULL")
+    _exec(f, "CREATE TABLE IF NOT EXISTS LocationNeighbors (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+             "location_id INTEGER NOT NULL, neighbor_id INTEGER NOT NULL, energy_cost INTEGER DEFAULT 0, "
+             "path_data TEXT NULL, is_auto_arrow INTEGER NOT NULL DEFAULT 0)")
+
+
+def _road(f, rid):
+    """FEAT-215: since «no land and no sea path → no deal» the planner needs a path, so the region gets a station
+    (its trade gate) linked to the hub. Physical-caravan tests override the station with their own roads."""
+    _road_tables(f)
+    gate = ROAD_HUB + int(rid)
+    for lid, name, region in ((ROAD_HUB, "Перекрёсток", None), (gate, f"Ворота {rid}", int(rid))):
+        if _scalar(f, "SELECT COUNT(*) FROM Locations WHERE id = :i", i=lid) == 0:
+            _exec(f, "INSERT INTO Locations (id, name, region_id) VALUES (:i, :n, :r)", i=lid, n=name, r=region)
+    _exec(f, "INSERT INTO LocationNeighbors (location_id, neighbor_id) VALUES (:a, :b), (:b, :a)", a=gate, b=ROAD_HUB)
+    _exec(f, "UPDATE Regions SET jail_location_id = :l WHERE id = :r", l=gate, r=int(rid))
+
+
+def _region(f, rid, *, country=1, purse=PURSE, template="rural", road=True):
     _add_region(f, rid, template=template, country_id=country, purse=purse)
     _exec(f, "UPDATE econ_region_goods SET stock = norm_stock, price_mult = 1 WHERE region_id = :r", r=rid)
+    if road:
+        _road(f, rid)
 
 
 def _good(f, rid, group, stock, norm, mult=1.0):
@@ -106,6 +133,14 @@ def _pair(f, a, b, *, enabled=True, duty=10.0):
         db.commit()
     finally:
         db.close()
+
+
+@pytest.fixture(autouse=True)
+def _abstract_caravans(factory):
+    """FEAT-215: every region here now has a land road (``_road``), which would make some caravans physical; these
+    tests are about abstract caravans, so physical caravans are off unless a test turns them on."""
+    _set_params(factory, caravan_physical_enabled=0)
+    yield
 
 
 def _summary(run_id):

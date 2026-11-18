@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { fetchDeck, onSeaNotice, seaErrorMessage } from '../../../api/sea';
 import type { DeckView, SeaPass } from '../../../types/sea';
+import useActivityLock from '../../../hooks/useActivityLock';
 import { ShipStatusLine, seaPassTitle } from './CaptainModal/CaptainModal';
 import SeaShipAlerts from './SeaShipAlerts';
 
@@ -36,6 +37,7 @@ const passLine = (p: SeaPass, docked: boolean, sailorMinChars: number): string =
  */
 const ShipDeckHeader = ({ locationId, shipId, characterId, isCharacterHere, onShipStatusChange }: ShipDeckHeaderProps) => {
   const [view, setView] = useState<DeckView | null>(null);
+  const lock = useActivityLock();
   const [error, setError] = useState<string | null>(null);
   const errorShownRef = useRef(false);
   const statusRef = useRef<string | null>(null);
@@ -91,12 +93,15 @@ const ShipDeckHeader = ({ locationId, shipId, characterId, isCharacterHere, onSh
 
   const { ship } = view;
   const docked = ship.status === 'docked';
+  const cargoCount = view.cargo?.length ?? 0;
+  // FEAT-215: a caravan escort on the deck sails with the cargo in the hold — no ticket needed.
+  const sailsWithCargo = lock.reason === 'caravan_escort' && cargoCount > 0;
   const passes = view.my_passes;
   const hasNextTrip = docked
     ? passes.some((p) => p.valid_now)
     : passes.some((p) => !p.valid_now) ||
       passes.some((p) => p.valid_now && ship.next_port != null && p.to_port_id !== ship.next_port.id);
-  const warning = !isCharacterHere
+  const warning = !isCharacterHere || sailsWithCargo
     ? null
     : docked
       ? hasNextTrip || !ship.is_active
@@ -143,7 +148,15 @@ const ShipDeckHeader = ({ locationId, shipId, characterId, isCharacterHere, onSh
           )}
         </span>
         <span>На борту: {view.passengers_count}</span>
+        {cargoCount > 0 && (
+          <span className="text-gold-light">
+            В трюме груз каравана{cargoCount > 1 ? ` × ${cargoCount}` : ''}
+          </span>
+        )}
       </div>
+      {isCharacterHere && sailsWithCargo && (
+        <p className="text-xs sm:text-sm text-site-blue">Вы плывёте с караваном как охрана — билет не нужен.</p>
+      )}
 
       {view.ships_nearby.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-xs sm:text-sm text-site-blue">

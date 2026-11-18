@@ -14,6 +14,12 @@ by changing its own state; the only passenger moves this module makes are :func:
 
 Lock order (§3.7): ``sea_ships (asc id) → sea_passes → characters (asc id) → econ_accounts``. Nothing here commits;
 notices are returned and published by the caller after the commit.
+
+FEAT-215 global lock order (features/FEAT-215 §3.6, supersedes the line above for these tables): ``sea_ships (asc) →
+sea_passes → econ_regions → econ_region_goods → econ_region_events → econ_caravans (asc) → econ_caravan_raids →
+econ_caravan_escorts (asc) → econ_caravan_sea_losses → sea_raids → … (FEAT-207 chain) … → characters (asc, ONE sorted
+call per tx) → econ_accounts (asc) → character_attributes``. The ship transaction (``sea_cargo``) never takes the
+region / goods / caravan-raid locks; no caravan / raid / delivery code path locks ``sea_ships``.
 """
 
 import logging
@@ -847,12 +853,33 @@ def deck_view(db: Session, location_id: int, character_id: int, user_id: int,
         near_q = None
     nearby = [] if near_q is None else [{"id": int(r[0]), "name": r[1]}
                                         for r in near_q.filter(S.id != int(ship.id)).order_by(S.id).all()]
+    # FEAT-215 §3.9: caravan escorts ride hidden inside the wagon — not counted as passengers
     passengers = db.query(models.Character.id).filter(
         models.Character.current_location_id == int(ship.deck_location_id),
-        models.Character.is_npc.is_(False)).count()
+        models.Character.is_npc.is_(False), models.Character.escort_caravan_id.is_(None)).count()
     return {"ship": ship_public(db, ship, stops, now), "ships_nearby": nearby, "passengers_count": int(passengers),
             "my_passes": my_passes(db, ship, character_id),
-            "sailor_post_min_chars": int(load_params(db).sailor_post_min_chars)}
+            "sailor_post_min_chars": int(load_params(db).sailor_post_min_chars),
+            "cargo": deck_cargo(db, ship)}
+
+
+def deck_cargo(db: Session, ship: "models.SeaShip") -> List[dict]:
+    """FEAT-215 §3.9: the caravans in the hold for the deck header — goods group and landing port only."""
+    import sea_cargo  # local: sea_cargo imports this module
+    ids = sea_cargo.aboard_ids(db, ship.id)
+    if not ids:
+        return []
+    rows = (db.query(models.EconCaravan.id, models.EconCaravan.group_code, models.EconCaravan.sea_alight_port_id)
+            .filter(models.EconCaravan.id.in_(ids)).order_by(models.EconCaravan.id).all())
+    codes = sorted({r[1] for r in rows if r[1]})
+    groups: Dict[str, Optional[str]] = {}
+    if codes:
+        ph, params = core.in_params("g", codes)
+        groups = {r[0]: r[1] for r in db.execute(text(
+            f"SELECT code, name FROM econ_goods_groups WHERE code IN ({ph})"), params).fetchall()}
+    locs = location_infos(db, [r[2] for r in rows])
+    return [{"caravan_id": int(r[0]), "group_name": groups.get(r[1]) or r[1],
+             "alight_port_name": locs[int(r[2])].name if r[2] and int(r[2]) in locs else None} for r in rows]
 
 
 # =====================================================================================================================

@@ -2086,7 +2086,9 @@ async def _sea_fighter_available(db, character_id: int, location_id: int) -> boo
     """FEAT-214: may this deck player be pulled into the sea raid?
 
     A player (`is_npc = 0`) standing on the deck, not in an active battle, not
-    activity-locked (unconscious, jail, reading, asleep, ...) and with `current_health > 0`."""
+    activity-locked (unconscious, jail, reading, asleep, ...) and with `current_health > 0`.
+    FEAT-215: a caravan escort sailing with its cargo fights the monsters like everyone on
+    deck — the caravan-escort lock is the ONLY lock exemption (as in `_escort_available`)."""
     row = (await db.execute(
         text("SELECT is_npc, current_location_id FROM characters WHERE id = :cid"),
         {"cid": character_id},
@@ -2097,7 +2099,8 @@ async def _sea_fighter_available(db, character_id: int, location_id: int) -> boo
         return False
     if await get_active_battle_for_character(db, character_id):
         return False
-    if await _is_activity_locked(db, character_id):
+    lock = await activity_lock.get_activity_lock(db, character_id)
+    if lock["reason"] not in (None, activity_lock.REASON_CARAVAN_ESCORT):
         return False
     hp_row = (await db.execute(
         text("SELECT current_health FROM character_attributes WHERE character_id = :cid"),

@@ -42,6 +42,12 @@ const STATE_LINE: Partial<Record<CaravanHereState, { text: string; cls: string }
   raided: { text: 'Уже ограблен', cls: 'text-white/50' },
 };
 
+/** FEAT-215: a caravan waiting for a ship / in a ship's hold has no road countdown. */
+const SEA_LINE: Record<string, { text: string; cls: string }> = {
+  waiting: { text: 'Ждёт корабль', cls: 'text-site-blue' },
+  aboard: { text: 'В трюме корабля', cls: 'text-site-blue' },
+};
+
 const Spinner = () => <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />;
 
 const WagonIcon = ({ className }: { className: string }) => (
@@ -257,7 +263,8 @@ const CaravanSection = ({
         >
           {caravans.map((c) => {
             const stateLine = STATE_LINE[c.state];
-            const depart = c.state === 'on_road' ? departText(c.departs_in_sec, fetchedAt, now) : null;
+            const seaLine = c.sea_stage ? SEA_LINE[c.sea_stage] : undefined;
+            const depart = c.state === 'on_road' && !seaLine ? departText(c.departs_in_sec, fetchedAt, now) : null;
             return (
               <motion.li
                 key={c.id}
@@ -268,6 +275,7 @@ const CaravanSection = ({
                   <span className="text-white text-sm font-medium break-words">
                     Торговый караван: {c.group_name || c.group_code}, охрана {c.guard_count}
                   </span>
+                  {seaLine && <span className={`text-xs ${seaLine.cls}`}>{seaLine.text}</span>}
                   {stateLine && <span className={`text-xs ${stateLine.cls}`}>{stateLine.text}</span>}
                   {depart && <span className="text-white/50 text-xs">{depart}</span>}
                 </div>

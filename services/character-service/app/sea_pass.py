@@ -24,6 +24,12 @@ are quiet); the **sailor relief** of a storm delay; the re-landing of players ke
 runs once per pass before the ships, the raid fallbacks after them. After the commit: the CAS storm damage and the raid
 start (``sea_raid_crud.start_pending``).
 
+FEAT-215 (§3.5, ``sea_cargo``): the hold of every docked ship is unloaded / stranded each pass (``dock_cargo``, also
+at the arrival); the departure boards waiting caravans (``board``, instead of the deck players lock: ONE sorted
+characters lock of deck players ∪ escorts) and lets their escorts sail without a pass; safe landings strand the hold
+first. Lock order ``sea_ships → sea_passes → econ_caravans → econ_caravan_escorts → characters → econ_accounts``
+(§3.6); when ``dock_cargo`` moved escorts the departure waits for the next pass.
+
 After the commit (best effort): LS «character left the location» cleanup + gathering cancel for everyone put ashore,
 law encounter / slip / wanted notices, the sea notices (``ws_type="sea"``). :func:`after_commit` is shared with the
 ship admin (delete ship). Never started under pytest by the scheduler; tests call :func:`run_pass` directly
@@ -44,6 +50,7 @@ from sqlalchemy.orm import Session
 import law_core as lc
 import law_notify
 import models
+import sea_cargo
 import sea_core
 import sea_crud
 import sea_raid_crud
@@ -286,7 +293,9 @@ def depart(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome)
     target, fallback = sea_crud.landing_target(db, ship, stops)
 
     passes = sea_crud.active_passes(db, ship.id, lock=True)
-    players = sea_crud.deck_players(db, ship, lock=True)
+    # FEAT-215 §3.5: cargo boards here (caravans → escorts), then ONE sorted characters lock (deck ∪ escorts)
+    cargo = sea_cargo.board(db, ship, now, out)
+    players = cargo.players
     covering: Dict[int, "models.SeaPass"] = {}
     rank = {sea_core.KIND_TICKET: 0, sea_core.KIND_SAILOR: 1, sea_core.KIND_STOWAWAY: 2}
     for p in passes:
@@ -303,6 +312,9 @@ def depart(db: Session, ship: "models.SeaShip", now: datetime, out: ShipOutcome)
     for ch in players:
         cid = int(ch.id)
         aboard.add(cid)
+        if cid in cargo.escort_ids:                  # FEAT-215: escorts sail with their cargo, no pass needed
+            sailing_ids.append(ch)
+            continue
         if in_battle(db, cid):
             logger.info("sea ship %s departure: character %s is in a battle and stays aboard", ship.id, cid)
             sailing_ids.append(ch)
@@ -445,6 +457,7 @@ def _dock(db: Session, ship: "models.SeaShip", stop_idx: int, port_id: int, zone
         else:
             still_covered.add(int(p.character_id))
     db.flush()
+    sea_cargo.dock_cargo(db, ship, now, out)          # FEAT-215 §3.5: unload / strand the hold
     place_captain(db, ship, "arrival")
     port_name = _name(sea_crud.location_infos(db, [port_id]), port_id)
     for ch in sea_crud.deck_players(db, ship, lock=False):
@@ -459,7 +472,8 @@ def _dock(db: Session, ship: "models.SeaShip", stop_idx: int, port_id: int, zone
 
 def _land_broken(db: Session, ship: "models.SeaShip", reason: str, now: datetime, out: ShipOutcome) -> None:
     """Safe landing at sea (no valid stop / no path): everyone ashore, ship off and docked where it last was (so the
-    admin can edit its stops)."""
+    admin can edit its stops). FEAT-215: the hold lands first (escorts with their caravan)."""
+    sea_cargo.strand_all(db, ship, sea_crud.landing_target(db, ship)[0], now, out)
     result = sea_crud.safe_land(db, ship, reason, now)
     # active_passes() below re-reads with populate_existing() and the session does not
     # autoflush: flush so the passes safe_land just refunded stay 'refunded'.
@@ -581,7 +595,8 @@ def _zone_effects(db: Session, ship: "models.SeaShip", storm: Optional["sea_weat
         logger.info("sea ship %s: «%s» attacked in zone %s, nobody could fight — repelled (+%s min)", ship.id,
                     pick.name, ship.current_zone_id, delay)
         return stop
-    rows = sea_raid_crud.plan_raid(db, ship, pick, eligible, now)
+    rows = sea_raid_crud.plan_raid(db, ship, pick, eligible, now,
+                                   caravan_ids=sea_cargo.aboard_ids(db, ship.id))   # FEAT-215 §3.8
     if not rows:
         return stop
     hold = sea_core.clamp(params.raid_hold_max_minutes, sea_core.RAID_HOLD_MAX_MINUTES_RANGE)
@@ -768,7 +783,9 @@ def process_ship(db: Session, ship_id: int, now: datetime) -> Optional[ShipOutco
     deck_ok = int(ship.deck_location_id) in sea_crud.location_infos(db, [ship.deck_location_id])
     if not deck_ok:
         on_old_deck = _free_players(db, int(ship.deck_location_id))
-        if ship.is_active or on_old_deck or ship.blocked_reason != sea_core.BLOCKED_NO_DECK:
+        if ship.is_active or on_old_deck or ship.blocked_reason != sea_core.BLOCKED_NO_DECK \
+                or sea_cargo.cargo_aboard(db, ship.id):
+            sea_cargo.strand_all(db, ship, sea_crud.landing_target(db, ship)[0], now, out)   # FEAT-215 §3.5
             result = sea_crud.safe_land(db, ship, sea_core.BLOCKED_NO_DECK, now)
             _collect_landing(db, result, out)
             out.events.append(EV_SAFE_LANDING)
@@ -783,8 +800,13 @@ def process_ship(db: Session, ship_id: int, now: datetime) -> Optional[ShipOutco
         logger.warning("sea ship %s: %d players kept aboard by a battle landed", ship.id, len(result.ashore))
     if ship.status == sea_core.STATUS_SAILING and ship.hold_until is not None:
         release_hold(db, ship, now, out)
+    # FEAT-215 §3.5: the hold of every docked ship (unload at the landing port / strand when no longer served). When
+    # it moved escorts the departure waits for the next pass (one sorted characters lock per transaction, §3.6).
+    cargo_moved = 0
+    if ship.status == sea_core.STATUS_DOCKED and EV_SAFE_LANDING not in out.events:
+        cargo_moved = sea_cargo.dock_cargo(db, ship, now, out)
     if ship.status == sea_core.STATUS_DOCKED and ship.is_active and deck_ok and ship.departs_at is not None \
-            and ship.departs_at <= now:
+            and ship.departs_at <= now and not cargo_moved:
         if not postpone_departure(db, ship, now, out):
             depart(db, ship, now, out)
     elif ship.status == sea_core.STATUS_SAILING and (ship.next_zone_at is None or ship.next_zone_at <= now) \

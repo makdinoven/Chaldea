@@ -53,6 +53,7 @@ DIRECTION_BACKWARD = -1
 NAME_MAX = 100
 CAPACITY_RANGE = (0, 200)
 CREW_SLOTS_RANGE = (0, 20)
+CARGO_CAPACITY_RANGE = (0, 20)        # FEAT-215: caravans per trip in the hold
 BOARDING_MINUTES_RANGE = (1, 1440)
 ZONE_MINUTES_RANGE = (1, 1440)
 FARE_RANGE = (0, 1_000_000)
@@ -64,6 +65,7 @@ PATH_MAX_ZONES_RANGE = (10, 1000)
 
 DEFAULT_SAILOR_POST_MIN_CHARS = 800
 DEFAULT_PATH_MAX_ZONES = 200
+DEFAULT_CARGO_CAPACITY = 2             # FEAT-215 (054 server default)
 
 # ---------------------------------------------------------------------------------------------------------------------
 # FEAT-214 storms and raids (§3.3, §3.4)
@@ -396,3 +398,35 @@ def pick_drift(adj: Mapping[int, Sequence[int]], current: int, next_zone: Option
     if not options:
         return None
     return options[rng.randrange(len(options))]
+
+
+# =====================================================================================================================
+# FEAT-215 sea caravans — which ports a ship's plan serves from a port (§3.3)
+# =====================================================================================================================
+
+def reached_from(legs: Sequence, a: int) -> Dict[int, int]:
+    """``{port B: zones}`` — every port reached by the plan ``legs`` starting with the **first** leg that departs
+    from port ``a``, walking on until a leg arrives back at ``a`` (or the plan ends). Zones = Σ zones of the legs
+    from that first leg up to the first arrival at B (the cargo stays in the hold through intermediate stops).
+    A leg is any object with ``from_port``, ``to_port`` and ``zones`` (``sea_crud.PlannedLeg``)."""
+    a = int(a)
+    out: Dict[int, int] = {}
+    start = next((i for i, leg in enumerate(legs) if int(leg.from_port) == a), None)
+    if start is None:
+        return out
+    zones = 0
+    for leg in legs[start:]:
+        zones += max(0, int(leg.zones))
+        to_port = int(leg.to_port)
+        if to_port == a:
+            break
+        out.setdefault(to_port, zones)
+    return out
+
+
+def serves(legs: Sequence, a: int, b: int) -> Optional[int]:
+    """Zones from port ``a`` to port ``b`` along the plan (see :func:`reached_from`), or None when the plan does not
+    carry cargo from ``a`` to ``b`` without coming back to ``a`` first."""
+    if a is None or b is None or int(a) == int(b):
+        return None
+    return reached_from(legs, int(a)).get(int(b))

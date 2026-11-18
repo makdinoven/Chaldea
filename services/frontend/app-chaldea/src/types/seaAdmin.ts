@@ -68,6 +68,10 @@ export interface SeaShipAdmin {
   deck: SeaRef;
   capacity: number;
   crew_slots: number;
+  /** FEAT-215: caravans per trip (0 = no cargo) — optional on an older backend */
+  cargo_capacity?: number;
+  /** FEAT-215: caravans in the hold right now (read-only) — optional on an older backend */
+  cargo_aboard?: number;
   boarding_minutes: number;
   zone_minutes: number;
   fare_base: number;
@@ -109,6 +113,8 @@ export interface SeaShipCreate {
   deck_location_id: number;
   capacity: number;
   crew_slots: number;
+  /** FEAT-215: caravans per trip, 0..20 (backend default 2) */
+  cargo_capacity: number;
   boarding_minutes: number;
   zone_minutes: number;
   fare_base: number;

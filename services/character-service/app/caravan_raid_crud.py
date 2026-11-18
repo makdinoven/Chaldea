@@ -76,6 +76,7 @@ STATE_UNDER_ATTACK = "under_attack"
 STATE_RAIDED = "raided"
 
 KEY_RAID = "raid"
+SEA_NO_COUNTDOWN = (caravan_crud.SEA_WAITING, caravan_crud.SEA_ABOARD)  # FEAT-215: leaves with a ship, no timer
 SPAWN_TYPE = "dungeon"                    # hidden from the location lists; despawned by crud.despawn_dungeon_mobs
 MAX_GUARDS = 5                            # battle team size
 STALE_STARTING_AFTER = timedelta(minutes=10)
@@ -199,14 +200,15 @@ def caravans_here(db: Session, character_id: int, now: Optional[datetime] = None
         else:
             held = caravan_crud.held_by(db, row, now, params, gates_available)
             state = STATE_HELD if held else STATE_ON_ROAD
-            if state == STATE_ON_ROAD and row.next_move_at is not None:
+            if state == STATE_ON_ROAD and row.next_move_at is not None and row.sea_stage not in SEA_NO_COUNTDOWN:
                 departs = max(0, int((row.next_move_at - now).total_seconds()))
             can_attack, reason = (True, None) if has_pool else (False, MSG_NO_GUARDS)
         if row.group_code not in names:
             names[row.group_code] = _group_name(db, row.group_code)
         out.append({"id": int(row.id), "group_code": row.group_code,
                     "group_name": names[row.group_code] or row.group_code, "guard_count": _i(row.guard_count),
-                    "state": state, "departs_in_sec": departs, "can_attack": can_attack, "reason": reason})
+                    "state": state, "departs_in_sec": departs, "can_attack": can_attack, "reason": reason,
+                    "sea_stage": row.sea_stage})
     return {"location_id": location_id, "caravans": out}
 
 
@@ -233,6 +235,33 @@ class RaidStart:
     location_id: int
     guard_ids: Tuple[int, ...] = ()
     escort_ids: Tuple[int, ...] = ()                  # FEAT-212: the caravan's active player escorts (asc id)
+
+
+def departure_port(db: Session, ship_id) -> Optional[int]:
+    """FEAT-215 §3.8: the port the ship's current leg departed from — the docked port when docked, else the last
+    port. Plain read of ``sea_ships`` (never locked from a caravan path, §3.6); None when unknown / no table."""
+    if not ship_id:
+        return None
+    try:
+        with db.begin_nested():
+            ship = db.execute(text("SELECT status, docked_port_id, last_port_id FROM sea_ships WHERE id = :s"),
+                              {"s": int(ship_id)}).first()
+    except DBAPIError:
+        return None
+    if ship is None:
+        return None
+    port = ship[1] if ship[0] == "docked" and ship[1] is not None else ship[2]
+    return int(port) if port is not None else None
+
+
+def crime_location(db: Session, caravan: "models.EconCaravan", location_id: int) -> int:
+    """The location whose region judges a raid (``raid.region_id``): for a caravan in a ship's hold the departure
+    port of the ship (a deck has no land region — the law of the shore the ship left), else the raid's location."""
+    if caravan.sea_stage == caravan_crud.SEA_ABOARD:
+        port = departure_port(db, caravan.sea_ship_id)
+        if port is not None:
+            return port
+    return int(location_id)
 
 
 def begin_raid(db: Session, caravan_id: int, character_id: int, group: bool,
@@ -264,7 +293,7 @@ def begin_raid(db: Session, caravan_id: int, character_id: int, group: bool,
         location_id = int(row.current_location_id)
         if not has_open_gate(db, character_id, location_id, int(row.id)):
             raise EconomyApiError(403, MSG_GATE_REQUIRED)
-        region_id, _country = econ_ledger.resolve_location(db, location_id)
+        region_id, _country = econ_ledger.resolve_location(db, crime_location(db, row, location_id))
         raid = models.EconCaravanRaid(
             caravan_id=int(row.id), leader_character_id=int(character_id), is_group=bool(group),
             location_id=location_id, region_id=int(region_id) if region_id else None, status=STATUS_STARTING,
@@ -634,12 +663,13 @@ def _pay_out(db: Session, raid: "models.EconCaravanRaid", caravan: "models.EconC
              lock_also: Sequence[int] = ()) -> List[law_notify.Notice]:
     """The loot of a won raid (inside Tx 1): stolen units / bales, escrow marks via the ledger, shares, logs.
     ``lock_also`` = the escorts falling out — locked in the same single sorted character lock as the raiders."""
-    left = max(Decimal(0), caravan_crud._dec3(caravan.units) - caravan_crud._dec3(caravan.stolen_units))
+    left = caravan_crud._remaining_units(caravan)              # FEAT-215: units − stolen − sunk
     stolen_units, stolen_value = econ_caravan.stolen(left, caravan.unit_price, params.caravan_raid_goods_share)
     paid_total = _i(caravan.paid_purse) + _i(caravan.paid_treasury)
     marks = int((Decimal(paid_total) * Decimal(str(params.caravan_raid_marks_share or 0)))
                 .to_integral_value(rounding=ROUND_FLOOR))
-    marks = max(0, min(marks, paid_total - _i(caravan.raid_paid)))
+    # FEAT-215 §3.7: the reserved sea freight belongs to the port, never to the raiders
+    marks = max(0, min(marks, econ_caravan.raid_marks_cap(paid_total, _i(caravan.freight), _i(caravan.raid_paid))))
     bale = bale_item(db, caravan.group_code)
     bales = econ_caravan.bale_count(stolen_value, bale[2]) if bale is not None else 0
     split = econ_caravan.split_loot(marks, bales, [a for a in attackers if a in players] or players,
