@@ -1088,6 +1088,21 @@ class EconCaravan(Base):
     freight_paid = Column(Integer, nullable=False, default=0, server_default="0")   # charged: 0 or freight
     freight_op_id = Column(BigInteger, nullable=True)                               # the caravan_freight operation
     sunk_units = Column(Numeric(16, 3), nullable=False, default=0, server_default="0")  # lost to sea monsters
+    # FEAT-216 customs & smuggling (migration 055). A contraband caravan never has a post (customs_* stay NULL);
+    # a legal foreign caravan routed via a post: customs_state pending -> inspecting -> cleared at route[customs_index].
+    # duty_paid is meaningful only once customs_state is inspecting / cleared (the duty left the escrow at the post).
+    is_contraband = Column(Boolean, nullable=False, default=False, server_default="0")
+    markup_pct = Column(Numeric(6, 2), nullable=True)
+    customs_index = Column(Integer, nullable=True)
+    customs_location_id = Column(BigInteger, nullable=True)
+    customs_state = Column(String(16), nullable=True)                               # pending | inspecting | cleared
+    customs_until = Column(DateTime, nullable=True)
+    duty_paid = Column(Integer, nullable=False, default=0, server_default="0")
+    duty_op_id = Column(BigInteger, nullable=True)                                  # the caravan_duty operation
+    customs_alert_officer_id = Column(Integer, nullable=True)
+    customs_alert_until = Column(DateTime, nullable=True)
+    seized_region_id = Column(Integer, nullable=True)
+    seized_country_id = Column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("dispatch_run_id", "from_region_id", "to_region_id", "group_code",
@@ -1100,6 +1115,7 @@ class EconCaravan(Base):
         Index("ix_econ_caravans_loc", "current_location_id", "status"),
         Index("ix_econ_caravans_sea_wait", "sea_stage", "sea_board_port_id"),
         Index("ix_econ_caravans_sea_ship", "sea_ship_id", "sea_stage"),
+        Index("ix_econ_caravans_contraband", "is_contraband", "status"),
     )
 
 
@@ -1157,11 +1173,48 @@ class EconCaravanRaid(Base):
     # followup claim (like `law_done`).
     escort_ids = Column(JSON, nullable=True)
     faction_done = Column(Boolean, nullable=False, default=False, server_default="0")
+    # FEAT-216 (055): raid = bandits (FEAT-211) | customs = a customs officer's fight | patrol = guards' fight.
+    # One fight per caravan whatever the kind (the UNIQUE below). officer_paid = officers' share of the seizure;
+    # seized_done = the confiscation followup claim (like `law_done`).
+    kind = Column(String(16), nullable=False, default="raid", server_default="raid")
+    officer_paid = Column(BigInteger, nullable=False, default=0, server_default="0")
+    seized_done = Column(Boolean, nullable=False, default=False, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("caravan_id", name="uq_econ_caravan_raids_caravan"),
         Index("ix_econ_caravan_raids_battle", "battle_id"),
         Index("ix_econ_caravan_raids_status", "status", "id"),
+    )
+
+
+class EconCountryBan(Base):
+    """FEAT-216: a goods group whose import into a country is forbidden (Countries.id / group code, no FK).
+    Admin replace = DELETE + INSERT of one country's rows in one transaction; never locked."""
+
+    __tablename__ = "econ_country_bans"
+
+    country_id = Column(Integer, primary_key=True, autoincrement=False)
+    group_code = Column(String(32), primary_key=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class EconCustomsOfficer(Base):
+    """FEAT-216: a player's customs job (one row per character; no activity lock). status: active | resigned."""
+
+    __tablename__ = "econ_customs_officers"
+
+    character_id = Column(Integer, primary_key=True, autoincrement=False)
+    country_id = Column(Integer, nullable=False)
+    npc_id = Column(Integer, nullable=True)
+    location_id = Column(BigInteger, nullable=True)
+    status = Column(String(16), nullable=False)
+    enlisted_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    seizures = Column(Integer, nullable=False, default=0, server_default="0")
+    earned = Column(BigInteger, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        Index("ix_econ_customs_officers_country", "status", "country_id"),
     )
 
 

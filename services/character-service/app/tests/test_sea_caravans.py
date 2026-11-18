@@ -24,6 +24,7 @@ import pytest
 
 import caravan_pass
 import caravan_raid_crud as raids
+import econ_caravan as ec
 import econ_core as core
 import econ_ledger
 import econ_tick
@@ -113,8 +114,9 @@ def sc(storm):
 # ===================================================================================================================
 
 def _check(f):
-    """escrow == Σ (paid − raid_paid − freight_paid) of caravans in transit; nothing non-negative went negative."""
-    expected = int(q(f, "SELECT COALESCE(SUM(paid_purse + paid_treasury - raid_paid - freight_paid), 0) "
+    """escrow == Σ (paid − raid_paid − freight_paid − duty_paid) of caravans in transit (FEAT-216: a duty paid at a
+    customs post left the escrow); nothing non-negative went negative."""
+    expected = int(q(f, "SELECT COALESCE(SUM(paid_purse + paid_treasury - raid_paid - freight_paid - duty_paid), 0) "
                         "FROM econ_caravans WHERE status = 'in_transit'"))
     db = f()
     try:
@@ -475,6 +477,31 @@ def test_raid_on_deck_is_judged_by_the_departure_port_and_loot_skips_freight_and
 # ===================================================================================================================
 # sea monsters: cargo loss, empty deck, escorts in the fight
 # ===================================================================================================================
+
+def test_customs_landing_port_inspects_after_the_freight(sc):
+    """FEAT-216 task 4: a legal caravan whose post is its landing port (``customs_index == sea_split_index + 1``)
+    is unloaded, pays freight then duty in the same transaction, and stops there until ``customs_until``."""
+    cid = _waiting(sc)
+    _set_row(sc, cid, customs_index=2, customs_location_id=P_B, customs_state="pending")
+    c = _row(sc, cid)
+    _seller, duty = ec.remaining_payout(c.value, c.duty, c.paid_purse + c.paid_treasury, 0, freight=c.freight)
+    assert duty > 0
+    country = int(q(sc, "SELECT COALESCE(SUM(balance), 0) FROM econ_accounts WHERE kind = 'country_treasury' "
+                        "AND ref_id = 2") or 0)
+    _out, t = depart(sc)
+    run_ship(sc, t + timedelta(minutes=30))                   # arrival at 200 → unload + freight + duty
+    c = _row(sc, cid)
+    assert (c.sea_stage, c.route_index, c.customs_state, c.duty_paid) == ("landed", 2, "inspecting", duty)
+    assert c.freight_paid == c.freight and c.arrived_at is None
+    assert c.customs_until is not None and c.next_move_at == c.customs_until
+    assert op(sc, c.duty_op_id)[0] == core.OP_CARAVAN_DUTY
+    assert int(q(sc, "SELECT balance FROM econ_accounts WHERE kind = 'country_treasury' AND ref_id = 2"))         == country + duty
+    _check(sc)
+    _cpass(sc, c.customs_until + timedelta(minutes=1))       # cleared → 210 → delivered
+    c = _row(sc, cid)
+    assert (c.status, c.customs_state) == ("delivered", "cleared")
+    assert crud.escrow_balance(sc()) == 0
+
 
 def _attack_rows(f, caravan_id, key="1:1:1:502:1"):
     add_monster(f, Z2)

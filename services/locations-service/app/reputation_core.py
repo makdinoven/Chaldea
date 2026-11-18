@@ -42,6 +42,7 @@ ACTION_REGION_EVENT = "region_event_help"
 ACTION_CARAVAN = "caravan_attack"
 ACTION_CARAVAN_ESCORT = "caravan_escort"      # FEAT-212: delivered a caravan as a player escort
 ACTION_CARAVAN_DEFENSE = "caravan_defense"    # FEAT-212: repelled a raid on the escorted caravan
+ACTION_CUSTOMS_SEIZURE = "customs_seizure"    # FEAT-216: a customs officer seized a contraband caravan
 ACTION_CRIME = "crime"
 ACTION_ADMIN = "admin_manual"
 ACTION_DECAY = "decay"                  # journal-only pseudo action (never a row of reputation_actions)
@@ -100,6 +101,7 @@ DEFAULT_ACTIONS: Tuple[Tuple[str, str, int, Optional[int], bool, int], ...] = (
     (ACTION_CARAVAN, "Нападение на караван", -100, None, True, 50),
     (ACTION_CARAVAN_ESCORT, "Охрана каравана", 10, 40, True, 55),
     (ACTION_CARAVAN_DEFENSE, "Отбит налёт на караван", 25, None, True, 56),
+    (ACTION_CUSTOMS_SEIZURE, "Конфискация контрабанды", 20, None, True, 57),
     (ACTION_CRIME, "Преступление", -50, None, False, 60),
     (ACTION_ADMIN, "Решение властей", 0, None, False, 70),
 )
@@ -111,6 +113,7 @@ DEFAULT_NPC_ROLE_WEIGHTS: Dict[str, int] = {
     "bandit": 20,
     "mercenary": -30,
     "guard": -300,
+    "customs": -300,                    # FEAT-216: the «Таможенник» NPC is an officer of the law like a guard
     "ruler": -1000,
     "king": -1000,
     **{role: -150 for role in _PEACEFUL_ROLES},

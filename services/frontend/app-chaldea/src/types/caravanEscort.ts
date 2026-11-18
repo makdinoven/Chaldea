@@ -26,6 +26,12 @@ export interface CaravaneerView {
   caravans: CaravaneerCaravan[];
 }
 
+/** FEAT-216 C7 — the fence's smuggler hire list: the caravaneer shape + the trade gate the caravans leave from. */
+export interface SmugglerView extends CaravaneerView {
+  gate_location_id: number | null;
+  gate_location_name: string | null;
+}
+
 export interface EscortHireRequest {
   character_id: number;
   npc_id: number;
@@ -43,7 +49,7 @@ export interface EscortMate {
   avatar: string | null;
 }
 
-export type EscortState = 'preparing' | 'on_road' | 'held' | 'under_attack' | 'arrived';
+export type EscortState = 'preparing' | 'on_road' | 'held' | 'under_attack' | 'arrived' | 'inspection';
 
 export type EscortRaidStatus = 'starting' | 'fighting' | 'won' | 'repelled' | 'aborted' | 'expired';
 
@@ -75,6 +81,8 @@ export interface EscortJob {
   /** Index of the boarding port in `route`; the next point is the landing port. */
   sea_split_index?: number | null;
   ship_name?: string | null;
+  /** FEAT-216: the escorted caravan carries contraband (only the escort himself ever sees this). */
+  is_contraband?: boolean;
 }
 
 export interface EscortJobWrap {

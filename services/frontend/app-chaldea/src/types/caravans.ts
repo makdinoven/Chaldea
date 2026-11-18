@@ -6,7 +6,7 @@
  */
 
 /** State of a caravan standing in the character's location (A1). */
-export type CaravanHereState = 'on_road' | 'held' | 'under_attack' | 'raided';
+export type CaravanHereState = 'on_road' | 'held' | 'under_attack' | 'raided' | 'inspection';
 
 export interface CaravanHere {
   id: number;
@@ -21,6 +21,10 @@ export interface CaravanHere {
   reason: string | null;
   /** FEAT-215: sea stage (`waiting` in a port, `aboard` on a deck); null / absent on land. */
   sea_stage?: 'to_port' | 'waiting' | 'aboard' | 'landed' | 'stranded' | string | null;
+  /** FEAT-216 C6: only the alerted customs officer gets `true` — «Досмотреть». Absent on an older backend. */
+  can_inspect?: boolean;
+  /** FEAT-216 C6: seconds left of the officer's alert window; null unless `can_inspect`. */
+  inspect_in_sec?: number | null;
 }
 
 /** `GET /characters/caravans/here` (A1). */

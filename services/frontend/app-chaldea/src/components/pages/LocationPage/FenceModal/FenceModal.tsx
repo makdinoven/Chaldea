@@ -12,6 +12,7 @@ import type { FenceOffer } from '../../../../types/caravans';
 import { getClientPrefs } from '../../../../utils/clientPrefs';
 import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 import ConfirmationModal from '../../../ui/ConfirmationModal';
+import SmugglerSection from './SmugglerSection';
 
 interface FenceModalProps {
   npcId: number;
@@ -28,6 +29,11 @@ const parseQty = (raw: string): number => {
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
+
+type FenceTab = 'sell' | 'smuggle';
+
+const TAB_CLS =
+  'flex-1 sm:flex-none px-3 sm:px-5 py-2 border-b-2 text-xs sm:text-sm uppercase tracking-wide transition-colors duration-200 ease-site';
 
 const maxFor = (offer: FenceOffer): number => Math.max(0, Math.min(offer.max_quantity, QUANTITY_MAX));
 
@@ -49,6 +55,9 @@ const FenceModal = ({ npcId, npcName, npcAvatar, onClose }: FenceModalProps) => 
   const [actionError, setActionError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  /** FEAT-216: «Сбыть краденое» / «Охрана контрабанды». */
+  const [tab, setTab] = useState<FenceTab>('sell');
+  const [smuggleBusy, setSmuggleBusy] = useState(false);
   /** Guards double submits between the click and the re-render that disables the button. */
   const pendingRef = useRef(false);
 
@@ -157,8 +166,41 @@ const FenceModal = ({ npcId, npcName, npcAvatar, onClose }: FenceModalProps) => 
   );
 
   return (
-    <ModalShell open onClose={onClose} title={npcName} size="lg" icon={icon} dismissible={!pending}>
-      {loading && !offers ? (
+    <ModalShell
+      open
+      onClose={onClose}
+      title={npcName}
+      size="lg"
+      icon={icon}
+      dismissible={!pending && !smuggleBusy}
+    >
+      {characterId && (
+        <div className="flex border-b border-white/10 mb-4" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'sell'}
+            disabled={pending || smuggleBusy}
+            onClick={() => setTab('sell')}
+            className={`${TAB_CLS} ${tab === 'sell' ? 'border-gold text-gold' : 'border-transparent text-white/55 hover:text-white'}`}
+          >
+            Сбыть краденое
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'smuggle'}
+            disabled={pending || smuggleBusy}
+            onClick={() => setTab('smuggle')}
+            className={`${TAB_CLS} ${tab === 'smuggle' ? 'border-gold text-gold' : 'border-transparent text-white/55 hover:text-white'}`}
+          >
+            Охрана контрабанды
+          </button>
+        </div>
+      )}
+      {tab === 'smuggle' && characterId ? (
+        <SmugglerSection npcId={npcId} characterId={characterId} onBusyChange={setSmuggleBusy} onHired={onClose} />
+      ) : loading && !offers ? (
         <div className="flex items-center justify-center py-12">
           <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
         </div>

@@ -24,11 +24,19 @@ import type {
   EconSimParams,
   TradePair,
 } from '../../../types/economy';
-import { caravanCancelReasonLabel, formatDateTime, formatDecimal, formatQty } from './economyLabels';
+import {
+  caravanCancelReasonLabel,
+  caravanCustomsStateLabel,
+  formatDateTime,
+  formatDecimal,
+  formatQty,
+  isSeizureReason,
+} from './economyLabels';
 import { FieldHint, SimParamHint } from './ParamHint';
 import CaravanDetail, { isSeaCaravan, RaidBadge, seaStageCls, seaStageText } from './CaravanDetail';
 import CaravanRoadsCard from './CaravanRoadsCard';
 import CaravanGuardsCard from './CaravanGuardsCard';
+import CustomsBansCard from './CustomsBansCard';
 
 /* ------------------------------------------------------------------------------------- constants */
 
@@ -44,6 +52,9 @@ interface CaravanParamDef {
   integer?: boolean;
   /** 0/1 flag shown as a checkbox */
   toggle?: boolean;
+  /** Checkbox captions (default — the physical caravans wording). */
+  onText?: string;
+  offText?: string;
 }
 
 const CARAVAN_PARAMS: CaravanParamDef[] = [
@@ -95,13 +106,51 @@ const SEA_PARAMS: CaravanParamDef[] = [
   { key: 'caravan_no_path_abstract', label: 'Невидимая торговля без дороги и моря', def: 1, min: 0, max: 1, integer: true, toggle: true },
 ];
 
-const ALL_PARAMS: CaravanParamDef[] = [...CARAVAN_PARAMS, ...PHYSICAL_PARAMS, ...ESCORT_PARAMS, ...SEA_PARAMS];
+/** FEAT-216 — «Таможня и контрабанда» (feature file 3.5; bounds mirror `schemas.ECON_SIM_PARAM_BOUNDS`). */
+const CUSTOMS_PARAMS: CaravanParamDef[] = [
+  {
+    key: 'customs_enabled',
+    label: 'Таможня и контрабанда',
+    def: 1,
+    min: 0,
+    max: 1,
+    integer: true,
+    toggle: true,
+    onText: 'Включены',
+    offText: 'Выключены (посты и запреты не действуют, новой контрабанды нет)',
+  },
+  { key: 'customs_inspection_minutes', label: 'Досмотр на посту, мин', def: 30, min: 0, max: 240, integer: true },
+  { key: 'customs_contraband_share', label: 'Доля запретной сделки контрабандистам', def: 0.3, min: 0, max: 1 },
+  { key: 'customs_contraband_markup_pct', label: 'Наценка контрабанды, %', def: 50, min: 0, max: 500 },
+  { key: 'customs_caravan_stealth', label: 'Скрытность контрабандного каравана', def: 20, min: 0, max: 200, integer: true },
+  { key: 'customs_detect_base_pct', label: 'Шанс таможенника заметить, %', def: 35, min: 0, max: 100 },
+  { key: 'customs_detect_min_pct', label: 'Шанс таможенника — минимум, %', def: 5, min: 0, max: 100 },
+  { key: 'customs_detect_max_pct', label: 'Шанс таможенника — максимум, %', def: 90, min: 0, max: 100 },
+  { key: 'customs_patrol_detect_pct', label: 'Шанс стражи остановить, %', def: 5, min: 0, max: 100 },
+  { key: 'customs_alert_minutes', label: 'Ожидание «Досмотреть», мин', def: 10, min: 1, max: 60, integer: true },
+  { key: 'customs_officer_share', label: 'Доля конфиската таможенникам', def: 0.2, min: 0, max: 1 },
+  { key: 'customs_seizure_fame', label: 'Слава за конфискацию', def: 30, min: 0, max: 1000, integer: true },
+  { key: 'customs_smuggler_fee_share', label: 'Доля выручки охране контрабанды', def: 0.1, min: 0, max: 0.5 },
+  { key: 'customs_smuggling_wanted_points', label: 'Розыск за контрабанду, очков', def: 40, min: 0, max: 1000, integer: true },
+];
+
+const ALL_PARAMS: CaravanParamDef[] = [
+  ...CARAVAN_PARAMS,
+  ...PHYSICAL_PARAMS,
+  ...ESCORT_PARAMS,
+  ...SEA_PARAMS,
+  ...CUSTOMS_PARAMS,
+];
+
+/** Backend rule (400): the officer's chance clamp must keep min <= max. */
+const DETECT_RANGE_ERROR = 'Минимум не может быть больше максимума';
 
 const KIND_TABS: { id: CaravanKindFilter; label: string }[] = [
   { id: 'all', label: 'Все' },
   { id: 'physical', label: 'Физические' },
   { id: 'sea', label: 'По морю' },
   { id: 'abstract', label: 'Абстрактные' },
+  { id: 'contraband', label: 'Контрабанда' },
 ];
 
 const ENABLED_DEF = { def: 1, min: 0, max: 1 };
@@ -192,6 +241,25 @@ const StatusBadge = ({ status }: { status: CaravanStatus }) => {
   );
 };
 
+/** FEAT-216: chip colours of the customs stage of a legal caravan. */
+const CUSTOMS_STATE_CLS: Record<string, string> = {
+  pending: 'border-white/20 text-white/70',
+  inspecting: 'border-gold/40 bg-gold/10 text-gold',
+  cleared: 'border-stat-energy/40 bg-stat-energy/10 text-stat-energy',
+};
+
+const CUSTOMS_TEXT_CLS: Record<string, string> = {
+  pending: 'text-white/70',
+  inspecting: 'text-gold',
+  cleared: 'text-stat-energy',
+};
+
+const customsStateCls = (state: string | null | undefined): string =>
+  (state && CUSTOMS_STATE_CLS[state]) || 'border-white/20 text-white/60';
+
+const customsTextCls = (state: string | null | undefined): string =>
+  (state && CUSTOMS_TEXT_CLS[state]) || 'text-white/60';
+
 /* ------------------------------------------------------------------------------------- state card */
 
 const StateCard = ({ data, format }: { data: CaravanOverview; format: (n: number) => string }) => {
@@ -258,6 +326,14 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
     CaravanParamKey,
     string | null
   >;
+  if (
+    errors.customs_detect_min_pct === null &&
+    errors.customs_detect_max_pct === null &&
+    parseNum(form.customs_detect_min_pct) > parseNum(form.customs_detect_max_pct)
+  ) {
+    errors.customs_detect_min_pct = DETECT_RANGE_ERROR;
+    errors.customs_detect_max_pct = DETECT_RANGE_ERROR;
+  }
   const changed = ALL_PARAMS.filter((d) => parseNum(form[d.key]) !== (params[d.key] ?? d.def));
   const enabledChanged = (enabled ? 1 : 0) !== (params.caravans_enabled ?? ENABLED_DEF.def);
   const valid = ALL_PARAMS.every((d) => errors[d.key] === null);
@@ -297,7 +373,7 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
               disabled={!canEdit || saving}
               onChange={(e) => setForm({ ...form, [d.key]: e.target.checked ? '1' : '0' })}
             />
-            {on ? 'Включены' : 'Выключены (новые сухопутные — абстрактные, за море не ходят)'}
+            {on ? d.onText ?? 'Включены' : d.offText ?? 'Выключены (новые сухопутные — абстрактные, за море не ходят)'}
           </label>
         </div>
       );
@@ -375,6 +451,15 @@ const ParamsCard = ({ params, canEdit, onSaved }: ParamsCardProps) => {
         </p>
       </div>
       {renderGrid(SEA_PARAMS)}
+      <div className="flex flex-col gap-1 border-t border-white/10 pt-4">
+        <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em]">Таможня и контрабанда</h3>
+        <p className="text-white/50 text-xs">
+          Законный караван из другой страны идёт через таможенный пост страны назначения, стоит на досмотре и платит
+          там пошлину. Запрещённые группы и закрытая торговля частично уходят контрабандистам — их ловят таможенники
+          из игроков и стража. Посты отмечаются в редакторе локаций, запреты — в карточке «Таможня» ниже.
+        </p>
+      </div>
+      {renderGrid(CUSTOMS_PARAMS)}
       {canEdit ? (
         <button
           type="button"
@@ -601,6 +686,10 @@ const resultText = (c: CaravanRow): string => {
   if (c.status === 'in_transit') return c.runs_left > 0 ? `ещё пересчётов: ${c.runs_left}` : 'приедет в следующем пересчёте';
   if (c.status === 'delivered') return c.finished_run_id ? `доставлен в пересчёте №${c.finished_run_id}` : 'доставлен';
   const reason = caravanCancelReasonLabel(c.cancel_reason);
+  if (isSeizureReason(c.cancel_reason)) {
+    const where = c.seized_region_name ?? (c.seized_region_id ? `регион #${c.seized_region_id}` : null);
+    return `${reason}${where ? ` (${where})` : ''}; товар на рынок края поимки, деньги покупателя — штраф в казну`;
+  }
   const goods = c.goods_returned === false ? 'товар списан' : 'товар вернулся продавцу';
   return `${reason}; ${goods}, деньги возвращены покупателю`;
 };
@@ -610,6 +699,8 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
   const [open, setOpen] = useState(false);
   const sea = isSeaCaravan(c);
   const inTransit = c.status === 'in_transit';
+  const customsState = caravanCustomsStateLabel(c.customs_state);
+  const dutyPaid = c.duty_paid ?? 0;
   return (
     <li className="flex flex-col gap-2 rounded-card border border-white/10 bg-white/[0.03] p-3 min-w-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -624,6 +715,18 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
               по дорогам
             </span>
           )
+        )}
+        {c.is_contraband && (
+          <span className="inline-flex rounded-full border border-site-red/50 bg-site-red/10 px-2 py-0.5 text-[11px] text-site-red whitespace-nowrap">
+            контрабанда{c.markup_pct ? ` +${formatDecimal(c.markup_pct)} %` : ''}
+          </span>
+        )}
+        {customsState && (
+          <span
+            className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap ${customsStateCls(c.customs_state)}`}
+          >
+            таможня: {customsState}
+          </span>
         )}
         {c.raid_status && <RaidBadge status={c.raid_status} />}
         {(c.escort_count ?? 0) > 0 && (
@@ -647,6 +750,7 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
         <span>
           Пошлина:{' '}
           <span className="text-white">{c.duty > 0 ? `${format(c.duty)} (${formatDecimal(c.duty_pct)} %)` : 'нет'}</span>
+          {dutyPaid > 0 && <span className="text-stat-energy"> · уплачено на посту {format(dutyPaid)}</span>}
         </span>
         <span>
           Платили: жители <span className="text-white">{format(c.paid_purse)}</span>
@@ -674,6 +778,13 @@ const CaravanItem = ({ c, format }: { c: CaravanRow; format: (n: number) => stri
           </span>
           {c.route_len ? ` (${(c.route_index ?? 0) + 1} из ${c.route_len})` : ''}
           {c.arrived_at && <span className="text-stat-energy"> · прибыл, ждёт расчёта</span>}
+        </p>
+      )}
+      {c.customs_location_id != null && (
+        <p className="text-xs text-white/60 break-words">
+          Таможенный пост:{' '}
+          <span className="text-white">{c.customs_location_name ?? `#${c.customs_location_id}`}</span>
+          {customsState && <span className={customsTextCls(c.customs_state)}> · {customsState}</span>}
         </p>
       )}
       {sea && inTransit && (
@@ -958,6 +1069,7 @@ const EconomyCaravans = ({ canSettings }: { canSettings: boolean }) => {
       <CaravansCard format={fmt} reloadKey={reloadKey} />
       <CaravanRoadsCard canEdit={canSettings} reloadKey={reloadKey} />
       <CaravanGuardsCard canEdit={canSettings} />
+      <CustomsBansCard canEdit={canSettings} />
     </div>
   );
 };

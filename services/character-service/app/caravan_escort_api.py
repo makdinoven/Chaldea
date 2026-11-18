@@ -2,7 +2,10 @@
 ``caravan_escort_crud``). Included from main.py after the caravan router, before the main ``/characters`` router.
 
 * C1 ``GET  /characters/caravans/caravaneer/{npc_id}?character_id=`` — caravans preparing at the caravaneer's gate;
-* C2 ``POST /characters/caravans/{caravan_id}/escort/hire`` — hire (201, the C3 job body);
+* C2 ``POST /characters/caravans/{caravan_id}/escort/hire`` — hire (201, the C3 job body); FEAT-216 C8: ``npc_id`` may
+  be a fence (smuggler hire of a contraband caravan, the character is led to the caravan);
+* FEAT-216 C7 ``GET /characters/caravans/fence/{npc_id}?character_id=`` — contraband caravans preparing at the trade
+  gate of the fence's region (smuggler hire list);
 * C3 ``GET  /characters/caravans/escort?character_id=`` — own job (``{"escort": null}`` when none);
 * C4 ``POST /characters/caravans/escort/leave`` — «Сойти»;
 * C5 ``GET  /characters/caravans/escort/messages?character_id=&after_id=`` — the caravan channel;
@@ -68,10 +71,11 @@ def _write(db: Session, action, *, integrity_detail: str = MSG_WRITE_FAILED):
         raise HTTPException(status_code=500, detail=MSG_WRITE_FAILED)
 
 
-async def _caravaneer_context(db: Session, npc_id: int, character_id: int, user: UserRead):
-    """Steps 1–5 of C1 / C2; the DB transaction is closed before the gate's HTTP call."""
-    ctx = await run_in_threadpool(_read, db, lambda: escort_crud.resolve_caravaneer(
-        db, npc_id, character_id, user.id))
+async def _caravaneer_context(db: Session, npc_id: int, character_id: int, user: UserRead,
+                              resolve=escort_crud.resolve_caravaneer):
+    """Steps 1–5 of C1 / C2 / C7; the DB transaction is closed before the gate's HTTP call. ``resolve`` picks the
+    hiring NPC roles (C1 caravaneer, C7 fence, C2 either)."""
+    ctx = await run_in_threadpool(_read, db, lambda: resolve(db, npc_id, character_id, user.id))
     try:
         gate_open = await locations_client.check_npc_gate(character_id, ctx.location_id, npc_id)
     except locations_client.GateUnavailable:
@@ -95,11 +99,23 @@ async def get_caravaneer(
     return await run_in_threadpool(_read, db, lambda: escort_crud.caravaneer_view(db, ctx))
 
 
+@router.get("/caravans/fence/{npc_id}", response_model=schemas.SmugglerViewOut)
+async def get_fence_caravans(
+    npc_id: int = Path(..., ge=1),
+    character_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """FEAT-216 C7: the smuggler hire list of a fence (same gates as C1)."""
+    ctx = await _caravaneer_context(db, npc_id, character_id, current_user, escort_crud.resolve_fence)
+    return await run_in_threadpool(_read, db, lambda: escort_crud.smuggler_view(db, ctx))
+
+
 def _hire(db: Session, ctx, caravan_id: int):
     result = _write(db, lambda: escort_crud.hire(db, ctx, caravan_id), integrity_detail=escort_crud.MSG_NO_REJOIN)
     law_notify.publish([result.notice])
-    logger.info("caravan escort hired: user=%s character=%s caravan=%s npc=%s", ctx.user_id, ctx.character_id,
-                caravan_id, ctx.npc_id)
+    logger.info("caravan escort hired: user=%s character=%s caravan=%s npc=%s role=%s", ctx.user_id,
+                ctx.character_id, caravan_id, ctx.npc_id, ctx.role)
     return {"escort": _read(db, lambda: escort_crud.escort_job(db, ctx.character_id))}
 
 
@@ -110,7 +126,8 @@ async def post_escort_hire(
     db: Session = Depends(get_db),
     current_user: UserRead = Depends(get_current_user_via_http),
 ):
-    ctx = await _caravaneer_context(db, body.npc_id, body.character_id, current_user)
+    ctx = await _caravaneer_context(db, body.npc_id, body.character_id, current_user,
+                                    escort_crud.resolve_hiring_npc)
     out = await run_in_threadpool(_hire, db, ctx, caravan_id)
     if out["escort"] is None:                      # released in between (admin teleport) — practically never
         raise HTTPException(status_code=409, detail=escort_crud.MSG_NOT_ESCORT)

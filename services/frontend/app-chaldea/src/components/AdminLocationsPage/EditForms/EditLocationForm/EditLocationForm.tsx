@@ -55,6 +55,8 @@ interface LocationFormData {
   /** FEAT-213: a sea zone of a hidden country (never a port / starting point). */
   is_sea_zone: boolean;
   port_sea_zone_id: number | null;
+  /** FEAT-216: customs post — legal foreign caravans are inspected here (never on a ship / sea zone). */
+  is_customs: boolean;
   [key: string]: unknown;
 }
 
@@ -75,6 +77,7 @@ interface InitialData {
   is_port?: boolean;
   is_sea_zone?: boolean;
   port_sea_zone_id?: number | null;
+  is_customs?: boolean;
 }
 
 /** Backend `detail` of a rejected thunk (`rejectWithValue(error.response?.data || error.message)`). */
@@ -126,6 +129,7 @@ const EditLocationForm = ({
     is_port: initialData?.is_port ?? false,
     is_sea_zone: initialData?.is_sea_zone ?? false,
     port_sea_zone_id: initialData?.port_sea_zone_id ?? null,
+    is_customs: initialData?.is_customs ?? false,
   });
   const [seaZones, setSeaZones] = useState<SeaZone[]>([]);
   const [seaZonesError, setSeaZonesError] = useState<string | null>(null);
@@ -207,6 +211,7 @@ const EditLocationForm = ({
         is_port: Boolean(currentLocation.is_port),
         is_sea_zone: Boolean(currentLocation.is_sea_zone),
         port_sea_zone_id: (currentLocation.port_sea_zone_id as number | null) ?? null,
+        is_customs: Boolean(currentLocation.is_customs),
       });
       if (currentLocation.map_icon_url && !iconFile) {
         setIconPreview(currentLocation.map_icon_url as string);
@@ -284,7 +289,14 @@ const EditLocationForm = ({
       is_port: checked ? false : prev.is_port,
       port_sea_zone_id: checked ? null : prev.port_sea_zone_id,
       is_starting: checked ? false : prev.is_starting,
+      is_customs: checked ? false : prev.is_customs,
     }));
+  };
+
+  // FEAT-216: a customs post never stands in a sea zone (the backend refuses it with 400).
+  const handleIsCustomsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setFormData((prev) => ({ ...prev, is_customs: checked }));
   };
 
   const handlePortZoneChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -356,6 +368,7 @@ const EditLocationForm = ({
           formData.is_port && !formData.is_sea_zone
             ? formData.port_sea_zone_id ?? (locationId === 'new' ? null : 0)
             : null,
+        is_customs: Boolean(formData.is_customs) && !formData.is_sea_zone,
       };
 
       const action = locationId !== 'new' ? updateLocation : createLocation;
@@ -582,6 +595,26 @@ const EditLocationForm = ({
                   )}
                 </div>
               )}
+            </div>
+
+            {/* FEAT-216: customs post */}
+            <div>
+              <label className="flex items-start gap-2 text-[#d4e6f3] cursor-pointer">
+                <input
+                  type="checkbox"
+                  name="is_customs"
+                  checked={Boolean(formData.is_customs)}
+                  onChange={handleIsCustomsChange}
+                  disabled={Boolean(formData.is_sea_zone)}
+                  className="w-4 h-4 mt-0.5 flex-shrink-0"
+                />
+                <span>Таможня (пост досмотра караванов)</span>
+              </label>
+              <p className="mt-1 ml-6 text-[#8ab3d5]/70 text-xs">
+                Законный караван из другой страны идёт через пост страны назначения, стоит на досмотре и платит
+                пошлину в казну. Порт с таможней досматривает всё, что приходит морем. Контрабандисты посты обходят.
+                Нельзя ставить на корабле и в морской зоне.
+              </p>
             </div>
 
             {(hiddenCountry !== false || formData.is_sea_zone) && (

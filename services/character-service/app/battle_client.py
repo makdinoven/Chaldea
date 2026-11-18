@@ -3,7 +3,8 @@
 * :func:`create_guard_battle` — ``POST /battles/internal/guard`` (async; the encounter choice «драться»);
 * :func:`get_battle_result`   — ``GET /battles/internal/{id}/result`` (sync; the law pass polls lost callbacks);
 * :func:`create_caravan_raid_battle` — ``POST /battles/internal/caravan-raid`` (async; FEAT-211 raid start, B1);
-* :func:`create_sea_raid_battle` — ``POST /battles/internal/sea-raid`` (async; FEAT-214 sea monsters on a deck).
+* :func:`create_sea_raid_battle` — ``POST /battles/internal/sea-raid`` (async; FEAT-214 sea monsters on a deck);
+* :func:`create_customs_battle` — ``POST /battles/internal/customs-fight`` (async; FEAT-216 customs / patrol fight).
 
 Both send ``X-Internal-Token``. Errors are raised as :class:`BattleServiceError` (the caller decides what the player
 sees); a 404 battle is reported as :data:`BATTLE_NOT_FOUND`.
@@ -121,6 +122,40 @@ async def create_sea_raid_battle(sea_raid_id: int, location_id: int, player_char
         data = response.json()
         return {"battle_id": int(data["battle_id"]),
                 "player_character_ids": [int(p) for p in (data.get("player_character_ids") or [])]}
+    except Exception as e:
+        raise BattleServiceError("bad battle-service answer", response.status_code) from e
+
+
+async def create_customs_battle(caravan_raid_id: int, caravan_id: int, location_id: int,
+                                leader_character_id: Optional[int] = None, group: bool = False,
+                                enforcer_npc_ids=(), guard_character_ids=(), escort_character_ids=()) -> dict:
+    """FEAT-216 B1: start a customs fight (``leader_character_id`` = the officer, + his free squad when ``group``) or
+    a patrol fight (``enforcer_npc_ids`` = law guards) on a contraband caravan — exactly one of the two. Team 0 the
+    enforcers, team 1 the caravan mobs + available escorts. No post gate is consumed. Returns
+    ``{"battle_id": int, "attacker_character_ids": [int], "escort_character_ids": [int]}``. Raises
+    :class:`BattleServiceError` (409 «Защитников каравана нет» → the caller confiscates without a fight)."""
+    url = f"{_base_url()}/battles/internal/customs-fight"
+    payload = {"caravan_raid_id": int(caravan_raid_id), "caravan_id": int(caravan_id), "location_id": int(location_id),
+               "leader_character_id": int(leader_character_id) if leader_character_id is not None else None,
+               "group": bool(group),
+               "enforcer_npc_ids": [int(n) for n in (enforcer_npc_ids or ())],
+               "guard_character_ids": [int(g) for g in (guard_character_ids or ())],
+               "escort_character_ids": [int(e) for e in (escort_character_ids or ())]}
+    try:
+        async with httpx.AsyncClient(timeout=BATTLE_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=payload, headers=_internal_headers())
+    except Exception as e:
+        logger.error("customs battle create failed (raid %s): %s", caravan_raid_id, e)
+        raise BattleServiceError("battle-service unavailable") from e
+    if response.status_code >= 400:
+        logger.warning("customs battle create refused (raid %s): %s %s", caravan_raid_id,
+                       response.status_code, response.text[:200])
+        raise BattleServiceError("customs battle refused", response.status_code, _detail(response))
+    try:
+        data = response.json()
+        return {"battle_id": int(data["battle_id"]),
+                "attacker_character_ids": [int(a) for a in (data.get("attacker_character_ids") or [])],
+                "escort_character_ids": [int(e) for e in (data.get("escort_character_ids") or [])]}
     except Exception as e:
         raise BattleServiceError("bad battle-service answer", response.status_code) from e
 

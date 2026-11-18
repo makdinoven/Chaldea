@@ -23,6 +23,7 @@ export const NPC_ROLES = [
   { value: 'fence', label: 'Скупщик' },
   { value: 'caravaneer', label: 'Караванщик' },
   { value: 'captain', label: 'Капитан' },
+  { value: 'customs', label: 'Таможенник' },
 ] as const;
 
 export const NPC_ROLE_LABELS: Record<string, string> = Object.fromEntries(
@@ -54,6 +55,7 @@ export const NPC_ROLE_ICONS: Record<string, string> = {
   fence: '🎭',
   caravaneer: '🐫',
   captain: '⚓',
+  customs: '🛃',
 };
 
 export const NPC_SEXES = [

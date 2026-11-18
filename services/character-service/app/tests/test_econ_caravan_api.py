@@ -151,7 +151,8 @@ def test_overview_defaults(api, world):
                "caravan_travel_foreign": 2, "caravan_min_value": 10, "caravan_max_per_run": 200}
     # FEAT-211 3.14 extends the caravan card with the physical caravan / raid keys
     assert {k: data["params"][k] for k in feat192} == feat192
-    assert set(data["params"]) == set(crud.CARAVAN_PARAM_KEYS)
+    # FEAT-216 3.5 adds the customs keys to the same card
+    assert set(data["params"]) == set(crud.CARAVAN_PARAM_KEYS) | set(crud.CUSTOMS_PARAM_KEYS)
     assert data["escrow"] == {"balance": 0, "expected": 0, "ok": True}
     assert data["in_transit"] == {"count": 0, "value": 0, "duty": 0}
     assert data["last_run"] is None
@@ -298,7 +299,11 @@ def test_list_newest_first_with_names(listed):
                           "sea_stage", "sea_split_index", "sea_board_port_id", "sea_board_port_name",
                           "sea_alight_port_id", "sea_alight_port_name", "sea_ship_id", "sea_ship_name",
                           "sea_waiting_since", "sea_wait_deadline", "sea_boarded_at", "sea_unloaded_at",
-                          "freight", "freight_paid", "sunk_units"}
+                          "freight", "freight_paid", "sunk_units",
+                          # FEAT-216 A3
+                          "is_contraband", "markup_pct", "customs_state", "customs_index", "customs_location_id",
+                          "customs_location_name", "customs_until", "duty_paid", "customs_alert_until",
+                          "seized_region_id", "seized_region_name", "seized_country_id", "seized_country_name"}
     assert (first["status"], first["group_name"], first["from_region_name"], first["to_region_name"],
             first["from_country_name"], first["finished_run_id"], first["cancel_reason"], first["goods_returned"]) == \
         ("delivered", "Продовольствие", "Регион 1", "Регион 2", "Мидденгерд", 2, None, None)

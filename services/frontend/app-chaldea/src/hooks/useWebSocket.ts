@@ -124,13 +124,17 @@ const bellLink = (type: string, data: BellEventData): string | undefined => {
       return typeof data.user_id === 'number' ? `/user-profile/${data.user_id}` : undefined;
     case 'character_request_rejected':
       return '/my-requests';
+    // FEAT-216: a customs officer noticed a suspicious caravan — «Досмотреть» waits in that location.
+    case 'customs_alert':
+      return typeof data.location_id === 'number' ? `/location/${data.location_id}` : undefined;
     default:
       return undefined;
   }
 };
 
-/** Events about fighting get the battle sound. */
-const isBattleEvent = (type: string) => type.startsWith('pvp_') || type.startsWith('battle_');
+/** Events about fighting get the battle sound (FEAT-216: the customs alert calls the officer to a fight). */
+const isBattleEvent = (type: string) =>
+  type.startsWith('pvp_') || type.startsWith('battle_') || type === 'customs_alert';
 
 interface UseWebSocketReturn {
   connected: boolean;

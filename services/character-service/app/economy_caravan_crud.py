@@ -45,6 +45,13 @@ sub-invariant becomes ``escrow == Σ (paid_purse + paid_treasury − raid_paid �
 econ_region_events → econ_caravans (asc) → econ_caravan_raids → econ_caravan_escorts (asc) → econ_caravan_sea_losses →
 sea_raids → … → characters (asc, ONE sorted call) → econ_accounts (asc) → character_attributes``; nothing in this module
 locks ``sea_ships``.
+
+FEAT-216 customs (§3.2, §3.3): a legal caravan pays its duty physically at a customs post (op ``caravan_duty``,
+``duty_paid``); the sub-invariant becomes ``escrow == Σ (paid_purse + paid_treasury − raid_paid − freight_paid −
+duty_paid)``. Global lock order (supersedes the FEAT-215 one): ``sea_ships → sea_passes → econ_regions (asc) →
+econ_region_goods (asc) → econ_region_events → econ_caravans (asc) → econ_caravan_raids → econ_caravan_escorts (asc) →
+econ_customs_officers (asc character_id) → econ_caravan_raid_shares → econ_caravan_sea_losses → sea_raids → … →
+characters (asc, ONE sorted call) → econ_accounts (asc) → character_attributes``. ``econ_country_bans`` is never locked.
 """
 
 import json
@@ -56,10 +63,11 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 import caravan_route
+import customs_core
 import econ_caravan
 import econ_core as core
 import econ_events
@@ -120,12 +128,22 @@ CARAVAN_PARAM_KEYS = (
     "caravan_no_path_abstract",
 )
 
+# FEAT-216 customs & smuggling (3.5) — shown in the same admin caravan params card
+CUSTOMS_PARAM_KEYS = (
+    "customs_enabled", "customs_inspection_minutes", "customs_contraband_share", "customs_contraband_markup_pct",
+    "customs_caravan_stealth", "customs_detect_base_pct", "customs_detect_min_pct", "customs_detect_max_pct",
+    "customs_patrol_detect_pct", "customs_alert_minutes", "customs_officer_share", "customs_seizure_fame",
+    "customs_smuggler_fee_share", "customs_smuggling_wanted_points",
+)
+
 # FEAT-211 physical caravans
 STEP_JITTER_PCT = 25                       # ± jitter of caravan_step_minutes (patrol_core.next_delay)
 RAID_ACTIVE_STATUSES = ("starting", "fighting")
+HELD_RAID, HELD_POST, HELD_CUSTOMS = "raid", "post", "customs"    # held_by(); customs = FEAT-216 detection alert
 GATE_ACTION_CARAVAN = "caravan"            # locations-service action_gates.action_type / post gate requests
 MARKER_DUNGEON = "dungeon"
 KIND_ALL, KIND_PHYSICAL, KIND_ABSTRACT, KIND_SEA = "all", "physical", "abstract", "sea"
+KIND_CONTRABAND = "contraband"             # FEAT-216 A3: admin list filter
 GUARD_POOL_MAX = 20
 
 MSG_REGION_NOT_FOUND = "Край не найден"
@@ -194,12 +212,14 @@ def _region_country(db: Session, region_id: int) -> Optional[int]:
 # =====================================================================================================================
 
 def escrow_expected(db: Session) -> int:
-    """Σ (paid_purse + paid_treasury − raid_paid − freight_paid) of caravans on the road (FEAT-211: a raid pays raiders
-    out of the escrow; FEAT-215: a charged sea freight left it for the port treasury); 0 before migration 035."""
+    """Σ (paid_purse + paid_treasury − raid_paid − freight_paid − duty_paid) of caravans on the road (FEAT-211: a raid
+    pays raiders out of the escrow; FEAT-215: a charged sea freight left it for the port treasury; FEAT-216: a duty
+    paid at a customs post left it for the destination country); 0 before migration 035."""
     if not caravans_available(db):
         return 0
     return _i(db.execute(text(
-        "SELECT COALESCE(SUM(paid_purse + paid_treasury - raid_paid - freight_paid), 0) FROM econ_caravans "
+        "SELECT COALESCE(SUM(paid_purse + paid_treasury - raid_paid - freight_paid - duty_paid), 0) "
+        "FROM econ_caravans "
         "WHERE status = :s"), {"s": STATUS_IN_TRANSIT}).scalar())
 
 
@@ -238,6 +258,67 @@ class Snapshot:
     markets: Dict[int, econ_caravan.RegionMarket] = field(default_factory=dict)
     inbound: Dict[Tuple[int, str], float] = field(default_factory=dict)
     pairs: Dict[Tuple[int, int], econ_caravan.PairRule] = field(default_factory=dict)
+    bans: Dict[int, frozenset] = field(default_factory=dict)      # FEAT-216: {country_id: banned group codes}
+
+
+def _optional_rows(db: Session, sql: str, params: Optional[dict] = None):
+    """Rows of a read whose table / column may be absent (deploy skew, SQLite fixtures): absent → None. Runs in a
+    SAVEPOINT so a failed read does not poison the caller's transaction (``sea_crud._rows`` pattern)."""
+    try:
+        with db.begin_nested():
+            return db.execute(text(sql), params or {}).fetchall()
+    except DBAPIError:
+        return None
+
+
+def load_bans(db: Session) -> Dict[int, frozenset]:
+    """FEAT-216: ``{country_id: frozenset(group codes)}`` of ``econ_country_bans`` (table missing → ``{}``)."""
+    rows = _optional_rows(db, "SELECT country_id, group_code FROM econ_country_bans")
+    out: Dict[int, set] = {}
+    for country_id, code in rows or ():
+        if country_id is None or not code:
+            continue
+        out.setdefault(int(country_id), set()).add(str(code))
+    return {cid: frozenset(codes) for cid, codes in out.items()}
+
+
+def country_bans_group(db: Session, country_id: Optional[int], group_code: str) -> bool:
+    """FEAT-216 dispatch re-check: is ``group_code`` banned in ``country_id`` now (table missing → no)."""
+    if country_id is None or not group_code:
+        return False
+    rows = _optional_rows(db, "SELECT 1 FROM econ_country_bans WHERE country_id = :c AND group_code = :g",
+                          {"c": int(country_id), "g": str(group_code)})
+    return bool(rows)
+
+
+@dataclass
+class CustomsPosts:
+    """FEAT-216: customs posts (``Locations.is_customs``) by country + the customs ports (``is_customs AND is_port``).
+    A post whose location resolves to no country is ignored (it belongs to nobody, nobody routes through it)."""
+
+    by_country: Dict[int, List[int]] = field(default_factory=dict)
+    ports: set = field(default_factory=set)
+
+    @property
+    def all(self) -> set:
+        return {loc for locs in self.by_country.values() for loc in locs}
+
+
+def load_customs_posts(db: Session) -> CustomsPosts:
+    """``Locations.is_customs`` by raw SQL (locations-service column, migration 061); the column missing (deploy
+    skew, test fixtures without it) → no posts at all. The country of a post = ``econ_ledger.resolve_location``."""
+    posts = CustomsPosts()
+    rows = _optional_rows(db, "SELECT id, is_port FROM Locations WHERE is_customs = 1 ORDER BY id")
+    if rows is None:
+        rows = _optional_rows(db, "SELECT id, 0 FROM Locations WHERE is_customs = 1 ORDER BY id")
+    for loc_id, is_port in rows or ():
+        _region, country = econ_ledger.resolve_location(db, int(loc_id))
+        if country is None:
+            continue
+        posts.by_country.setdefault(int(country), []).append(int(loc_id))
+        if is_port:
+            posts.ports.add(int(loc_id))
+    return posts
 
 
 def _halted_regions(active_map: Mapping[int, Sequence], group_codes: Sequence[str], params) -> set:
@@ -301,6 +382,7 @@ def load_snapshot(db: Session, run_id: int, params, groups: Mapping[str, econ_si
             "GROUP BY to_region_id, group_code"), {"s": STATUS_IN_TRANSIT}).fetchall():
         snap.inbound[(int(rid), code)] = _f(units)
     snap.pairs = enabled_pairs(db)
+    snap.bans = load_bans(db)
     return snap
 
 
@@ -385,20 +467,21 @@ def load_road_graph(db: Session) -> RoadGraph:
 
 
 def region_gates(db: Session, region_ids: Optional[Sequence[int]] = None) -> Dict[int, dict]:
-    """``{region_id: {override, station, gate, source}}`` of the simulated regions (``econ_regions`` rows that still
-    exist in ``Regions``): override = ``econ_regions.trade_gate_location_id``, station = ``Regions.jail_location_id``."""
+    """``{region_id: {override, station, gate, source, country_id}}`` of the simulated regions (``econ_regions`` rows
+    that still exist in ``Regions``): override = ``econ_regions.trade_gate_location_id``, station =
+    ``Regions.jail_location_id``; FEAT-216: ``country_id`` = ``Regions.country_id`` (the customs routing needs it)."""
     rows = db.execute(text(
-        "SELECT e.region_id, e.trade_gate_location_id, r.jail_location_id FROM econ_regions e "
+        "SELECT e.region_id, e.trade_gate_location_id, r.jail_location_id, r.country_id FROM econ_regions e "
         "JOIN Regions r ON r.id = e.region_id ORDER BY e.region_id")).fetchall()
     wanted = {int(r) for r in region_ids} if region_ids is not None else None
     out: Dict[int, dict] = {}
-    for rid, override, station in rows:
+    for rid, override, station, country in rows:
         rid = int(rid)
         if wanted is not None and rid not in wanted:
             continue
         gate, source = caravan_route.effective_gate(override, station)
         out[rid] = {"override": int(override) if override else None, "station": int(station) if station else None,
-                    "gate": gate, "source": source}
+                    "gate": gate, "source": source, "country_id": int(country) if country is not None else None}
     return out
 
 
@@ -417,6 +500,7 @@ class SeaRoute:
     board_port: int
     alight_port: int
     zones: int
+    customs_offset: Optional[int] = None    # FEAT-216: index of the customs post inside land2 (0 = the landing port)
 
     @property
     def route(self) -> List[int]:
@@ -426,15 +510,34 @@ class SeaRoute:
     def split_index(self) -> int:
         return len(self.land1) - 1
 
+    @property
+    def customs_index(self) -> Optional[int]:
+        """FEAT-216: route index of the customs post (None = no post on the route)."""
+        if self.customs_offset is None:
+            return None
+        return len(self.land1) + int(self.customs_offset)
+
 
 class RoutePlanner:
     """Graph + gates + the number of physical caravans on the road; built once per caravan pass of the tick.
     FEAT-215: plus the per-run sea pairs (``{(board port, alight port): sea_cargo.SeaPair}``), whether physical
-    caravans run at all (sea caravans are always physical) and the sea freight %."""
+    caravans run at all (sea caravans are always physical) and the sea freight %.
+
+    FEAT-216 (§3.0 A5 / A7 / A8): plus the customs posts by country, the customs ports and the master switch.
+    * legal routes (:meth:`legal_route`, :meth:`sea_route`): a **foreign** caravan bound for a country with posts goes
+      through the post ``P`` of that country minimising ``len(leg(gate_A, P)) + len(leg(P, gate_B))`` (ties by id); by
+      sea, land leg 2 passes the landing port if it is such a post, else the best ``leg(alight, P) + leg(P, goal)``;
+      no post reachable → no legal route of that kind;
+    * contraband routes (:meth:`contraband_route`, :meth:`contraband_sea_route`, :meth:`contraband_reach`): every post
+      of every country is blocked; the buyer gate / landing port must not be a post, the seller gate / boarding port
+      may be one (exports are not inspected); physical caravans off → no contraband at all;
+    * ``customs_enabled`` false or no posts → exactly the pre-FEAT-216 routes."""
 
     def __init__(self, graph: RoadGraph, gates: Mapping[int, dict], active: int, max_steps: int,
                  sea_pairs: Optional[Mapping[Tuple[int, int], object]] = None, *, sea_enabled: bool = True,
-                 freight_pct: float = 0.0, max_active: Optional[int] = None, abstract_fallback: bool = False):
+                 freight_pct: float = 0.0, max_active: Optional[int] = None, abstract_fallback: bool = False,
+                 posts_by_country: Optional[Mapping[int, Sequence[int]]] = None,
+                 customs_ports: Optional[Sequence[int]] = None, customs_enabled: bool = False):
         self.graph = graph
         self.gates = dict(gates)
         self.active = int(active)
@@ -444,15 +547,30 @@ class RoutePlanner:
         self.freight_pct = max(0.0, float(freight_pct or 0.0))
         self.max_active = None if max_active is None else max(0, int(max_active))
         self.abstract_fallback = bool(abstract_fallback)
+        self.customs_enabled = bool(customs_enabled)
+        self.posts_by_country: Dict[int, List[int]] = {
+            int(c): sorted({int(x) for x in locs}) for c, locs in (posts_by_country or {}).items() if locs}
+        self.all_posts = {loc for locs in self.posts_by_country.values() for loc in locs}
+        self.customs_ports = {int(x) for x in (customs_ports or ())}
         self._cache: Dict[Tuple[int, int], Tuple[Optional[List[int]], Optional[str]]] = {}
         self._leg_cache: Dict[Tuple[int, int], Optional[List[int]]] = {}
         self._sea_cache: Dict[Tuple[int, int], Optional[SeaRoute]] = {}
+        self._legal_cache: Dict[Tuple[int, int], Tuple[Optional[List[int]], Optional[int], Optional[str]]] = {}
+        self._smuggle_cache: Dict[Tuple[int, int], Tuple[Optional[List[int]], Optional[str]]] = {}
+        self._smuggle_leg_cache: Dict[Tuple[int, int], Optional[List[int]]] = {}
+        self._smuggle_sea_cache: Dict[Tuple[int, int], Optional[SeaRoute]] = {}
 
     def gate(self, region_id: int) -> Optional[int]:
         info = self.gates.get(int(region_id))
         return info["gate"] if info else None
 
+    def country(self, region_id: int) -> Optional[int]:
+        info = self.gates.get(int(region_id))
+        value = info.get("country_id") if info else None
+        return int(value) if value is not None else None
+
     def route(self, from_region_id: int, to_region_id: int) -> Tuple[Optional[List[int]], Optional[str]]:
+        """The plain shortest road between the two gates (no customs rule; admin «roads» view)."""
         key = (int(from_region_id), int(to_region_id))
         if key not in self._cache:
             start, goal = self.gate(key[0]), self.gate(key[1])
@@ -475,29 +593,105 @@ class RoutePlanner:
                 self._leg_cache[key] = path
         return self._leg_cache[key]
 
+    def _smuggle_leg(self, start: int, goal: int) -> Optional[List[int]]:
+        """:meth:`_leg` that never walks through a customs post (the endpoints are allowed, as in any BFS)."""
+        key = (int(start), int(goal))
+        if key not in self._smuggle_leg_cache:
+            if key[0] == key[1]:
+                self._smuggle_leg_cache[key] = [key[0]]
+            else:
+                path, _reason = caravan_route.shortest_route(self.graph.adj, self.graph.blocked | self.all_posts,
+                                                             key[0], key[1], self.max_steps)
+                self._smuggle_leg_cache[key] = path
+        return self._smuggle_leg_cache[key]
+
+    def destination_posts(self, from_region_id: int, to_region_id: int) -> List[int]:
+        """FEAT-216 A5: the posts a legal caravan between the two regions must pass — those of the destination
+        country, for a foreign pair only, with customs on; else ``[]`` (no post rule)."""
+        if not self.customs_enabled or not self.posts_by_country:
+            return []
+        from_country, to_country = self.country(from_region_id), self.country(to_region_id)
+        if from_country is None or to_country is None or from_country == to_country:
+            return []
+        return self.posts_by_country.get(to_country, [])
+
+    def _via_post(self, start: int, goal: int, posts: Sequence[int]) -> Tuple[Optional[List[int]], Optional[int]]:
+        """Shortest ``leg(start, P) + leg(P, goal)`` over ``posts`` (ties by P id); ``(path, index of P)`` or
+        ``(None, None)``. The total stays within ``max_steps`` hops."""
+        best = None
+        for post in sorted(posts):
+            first = self._leg(start, post)
+            if first is None:
+                continue
+            second = self._leg(post, goal)
+            if second is None:
+                continue
+            hops = (len(first) - 1) + (len(second) - 1)
+            if hops > max(1, self.max_steps):
+                continue
+            rank = (hops, int(post))
+            if best is None or rank < best[0]:
+                best = (rank, list(first) + list(second[1:]), len(first) - 1)
+        if best is None:
+            return None, None
+        return best[1], best[2]
+
+    def legal_route(self, from_region_id: int, to_region_id: int
+                    ) -> Tuple[Optional[List[int]], Optional[int], Optional[str]]:
+        """FEAT-216 A5: ``(route, customs_index, None)`` of a legal land caravan (``customs_index`` None = no post on
+        the route) or ``(None, None, reason)``. Without a post rule it is :meth:`route` exactly."""
+        key = (int(from_region_id), int(to_region_id))
+        if key not in self._legal_cache:
+            posts = self.destination_posts(*key)
+            if not posts:
+                road, reason = self.route(*key)
+                self._legal_cache[key] = (road, None, reason)
+            else:
+                start, goal = self.gate(key[0]), self.gate(key[1])
+                if not start or not goal or int(start) == int(goal):
+                    self._legal_cache[key] = (None, None, caravan_route.NO_ROAD_NO_GATE)
+                else:
+                    path, index = self._via_post(int(start), int(goal), posts)
+                    if path is None:
+                        self._legal_cache[key] = (None, None, caravan_route.NO_ROAD_NO_PATH)
+                    else:
+                        self._legal_cache[key] = (path, index, None)
+        return self._legal_cache[key]
+
     def sea_route(self, from_region_id: int, to_region_id: int) -> Optional[SeaRoute]:
         """The cheapest sea route between the two regions' gates over the per-run sea pairs: minimal
-        ``len(land1) + len(land2) + zones``, ties by (board port, alight port). None without gates / pairs."""
+        ``len(land1) + len(land2) + zones``, ties by (board port, alight port). None without gates / pairs.
+        FEAT-216 A7: with a post rule, land leg 2 must pass a post of the destination country — the landing port
+        itself when it is one, else the best ``leg(alight, P) + leg(P, goal)`` (ties by P); ``customs_offset`` set."""
         key = (int(from_region_id), int(to_region_id))
         if key in self._sea_cache:
             return self._sea_cache[key]
         best: Optional[SeaRoute] = None
         best_key = None
         start, goal = self.gate(key[0]), self.gate(key[1])
+        posts = self.destination_posts(*key)
         if start and goal and self.sea_pairs:
             for (board, alight) in sorted(self.sea_pairs):
                 pair = self.sea_pairs[(board, alight)]
                 land1 = self._leg(start, board)
                 if land1 is None:
                     continue
-                land2 = self._leg(alight, goal)
+                offset = None
+                post_id = 0
+                if not posts:
+                    land2 = self._leg(alight, goal)
+                elif int(alight) in posts:
+                    land2, offset, post_id = self._leg(alight, goal), 0, int(alight)
+                else:
+                    land2, offset = self._via_post(int(alight), int(goal), posts)
+                    post_id = int(land2[offset]) if land2 is not None else 0
                 if land2 is None:
                     continue
                 zones = int(getattr(pair, "zones", 0) or 0)
-                rank = (len(land1) + len(land2) + zones, int(board), int(alight))
+                rank = (len(land1) + len(land2) + zones, int(board), int(alight), post_id)
                 if best_key is None or rank < best_key:
                     best_key = rank
-                    best = SeaRoute(list(land1), list(land2), int(board), int(alight), zones)
+                    best = SeaRoute(list(land1), list(land2), int(board), int(alight), zones, offset)
         self._sea_cache[key] = best
         return best
 
@@ -510,8 +704,8 @@ class RoutePlanner:
     def reach(self, from_region_id: int, to_region_id: int) -> Optional[econ_caravan.Reach]:
         """FEAT-215 §3.3: a land road → land; else (physical caravans on) a sea route → sea with the freight %;
         else, with ``abstract_fallback`` (``caravan_no_path_abstract``), an abstract land deal (the world is not fully
-        drawn yet); else None (no deal)."""
-        road, _reason = self.route(from_region_id, to_region_id)
+        drawn yet); else None (no deal). FEAT-216: the land road is the :meth:`legal_route` (via a post)."""
+        road, _index, _reason = self.legal_route(from_region_id, to_region_id)
         if road is not None:
             return econ_caravan.Reach(econ_caravan.REACH_LAND, 0.0)
         if self.sea_enabled and self.sea_route(from_region_id, to_region_id) is not None:
@@ -520,16 +714,77 @@ class RoutePlanner:
             return econ_caravan.Reach(econ_caravan.REACH_LAND, 0.0)
         return None
 
+    # ------------------------------------------------------------------------------------------- FEAT-216 contraband
+
+    def contraband_route(self, from_region_id: int, to_region_id: int) -> Tuple[Optional[List[int]], Optional[str]]:
+        """A8: the shortest road between the gates that walks through no customs post; the buyer gate must not be a
+        post (the seller gate may be)."""
+        key = (int(from_region_id), int(to_region_id))
+        if key not in self._smuggle_cache:
+            start, goal = self.gate(key[0]), self.gate(key[1])
+            if not start or not goal:
+                self._smuggle_cache[key] = (None, caravan_route.NO_ROAD_NO_GATE)
+            elif int(goal) in self.all_posts:
+                self._smuggle_cache[key] = (None, caravan_route.NO_ROAD_NO_PATH)
+            else:
+                self._smuggle_cache[key] = caravan_route.shortest_route(
+                    self.graph.adj, self.graph.blocked | self.all_posts, start, goal, self.max_steps)
+        return self._smuggle_cache[key]
+
+    def contraband_sea_route(self, from_region_id: int, to_region_id: int) -> Optional[SeaRoute]:
+        """A8: like :meth:`sea_route` with both land legs avoiding every post; the landing port and the buyer gate
+        must not be posts (the boarding port may be). Never has a customs offset."""
+        key = (int(from_region_id), int(to_region_id))
+        if key in self._smuggle_sea_cache:
+            return self._smuggle_sea_cache[key]
+        best: Optional[SeaRoute] = None
+        best_key = None
+        start, goal = self.gate(key[0]), self.gate(key[1])
+        if start and goal and self.sea_pairs and int(goal) not in self.all_posts:
+            for (board, alight) in sorted(self.sea_pairs):
+                if int(alight) in self.all_posts or int(alight) in self.customs_ports:
+                    continue
+                pair = self.sea_pairs[(board, alight)]
+                land1 = self._smuggle_leg(start, board)
+                if land1 is None:
+                    continue
+                land2 = self._smuggle_leg(alight, goal)
+                if land2 is None:
+                    continue
+                zones = int(getattr(pair, "zones", 0) or 0)
+                rank = (len(land1) + len(land2) + zones, int(board), int(alight))
+                if best_key is None or rank < best_key:
+                    best_key = rank
+                    best = SeaRoute(list(land1), list(land2), int(board), int(alight), zones)
+        self._smuggle_sea_cache[key] = best
+        return best
+
+    def contraband_reach(self, from_region_id: int, to_region_id: int) -> Optional[econ_caravan.Reach]:
+        """A8: contraband is physical only — physical caravans off → None; a post-free road → land; else a post-free
+        sea route → sea with the freight %; else None (never abstract)."""
+        if not self.sea_enabled:
+            return None
+        road, _reason = self.contraband_route(from_region_id, to_region_id)
+        if road is not None:
+            return econ_caravan.Reach(econ_caravan.REACH_LAND, 0.0)
+        if self.contraband_sea_route(from_region_id, to_region_id) is not None:
+            return econ_caravan.Reach(econ_caravan.REACH_SEA, self.freight_pct)
+        return None
+
 
 def build_planner(db: Session, params) -> RoutePlanner:
-    """Land graph + gates + active physical caravans + (FEAT-215) the sea pairs of the active ships."""
+    """Land graph + gates + active physical caravans + (FEAT-215) the sea pairs of the active ships + (FEAT-216) the
+    customs posts (only loaded with ``customs_enabled``)."""
     import sea_cargo  # late: sea modules import the economy ones
+    customs_on = bool(int(getattr(params, "customs_enabled", 0) or 0))
+    posts = load_customs_posts(db) if customs_on else CustomsPosts()
     return RoutePlanner(load_road_graph(db), region_gates(db), active_physical_count(db),
                         int(params.caravan_route_max_steps), sea_cargo.sea_pairs(db),
                         sea_enabled=bool(int(params.caravan_physical_enabled)),
                         freight_pct=float(getattr(params, "caravan_sea_freight_pct", 0.0) or 0.0),
                         max_active=int(params.caravan_physical_max_active),
-                        abstract_fallback=bool(int(getattr(params, "caravan_no_path_abstract", 0) or 0)))
+                        abstract_fallback=bool(int(getattr(params, "caravan_no_path_abstract", 0) or 0)),
+                        posts_by_country=posts.by_country, customs_ports=posts.ports, customs_enabled=customs_on)
 
 
 def step_delay(params, u: float) -> timedelta:
@@ -552,7 +807,14 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
     caravan may go by road (3.2) — the route is stored on the row and the planner is NOT updated here (the caller
     counts it after the commit). FEAT-215: with a planner, no land road → a sea route (always physical, needs
     physical caravans on and a free slot) → else skipped («морской путь пропал до отправки»); a plan whose kind does
-    not match what the planner sees now is skipped too."""
+    not match what the planner sees now is skipped too.
+
+    FEAT-216 (§3.6): a legal plan whose group became banned in the buyer's country is skipped; its land road is the
+    planner's ``legal_route`` (via a customs post of the destination country) and a physical caravan with a post on
+    its route stores ``customs_index`` / ``customs_location_id`` / ``customs_state = 'pending'``. A contraband plan is
+    re-validated (customs on, physical caravans on, still foreign, still blocked — closed pair or banned group —, a
+    post-free route of the planned kind, a free physical slot) else skipped; it is always physical (no
+    ``choose_physical``), carries no duty and stores ``is_contraband`` / ``markup_pct``."""
     regions = _lock_regions(db, [plan.from_region_id, plan.to_region_id])
     seller, buyer = regions.get(plan.from_region_id), regions.get(plan.to_region_id)
     for region in (seller, buyer):
@@ -573,7 +835,14 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
         if rule is not None:
             pairs[(rule.country_a, rule.country_b)] = rule
     way = econ_caravan.route(from_country, to_country, pairs, params)
-    if way is None:
+    customs_on = bool(int(getattr(params, "customs_enabled", 0) or 0))
+    banned = (customs_on and from_country != to_country
+              and country_bans_group(db, to_country, plan.group_code))
+    if plan.contraband:
+        return _dispatch_contraband(db, plan, goods, run_id=run_id, params=params, now=now, planner=planner,
+                                    from_country=from_country, to_country=to_country,
+                                    blocked=way is None or banned, customs_on=customs_on)
+    if way is None or banned:
         return DispatchResult("skipped")
     if (way.duty_pct != plan.duty_pct or way.travel_runs != plan.travel_runs or from_country != plan.from_country_id
             or to_country != plan.to_country_id):
@@ -581,8 +850,9 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
                        to_country_id=to_country)
 
     road = sea = None
+    customs_index = None
     if planner is not None:
-        road, _reason = planner.route(plan.from_region_id, plan.to_region_id)
+        road, customs_index, _reason = planner.legal_route(plan.from_region_id, plan.to_region_id)
         if road is None:
             if int(params.caravan_physical_enabled):
                 sea = planner.sea_route(plan.from_region_id, plan.to_region_id)
@@ -605,7 +875,24 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
     if final is None:
         return DispatchResult("skipped")
 
-    row = models.EconCaravan(
+    row = _new_row(final, run_id=run_id, now=now)
+    physical = False
+    if sea is not None:
+        physical = True
+        _make_sea(row, sea, final, run_id=run_id, params=params, now=now)
+        _set_customs(row, sea.route, sea.customs_index)
+    elif planner is not None:
+        u = econ_caravan.physical_roll(run_id, final.from_region_id, final.to_region_id, final.group_code)
+        physical = econ_caravan.choose_physical(final.value, final.from_country_id, final.to_country_id,
+                                                road is not None, planner.active, params, u)
+        if physical:
+            _make_land(row, road, final, run_id=run_id, params=params, now=now)
+            _set_customs(row, road, customs_index)
+    return _insert_and_pay(db, row, final, goods, run_id=run_id, physical=physical, sea=sea is not None)
+
+
+def _new_row(final: econ_caravan.CaravanPlan, *, run_id: int, now: datetime) -> "models.EconCaravan":
+    return models.EconCaravan(
         dispatch_run_id=int(run_id), from_region_id=final.from_region_id, to_region_id=final.to_region_id,
         from_country_id=final.from_country_id, to_country_id=final.to_country_id, group_code=final.group_code,
         units=_dec3(final.units), unit_price=Decimal(str(final.unit_price)), value=final.value, duty=final.duty,
@@ -613,32 +900,91 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
         paid_treasury=final.paid_treasury, travel_runs=final.travel_runs, runs_left=final.travel_runs,
         last_run_id=int(run_id), status=STATUS_IN_TRANSIT, created_at=now, freight=int(final.freight),
     )
-    physical = False
+
+
+def _make_land(row, road: Sequence[int], final: econ_caravan.CaravanPlan, *, run_id: int, params,
+               now: datetime) -> None:
+    u = econ_caravan.physical_roll(run_id, final.from_region_id, final.to_region_id, final.group_code)
+    row.is_physical = True
+    row.route = [int(x) for x in road]
+    row.route_index = 0
+    row.current_location_id = int(road[0])
+    row.next_move_at = now + departure_delay(params, u)
+    row.guard_count = econ_caravan.guard_count(final.value, params)
+
+
+def _make_sea(row, sea: SeaRoute, final: econ_caravan.CaravanPlan, *, run_id: int, params, now: datetime) -> None:
+    u = econ_caravan.physical_roll(run_id, final.from_region_id, final.to_region_id, final.group_code)
+    route_ids = sea.route
+    row.is_physical = True
+    row.route = route_ids
+    row.route_index = 0
+    row.current_location_id = int(route_ids[0])
+    row.next_move_at = now + departure_delay(params, u)
+    row.guard_count = econ_caravan.guard_count(final.value, params)
+    row.sea_stage = SEA_TO_PORT
+    row.sea_split_index = sea.split_index
+    row.sea_board_port_id = int(sea.board_port)
+    row.sea_alight_port_id = int(sea.alight_port)
+
+
+def _set_customs(row, route_ids: Sequence[int], customs_index: Optional[int]) -> None:
+    """FEAT-216: a legal physical caravan with a customs post on its route (pending inspection at ``customs_index``)."""
+    if customs_index is None:
+        return
+    row.customs_index = int(customs_index)
+    row.customs_location_id = int(route_ids[int(customs_index)])
+    row.customs_state = customs_core.STATE_PENDING
+
+
+def _dispatch_contraband(db: Session, plan: econ_caravan.CaravanPlan, goods, *, run_id: int, params, now: datetime,
+                         planner: Optional[RoutePlanner], from_country: int, to_country: int, blocked: bool,
+                         customs_on: bool) -> DispatchResult:
+    """FEAT-216 §3.6: re-validate and send a smugglers' caravan (regions + seller goods already locked)."""
+    if (not customs_on or planner is None or not int(params.caravan_physical_enabled)
+            or from_country == to_country or not blocked):
+        return DispatchResult("skipped")
+    if planner.active >= max(0, int(params.caravan_physical_max_active)):
+        return DispatchResult("skipped")
+    road, _reason = planner.contraband_route(plan.from_region_id, plan.to_region_id)
+    sea = None
+    if road is not None:
+        if plan.is_sea:
+            return DispatchResult("skipped")       # the reach changed since planning (a post-free road appeared)
+    else:
+        sea = planner.contraband_sea_route(plan.from_region_id, plan.to_region_id)
+        if sea is None or not plan.is_sea:
+            return DispatchResult("skipped")
+    travel = max(1, int(params.caravan_travel_foreign))
+    if (plan.duty_pct != 0.0 or plan.travel_runs != travel or from_country != plan.from_country_id
+            or to_country != plan.to_country_id):
+        plan = replace(plan, duty_pct=0.0, travel_runs=travel, from_country_id=from_country, to_country_id=to_country)
+
+    purse_ref = core.AccountRef.purse(plan.to_region_id)
+    treasury_ref = core.AccountRef.region(plan.to_region_id)
+    escrow_ref = core.AccountRef.caravan_escrow()
+    balances = _lock_balances(db, [purse_ref, treasury_ref, escrow_ref])
+    final = econ_caravan.clamp_dispatch(plan, _f(goods.stock), _f(goods.norm_stock), balances[purse_ref],
+                                        balances[treasury_ref], min_value=int(params.caravan_min_value))
+    if final is None:
+        return DispatchResult("skipped")
+    row = _new_row(final, run_id=run_id, now=now)
+    row.is_contraband = True
+    row.markup_pct = Decimal(str(round(float(final.markup_pct or 0.0), 2)))
     if sea is not None:
-        u = econ_caravan.physical_roll(run_id, final.from_region_id, final.to_region_id, final.group_code)
-        physical = True
-        route_ids = sea.route
-        row.is_physical = True
-        row.route = route_ids
-        row.route_index = 0
-        row.current_location_id = int(route_ids[0])
-        row.next_move_at = now + departure_delay(params, u)
-        row.guard_count = econ_caravan.guard_count(final.value, params)
-        row.sea_stage = SEA_TO_PORT
-        row.sea_split_index = sea.split_index
-        row.sea_board_port_id = int(sea.board_port)
-        row.sea_alight_port_id = int(sea.alight_port)
-    elif planner is not None:
-        u = econ_caravan.physical_roll(run_id, final.from_region_id, final.to_region_id, final.group_code)
-        physical = econ_caravan.choose_physical(final.value, final.from_country_id, final.to_country_id,
-                                                road is not None, planner.active, params, u)
-        if physical:
-            row.is_physical = True
-            row.route = [int(x) for x in road]
-            row.route_index = 0
-            row.current_location_id = int(road[0])
-            row.next_move_at = now + departure_delay(params, u)
-            row.guard_count = econ_caravan.guard_count(final.value, params)
+        _make_sea(row, sea, final, run_id=run_id, params=params, now=now)
+    else:
+        _make_land(row, road, final, run_id=run_id, params=params, now=now)
+    return _insert_and_pay(db, row, final, goods, run_id=run_id, physical=True, sea=sea is not None)
+
+
+def _insert_and_pay(db: Session, row, final: econ_caravan.CaravanPlan, goods, *, run_id: int, physical: bool,
+                    sea: bool) -> DispatchResult:
+    """INSERT the caravan, take the units off the seller's stock and post the dispatch op (purse / treasury →
+    escrow)."""
+    purse_ref = core.AccountRef.purse(final.to_region_id)
+    treasury_ref = core.AccountRef.region(final.to_region_id)
+    escrow_ref = core.AccountRef.caravan_escrow()
     db.add(row)
     try:
         db.flush()
@@ -646,16 +992,19 @@ def dispatch(db: Session, plan: econ_caravan.CaravanPlan, *, run_id: int, params
         raise _AlreadyDispatched()
     goods.stock = _dec3(_dec3(goods.stock) - _dec3(final.units))
     db.flush()
+    metadata = {"run_id": int(run_id), "caravan_id": int(row.id), "from_region_id": final.from_region_id,
+                "to_region_id": final.to_region_id, "group_code": final.group_code, "units": str(_dec3(final.units)),
+                "unit_price": final.unit_price, "value": final.value, "duty": final.duty,
+                "duty_pct": final.duty_pct, "freight": final.freight, "freight_pct": final.freight_pct,
+                "sea": bool(sea)}
+    if final.contraband:      # FEAT-216: the ledger is admin-only, the marker never reaches players
+        metadata["contraband"] = True
+        metadata["markup_pct"] = final.markup_pct
     posted = econ_ledger.post_operation(
         db, op_type=core.OP_CARAVAN_DISPATCH,
         legs=[core.Leg(purse_ref, escrow_ref, final.paid_purse), core.Leg(treasury_ref, escrow_ref, final.paid_treasury)],
         source_service=SOURCE_SERVICE, region_id=final.to_region_id, apply_tax=False,
-        idempotency_key=caravan_key(row.id, KEY_PAY),
-        metadata={"run_id": int(run_id), "caravan_id": int(row.id), "from_region_id": final.from_region_id,
-                  "to_region_id": final.to_region_id, "group_code": final.group_code, "units": str(_dec3(final.units)),
-                  "unit_price": final.unit_price, "value": final.value, "duty": final.duty,
-                  "duty_pct": final.duty_pct, "freight": final.freight, "freight_pct": final.freight_pct,
-                  "sea": sea is not None},
+        idempotency_key=caravan_key(row.id, KEY_PAY), metadata=metadata,
     )
     row.dispatch_op_id = posted.operation_id
     return DispatchResult("sent", int(row.id), final.value, physical)
@@ -866,7 +1215,8 @@ def _cancel_legs(db: Session, row, goods, from_id: int, to_id: int, code: str, u
                  now: datetime) -> Tuple[List[core.Leg], List]:
     """The cancel branch shared by :func:`deliver_physical` and :func:`cancel_physical` (caravan already locked):
     escorts cancelled (escort rows + characters locked before the accounts), the remaining units back to the origin,
-    ``refund_split(paid_purse, paid_treasury, raid_paid, freight_paid)`` back to the buyer. ``(legs, notices)``."""
+    ``refund_split(paid_purse, paid_treasury, raid_paid, freight_paid, duty_paid)`` back to the buyer (FEAT-216: a duty
+    paid at the customs post stays in the treasury). ``(legs, notices)``."""
     import caravan_escort_crud as escorts               # late: it imports this module
     notices = escorts.cancel_escorts(db, row, now)
     origin_goods = goods.get((from_id, code))
@@ -882,7 +1232,8 @@ def _cancel_legs(db: Session, row, goods, from_id: int, to_id: int, code: str, u
     else:
         purse_ref = treasury_ref = _country_or_world(db, row.to_country_id)
     purse_back, treasury_back = econ_caravan.refund_split(_i(row.paid_purse), _i(row.paid_treasury),
-                                                          _i(row.raid_paid), _i(row.freight_paid))
+                                                          _i(row.raid_paid), _i(row.freight_paid),
+                                                          duty_paid=_i(row.duty_paid))
     escrow_ref = core.AccountRef.caravan_escrow()
     legs = [core.Leg(escrow_ref, purse_ref, purse_back), core.Leg(escrow_ref, treasury_ref, treasury_back)]
     return legs, notices
@@ -901,7 +1252,9 @@ def _post_finish(db: Session, row, now: datetime, *, op_type: str, key: str, sta
                   "raid_paid": _i(row.raid_paid), "escorts": escorts_meta,
                   # FEAT-215 sea caravans
                   "sunk_units": str(_dec3(row.sunk_units)), "freight": _i(row.freight),
-                  "freight_paid": _i(row.freight_paid), "sea_stage": row.sea_stage},
+                  "freight_paid": _i(row.freight_paid), "sea_stage": row.sea_stage,
+                  # FEAT-216 customs
+                  "duty_paid": _i(row.duty_paid), "customs_state": row.customs_state},
     )
     row.status = status
     row.runs_left = 0
@@ -937,8 +1290,9 @@ def deliver_physical(db: Session, caravan_id: int, now: datetime) -> FinishResul
     notices: List = []
     if dest_exists and _participates(regions.get(to_id)) and dest_goods is not None:
         dest_goods.stock = _dec3(_dec3(dest_goods.stock) + units)
-        seller_part, duty_part = econ_caravan.remaining_payout(_i(row.value), _i(row.duty), paid_total, raid_paid,
-                                                               freight=freight)
+        seller_part, duty_part = econ_caravan.remaining_payout(
+            _i(row.value), _i(row.duty), paid_total, raid_paid, freight=freight,
+            duty_paid=econ_caravan.settled_duty(row.customs_state, row.duty_paid))     # FEAT-216: paid at the post
         seller_ref = (core.AccountRef.purse(from_id) if _region_exists(db, from_id)
                       else _country_or_world(db, row.from_country_id))
         duty_ref = _country_or_world(db, row.to_country_id)
@@ -1072,15 +1426,25 @@ def post_window_open(row, now: datetime, params) -> bool:
     return now < row.hold_started_at + timedelta(minutes=int(params.caravan_post_hold_max_min))
 
 
+def customs_alert_open(row, now: datetime) -> bool:
+    """FEAT-216: a customs officer's detection alert holds the caravan (``customs_alert_officer_id`` set and
+    ``customs_alert_until`` in the future)."""
+    until = getattr(row, "customs_alert_until", None)
+    return getattr(row, "customs_alert_officer_id", None) is not None and until is not None and now < until
+
+
 def held_by(db: Session, row, now: datetime, params, gates_available: bool = True) -> Optional[str]:
-    """``"raid"`` (raid starting / fighting), ``"post"`` (3.4 post hold inside the window, never after a raid) or
-    None."""
+    """``"raid"`` (raid starting / fighting), ``"customs"`` (FEAT-216: an open customs alert — it never opens the RP
+    post window, ``hold_started_at`` stays untouched), ``"post"`` (3.4 post hold inside the window, never after a
+    raid) or None."""
     raid = active_raid_status(db, int(row.id))
     if raid in RAID_ACTIVE_STATUSES:
-        return "raid"
+        return HELD_RAID
+    if raid is None and customs_alert_open(row, now):
+        return HELD_CUSTOMS
     if raid is None and gates_available and post_window_open(row, now, params) \
             and post_hold(db, int(row.id), row.current_location_id):
-        return "post"
+        return HELD_POST
     return None
 
 
@@ -1138,7 +1502,7 @@ def overview(db: Session) -> dict:
         }
     balance, expected = escrow_balance(db), escrow_expected(db)
     return {
-        "params": {key: params[key] for key in CARAVAN_PARAM_KEYS},
+        "params": {key: params[key] for key in CARAVAN_PARAM_KEYS + CUSTOMS_PARAM_KEYS},
         "escrow": {"balance": balance, "expected": expected, "ok": balance == expected},
         "in_transit": {"count": _i(transit[0]), "value": _i(transit[1]), "duty": _i(transit[2])},
         "last_run": last_run,
@@ -1180,7 +1544,9 @@ SELECT c.id, c.status, c.group_code, g.name, c.from_region_id, rf.name, c.from_c
        (SELECT COUNT(*) FROM econ_caravan_escorts ce WHERE ce.caravan_id = c.id AND ce.status = 'active'),
        c.sea_stage, c.sea_split_index, c.sea_board_port_id, lb.name, c.sea_alight_port_id, la.name,
        c.sea_ship_id, ss.name, c.sea_waiting_since, c.sea_boarded_at, c.sea_unloaded_at, c.freight,
-       c.freight_paid, c.sunk_units
+       c.freight_paid, c.sunk_units,
+       c.is_contraband, c.markup_pct, c.customs_state, c.customs_index, c.customs_location_id, lcu.name,
+       c.customs_until, c.duty_paid, c.customs_alert_until, c.seized_region_id, rsz.name, c.seized_country_id, csz.name
 FROM econ_caravans c
 LEFT JOIN econ_goods_groups g ON g.code = c.group_code
 LEFT JOIN Regions rf ON rf.id = c.from_region_id
@@ -1192,6 +1558,9 @@ LEFT JOIN econ_caravan_raids cr ON cr.caravan_id = c.id
 LEFT JOIN Locations lb ON lb.id = c.sea_board_port_id
 LEFT JOIN Locations la ON la.id = c.sea_alight_port_id
 LEFT JOIN sea_ships ss ON ss.id = c.sea_ship_id
+LEFT JOIN Locations lcu ON lcu.id = c.customs_location_id
+LEFT JOIN Regions rsz ON rsz.id = c.seized_region_id
+LEFT JOIN Countries csz ON csz.id = c.seized_country_id
 """
 
 
@@ -1243,6 +1612,12 @@ def _caravan_out(r, wait_hours: int = 0) -> dict:
                               if waiting_since is not None and r[40] == SEA_WAITING else None),
         "sea_boarded_at": r[49], "sea_unloaded_at": r[50],
         "freight": _i(r[51]), "freight_paid": _i(r[52]), "sunk_units": round(_f(r[53]), 3),
+        # FEAT-216 (A3): customs & smuggling
+        "is_contraband": bool(r[54]), "markup_pct": round(_f(r[55]), 2) if r[55] is not None else None,
+        "customs_state": r[56], "customs_index": _opt_int(r[57]), "customs_location_id": _opt_int(r[58]),
+        "customs_location_name": r[59], "customs_until": _as_datetime(r[60]), "duty_paid": _i(r[61]),
+        "customs_alert_until": _as_datetime(r[62]), "seized_region_id": _opt_int(r[63]),
+        "seized_region_name": r[64], "seized_country_id": _opt_int(r[65]), "seized_country_name": r[66],
     }
 
 
@@ -1258,6 +1633,8 @@ def list_caravans(db: Session, *, status: str = "all", region_id: Optional[int] 
         where.append("c.is_physical = 0")
     elif kind == KIND_SEA:
         where.append("c.sea_board_port_id IS NOT NULL")
+    elif kind == KIND_CONTRABAND:
+        where.append("c.is_contraband = 1")
     if region_id is not None:
         where.append("(c.from_region_id = :rid OR c.to_region_id = :rid)")
         params["rid"] = int(region_id)
@@ -1383,6 +1760,8 @@ def _raid_out(db: Session, raid: "models.EconCaravanRaid") -> dict:
         "created_at": raid.created_at, "finished_at": raid.finished_at,
         # FEAT-212 (A5): player escorts placed on the guard team
         "escort_ids": [int(x) for x in _json_list(raid.escort_ids) if isinstance(x, int) or str(x).isdigit()],
+        # FEAT-216 (A3): raid | customs | patrol; the officers' share of a seizure
+        "kind": raid.kind or customs_core.KIND_RAID, "officer_paid": _i(raid.officer_paid),
     }
 
 

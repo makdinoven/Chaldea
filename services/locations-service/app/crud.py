@@ -409,6 +409,7 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
             "is_port": bool(getattr(location, 'is_port', False)),
             "is_sea_zone": bool(getattr(location, 'is_sea_zone', False)),
             "port_sea_zone_id": getattr(location, 'port_sea_zone_id', None),
+            "is_customs": bool(getattr(location, 'is_customs', False)),
             "description": location.description,
             "parent_id": location.parent_id,
             "children": children_list
@@ -426,6 +427,7 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
             "is_port": bool(getattr(location, 'is_port', False)),
             "is_sea_zone": bool(getattr(location, 'is_sea_zone', False)),
             "port_sea_zone_id": getattr(location, 'port_sea_zone_id', None),
+            "is_customs": bool(getattr(location, 'is_customs', False)),
             "description": location.description,
             "parent_id": location.parent_id,
             "children": []
@@ -740,6 +742,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "is_port": bool(getattr(loc, 'is_port', False)),
         "is_sea_zone": bool(getattr(loc, 'is_sea_zone', False)),
         "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
+        "is_customs": bool(getattr(loc, 'is_customs', False)),
         "description": loc.description,
         "parent_id": loc.parent_id,
         "marker_type": loc.marker_type,
@@ -1037,7 +1040,10 @@ async def create_location(session: AsyncSession, location_data: LocationCreate) 
         location_dict['is_port'] = bool(location_dict.get('is_port'))
         location_dict['is_sea_zone'] = bool(location_dict.get('is_sea_zone'))
         location_dict['port_sea_zone_id'] = location_dict.get('port_sea_zone_id') or None
+        # FEAT-216: is_customs is NOT NULL as well — null on create means "not a post".
+        location_dict['is_customs'] = bool(location_dict.get('is_customs'))
         await validate_sea_fields(session, None, location_dict)
+        await validate_customs_flag(session, None, location_dict)
         print(f"Данные после установки значений по умолчанию: {location_dict}")
 
         # Создаем новую локацию
@@ -1103,12 +1109,13 @@ async def update_location(session: AsyncSession, location_id: int, location_data
             update_data.pop('is_starting')
         # FEAT-213: is_port / is_sea_zone are NOT NULL too — an explicit null means "leave as is";
         # port_sea_zone_id: null = leave as is, 0 = clear. Then the §3.12 sea rules (409).
-        for flag in ('is_port', 'is_sea_zone', 'port_sea_zone_id'):
+        for flag in ('is_port', 'is_sea_zone', 'port_sea_zone_id', 'is_customs'):
             if flag in update_data and update_data[flag] is None:
                 update_data.pop(flag)
         if update_data.get('port_sea_zone_id') == 0:
             update_data['port_sea_zone_id'] = None
         await validate_sea_fields(session, location, update_data)
+        await validate_customs_flag(session, location, update_data)
 
         for field, value in update_data.items():
             setattr(location, field, value)
@@ -1316,6 +1323,7 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "is_port": bool(getattr(loc, 'is_port', False)),
         "is_sea_zone": bool(getattr(loc, 'is_sea_zone', False)),
         "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
+        "is_customs": bool(getattr(loc, 'is_customs', False)),
         "district_id": loc.district_id,
         "region_id": loc.region_id,
         "marker_type": loc.marker_type,
@@ -2813,6 +2821,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "is_port": bool(getattr(loc, 'is_port', False)),
         "is_sea_zone": bool(getattr(loc, 'is_sea_zone', False)),
         "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
+        "is_customs": bool(getattr(loc, 'is_customs', False)),
         "marker_type": loc.marker_type,
         "district_id": loc.district_id,
         # FEAT-153: return the RESOLVED region id, not Location.region_id.
@@ -3330,6 +3339,7 @@ async def get_world_graph(session: AsyncSession) -> dict:
             "is_port": bool(getattr(loc, 'is_port', False)),
             "is_sea_zone": False,  # zones are dropped above
             "port_sea_zone_id": getattr(loc, 'port_sea_zone_id', None),
+            "is_customs": bool(getattr(loc, 'is_customs', False)),
             "quick_travel_marker": bool(loc.quick_travel_marker),
         })
 
@@ -7251,6 +7261,27 @@ async def validate_sea_fields(session: AsyncSession, location: Optional[Location
         )).scalar()
         if port_name is not None:
             raise HTTPException(status_code=409, detail=SEA_ZONE_USED_BY_PORT.format(name=port_name))
+
+
+# FEAT-216: a customs post («Таможня») stands on land only — never on a ship's deck or a sea zone.
+CUSTOMS_NOT_AT_SEA = "Таможня не может стоять на корабле или в море"
+
+
+async def validate_customs_flag(session: AsyncSession, location: Optional[Location], data: dict) -> None:
+    """FEAT-216 §3.4: refuse ``is_customs`` on a ship's deck or a sea zone (400, Russian text).
+
+    ``data`` holds only the fields being written (explicit nulls already removed). Checked against the
+    resulting state, so flagging a customs post as a sea zone is refused too."""
+    def prev(name, default=None):
+        return getattr(location, name, default) if location is not None else default
+
+    if not bool(data.get('is_customs', prev('is_customs', False))):
+        return
+    if bool(data.get('is_sea_zone', prev('is_sea_zone', False))):
+        raise HTTPException(status_code=400, detail=CUSTOMS_NOT_AT_SEA)
+    location_id = prev('id')
+    if location_id is not None and await sea_read.ship_by_deck(session, location_id) is not None:
+        raise HTTPException(status_code=400, detail=CUSTOMS_NOT_AT_SEA)
 
 
 async def check_neighbor_links(session: AsyncSession, location_id: int, other_ids) -> None:

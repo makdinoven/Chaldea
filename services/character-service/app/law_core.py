@@ -41,6 +41,8 @@ CRIME_THEFT = "theft"
 CRIME_FACTION_MEMBERSHIP = "faction_membership"
 # FEAT-213: a stowaway caught by a ship's crew at departure (crime in the port's region)
 CRIME_STOWAWAY = "stowaway"
+# FEAT-216: an escort of a contraband caravan seized by customs / a guard patrol (crime in the seizure region)
+CRIME_SMUGGLING = "smuggling"
 
 # crime statuses: 2a applies every crime at once; 2b (FEAT-199) defers unwitnessed / masked crimes
 CRIME_REPORTED = "reported"

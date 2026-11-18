@@ -4951,6 +4951,8 @@ from fence_api import router as fence_router  # noqa: E402
 from caravan_escort_api import router as caravan_escort_router  # noqa: E402
 from sea_api import router as sea_router  # noqa: E402
 from sea_admin import router as sea_admin_router  # noqa: E402
+from customs_api import router as customs_router  # noqa: E402
+app.include_router(customs_router)       # FEAT-216; first: /admin/economy/caravans/customs beats .../caravans/{caravan_id}
 app.include_router(economy_router)
 app.include_router(caravan_router)      # FEAT-211; after the economy router (its /admin/economy/caravans/overview)
 app.include_router(caravan_escort_router)  # FEAT-212; player escorts C1–C6 (static /caravans/escort... paths)

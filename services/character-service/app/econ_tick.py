@@ -1658,7 +1658,15 @@ def _caravan_pass(session_factory: SessionFactory, run_id: int, summary: RunSumm
     # knows whether a pair has any path, so a failure sends no caravans this run (never "everything abstract").
     # A path-blind pre-plan that finds nothing means nothing to trade at all (reach only removes candidates and the
     # freight only shrinks budgets) — then the graph is not loaded.
-    if not econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params):
+    # FEAT-216 §3.6: with customs on, the bans remove legal candidates and blocked deals (banned group / closed pair)
+    # may go to smugglers — the pre-plan gets an always-land ``contraband_reach`` so it never loses them (contraband is
+    # physical only, so physical caravans off → no smugglers at all).
+    customs_on = bool(int(getattr(params, "customs_enabled", 0) or 0))
+    bans = snapshot.bans if customs_on else None
+    smuggling = customs_on and bool(int(params.caravan_physical_enabled))
+    blind_smuggle = (lambda _a, _b: econ_caravan.Reach(econ_caravan.REACH_LAND)) if smuggling else None
+    if not econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params,
+                                      bans=bans, contraband_reach=blind_smuggle):
         return
     session = session_factory()
     try:
@@ -1673,7 +1681,8 @@ def _caravan_pass(session_factory: SessionFactory, run_id: int, summary: RunSumm
         session.close()
     sea_slots = planner.sea_slots() if int(params.caravan_physical_enabled) else 0
     plans = econ_caravan.plan_caravans(snapshot.markets, groups, snapshot.inbound, snapshot.pairs, params,
-                                       reach=planner.reach, sea_slots=sea_slots)
+                                       reach=planner.reach, sea_slots=sea_slots, bans=bans,
+                                       contraband_reach=planner.contraband_reach if smuggling else None)
     for plan in plans:
         try:
             result = caravan_crud.dispatch_tx(session_factory, plan, run_id=run_id, params=params, now=now,

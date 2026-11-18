@@ -508,10 +508,11 @@ def test_migration_049_is_single_head():
     assert "048_npc_admin_ready" in downs
     # FEAT-211: 050_physical_caravans follows 049; FEAT-212: 051_caravan_escorts follows 050;
     # FEAT-213: 052_sea_ships follows 051; FEAT-214: 053_sea_storms_raids follows 052;
-    # FEAT-215: 054_sea_caravans follows 053 and is the single head
+    # FEAT-215: 054_sea_caravans follows 053; FEAT-216: 055_customs_smuggling follows 054 and is the single head
     assert "049_mob_admin_ready" in downs
     assert "050_physical_caravans" in downs
     assert "051_caravan_escorts" in downs
     assert "052_sea_ships" in downs
     assert "053_sea_storms_raids" in downs
-    assert "054_sea_caravans" not in downs
+    assert "054_sea_caravans" in downs
+    assert "055_customs_smuggling" not in downs

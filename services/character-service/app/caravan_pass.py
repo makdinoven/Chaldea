@@ -16,7 +16,12 @@ caravans frozen) or before migration 035. Every step is best effort, every carav
    raid to end; skipped while an economy run is ``running``, like deliveries);
 4. ``_step_caravans``   — due physical caravans move one location along their route unless held (3.4); FEAT-215: a
    sea caravan reaching its boarding port (``route_index == sea_split_index``) stops there — stage ``waiting``,
-   ``next_move_at`` NULL; the sea pass (``sea_cargo``) boards and unloads it;
+   ``next_move_at`` NULL; the sea pass (``sea_cargo``) boards and unloads it; FEAT-216: a legal caravan reaching its
+   customs post (``customs_index``) stops for the inspection (duty charged, ``customs_crud.start_inspection``) and
+   the next due step after ``customs_until`` clears it before it arrives / moves on;
+4a. ``_customs_checks`` — FEAT-216: contraband caravans that just moved (not to their final node) are checked by the
+   customs officers on watch there (alert → the officer's «Досмотреть») or the law guards (confiscation without a
+   fight / an automatic patrol fight); skipped while an economy run is ``running`` (``customs_crud.check_caravan``);
 5. ``_deliver_arrived`` — arrived caravans are delivered / cancelled (``economy_caravan_crud.deliver_physical``);
    skipped entirely while an economy run is ``running`` (a region never changes in the middle of a resumable run);
    FEAT-212: escorts are paid / cancelled inside that op, their notices published after the commit;
@@ -38,6 +43,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 import caravan_escort_crud as escort_crud
+import customs_crud
 import econ_tick
 import economy_caravan_crud as caravan_crud
 import law_notify
@@ -51,6 +57,8 @@ BATCH_SIZE = 200
 RAID_STEP_STALE = "expire_stale_raids"
 RAID_STEP_BATTLES = "poll_raid_battles"
 RAID_STEP_FOLLOWUPS = "raid_followups"
+
+INSPECTING = "inspecting"                   # FEAT-216: step outcome — the caravan stopped at its customs post
 
 
 def now_utc() -> datetime:
@@ -171,8 +179,8 @@ def _wait_at_port(row, now: datetime) -> str:
 
 def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
                  gates_available: bool = True) -> Optional[str]:
-    """One caravan (caller commits). Returns ``held`` | ``moved`` | ``arrived`` | ``at_port`` | None (not due /
-    gone / at sea)."""
+    """One caravan (caller commits). Returns ``held`` | ``moved`` | ``arrived`` | ``at_port`` | ``inspecting``
+    (FEAT-216: stopped at its customs post, duty charged) | None (not due / gone / at sea / still inspected)."""
     row = caravan_crud._lock_caravan(db, caravan_id)
     if (row is None or not row.is_physical or row.status != caravan_crud.STATUS_IN_TRANSIT
             or row.arrived_at is not None or row.next_move_at is None or row.next_move_at > now):
@@ -181,11 +189,20 @@ def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
         row.next_move_at = None                 # boarded / unloaded by the sea pass, cancelled by housekeeping
         return None
     route = [int(x) for x in caravan_crud._json_list(row.route)]
-    if caravan_crud.held_by(db, row, now, params, gates_available) is not None:
-        if row.hold_started_at is None:
-            row.hold_started_at = now
+    held = caravan_crud.held_by(db, row, now, params, gates_available)
+    if held is not None:
+        if row.hold_started_at is None and held != caravan_crud.HELD_CUSTOMS:
+            row.hold_started_at = now           # the RP post window; a customs alert never opens it (FEAT-216)
         return "held"
     index = int(row.route_index or 0)
+    # FEAT-216 §3.0 A6: the inspection at the post is a state at ``customs_index``, not a side effect of moving
+    if customs_crud.inspecting_here(row):
+        if row.customs_until is not None and row.customs_until > now:
+            row.next_move_at = row.customs_until
+            return None
+        customs_crud.clear_inspection(row, now)  # then arrive (post = final node) / move on as usual
+    elif customs_crud.at_post(row) and customs_crud.start_inspection(db, row, now, params):
+        return INSPECTING                       # customs_index 0 (post = seller gate) or a missed landing hook
     to_port = row.sea_stage == caravan_crud.SEA_TO_PORT and row.sea_split_index is not None
     if to_port and index >= int(row.sea_split_index):
         return _wait_at_port(row, now)          # sea_split_index == 0: dispatched right at the boarding port
@@ -198,6 +215,8 @@ def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
     row.route_index = index
     row.current_location_id = route[index]
     escort_crud.move_escorts(db, row)          # FEAT-212: escorts ride inside the wagon
+    if customs_crud.at_post(row, index) and customs_crud.start_inspection(db, row, now, params):
+        return INSPECTING                       # FEAT-216: stops at the post, even when it is the final node
     if to_port and index >= int(row.sea_split_index):
         return _wait_at_port(row, now)          # sea_split_index < len(route) - 1 always: never "arrived" here
     if index == len(route) - 1:
@@ -209,7 +228,8 @@ def step_caravan(db: Session, caravan_id: int, now: datetime, params, u: float,
 
 
 def _step_caravans(factory: Callable[[], Session], now: datetime, params, rng: Callable[[], float],
-                   stats: Dict[str, int]) -> None:
+                   stats: Dict[str, int], moved: Optional[List[int]] = None) -> None:
+    """Step every due caravan; ``moved`` (when given) collects the ids whose outcome was ``moved`` (FEAT-216)."""
     db = factory()
     try:
         try:
@@ -233,10 +253,59 @@ def _step_caravans(factory: Callable[[], Session], now: datetime, params, rng: C
                     continue
                 if outcome:
                     stats[outcome] += 1
+                if outcome == "moved" and moved is not None:
+                    moved.append(caravan_id)
             if len(ids) < BATCH_SIZE:
                 return
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------------------------- step 4a (customs)
+
+def _contraband_ids(db: Session, ids: List[int]) -> List[int]:
+    if not ids:
+        return []
+    out: List[int] = []
+    for i in range(0, len(ids), BATCH_SIZE):
+        chunk = ids[i:i + BATCH_SIZE]
+        names = ", ".join(f":c{n}" for n in range(len(chunk)))
+        out += [int(r[0]) for r in db.execute(text(
+            f"SELECT id FROM econ_caravans WHERE is_contraband = 1 AND id IN ({names}) ORDER BY id"),
+            {f"c{n}": int(cid) for n, cid in enumerate(chunk)}).fetchall()]
+    db.rollback()
+    return out
+
+
+def _customs_checks(factory: Callable[[], Session], ids: List[int], now: datetime, params,
+                    stats: Dict[str, int]) -> None:
+    """FEAT-216 step 4a: the contraband caravans that just MOVED (never the final node — that is ``arrived``) are
+    checked by the officers on watch / the guards there (``customs_crud.check_caravan``; each caravan best effort in
+    its own transactions). Skipped entirely while customs is off or an economy run is ``running``."""
+    if not ids or not customs_crud.enabled(params):
+        return
+    db = factory()
+    try:
+        if _economy_run_in_progress(db):
+            stats["customs_postponed"] = 1
+            return
+        contraband = _contraband_ids(db, ids)
+        if not contraband:
+            return
+        bans = caravan_crud.load_bans(db)
+        db.rollback()
+    finally:
+        db.close()
+    roller = customs_crud.rng()
+    for caravan_id in contraband:
+        try:
+            outcome = customs_crud.check_caravan(factory, caravan_id, now, params, bans, roller)
+        except Exception:
+            stats["failed"] += 1
+            logger.exception("caravan pass: customs check of caravan %s failed", caravan_id)
+            continue
+        if outcome:
+            stats[f"customs_{outcome}"] = stats.get(f"customs_{outcome}", 0) + 1
 
 
 # --------------------------------------------------------------------------------------------- step 5 (delivery)
@@ -304,7 +373,7 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
         db.close()
     stats = {"stale_raids": 0, "raid_battles": 0, "raid_followups": 0, "held": 0, "moved": 0, "arrived": 0,
              "delivered": 0, "cancelled": 0, "escort_rewards": 0, "escort_housekeeping": 0, "failed": 0,
-             "at_port": 0, "sea_cancelled": 0}
+             "at_port": 0, "sea_cancelled": 0, INSPECTING: 0}
     for key, step in (("stale_raids", _stale_raids), ("raid_battles", _raid_battles),
                       ("raid_followups", _raid_followups)):
         try:
@@ -317,11 +386,17 @@ def run_pass(factory: Callable[[], Session], now: Optional[datetime] = None, *, 
     except Exception:
         stats["failed"] += 1
         logger.exception("caravan pass: sea housekeeping failed")
+    moved: List[int] = []
     try:
-        _step_caravans(factory, now, params, rng, stats)
+        _step_caravans(factory, now, params, rng, stats, moved)
     except Exception:
         stats["failed"] += 1
         logger.exception("caravan pass: stepping failed")
+    try:
+        _customs_checks(factory, moved, now, params, stats)
+    except Exception:
+        stats["failed"] += 1
+        logger.exception("caravan pass: customs checks failed")
     try:
         _deliver_arrived(factory, now, stats)
     except Exception:

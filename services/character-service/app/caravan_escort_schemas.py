@@ -27,6 +27,13 @@ class CaravaneerViewOut(BaseModel):
     caravans: List[CaravaneerCaravanOut]
 
 
+class SmugglerViewOut(CaravaneerViewOut):
+    """FEAT-216 C7: the fence's smuggler hire list (contraband caravans shown as ordinary ones) + the trade gate of
+    the fence's region where the hired smuggler is led to."""
+    gate_location_id: Optional[int]
+    gate_location_name: Optional[str]
+
+
 class EscortHireIn(BaseModel):
     character_id: int = Field(..., ge=1)
     npc_id: int = Field(..., ge=1)
@@ -56,7 +63,7 @@ class EscortJobOut(BaseModel):
     route_index: int
     current_location_id: Optional[int]
     current_location_name: Optional[str]
-    state: str                            # preparing | on_road | held | under_attack | arrived
+    state: str                            # preparing | on_road | held | under_attack | arrived | inspection (FEAT-216)
     next_move_in_sec: Optional[int]
     seats_total: int
     escorts: List[EscortMateOut]
@@ -70,6 +77,8 @@ class EscortJobOut(BaseModel):
     sea_board_port_name: Optional[str] = None
     sea_alight_port_name: Optional[str] = None
     ship_name: Optional[str] = None
+    # FEAT-216 C8/C9: the escort's own caravan is contraband (smuggler job)
+    is_contraband: bool = False
 
 
 class EscortJobWrapOut(BaseModel):

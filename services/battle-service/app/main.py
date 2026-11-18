@@ -14,7 +14,7 @@ from schemas import (
     BattleCreated, BattleCreate, DungeonBattleCreate, GuardBattleCreate, ActionResponse, ActionRequest, LogResponse,
     BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
     PackAttack, PartyPackAttack,
-    CaravanRaidBattleCreate, CaravanRaidBattleCreated,
+    CaravanRaidBattleCreate, CaravanRaidBattleCreated, CustomsFightCreate,
     SeaRaidBattleCreate, SeaRaidBattleCreated,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
@@ -1989,6 +1989,126 @@ async def internal_create_caravan_raid_battle(
     player_ids = attackers + defenders
     teams = [CARAVAN_RAIDER_TEAM] * len(attackers) + [CARAVAN_GUARD_TEAM] * len(defenders)
     # FEAT-212: the escort flag is passed only when set (older call shapes stay unchanged).
+    escort_tag = {"autobattle_forbidden_character_ids": escort_ids} if escort_ids else {}
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", loc, caravan_raid_id=body.caravan_raid_id, **escort_tag,
+    )
+    return CaravanRaidBattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+        attacker_character_ids=attackers,
+        escort_character_ids=escort_ids,
+    )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-216: customs / patrol fight on a contraband caravan. Same tag (`caravan_raid_id`) and
+# end machinery as the raid; no post gate (a legal action), the enforcer side is either a
+# player officer (+ free squad) or NPC law guards.
+# ---------------------------------------------------------------------------
+CUSTOMS_ENFORCER_TEAM = 0
+CUSTOMS_CARAVAN_TEAM = 1
+CUSTOMS_MODE_REQUIRED = "Нужен либо таможенник, либо стража"
+CUSTOMS_ENFORCERS_UNAVAILABLE = "Стража недоступна"
+CUSTOMS_NO_DEFENDERS = "Защитников каравана нет"
+
+
+@router.post(
+    "/internal/customs-fight",
+    response_model=CaravanRaidBattleCreated,
+    status_code=201,
+    dependencies=[Depends(verify_internal_token)],
+)
+async def internal_create_customs_fight(
+    body: CustomsFightCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-216 section 3.7 (B1): a customs (officer) or patrol (NPC guards) fight on a
+    contraband caravan (character-service only).
+
+    Exactly one mode (else 400): `leader_character_id` — the officer, checked like the raid
+    leader (at the location, not in battle, not activity-locked), team 0 = him or his free
+    co-located squad (`group`), escorts filtered out; OR `enforcer_npc_ids` — NPC guards on
+    team 0 (`_ensure_caravan_guards`; NPCs are driven by autobattle like any PvE NPC, the
+    engine and the autobattle strategy are team-agnostic). Team 1 = caravan mobs
+    (`_ensure_caravan_guards`, may be empty) + escorts that pass `_escort_available` (others
+    silently skipped). No action-gate consumption. No defenders placed (NPC mode: no escort
+    placed) -> 409 «Защитников каравана нет» (character-service then confiscates without a
+    fight). The battle is `pve`, tagged `caravan_raid_id` (end notify / `/result` / join ban
+    reused), placed escorts flagged `autobattle_forbidden`."""
+    enforcer_npcs = list(body.enforcer_npc_ids or [])
+    has_leader = body.leader_character_id is not None
+    if has_leader == bool(enforcer_npcs):
+        raise HTTPException(400, CUSTOMS_MODE_REQUIRED)
+    escort_requested = list(dict.fromkeys(body.escort_character_ids or []))  # dedupe, keep order
+    guard_ids = list(body.guard_character_ids or [])
+    if len(guard_ids) + len(escort_requested) > settings.BATTLE_MAX_TEAM_SIZE:
+        raise HTTPException(
+            400,
+            f"В одной команде не может быть больше {settings.BATTLE_MAX_TEAM_SIZE} участников",
+        )
+    if set(enforcer_npcs) & set(guard_ids):
+        raise HTTPException(400, CUSTOMS_ENFORCERS_UNAVAILABLE)
+    loc = body.location_id
+
+    if has_leader:
+        leader_id = body.leader_character_id
+        if leader_id in escort_requested:
+            # Neutral on purpose (the escort lock text): never reveal the caravan's escorts.
+            raise HTTPException(409, activity_lock.lock_message(
+                {"locked": True, "reason": activity_lock.REASON_CARAVAN_ESCORT}))
+        leader_row = (await db.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": leader_id},
+        )).fetchone()
+        if not leader_row:
+            raise HTTPException(404, "Персонаж не найден")
+        if leader_row[0] is None or leader_row[0] != loc:
+            raise HTTPException(400, CARAVAN_NOT_HERE)
+        if await get_active_battle_for_character(db, leader_id):
+            raise HTTPException(409, "Персонаж уже в бою")
+        await _ensure_not_activity_locked(db, leader_id)
+    else:
+        await _ensure_caravan_guards(db, enforcer_npcs, loc, message=CUSTOMS_ENFORCERS_UNAVAILABLE)
+
+    if guard_ids:
+        await _ensure_caravan_guards(db, guard_ids, loc)
+
+    if has_leader:
+        if body.group:
+            attackers = await _free_squadmates(db, leader_id, loc)
+        else:
+            attackers = [leader_id]
+        # Defence in depth (FEAT-212 "rat"): an escort is never on the enforcers' team.
+        escort_set = set(escort_requested)
+        attackers = [cid for cid in attackers if cid not in escort_set]
+    else:
+        attackers = enforcer_npcs
+
+    escort_ids = []
+    guard_set = set(guard_ids)
+    attacker_set = set(attackers)
+    for cid in escort_requested:
+        if cid in guard_set or cid in attacker_set:
+            continue
+        if await _escort_available(db, cid, loc):
+            escort_ids.append(cid)
+
+    if not has_leader and not escort_ids:
+        raise HTTPException(409, CUSTOMS_NO_DEFENDERS)
+    defenders = guard_ids + escort_ids
+    if not defenders:
+        raise HTTPException(409, CUSTOMS_NO_DEFENDERS)
+    if len(attackers) > settings.BATTLE_MAX_TEAM_SIZE or len(defenders) > settings.BATTLE_MAX_TEAM_SIZE:
+        raise HTTPException(
+            400,
+            f"В одной команде не может быть больше {settings.BATTLE_MAX_TEAM_SIZE} участников",
+        )
+
+    player_ids = attackers + defenders
+    teams = [CUSTOMS_ENFORCER_TEAM] * len(attackers) + [CUSTOMS_CARAVAN_TEAM] * len(defenders)
     escort_tag = {"autobattle_forbidden_character_ids": escort_ids} if escort_ids else {}
     battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
         db, player_ids, teams, "pve", loc, caravan_raid_id=body.caravan_raid_id, **escort_tag,

@@ -862,7 +862,8 @@ def test_sim_params_bounds(api, key):
         resp = api.put(f"{BASE}/sim", json={"tick_enabled": True, "params": {key: bad}})
         assert resp.status_code == 422, (key, bad, resp.text)
     for good in (lo, hi):
-        if key in ("price_min", "price_max", "prod_price_min", "prod_price_max"):
+        if key in ("price_min", "price_max", "prod_price_min", "prod_price_max",
+                   "customs_detect_min_pct", "customs_detect_max_pct"):        # FEAT-216: min <= max rule
             continue                                                # bound values may hit the cross-field rule
         resp = api.put(f"{BASE}/sim", json={"tick_enabled": True, "params": {key: good}})
         assert resp.status_code == 200, (key, good, resp.text)

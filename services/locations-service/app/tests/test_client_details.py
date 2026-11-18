@@ -302,6 +302,8 @@ class TestGetLocationClientDetails:
             "is_port", "is_sea_zone", "port_sea_zone_id", "ship_id", "docked_ships",
             # FEAT-214: the port's sea zone is in a storm
             "sea_unrest",
+            # FEAT-216: customs post flag
+            "is_customs",
             # FEAT-152: breadcrumb fields
             "country_id", "country_name", "region_name", "district_name",
             "neighbors", "players", "npcs", "posts", "loot", "gathering_nodes",

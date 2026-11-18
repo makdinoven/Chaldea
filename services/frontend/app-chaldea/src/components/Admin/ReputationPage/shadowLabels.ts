@@ -11,6 +11,8 @@ export const CRIME_TYPE_LABELS: Record<string, string> = {
   faction_membership: 'Членство в запрещённой фракции',
   /** FEAT-213: caught aboard a ship without a ticket (crime in the port's region). */
   stowaway: 'Безбилетный проезд',
+  /** FEAT-216: escort of a contraband caravan seized by customs or a patrol. */
+  smuggling: 'Контрабанда',
 };
 
 export const CRIME_STATUS_LABELS: Record<string, string> = {
@@ -45,6 +47,8 @@ export const RENOWN_SOURCE_LABELS: Record<string, string> = {
   staff: 'Решение властей',
   /** FEAT-212: a repelled raid on a caravan the player escorted. */
   caravan_defense: 'Отбитый налёт на караван',
+  /** FEAT-216: a customs officer's won inspection. */
+  customs_seizure: 'Конфискация контрабанды',
 };
 
 export const RENOWN_SCALE_LABELS: Record<string, string> = {

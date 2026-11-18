@@ -160,8 +160,12 @@ OP_CARAVAN_CANCEL = "caravan_cancel"      # escrow -> the buyer accounts that pa
 OP_CARAVAN_RAID = "caravan_raid"
 # FEAT-215: escrow -> boarding-port region treasury (+ explicit country-tax leg) when a sea caravan is unloaded
 OP_CARAVAN_FREIGHT = "caravan_freight"
+# FEAT-216: escrow -> destination country treasury (duty paid physically at a customs post)
+OP_CARAVAN_DUTY = "caravan_duty"
+# FEAT-216: escrow -> seizure country treasury (fine) + escrow -> customs officers (their share) on confiscation
+OP_CARAVAN_SEIZURE = "caravan_seizure"
 CARAVAN_OP_TYPES = frozenset({OP_CARAVAN_DISPATCH, OP_CARAVAN_DELIVERY, OP_CARAVAN_CANCEL, OP_CARAVAN_RAID,
-                              OP_CARAVAN_FREIGHT})
+                              OP_CARAVAN_FREIGHT, OP_CARAVAN_DUTY, OP_CARAVAN_SEIZURE})
 # FEAT-193: a player fills a region's guild order: purse (+ region treasury for food) -> character (untaxed)
 OP_GUILD_ORDER = "guild_order"
 GUILD_OP_TYPES = frozenset({OP_GUILD_ORDER})

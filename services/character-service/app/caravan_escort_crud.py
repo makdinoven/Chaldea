@@ -4,7 +4,10 @@
   :func:`resolve_caravaneer` (steps 1–3; the API then asks the ``npc_dialogue`` gate and the NPC tier gate),
   :func:`caravaneer_view`, :func:`hire`. A caravan is *preparing* (hireable) while it is physical, in transit, not
   arrived, at ``route_index 0`` and was never raided. Strangers never learn how many escorts ride (PM decision 1:
-  only «есть места» / «мест нет»);
+  only «есть места» / «мест нет»); FEAT-216: contraband caravans are never shown / hired at a caravaneer — smugglers
+  are hired at a «Скупщик» (role ``fence``) anywhere in the seller region (C7 :func:`smuggler_view`, the same
+  :func:`hire` via :func:`resolve_hiring_npc`) and are led to the caravan at once; their pay pool is
+  ``customs_smuggler_fee_share`` and a smuggling run gives no reputation / fame / faction points;
 * **the job** (C3 :func:`escort_job`, C4 :func:`leave`, the caravan channel C5 :func:`messages` / C6
   :func:`post_message`);
 * **stepping** (:func:`move_escorts`, called by ``caravan_pass.step_caravan`` in the caravan's transaction);
@@ -32,6 +35,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 import activity_lock
+import customs_core
 import econ_caravan
 import econ_core as core
 import economy_caravan_crud as caravan_crud
@@ -56,6 +60,8 @@ LOG_EVENT_TYPE = "caravan_escort"
 WS_CARAVAN_ESCORT = "caravan_escort"
 
 CARAVANEER_ROLE = "caravaneer"
+FENCE_ROLE = "fence"                      # FEAT-216: smuggler escorts are hired at a «Скупщик» (fence_crud.FENCE_ROLE)
+HIRING_ROLES = (CARAVANEER_ROLE, FENCE_ROLE)
 NPC_DEAD = "dead"
 NEUTRAL_TIER = "wanderer"                 # «Скиталец»: reputation must not be below neutral in the seller region
 RAID_ACTIVE_STATUSES = ("starting", "fighting")
@@ -67,6 +73,7 @@ STATE_ON_ROAD = "on_road"
 STATE_HELD = "held"
 STATE_UNDER_ATTACK = "under_attack"
 STATE_ARRIVED = "arrived"
+STATE_INSPECTION = "inspection"            # FEAT-216: the caravan stands at its customs post
 SEA_NO_COUNTDOWN = (caravan_crud.SEA_WAITING, caravan_crud.SEA_ABOARD)   # FEAT-215: leaves with a ship, no timer
 
 MESSAGE_MAX_LEN = 500
@@ -82,6 +89,9 @@ MSG_NOT_OWNER = "Вы можете управлять только своими 
 MSG_NOT_PLAYER = "Охрану караванов нанимают только персонажи игроков"
 MSG_CARAVANEER_NOT_FOUND = "Караванщик не найден"
 MSG_NOT_AT_CARAVANEER = "Вы не у караванщика"
+MSG_FENCE_NOT_FOUND = "Скупщик не найден"
+MSG_NOT_AT_FENCE = "Вы не у скупщика"
+MSG_OFFICER = "Вы служите на таможне — скупщик не станет с вами связываться"
 MSG_GATE_CLOSED = "Нужен пост-намерение «Диалог с НПС» с этим персонажем"
 MSG_GATE_UNAVAILABLE = "Не удалось проверить обращение к караванщику, попробуйте позже"
 MSG_CARAVAN_NOT_FOUND = "Караван не найден"
@@ -237,9 +247,11 @@ def _floor_share(amount: int, share) -> int:
                       .to_integral_value(rounding=ROUND_FLOOR)))
 
 
-def pools(seller_part: int, params, repelled: bool) -> Tuple[int, int]:
-    """(fee_pool, bonus_pool) carved out of the seller's remaining proceeds; their sum never exceeds the part."""
-    fee = _floor_share(seller_part, getattr(params, "caravan_escort_fee_share", 0))
+def pools(seller_part: int, params, repelled: bool, contraband: bool = False) -> Tuple[int, int]:
+    """(fee_pool, bonus_pool) carved out of the seller's remaining proceeds; their sum never exceeds the part.
+    FEAT-216: a contraband caravan pays its smugglers ``customs_smuggler_fee_share`` (bonus share unchanged)."""
+    fee_key = "customs_smuggler_fee_share" if contraband else "caravan_escort_fee_share"
+    fee = _floor_share(seller_part, getattr(params, fee_key, 0))
     bonus = _floor_share(seller_part, getattr(params, "caravan_escort_bonus_share", 0)) if repelled else 0
     fee = min(fee, max(0, int(seller_part)))
     bonus = min(bonus, max(0, int(seller_part)) - fee)
@@ -249,7 +261,10 @@ def pools(seller_part: int, params, repelled: bool) -> Tuple[int, int]:
 def _seller_part(caravan: "models.EconCaravan") -> int:
     seller, _duty = econ_caravan.remaining_payout(_i(caravan.value), _i(caravan.duty),
                                                   _i(caravan.paid_purse) + _i(caravan.paid_treasury),
-                                                  _i(caravan.raid_paid), freight=_i(caravan.freight))
+                                                  _i(caravan.raid_paid), freight=_i(caravan.freight),
+                                                  duty_paid=econ_caravan.settled_duty(
+                                                      getattr(caravan, "customs_state", None),
+                                                      getattr(caravan, "duty_paid", 0)))
     return seller
 
 
@@ -267,6 +282,12 @@ class CaravaneerContext:
     user_id: int
     npc_id: int
     location_id: int
+    role: str = CARAVANEER_ROLE               # FEAT-216: caravaneer | fence
+    region_id: Optional[int] = None           # the fence's region (None for a caravaneer)
+
+    @property
+    def is_fence(self) -> bool:
+        return self.role == FENCE_ROLE
 
 
 def _player(db: Session, character_id: int, user_id: int) -> "models.Character":
@@ -285,16 +306,35 @@ def require_owner(db: Session, character_id: int, user_id: int) -> "models.Chara
     return _player(db, character_id, user_id)
 
 
-def resolve_caravaneer(db: Session, npc_id: int, character_id: int, user_id: int) -> CaravaneerContext:
-    """Steps 1–3: owner + player, the caravaneer exists / role / alive, same location. Raises EconomyApiError."""
+def resolve_hiring_npc(db: Session, npc_id: int, character_id: int, user_id: int,
+                       roles: Sequence[str] = HIRING_ROLES) -> CaravaneerContext:
+    """Steps 1–3: owner + player, the hiring NPC (a role of ``roles``) exists / alive, same location. Raises
+    EconomyApiError. FEAT-216: a fence context carries the fence's region (the smuggler list / hire rules)."""
     character = _player(db, character_id, user_id)
+    fence_only = tuple(roles) == (FENCE_ROLE,)
     npc = db.query(models.Character).filter(models.Character.id == int(npc_id)).first()
-    if npc is None or not npc.is_npc or npc.npc_role != CARAVANEER_ROLE or npc.npc_status == NPC_DEAD \
+    if npc is None or not npc.is_npc or npc.npc_role not in roles or npc.npc_status == NPC_DEAD \
             or npc.current_location_id is None:
-        raise EconomyApiError(404, MSG_CARAVANEER_NOT_FOUND)
+        raise EconomyApiError(404, MSG_FENCE_NOT_FOUND if fence_only else MSG_CARAVANEER_NOT_FOUND)
+    is_fence = npc.npc_role == FENCE_ROLE
     if character.current_location_id is None or int(character.current_location_id) != int(npc.current_location_id):
-        raise EconomyApiError(400, MSG_NOT_AT_CARAVANEER)
-    return CaravaneerContext(int(character.id), int(user_id), int(npc.id), int(npc.current_location_id))
+        raise EconomyApiError(400, MSG_NOT_AT_FENCE if is_fence else MSG_NOT_AT_CARAVANEER)
+    region_id = None
+    if is_fence:
+        import econ_ledger
+        region_id, _country = econ_ledger.resolve_location(db, npc.current_location_id)
+    return CaravaneerContext(int(character.id), int(user_id), int(npc.id), int(npc.current_location_id),
+                             FENCE_ROLE if is_fence else CARAVANEER_ROLE, region_id)
+
+
+def resolve_caravaneer(db: Session, npc_id: int, character_id: int, user_id: int) -> CaravaneerContext:
+    """C1: the caravaneer only (a fence has its own list, C7)."""
+    return resolve_hiring_npc(db, npc_id, character_id, user_id, (CARAVANEER_ROLE,))
+
+
+def resolve_fence(db: Session, npc_id: int, character_id: int, user_id: int) -> CaravaneerContext:
+    """FEAT-216 C7: the fence only."""
+    return resolve_hiring_npc(db, npc_id, character_id, user_id, (FENCE_ROLE,))
 
 
 def require_npc_tier(db: Session, ctx: CaravaneerContext) -> None:
@@ -311,12 +351,21 @@ def _active_count(db: Session, caravan_id: int, *, lock: bool = False) -> int:
     return q.count()
 
 
-def _caravan_refusal(caravan, location_id: int, raid_status: Optional[str]) -> Optional[Tuple[int, str]]:
-    if caravan is None or not caravan.is_physical or caravan.status != caravan_crud.STATUS_IN_TRANSIT:
+def _caravan_refusal(caravan, ctx: CaravaneerContext, raid_status: Optional[str]) -> Optional[Tuple[int, str]]:
+    """The caravan side of §3.7. FEAT-216: a caravaneer never hires for a contraband caravan (it does not exist for
+    him → 404, same as a missing one); a fence hires only for a contraband caravan of its own region, wherever in
+    that region the fence stands (the caravan waits at the region's trade gate)."""
+    if caravan is None or not caravan.is_physical or caravan.status != caravan_crud.STATUS_IN_TRANSIT \
+            or bool(caravan.is_contraband) != ctx.is_fence:
+        return 404, MSG_CARAVAN_NOT_FOUND
+    if ctx.is_fence and (ctx.region_id is None or caravan.from_region_id is None
+                         or int(caravan.from_region_id) != int(ctx.region_id)):
         return 404, MSG_CARAVAN_NOT_FOUND
     if _i(caravan.route_index) > 0 or caravan.arrived_at is not None:
         return 409, MSG_CARAVAN_GONE
-    if caravan.current_location_id is None or int(caravan.current_location_id) != int(location_id):
+    if caravan.current_location_id is None:
+        return 400, MSG_WRONG_GATE
+    if not ctx.is_fence and int(caravan.current_location_id) != int(ctx.location_id):
         return 400, MSG_WRONG_GATE
     if raid_status is not None:
         return 409, MSG_RAIDED
@@ -334,7 +383,9 @@ def _seat_refusal(params, taken: int) -> Optional[Tuple[int, str]]:
 
 def _character_refusal(db: Session, character: "models.Character", caravan: "models.EconCaravan",
                        now: datetime) -> Optional[Tuple[int, str]]:
-    """The character side of §3.7 in the contract order (one job, no rejoin, lock, battle, gathering, law, rep)."""
+    """The character side of §3.7 in the contract order (one job, no rejoin, lock, battle, gathering, law, rep).
+    FEAT-216: for a contraband caravan (smugglers) no wanted / reputation checks, but an active customs officer is
+    refused."""
     if character.escort_caravan_id is not None:
         return 409, MSG_ALREADY_ESCORT
     if db.query(models.EconCaravanEscort.id).filter(
@@ -348,6 +399,11 @@ def _character_refusal(db: Session, character: "models.Character", caravan: "mod
         return 409, MSG_IN_BATTLE
     if _gathering(db, character.id):
         return 409, MSG_GATHERING
+    if caravan.is_contraband:
+        import customs_crud
+        if customs_crud.is_active_officer(db, character.id):
+            return 403, MSG_OFFICER
+        return None
     seller_region = int(caravan.from_region_id) if caravan.from_region_id else None
     if _region_exists(db, seller_region):
         import law_crud
@@ -360,30 +416,63 @@ def _character_refusal(db: Session, character: "models.Character", caravan: "mod
     return None
 
 
-def _preparing_here(db: Session, location_id: int) -> List["models.EconCaravan"]:
-    rows = (db.query(models.EconCaravan)
-            .filter(models.EconCaravan.is_physical.is_(True),
-                    models.EconCaravan.status == caravan_crud.STATUS_IN_TRANSIT,
-                    models.EconCaravan.arrived_at.is_(None),
-                    models.EconCaravan.route_index == 0,
-                    models.EconCaravan.current_location_id == int(location_id))
-            .order_by(models.EconCaravan.id).all())
+def _preparing(db: Session, *, location_id: Optional[int] = None, region_id: Optional[int] = None,
+               contraband: bool = False) -> List["models.EconCaravan"]:
+    """Hireable caravans: at a caravaneer's gate (``location_id``, legal only) or of a fence's region (``region_id``,
+    contraband only — FEAT-216)."""
+    q = (db.query(models.EconCaravan)
+         .filter(models.EconCaravan.is_physical.is_(True),
+                 models.EconCaravan.status == caravan_crud.STATUS_IN_TRANSIT,
+                 models.EconCaravan.arrived_at.is_(None),
+                 models.EconCaravan.route_index == 0,
+                 models.EconCaravan.is_contraband == bool(contraband)))
+    if location_id is not None:
+        q = q.filter(models.EconCaravan.current_location_id == int(location_id))
+    if region_id is not None:
+        q = q.filter(models.EconCaravan.from_region_id == int(region_id),
+                     models.EconCaravan.current_location_id.isnot(None))
+    rows = q.order_by(models.EconCaravan.id).all()
     return [r for r in rows if caravan_crud.active_raid_status(db, int(r.id)) is None]
+
+
+def _preparing_here(db: Session, location_id: int) -> List["models.EconCaravan"]:
+    return _preparing(db, location_id=location_id)
 
 
 def caravaneer_view(db: Session, ctx: CaravaneerContext, now: Optional[datetime] = None) -> dict:
     """C1: caravans preparing at the caravaneer's gate with per-caravan eligibility. Never from / to / route / value
     and never the number of seats or escorts (PM decision 1): only ``has_seats``. ``pay_estimate`` = the guaranteed
-    pay per head when every seat is taken (independent of the current escorts)."""
-    now = now or now_utc()
+    pay per head when every seat is taken (independent of the current escorts). FEAT-216: never a contraband one."""
+    return _hire_list(db, ctx, _preparing_here(db, ctx.location_id), now or now_utc())
+
+
+def smuggler_view(db: Session, ctx: CaravaneerContext, now: Optional[datetime] = None) -> dict:
+    """FEAT-216 C7: contraband caravans preparing at the trade gate of the fence's region (same item shape as C1, the
+    pay estimate from ``customs_smuggler_fee_share``) + the gate location the hired smuggler is led to."""
+    caravans = _preparing(db, region_id=ctx.region_id, contraband=True) if ctx.region_id is not None else []
+    out = _hire_list(db, ctx, caravans, now or now_utc())
+    gate = None
+    if ctx.region_id is not None:
+        gate = caravan_crud.region_gates(db, [ctx.region_id]).get(int(ctx.region_id), {}).get("gate")
+    if gate is None and caravans:
+        gate = int(caravans[0].current_location_id)
+    out["gate_location_id"] = int(gate) if gate is not None else None
+    out["gate_location_name"] = (caravan_crud._location_names(db, [int(gate)]).get(int(gate))
+                                 if gate is not None else None)
+    return out
+
+
+def _hire_list(db: Session, ctx: CaravaneerContext, caravans: Sequence["models.EconCaravan"],
+               now: datetime) -> dict:
+    """C1 / C7 body (one item shape)."""
     params = _params(db)
     seats = _seats(params)
     character = db.get(models.Character, ctx.character_id)
     out = []
-    for caravan in _preparing_here(db, ctx.location_id):
+    for caravan in caravans:
         taken = _active_count(db, caravan.id)
         refusal = _seat_refusal(params, taken) or _character_refusal(db, character, caravan, now)
-        fee, _bonus = pools(_seller_part(caravan), params, False)
+        fee, _bonus = pools(_seller_part(caravan), params, False, bool(caravan.is_contraband))
         departs = None
         if caravan.next_move_at is not None:
             departs = max(0, int((caravan.next_move_at - now).total_seconds()))
@@ -409,7 +498,7 @@ def hire(db: Session, ctx: CaravaneerContext, caravan_id: int, now: Optional[dat
     params = _params(db)
     caravan = caravan_crud._lock_caravan(db, caravan_id)
     raid_status = caravan_crud.active_raid_status(db, int(caravan_id)) if caravan is not None else None
-    refusal = _caravan_refusal(caravan, ctx.location_id, raid_status)
+    refusal = _caravan_refusal(caravan, ctx, raid_status)
     if refusal is None:
         refusal = _seat_refusal(params, _active_count(db, caravan.id, lock=True))
     if refusal is not None:
@@ -420,16 +509,22 @@ def hire(db: Session, ctx: CaravaneerContext, caravan_id: int, now: Optional[dat
     refusal = _character_refusal(db, character, caravan, now)
     if refusal is not None:
         raise EconomyApiError(*refusal)
+    # hire location = where he signed up (at a fence: the fence's location — the FEAT-212 public mask shows him there)
     db.add(models.EconCaravanEscort(caravan_id=int(caravan.id), character_id=int(character.id), status=STATUS_ACTIVE,
                                     hire_location_id=character.current_location_id, joined_at=now))
     character.escort_caravan_id = int(caravan.id)
     character.house_room_id = None
     group = _group_name(db, caravan.group_code)
-    message = f"Нанялся в охрану каравана ({group})"
-    _log(db, character.id, message, caravan.id, npc_id=ctx.npc_id)
+    if ctx.is_fence:
+        # FEAT-216 A10: «Скупщик проводит вас к каравану» — a raw move like move_escorts (no entry checks)
+        character.current_location_id = int(caravan.current_location_id)
+        _log(db, character.id, f"Нанялся в охрану каравана у скупщика ({group})", caravan.id, npc_id=ctx.npc_id)
+        notice_text = f"Скупщик проводит вас к каравану ({group}) — вы в охране"
+    else:
+        _log(db, character.id, f"Нанялся в охрану каравана ({group})", caravan.id, npc_id=ctx.npc_id)
+        notice_text = f"Вы в охране каравана ({group})"
     db.flush()
-    return HireResult(int(caravan.id), _notice(character.user_id, f"Вы в охране каравана ({group})", character.id,
-                                               caravan.id))
+    return HireResult(int(caravan.id), _notice(character.user_id, notice_text, character.id, caravan.id))
 
 
 # =====================================================================================================================
@@ -477,16 +572,20 @@ def escort_job(db: Session, character_id: int, now: Optional[datetime] = None) -
         state = STATE_UNDER_ATTACK
     elif caravan_crud.held_by(db, caravan, now, params, caravan_crud.gate_tables_available(db)) is not None:
         state = STATE_HELD
+    elif caravan.customs_state == customs_core.STATE_INSPECTING:
+        state = STATE_INSPECTION                    # FEAT-216: stopped at the customs post
     elif _i(caravan.route_index) == 0 and raid is None:
         state = STATE_PREPARING
     else:
         state = STATE_ON_ROAD
     next_move = None
-    if (state in (STATE_PREPARING, STATE_ON_ROAD) and caravan.next_move_at is not None
+    if state == STATE_INSPECTION and caravan.customs_until is not None:
+        next_move = max(0, int((caravan.customs_until - now).total_seconds()))
+    elif (state in (STATE_PREPARING, STATE_ON_ROAD) and caravan.next_move_at is not None
             and caravan.sea_stage not in SEA_NO_COUNTDOWN):
         next_move = max(0, int((caravan.next_move_at - now).total_seconds()))
     escorts = _escorts_of(db, caravan.id)
-    fee, bonus = pools(_seller_part(caravan), params, raid_status == RAID_REPELLED)
+    fee, bonus = pools(_seller_part(caravan), params, raid_status == RAID_REPELLED, bool(caravan.is_contraband))
     in_raid = bool(row.in_raid) or (raid is not None and int(character_id) in _ids(raid.escort_ids))
     battle_id = (int(raid.battle_id) if raid is not None and raid_status in RAID_ACTIVE_STATUSES and in_raid
                  and raid.battle_id is not None else None)
@@ -508,6 +607,8 @@ def escort_job(db: Session, character_id: int, now: Optional[datetime] = None) -
         "sea_board_port_name": names.get(int(caravan.sea_board_port_id)) if caravan.sea_board_port_id else None,
         "sea_alight_port_name": names.get(int(caravan.sea_alight_port_id)) if caravan.sea_alight_port_id else None,
         "ship_name": _ship_name(db, caravan.sea_ship_id),
+        # FEAT-216 C9: the escort's own job only (never shown to anyone else)
+        "is_contraband": bool(caravan.is_contraband),
     }
 
 
@@ -675,7 +776,7 @@ def pay_plan(db: Session, caravan: "models.EconCaravan", seller_part: int) -> Pa
     _lock_characters(db, [r.character_id for r in rows])
     params = _params(db)
     repelled = caravan_crud.active_raid_status(db, int(caravan.id)) == RAID_REPELLED
-    fee, bonus = pools(seller_part, params, repelled)
+    fee, bonus = pools(seller_part, params, repelled, bool(caravan.is_contraband))
     n = len(rows)
     return PayPlan(rows, fee // n, bonus // n)
 
@@ -774,7 +875,8 @@ def reward_one(db: Session, escort_id: int, now: datetime, params) -> bool:
     import shadow_core as sc
 
     info = db.execute(text(
-        "SELECT e.character_id, e.caravan_id, e.in_raid, c.from_region_id, c.to_region_id, c.group_code "
+        "SELECT e.character_id, e.caravan_id, e.in_raid, c.from_region_id, c.to_region_id, c.group_code, "
+        "c.is_contraband "
         "FROM econ_caravan_escorts e JOIN econ_caravans c ON c.id = e.caravan_id "
         "WHERE e.id = :id AND e.status = :s AND e.rewards_done = 0"),
         {"id": int(escort_id), "s": STATUS_DELIVERED}).first()
@@ -782,6 +884,17 @@ def reward_one(db: Session, escort_id: int, now: datetime, params) -> bool:
     if info is None:
         return False
     cid, caravan_id, in_raid = int(info[0]), int(info[1]), bool(info[2])
+    if info[6]:
+        # FEAT-216: a smuggling run is pay only — no reputation, no defense fame, no faction deed (row still claimed)
+        try:
+            claimed = db.execute(text(
+                "UPDATE econ_caravan_escorts SET rewards_done = 1 WHERE id = :id AND rewards_done = 0"),
+                {"id": int(escort_id)})
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        return (claimed.rowcount or 0) == 1
     faction = faction_kills.apply_caravan_deed(db, cid, fc.ENEMY_ESCORT, escort_faction_key(caravan_id, cid), now)
     try:
         claimed = db.execute(text(

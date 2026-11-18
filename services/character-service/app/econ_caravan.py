@@ -20,12 +20,17 @@ FEAT-215 sea caravans (§3.3): ``plan_caravans`` may get a pure reachability cal
 to_region) -> Reach | None`` (land road / sea route / nothing) and a number of free physical slots for sea caravans.
 A sea caravan carries a freight ``floor(value x freight_pct / 100)`` paid by the buyer on top of value and duty, so
 ``paid_purse + paid_treasury == value + duty + freight``; the freight leaves the escrow only on unloading.
+
+FEAT-216 customs (§3.2): a legal foreign physical caravan routed via a customs post pays its duty at the post (op
+``caravan_duty``) — ``duty_paid`` then left the escrow. The money helpers take ``duty_paid``: ``None`` (or the
+default 0 for the refund / raid cap) = the duty is not settled yet, i.e. exactly the pre-FEAT-216 behaviour.
 """
 
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import customs_core
 from econ_sim import GroupDef, SimParams
 
 _THOUSANDTH = Decimal("0.001")
@@ -105,6 +110,8 @@ class CaravanPlan:
     freight: int = 0                 # FEAT-215: reserved sea freight (inside the paid parts)
     freight_pct: float = 0.0
     kind: str = REACH_LAND           # REACH_LAND | REACH_SEA (the reach the planner chose)
+    contraband: bool = False         # FEAT-216: a smugglers' caravan (always physical, no duty, marked-up price)
+    markup_pct: float = 0.0          # FEAT-216: the markup baked into ``unit_price`` (contraband only)
 
     @property
     def cost(self) -> int:
@@ -190,6 +197,15 @@ def affordable_units(budget, price, duty_pct) -> float:
     return floor3(budget_d / factor)
 
 
+def contraband_price(price, markup_pct) -> float:
+    """FEAT-216 §3.2: the smugglers' unit price ``round4(price x (1 + markup / 100))`` (markup < 0 counts as 0)."""
+    base = _dec(price)
+    if base <= 0:
+        return 0.0
+    factor = Decimal(1) + max(_dec(markup_pct), Decimal(0)) / _HUNDRED
+    return float((base * factor).quantize(_PRICE_STEP, rounding=ROUND_HALF_UP))
+
+
 def split_payment(cost: int, purse_left: int, treasury_left: int, is_food: bool) -> Optional[Tuple[int, int]]:
     """Who pays ``cost``: the purse first, the region treasury tops up **food only**.
 
@@ -222,12 +238,24 @@ def plan_caravans(
     params: SimParams,
     reach: Optional[Callable[[int, int], Optional[Reach]]] = None,
     sea_slots: Optional[int] = None,
+    bans: Optional[Mapping[int, Sequence[str]]] = None,
+    contraband_reach: Optional[Callable[[int, int], Optional[Reach]]] = None,
 ) -> List[CaravanPlan]:
     """Match surplus regions with deficit regions (3.5). Deterministic: same input -> same plan.
 
     FEAT-215: ``reach is None`` = the legacy behaviour (no geography). Otherwise a seller is a candidate only when the
     country / pair rule allows the trade **and** ``reach(seller, buyer)`` is not None; land candidates sort before
     sea ones of the same trip length; a sea plan uses one of ``sea_slots`` (None = unlimited) and carries a freight.
+
+    FEAT-216 (§3.6): ``bans`` = ``{country_id: banned group codes}`` — a foreign deal of a group banned in the buyer's
+    country is not a legal candidate. A foreign deal that is blocked (closed / missing pair, or banned group) becomes a
+    **contraband** candidate when ``contraband_reach`` is given, ``customs_enabled`` and ``customs_contraband_share >
+    0``: ``caravan_travel_foreign`` recounts, no duty, the price marked up by ``customs_contraband_markup_pct``, at
+    most ``share`` of ``min(need, supply)``, reach = ``contraband_reach(seller, buyer)`` (None → no candidate).
+    A foreign deal that is allowed but has no legal reach (e.g. the post is unreachable) is NOT contraband.
+    Contraband is always physical, so every contraband plan (land or sea) uses one of ``sea_slots`` (the free
+    physical slots). Legal candidates sort before contraband ones. ``bans is None`` and ``contraband_reach is None``
+    → exactly the pre-FEAT-216 output.
     """
     if not int(params.caravans_enabled):
         return []
@@ -249,6 +277,11 @@ def plan_caravans(
         return plans
     sea_left: Optional[int] = None if sea_slots is None else max(0, int(sea_slots))
     region_ids = sorted(markets)
+    smuggle_share = _dec(getattr(params, "customs_contraband_share", 0) or 0)
+    smuggling = (contraband_reach is not None and bool(int(getattr(params, "customs_enabled", 0) or 0))
+                 and smuggle_share > 0)
+    markup_pct = max(0.0, float(getattr(params, "customs_contraband_markup_pct", 0) or 0)) if smuggling else 0.0
+    smuggle_way = Route(max(1, int(params.caravan_travel_foreign)), 0.0)
 
     for group in _group_order(groups):
         code = group.code
@@ -281,26 +314,36 @@ def plan_caravans(
             for seller_id, amount in supply.items():
                 if seller_id == buyer_id or amount <= 0 or prices.get(seller_id, 0) <= 0:
                     continue
-                way = route(markets[seller_id].country_id, buyer.country_id, pairs, params)
-                if way is None:
-                    continue
-                how = Reach(REACH_LAND) if reach is None else reach(seller_id, buyer_id)
-                if how is None:
-                    continue
-                candidates.append((way.travel_runs, 0 if how.kind == REACH_LAND else 1, prices[seller_id],
-                                   seller_id, way, how))
-            candidates.sort(key=lambda c: (c[0], c[1], c[2], c[3]))
+                seller_country = markets[seller_id].country_id
+                way = route(seller_country, buyer.country_id, pairs, params)
+                foreign = int(seller_country) != int(buyer.country_id)
+                banned = foreign and bans is not None and customs_core.is_banned(bans, buyer.country_id, code)
+                if way is not None and not banned:
+                    how = Reach(REACH_LAND) if reach is None else reach(seller_id, buyer_id)
+                    if how is None:
+                        continue
+                    candidates.append((0, way.travel_runs, 0 if how.kind == REACH_LAND else 1, prices[seller_id],
+                                       seller_id, way, how))
+                elif foreign and smuggling:
+                    how = contraband_reach(seller_id, buyer_id)
+                    if how is None:
+                        continue
+                    candidates.append((1, smuggle_way.travel_runs, 0 if how.kind == REACH_LAND else 1,
+                                       contraband_price(prices[seller_id], markup_pct), seller_id, smuggle_way, how))
+            candidates.sort(key=lambda c: (c[0], c[1], c[2], c[3], c[4]))
 
-            for _travel, _kind, price, seller_id, way, how in candidates:
+            for is_smuggled, _travel, _kind, price, seller_id, way, how in candidates:
                 if len(plans) >= max_count:
                     return plans
                 if supply[seller_id] <= 0:
                     continue
                 is_sea = how.kind == REACH_SEA
-                if is_sea and sea_left is not None and sea_left <= 0:
+                if (is_sea or is_smuggled) and sea_left is not None and sea_left <= 0:
                     continue
                 freight_pct = max(0.0, float(how.freight_pct)) if is_sea else 0.0
                 want = min(need[buyer_id], supply[seller_id])
+                if is_smuggled:
+                    want = floor3(_dec(want) * smuggle_share)
                 budget = purse_left[buyer_id] + (treasury_left[buyer_id] if group.is_food else 0)
                 units = min(want, affordable_units(budget, price, way.duty_pct + freight_pct))
                 value, duty = price_caravan(units, price, way.duty_pct)
@@ -323,8 +366,9 @@ def plan_caravans(
                     units=units, unit_price=price, value=value, duty=duty, duty_pct=float(way.duty_pct),
                     travel_runs=int(way.travel_runs), paid_purse=paid_purse, paid_treasury=paid_treasury,
                     freight=freight, freight_pct=freight_pct, kind=how.kind,
+                    contraband=bool(is_smuggled), markup_pct=markup_pct if is_smuggled else 0.0,
                 ))
-                if is_sea and sea_left is not None:
+                if (is_sea or is_smuggled) and sea_left is not None:
                     sea_left -= 1
                 left = purse_left[buyer_id] + (treasury_left[buyer_id] if group.is_food else 0)
                 if need[buyer_id] <= 0 or left <= 0:
@@ -405,10 +449,25 @@ def guard_multiplier(value: int, marker_type: Optional[str], params: SimParams) 
     return float(max(Decimal(1), mult).quantize(_THOUSANDTH, rounding=ROUND_HALF_UP))
 
 
-def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int, freight: int = 0) -> Tuple[int, int]:
+def settled_duty(customs_state: Optional[str], duty_paid) -> Optional[int]:
+    """FEAT-216: the duty already paid at the customs post (``int``) once the inspection started, else ``None``
+    (not settled: the duty is still part of the escrow and is paid on delivery)."""
+    if customs_state in customs_core.DUTY_SETTLED_STATES:
+        return max(0, int(duty_paid or 0))
+    return None
+
+
+def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int, freight: int = 0,
+                     duty_paid: Optional[int] = None) -> Tuple[int, int]:
     """Delivery after a raid (§3.3): the rest of the escrow ``R = paid_total - freight - raid_paid`` goes to the seller
     and the duty; ``duty' = floor(duty x R / (value + duty))`` (the full duty when nothing was raided).
-    ``(seller, duty)``. FEAT-215: ``freight`` = the reserved sea freight (it goes to the port, never to the seller)."""
+    ``(seller, duty)``. FEAT-215: ``freight`` = the reserved sea freight (it goes to the port, never to the seller).
+    FEAT-216: ``duty_paid`` = the duty settled at the customs post (``None`` = not settled, today's rule); once
+    settled the seller gets ``paid_total - freight - raid_paid - duty_paid`` and the duty part is 0."""
+    if duty_paid is not None:
+        rest = (int(paid_total) - max(0, int(freight or 0)) - max(0, int(raid_paid))
+                - max(0, int(duty_paid)))
+        return max(0, rest), 0
     rest = max(0, int(paid_total) - max(0, int(freight or 0)) - max(0, int(raid_paid)))
     duty = max(0, int(duty))
     cost = max(0, int(value)) + duty
@@ -421,22 +480,25 @@ def remaining_payout(value: int, duty: int, paid_total: int, raid_paid: int, fre
     return rest - duty_part, duty_part
 
 
-def refund_split(paid_purse: int, paid_treasury: int, raid_paid: int, freight_paid: int = 0) -> Tuple[int, int]:
+def refund_split(paid_purse: int, paid_treasury: int, raid_paid: int, freight_paid: int = 0,
+                 duty_paid: int = 0) -> Tuple[int, int]:
     """Cancel after a raid (§3.3): ``(purse_back, treasury_back)``; the raid takes from both payers pro rata.
     FEAT-215: a freight already charged (``freight_paid``) is gone as well (pro rata like the raid); a reserved but
-    uncharged freight is refunded with the rest."""
+    uncharged freight is refunded with the rest. FEAT-216: a duty paid at the customs post (``duty_paid``) stays in
+    the treasury — gone pro rata like the freight."""
     paid_purse, paid_treasury = max(0, int(paid_purse)), max(0, int(paid_treasury))
     total = paid_purse + paid_treasury
-    raid = min(max(0, int(raid_paid)) + max(0, int(freight_paid or 0)), total)
+    raid = min(max(0, int(raid_paid)) + max(0, int(freight_paid or 0)) + max(0, int(duty_paid or 0)), total)
     if total <= 0:
         return 0, 0
     purse_back = paid_purse - (raid * paid_purse) // total
     return purse_back, total - raid - purse_back
 
 
-def raid_marks_cap(paid_total: int, freight: int, raid_paid: int) -> int:
-    """FEAT-215: the most marks a raid may still take out of the escrow: ``paid_total - freight - raid_paid``."""
-    return max(0, int(paid_total) - max(0, int(freight or 0)) - max(0, int(raid_paid)))
+def raid_marks_cap(paid_total: int, freight: int, raid_paid: int, duty_paid: int = 0) -> int:
+    """FEAT-215: the most marks a raid may still take out of the escrow: ``paid_total - freight - raid_paid``;
+    FEAT-216: minus the duty already paid at the customs post (it is in the treasury, not raidable)."""
+    return max(0, int(paid_total) - max(0, int(freight or 0)) - max(0, int(raid_paid)) - max(0, int(duty_paid or 0)))
 
 
 def cargo_loss_units(units_left, loss_pct, lost_groups: int, decided_groups: int) -> float:

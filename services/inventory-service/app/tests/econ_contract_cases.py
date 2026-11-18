@@ -39,6 +39,8 @@ duty, cancel escrow -> payers; untaxed, never negative, no sources) and CARAVAN_
 CARAVAN_ESCROW_KIND_NAME, which a runner checks against econ_core's constants directly.
 FEAT-211 (physical caravans) adds `caravan_raid` (escrow -> raiders, untaxed) to those caravan CASES.
 FEAT-215 (sea caravans) adds `caravan_freight` (escrow -> port region + explicit country leg) to the op names.
+FEAT-216 (customs) adds `caravan_duty` (escrow -> destination country at the post) and `caravan_seizure`
+(escrow -> seizure country + customs officers) to the op names.
 
 FEAT-193 (guild orders) appends `guild_order` ledger CASES (purse + region treasury -> character, no
 comment, untaxed, no sources) and GUILD_OP_TYPE_NAMES, plus PRICING_CASES for the shop-row helpers
@@ -843,7 +845,7 @@ CASES += [
 # a runner checks == CARAVAN_OP_TYPES, subset of OP_TYPES, disjoint from SOURCE_OP_TYPES and
 # COMMENT_REQUIRED_OP_TYPES
 CARAVAN_OP_TYPE_NAMES: Tuple[str, ...] = ("caravan_dispatch", "caravan_delivery", "caravan_cancel",
-                                          "caravan_raid", "caravan_freight")
+                                          "caravan_raid", "caravan_freight", "caravan_duty", "caravan_seizure")
 # a runner checks: in ACCOUNT_KINDS, singleton, not in NEGATIVE_ALLOWED_KINDS / TAX_SOURCE_KINDS / SOURCE_KINDS
 CARAVAN_ESCROW_KIND_NAME = "caravan_escrow"
 

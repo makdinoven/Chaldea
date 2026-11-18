@@ -8,6 +8,7 @@ import type {
   EscortLeaveResponse,
   EscortMessage,
   EscortMessages,
+  SmugglerView,
 } from '../types/caravanEscort';
 
 /**
@@ -29,7 +30,19 @@ export const fetchCaravaneer = async (npcId: number, characterId: number): Promi
   return data;
 };
 
-/** C2 — hire on as an escort; answers with the new job. */
+/** FEAT-216 C7 — the fence's secret cargo caravans preparing at his region's trade gate (smuggler hire list). */
+export const fetchSmugglerCaravans = async (npcId: number, characterId: number): Promise<SmugglerView> => {
+  const { data } = await axios.get<SmugglerView>(`${CARAVANS}/fence/${npcId}`, {
+    params: { character_id: characterId },
+    ...QUIET_403,
+  });
+  return data;
+};
+
+/**
+ * C2 — hire on as an escort; answers with the new job.
+ * FEAT-216: `npc_id` may be a fence — the smuggler is then moved to the caravan's location.
+ */
 export const hireEscort = async (caravanId: number, body: EscortHireRequest): Promise<EscortJob> => {
   const { data } = await axios.post<EscortJob>(`${CARAVANS}/${caravanId}/escort/hire`, body, QUIET_403);
   return data;

@@ -4,7 +4,14 @@ import { fetchCaravanDetail } from '../../../api/economyAdmin';
 import { apiErrorMessage } from '../../../api/errors';
 import RemainingText from '../../CommonComponents/RemainingText';
 import type { CaravanDetail as CaravanDetailData, CaravanRaidStatus, CaravanRow } from '../../../types/economy';
-import { formatDateTime, formatDecimal, formatQty } from './economyLabels';
+import {
+  caravanCancelReasonLabel,
+  caravanCustomsStateLabel,
+  formatDateTime,
+  formatDecimal,
+  formatQty,
+  isSeizureReason,
+} from './economyLabels';
 
 /* FEAT-211 — expanded caravan row of the admin list (A5): route with the current position, hold, raid. */
 
@@ -26,15 +33,31 @@ export const RAID_STATUS_CLS: Record<CaravanRaidStatus, string> = {
   expired: 'border-white/20 text-white/50',
 };
 
-export const RaidBadge = ({ status }: { status: CaravanRaidStatus }) => (
-  <span
-    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap ${
-      RAID_STATUS_CLS[status] ?? 'border-white/20 text-white/50'
-    }`}
-  >
-    налёт: {RAID_STATUS_LABEL[status] ?? status}
-  </span>
-);
+/** FEAT-216: a customs / patrol fight reuses the raid row; `won` there means «конфискован». */
+const FIGHT_KIND_LABEL: Record<string, string> = {
+  raid: 'налёт',
+  customs: 'досмотр таможни',
+  patrol: 'стража',
+};
+
+const FIGHT_WON_LABEL: Record<string, string> = {
+  customs: 'конфискован',
+  patrol: 'конфискован',
+};
+
+export const RaidBadge = ({ status, kind }: { status: CaravanRaidStatus; kind?: string | null }) => {
+  const k = kind ?? 'raid';
+  const statusText = (status === 'won' && FIGHT_WON_LABEL[k]) || RAID_STATUS_LABEL[status] || status;
+  return (
+    <span
+      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap ${
+        RAID_STATUS_CLS[status] ?? 'border-white/20 text-white/50'
+      }`}
+    >
+      {FIGHT_KIND_LABEL[k] ?? k}: {statusText}
+    </span>
+  );
+};
 
 /** FEAT-212 — escort row statuses (A5). */
 const ESCORT_STATUS_LABEL: Record<string, string> = {
@@ -96,9 +119,10 @@ const SEA_STAGE_CLS: Record<string, string> = {
 export const seaStageCls = (stage: string | null | undefined): string =>
   (stage && SEA_STAGE_CLS[stage]) || 'text-white/70';
 
-const HELD_LABEL: Record<'post' | 'raid', string> = {
+const HELD_LABEL: Record<'post' | 'raid' | 'customs', string> = {
   post: 'ждёт: в локации открыт боевой пост на налёт',
   raid: 'стоит: на него напали',
+  customs: 'стоит: его заметил таможенник, ждёт досмотра',
 };
 
 const Line = ({ label, children }: { label: string; children: ReactNode }) => (
@@ -158,6 +182,11 @@ const CaravanDetail = ({ caravanId, format }: CaravanDetailProps) => {
   const freightPaid = data.freight_paid ?? 0;
   const sunk = data.sunk_units ?? 0;
   const losses = data.sea_losses ?? [];
+  const customsState = caravanCustomsStateLabel(data.customs_state);
+  const dutyPaid = data.duty_paid ?? 0;
+  const seized = isSeizureReason(data.cancel_reason);
+  const hasCustoms = data.customs_location_id != null || !!data.is_contraband || seized;
+  const raidKind = raid?.kind ?? 'raid';
 
   return (
     <div className="flex flex-col gap-4 min-w-0 border-t border-white/10 pt-3">
@@ -284,6 +313,47 @@ const CaravanDetail = ({ caravanId, format }: CaravanDetailProps) => {
         </>
       )}
 
+      {hasCustoms && (
+        <div
+          className={`flex flex-col gap-1.5 rounded-card border p-3 min-w-0 ${
+            data.is_contraband || seized ? 'border-site-red/20 bg-site-red/[0.04]' : 'border-gold/20 bg-gold/[0.04]'
+          }`}
+        >
+          <span className="text-white/60 text-[11px] uppercase tracking-[0.06em]">
+            {data.is_contraband ? 'Контрабанда' : 'Таможня'}
+          </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1">
+            {data.is_contraband && (
+              <Line label="Наценка">{data.markup_pct != null ? `${formatDecimal(data.markup_pct)} %` : '—'}</Line>
+            )}
+            {data.customs_location_id != null && (
+              <Line label="Пост">{data.customs_location_name ?? `#${data.customs_location_id}`}</Line>
+            )}
+            {customsState && <Line label="Досмотр">{customsState}</Line>}
+            {inTransit && data.customs_state === 'inspecting' && data.customs_until && (
+              <Line label="Досмотр закончится">
+                <RemainingText until={data.customs_until} prefix="через" doneText="ждёт фонового шага" />
+              </Line>
+            )}
+            {(dutyPaid > 0 || data.customs_state === 'inspecting' || data.customs_state === 'cleared') && (
+              <Line label="Пошлина уплачена на посту">{format(dutyPaid)}</Line>
+            )}
+            {seized && (
+              <Line label="Итог">
+                <span className="text-site-red">{caravanCancelReasonLabel(data.cancel_reason)}</span>
+              </Line>
+            )}
+            {seized && (data.seized_region_id != null || data.seized_country_id != null) && (
+              <Line label="Где поймали">
+                {data.seized_region_name ?? (data.seized_region_id != null ? `регион #${data.seized_region_id}` : '—')}
+                {(data.seized_country_name || data.seized_country_id != null) &&
+                  ` (${data.seized_country_name ?? `страна #${data.seized_country_id}`})`}
+              </Line>
+            )}
+          </div>
+        </div>
+      )}
+
       {(data.escorts?.length ?? 0) > 0 && (
         <div className="flex flex-col gap-1.5 min-w-0">
           <span className="text-white/60 text-[11px] uppercase tracking-[0.06em]">
@@ -328,14 +398,14 @@ const CaravanDetail = ({ caravanId, format }: CaravanDetailProps) => {
       {raid && (
         <div className="flex flex-col gap-2 rounded-card border border-site-red/20 bg-site-red/[0.04] p-3 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <RaidBadge status={raid.status} />
+            <RaidBadge status={raid.status} kind={raidKind} />
             <span className="text-white/40 text-xs">
-              налёт #{raid.id} · {formatDateTime(raid.created_at)}
+              {FIGHT_KIND_LABEL[raidKind] ?? raidKind} #{raid.id} · {formatDateTime(raid.created_at)}
               {raid.finished_at && ` — ${formatDateTime(raid.finished_at)}`}
             </span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1">
-            <Line label="Вожак">
+            <Line label={raidKind === 'raid' ? 'Вожак' : raidKind === 'customs' ? 'Таможенник' : 'Старший стражи'}>
               {raid.leader_name ?? `#${raid.leader_id}`}
               {raid.is_group ? ' (группой)' : ''}
             </Line>
@@ -347,12 +417,18 @@ const CaravanDetail = ({ caravanId, format }: CaravanDetailProps) => {
             {(raid.escort_ids?.length ?? 0) > 0 && (
               <Line label="Охранники-игроки в бою">{raid.escort_ids?.length ?? 0}</Line>
             )}
-            <Line label="Добыча">
-              {format(raid.marks)}, тюков {raid.bales}
-            </Line>
-            <Line label="Украдено товара">
-              {formatQty(raid.stolen_units)} ед. на {format(raid.stolen_value)}
-            </Line>
+            {raidKind === 'raid' ? (
+              <>
+                <Line label="Добыча">
+                  {format(raid.marks)}, тюков {raid.bales}
+                </Line>
+                <Line label="Украдено товара">
+                  {formatQty(raid.stolen_units)} ед. на {format(raid.stolen_value)}
+                </Line>
+              </>
+            ) : (
+              raidKind === 'customs' && <Line label="Доля таможенникам">{format(raid.officer_paid ?? 0)}</Line>
+            )}
           </div>
           {raid.attackers.length > 0 && (
             <ul className="flex flex-col gap-1">

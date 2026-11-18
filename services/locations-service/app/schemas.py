@@ -122,6 +122,8 @@ class LocationCreate(BaseModel):
     is_sea_zone: Optional[bool] = None
     # FEAT-213: the zone a port opens to (ports only); null / 0 = none.
     port_sea_zone_id: Optional[int] = Field(None, ge=0)
+    # FEAT-216: a customs post («Таможня»); null = not a post. Refused on ships / sea zones (400).
+    is_customs: Optional[bool] = None
 
 class LocationCreateResponse(BaseModel):
     id: int
@@ -137,6 +139,7 @@ class LocationCreateResponse(BaseModel):
     is_port: bool = False
     is_sea_zone: bool = False
     port_sea_zone_id: Optional[int] = None
+    is_customs: bool = False
     marker_type: str = "safe"
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
@@ -166,6 +169,8 @@ class LocationUpdate(BaseModel):
     is_sea_zone: Optional[bool] = None
     # FEAT-213: null = leave as is, 0 = clear, else the zone id (ports only).
     port_sea_zone_id: Optional[int] = Field(None, ge=0)
+    # FEAT-216: customs post; null = leave as is. Refused on ships / sea zones (400).
+    is_customs: Optional[bool] = None
 
 class LocationRead(BaseModel):
     id: int
@@ -178,6 +183,7 @@ class LocationRead(BaseModel):
     is_port: bool = False
     is_sea_zone: bool = False
     port_sea_zone_id: Optional[int] = None
+    is_customs: bool = False
     image_url: Optional[str] = None
     parent_id: Optional[int] = None
     marker_type: str = "safe"
@@ -776,6 +782,8 @@ class LocationClientDetails(BaseModel):
     # FEAT-213: sea zone flag, the ship whose deck this location is, ships at the pier
     is_sea_zone: bool = False
     port_sea_zone_id: Optional[int] = None
+    # FEAT-216: a customs post
+    is_customs: bool = False
     ship_id: Optional[int] = None
     docked_ships: List[DockedShipClient] = []
     # FEAT-214: the port's sea zone is under an active storm («В море неспокойно»)

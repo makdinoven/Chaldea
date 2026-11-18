@@ -28,6 +28,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 import caravan_escort_crud as escort_crud
+import customs_crud
 import econ_core as core
 import econ_ledger
 import economy_caravan_crud as caravan_crud
@@ -246,13 +247,25 @@ def charge_freight(db: Session, caravan: "models.EconCaravan", ship_id: Optional
 
 
 def _unload(caravan: "models.EconCaravan", now: datetime, params) -> None:
-    """Landing port reached: the land leg 2 starts (``route[sea_split_index + 1]`` is the landing port)."""
+    """Landing port reached: the land leg 2 starts (``route[sea_split_index + 1]`` is the landing port). FEAT-216: a
+    customs landing port (``customs_index``, still ``pending``) neither arrives nor moves here — the inspection starts
+    in :func:`_settle_hold` after the freight (accounts last, §3.3)."""
     route = [int(x) for x in caravan_crud._json_list(caravan.route)]
     index = _i(caravan.sea_split_index) + 1
     caravan.current_location_id = int(caravan.sea_alight_port_id)
     caravan.route_index = min(index, max(0, len(route) - 1))
     caravan.sea_stage = caravan_crud.SEA_LANDED
     caravan.sea_unloaded_at = now
+    if customs_crud.at_post(caravan):
+        caravan.next_move_at = None             # set by customs_crud.start_inspection in the same transaction
+        return
+    _land_next(caravan, now, params)
+
+
+def _land_next(caravan: "models.EconCaravan", now: datetime, params) -> None:
+    """After landing: arrived when the landing port is the final node, else the first land step is scheduled."""
+    route = [int(x) for x in caravan_crud._json_list(caravan.route)]
+    index = _i(caravan.route_index)
     if not route or index >= len(route) - 1:
         caravan.arrived_at = now
         caravan.next_move_at = None
@@ -310,6 +323,8 @@ def _settle_hold(db: Session, ship: "models.SeaShip", caravans: Sequence["models
     db.flush()
     for c in unloaded:                                   # accounts last (§3.6)
         charge_freight(db, c, ship.id, now)
+        if customs_crud.at_post(c) and not customs_crud.start_inspection(db, c, now, params):
+            _land_next(c, now, params)                   # FEAT-216: inspection 0 min — duty only, then as usual
     db.flush()
     return len(todo)
 

@@ -621,6 +621,21 @@ export interface EconSimParams {
   caravan_sea_wait_hours: number;
   caravan_sea_loss_pct: number;
   caravan_no_path_abstract: number;
+  /* FEAT-216 customs & smuggling (feature file 3.5) — older backends may not send them yet */
+  customs_enabled: number;
+  customs_inspection_minutes: number;
+  customs_contraband_share: number;
+  customs_contraband_markup_pct: number;
+  customs_caravan_stealth: number;
+  customs_detect_base_pct: number;
+  customs_detect_min_pct: number;
+  customs_detect_max_pct: number;
+  customs_patrol_detect_pct: number;
+  customs_alert_minutes: number;
+  customs_officer_share: number;
+  customs_seizure_fame: number;
+  customs_smuggler_fee_share: number;
+  customs_smuggling_wanted_points: number;
   /* FEAT-193 guild orders (feature file 3.4) — older backends may not send them yet */
   guild_enabled: number;
   guild_markup_pct: number;
@@ -1343,6 +1358,21 @@ export interface CaravanParams {
   caravan_sea_wait_hours?: number;
   caravan_sea_loss_pct?: number;
   caravan_no_path_abstract?: number;
+  /* FEAT-216 customs & smuggling (feature file 3.5) — optional: an older backend does not send them */
+  customs_enabled?: number;
+  customs_inspection_minutes?: number;
+  customs_contraband_share?: number;
+  customs_contraband_markup_pct?: number;
+  customs_caravan_stealth?: number;
+  customs_detect_base_pct?: number;
+  customs_detect_min_pct?: number;
+  customs_detect_max_pct?: number;
+  customs_patrol_detect_pct?: number;
+  customs_alert_minutes?: number;
+  customs_officer_share?: number;
+  customs_seizure_fame?: number;
+  customs_smuggler_fee_share?: number;
+  customs_smuggling_wanted_points?: number;
 }
 
 export interface CaravanCountry {
@@ -1442,6 +1472,22 @@ export interface CaravanRow {
   freight_paid?: number;
   /** Units lost to sea monsters. */
   sunk_units?: number;
+  /* FEAT-216 customs & smuggling (feature file 3.7 A3) — optional: absent on an older backend */
+  is_contraband?: boolean;
+  /** Contraband price markup, % (baked into `unit_price`). */
+  markup_pct?: number | null;
+  /** null = no customs post on the route. */
+  customs_state?: CaravanCustomsState | string | null;
+  customs_location_id?: number | null;
+  customs_location_name?: string | null;
+  /** End of the stop at the post (while inspecting). */
+  customs_until?: string | null;
+  /** Duty already paid to the destination country at the post. */
+  duty_paid?: number;
+  seized_region_id?: number | null;
+  seized_region_name?: string | null;
+  seized_country_id?: number | null;
+  seized_country_name?: string | null;
 }
 
 export interface CaravanList {
@@ -1461,7 +1507,13 @@ export interface CaravanListQuery {
 
 /* ============================================================================ FEAT-211 physical caravans (3.13) */
 
-export type CaravanKindFilter = 'all' | 'physical' | 'abstract' | 'sea';
+export type CaravanKindFilter = 'all' | 'physical' | 'abstract' | 'sea' | 'contraband';
+
+/** FEAT-216 (3.1): customs stage of a legal caravan whose route passes a post; null = no post. */
+export type CaravanCustomsState = 'pending' | 'inspecting' | 'cleared';
+
+/** FEAT-216 (3.0 A1): what kind of fight a caravan raid row is. */
+export type CaravanFightKind = 'raid' | 'customs' | 'patrol';
 
 /** FEAT-215 (3.4): stage of a sea caravan; null on a land caravan. */
 export type CaravanSeaStage = 'to_port' | 'waiting' | 'aboard' | 'landed' | 'stranded';
@@ -1510,6 +1562,10 @@ export interface CaravanRaidAdmin {
   finished_at: string | null;
   /** FEAT-212: player escorts placed on the guard team */
   escort_ids?: number[];
+  /** FEAT-216: bandit raid / customs officer / guard patrol — optional on an older backend (= raid) */
+  kind?: CaravanFightKind | string;
+  /** FEAT-216: officers' share of the confiscation fine paid out */
+  officer_paid?: number;
 }
 
 /** FEAT-212 (A5): escort row status. */
@@ -1530,7 +1586,8 @@ export interface CaravanEscortAdmin {
 /** A5 — one caravan with its route and raid. */
 export interface CaravanDetail extends CaravanRow {
   route: CaravanRoutePoint[];
-  held_by: 'post' | 'raid' | null;
+  /** FEAT-216 adds `customs` (a detected contraband caravan waits for the officer). */
+  held_by: 'post' | 'raid' | 'customs' | null;
   raid: CaravanRaidAdmin | null;
   /** FEAT-212 — optional on an older backend */
   escorts?: CaravanEscortAdmin[];
@@ -1765,4 +1822,30 @@ export interface GuildAdminQuery {
   group_code?: string;
   limit?: number;
   offset?: number;
+}
+
+/* ============================================================================ FEAT-216 customs (3.7 A1/A2) */
+
+export interface CustomsPost {
+  location_id: number;
+  name: string | null;
+  is_port: boolean;
+}
+
+export interface CustomsCountry {
+  country_id: number;
+  name: string | null;
+  /** Codes of `econ_goods_groups` legal trade may not bring into this country. */
+  banned_groups: string[];
+  posts: CustomsPost[];
+}
+
+export interface CustomsGroup {
+  code: string;
+  name: string;
+}
+
+export interface CustomsAdmin {
+  countries: CustomsCountry[];
+  groups: CustomsGroup[];
 }

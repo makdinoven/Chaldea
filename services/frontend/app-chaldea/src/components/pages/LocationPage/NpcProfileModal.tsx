@@ -15,6 +15,7 @@ import FenceModal from './FenceModal/FenceModal';
 import GuildModal from './GuildModal/GuildModal';
 import CaravaneerModal from './CaravaneerModal/CaravaneerModal';
 import CaptainModal from './CaptainModal/CaptainModal';
+import CustomsOfficerModal from './CustomsOfficerModal/CustomsOfficerModal';
 import QuartermasterModal from './QuartermasterModal/QuartermasterModal';
 import { QM_SILENT_TEXT, probeQuartermaster, type QuartermasterProbeState } from '../../../api/factions';
 import TeleportMenu from './TeleportMenu';
@@ -57,6 +58,7 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
   /** FEAT-212: «Караванщик» — hiring on as a caravan escort. */
   const [caravaneerOpen, setCaravaneerOpen] = useState(false);
   const [captainOpen, setCaptainOpen] = useState(false);
+  const [customsOpen, setCustomsOpen] = useState(false);
   /** FEAT-206: faction quartermaster binding as seen by this character (none / silent / open). */
   const [qmState, setQmState] = useState<QuartermasterProbeState>('none');
   const [qmOpen, setQmOpen] = useState(false);
@@ -217,6 +219,17 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
         npcName={npc.name}
         npcAvatar={npc.avatar}
         onClose={() => setCaptainOpen(false)}
+      />
+    );
+  }
+
+  if (customsOpen && npc) {
+    return (
+      <CustomsOfficerModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setCustomsOpen(false)}
       />
     );
   }
@@ -530,6 +543,24 @@ const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfile
             >
               <span aria-hidden className="text-lg leading-none">⚓</span>
               Корабль
+            </button>
+          )}
+
+          {/* Customs button — a «Таможенник» NPC at a customs post takes on customs officers (FEAT-216) */}
+          {npc.npc_role === 'customs' && isCharacterHere && characterId && (
+            <button
+              onClick={() => setCustomsOpen(true)}
+              className="
+                mt-2 w-full px-6 py-3 rounded-card
+                border border-gold/50 bg-gold/10
+                text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                hover:bg-gold/20 hover:border-gold/80
+                transition-all duration-200
+                flex items-center justify-center gap-2
+              "
+            >
+              <span aria-hidden className="text-lg leading-none">🛃</span>
+              Таможня
             </button>
           )}
 

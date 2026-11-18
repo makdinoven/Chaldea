@@ -42,6 +42,8 @@ from sqlalchemy.orm import Session
 
 import activity_lock
 import caravan_escort_crud as escort_crud
+import customs_core
+import customs_crud
 import econ_caravan
 import econ_core as core
 import econ_ledger
@@ -74,6 +76,7 @@ STATE_ON_ROAD = "on_road"
 STATE_HELD = "held"
 STATE_UNDER_ATTACK = "under_attack"
 STATE_RAIDED = "raided"
+STATE_INSPECTION = "inspection"            # FEAT-216: a legal caravan stopped at its customs post
 
 KEY_RAID = "raid"
 SEA_NO_COUNTDOWN = (caravan_crud.SEA_WAITING, caravan_crud.SEA_ABOARD)  # FEAT-215: leaves with a ship, no timer
@@ -200,15 +203,23 @@ def caravans_here(db: Session, character_id: int, now: Optional[datetime] = None
         else:
             held = caravan_crud.held_by(db, row, now, params, gates_available)
             state = STATE_HELD if held else STATE_ON_ROAD
-            if state == STATE_ON_ROAD and row.next_move_at is not None and row.sea_stage not in SEA_NO_COUNTDOWN:
+            inspection_left = customs_crud.inspection_left_sec(row, now)
+            if state == STATE_ON_ROAD and inspection_left is not None:
+                state, departs = STATE_INSPECTION, inspection_left       # FEAT-216: legal caravans only
+            elif state == STATE_ON_ROAD and row.next_move_at is not None and row.sea_stage not in SEA_NO_COUNTDOWN:
                 departs = max(0, int((row.next_move_at - now).total_seconds()))
             can_attack, reason = (True, None) if has_pool else (False, MSG_NO_GUARDS)
+        # FEAT-216 C6: only the alerted officer sees «Досмотреть» (nobody else learns the caravan is suspicious)
+        can_inspect = (raid is None and row.customs_alert_officer_id is not None
+                       and int(row.customs_alert_officer_id) == int(character_id)
+                       and caravan_crud.customs_alert_open(row, now))
+        inspect_in = (max(0, int((row.customs_alert_until - now).total_seconds())) if can_inspect else None)
         if row.group_code not in names:
             names[row.group_code] = _group_name(db, row.group_code)
         out.append({"id": int(row.id), "group_code": row.group_code,
                     "group_name": names[row.group_code] or row.group_code, "guard_count": _i(row.guard_count),
                     "state": state, "departs_in_sec": departs, "can_attack": can_attack, "reason": reason,
-                    "sea_stage": row.sea_stage})
+                    "sea_stage": row.sea_stage, "can_inspect": can_inspect, "inspect_in_sec": inspect_in})
     return {"location_id": location_id, "caravans": out}
 
 
@@ -419,6 +430,11 @@ def mark_fighting(db: Session, raid_id: int, battle_id: int, attacker_ids: Seque
     return True
 
 
+def is_enforcement(raid) -> bool:
+    """FEAT-216: a customs officer's / a patrol's fight (``kind`` customs | patrol), not a bandit raid."""
+    return (getattr(raid, "kind", None) or customs_core.KIND_RAID) in customs_core.ENFORCEMENT_KINDS
+
+
 # =====================================================================================================================
 # A3 / poll: settlement (3.8)
 # =====================================================================================================================
@@ -562,7 +578,7 @@ def _escort_plan(db: Session, raid: "models.EconCaravanRaid", caravan: Optional[
 
 
 def _apply_escort_plan(db: Session, caravan: "models.EconCaravan", plan: EscortPlan,
-                       now: datetime) -> List[law_notify.Notice]:
+                       now: datetime, repelled_message: str = MSG_ESCORT_REPELLED) -> List[law_notify.Notice]:
     """Rows → fallen / released, columns cleared (the character stays at the raid location; no knockout, no pay),
     CharacterLog; notices for them and for the repelled survivors. The characters are already locked."""
     ids = plan.out_ids + [int(r.character_id) for r in plan.survivors]
@@ -578,7 +594,7 @@ def _apply_escort_plan(db: Session, caravan: "models.EconCaravan", plan: EscortP
                                            caravan.id, status=plan.out_status))
     escort_crud._clear_columns(db, caravan.id, plan.out_ids)
     for row in plan.survivors:
-        notices.append(escort_crud._notice(users.get(int(row.character_id)), MSG_ESCORT_REPELLED, row.character_id,
+        notices.append(escort_crud._notice(users.get(int(row.character_id)), repelled_message, row.character_id,
                                            caravan.id, status=STATUS_REPELLED))
     return notices
 
@@ -628,9 +644,20 @@ def settle_raid(db: Session, raid_id: int, *, battle_id: Optional[int], winner_t
         escorts = _escort_plan(db, raid, caravan, status, fallen_character_ids)    # escort rows locked here
         notices: List[law_notify.Notice] = []
         group_name = _group_name(db, caravan.group_code) if caravan is not None else None
-        if status == STATUS_WON and caravan is not None and players:
+        # FEAT-216: a customs / patrol fight moves no money here — a won one is confiscated by the follow-up
+        enforcement = is_enforcement(raid)
+        if status == STATUS_WON and caravan is not None and players and not enforcement:
             notices = _pay_out(db, raid, caravan, attackers, players, group_name, params, now,
                                lock_also=escorts.out_ids)
+        elif enforcement:
+            _lock_characters(db, escorts.out_ids)                                 # the one character lock of Tx 1
+            message = {STATUS_WON: customs_crud.MSG_SEIZED, STATUS_REPELLED: customs_crud.MSG_REPELLED}.get(status)
+            if message:
+                user_ids = law_crud.character_user_ids(db, players)
+                notices = [law_notify.Notice(user_ids.get(cid), message, customs_crud.WS_CUSTOMS,
+                                             law_notify.CATEGORY_PROGRESS,
+                                             {"character_id": cid, "raid_id": int(raid.id)})
+                           for cid in players]
         else:
             _lock_characters(db, escorts.out_ids)                                 # the one character lock of Tx 1
             if status == STATUS_REPELLED:
@@ -640,14 +667,22 @@ def settle_raid(db: Session, raid_id: int, *, battle_id: Optional[int], winner_t
                                              {"character_id": cid, "raid_id": int(raid.id)})
                            for cid in players]
         if caravan is not None:
-            notices = notices + _apply_escort_plan(db, caravan, escorts, now)
+            notices = notices + _apply_escort_plan(
+                db, caravan, escorts, now,
+                customs_crud.MSG_ESCORT_REPELLED if enforcement else MSG_ESCORT_REPELLED)
         if raid.attacker_ids is None:
             raid.attacker_ids = attackers
         raid.status = status
         raid.finished_at = now
         if (caravan is not None and caravan.status == caravan_crud.STATUS_IN_TRANSIT
+                and caravan.arrived_at is None and enforcement and status == STATUS_WON):
+            caravan.next_move_at = None                # FEAT-216: frozen until the confiscation follow-up
+        elif (caravan is not None and caravan.status == caravan_crud.STATUS_IN_TRANSIT
                 and caravan.arrived_at is None):
             caravan.next_move_at = now + caravan_crud.step_delay(params, rng())
+            if (caravan.customs_state == customs_core.STATE_INSPECTING and caravan.customs_until is not None
+                    and caravan.customs_until > caravan.next_move_at):
+                caravan.next_move_at = caravan.customs_until       # FEAT-216: the inspection is not cut short
         db.flush()
         db.commit()
     except Exception:
@@ -668,8 +703,10 @@ def _pay_out(db: Session, raid: "models.EconCaravanRaid", caravan: "models.EconC
     paid_total = _i(caravan.paid_purse) + _i(caravan.paid_treasury)
     marks = int((Decimal(paid_total) * Decimal(str(params.caravan_raid_marks_share or 0)))
                 .to_integral_value(rounding=ROUND_FLOOR))
-    # FEAT-215 §3.7: the reserved sea freight belongs to the port, never to the raiders
-    marks = max(0, min(marks, econ_caravan.raid_marks_cap(paid_total, _i(caravan.freight), _i(caravan.raid_paid))))
+    # FEAT-215 §3.7: the reserved sea freight belongs to the port, never to the raiders; FEAT-216: neither does a duty
+    # already paid at the customs post
+    marks = max(0, min(marks, econ_caravan.raid_marks_cap(paid_total, _i(caravan.freight), _i(caravan.raid_paid),
+                                                          duty_paid=_i(caravan.duty_paid))))
     bale = bale_item(db, caravan.group_code)
     bales = econ_caravan.bale_count(stolen_value, bale[2]) if bale is not None else 0
     split = econ_caravan.split_loot(marks, bales, [a for a in attackers if a in players] or players,
@@ -728,10 +765,12 @@ def raid_share_by_battle(db: Session, battle_id: int, character_id: int) -> dict
     or where the character was not a raider (so the window shows the ordinary PvE rewards only)."""
     none = {"raid": False, "status": None, "marks": 0, "bales": 0, "bale_name": None}
     row = db.execute(text(
-        "SELECT id, status, attacker_ids FROM econ_caravan_raids WHERE battle_id = :b ORDER BY id DESC LIMIT 1"),
+        "SELECT id, status, attacker_ids, kind FROM econ_caravan_raids WHERE battle_id = :b ORDER BY id DESC LIMIT 1"),
         {"b": int(battle_id)}).first()
     if row is None or int(character_id) not in _ids(row[2]):
         return none
+    if (row[3] or customs_core.KIND_RAID) != customs_core.KIND_RAID:
+        return none                                   # FEAT-216: a customs / patrol fight shows the PvE rewards
     status = row[1]
     if status in ACTIVE_STATUSES:
         return {**none, "raid": True, "status": SHARE_PENDING}
@@ -756,9 +795,11 @@ def law_step(db: Session, raid_id: int, now: Optional[datetime] = None, params=N
     import shadow_crud
     now = now or now_utc()
     try:
+        # FEAT-216: a customs / patrol fight waits for its confiscation (the seizure region judges the escorts)
         claimed = db.execute(text(
-            "UPDATE econ_caravan_raids SET law_done = 1 WHERE id = :id AND status = :s AND law_done = 0"),
-            {"id": int(raid_id), "s": STATUS_WON})
+            "UPDATE econ_caravan_raids SET law_done = 1 WHERE id = :id AND status = :s AND law_done = 0 "
+            "AND (kind = :raid OR seized_done = 1)"),
+            {"id": int(raid_id), "s": STATUS_WON, "raid": customs_core.KIND_RAID})
         if (claimed.rowcount or 0) != 1:
             db.rollback()
             return None
@@ -768,6 +809,10 @@ def law_step(db: Session, raid_id: int, now: Optional[datetime] = None, params=N
             db.commit()
             return None
         params = params or _params(db)
+        if is_enforcement(raid):
+            outcome = customs_crud.consequences(db, raid, caravan, params, now)
+            db.commit()
+            return outcome
         players = [int(r[0]) for r in db.execute(text(
             "SELECT character_id FROM econ_caravan_raid_shares WHERE raid_id = :r ORDER BY character_id"),
             {"r": int(raid_id)}).fetchall()]
@@ -793,7 +838,7 @@ def raid_faction_points(db: Session, raid_id: int, now: Optional[datetime] = Non
     import faction_kills
     import faction_notify
     now = now or now_utc()
-    row = db.execute(text("SELECT status, faction_done FROM econ_caravan_raids WHERE id = :id"),
+    row = db.execute(text("SELECT status, faction_done, kind FROM econ_caravan_raids WHERE id = :id"),
                      {"id": int(raid_id)}).first()
     players = [int(r[0]) for r in db.execute(text(
         "SELECT character_id FROM econ_caravan_raid_shares WHERE raid_id = :r ORDER BY character_id"),
@@ -801,6 +846,8 @@ def raid_faction_points(db: Session, raid_id: int, now: Optional[datetime] = Non
     db.rollback()
     if row is None or row[0] != STATUS_WON or bool(row[1]):
         return 0
+    if (row[2] or customs_core.KIND_RAID) != customs_core.KIND_RAID:
+        return 0                                          # FEAT-216: no faction deed for a customs / patrol fight
     applied = 0
     notices = []
     for cid in players:
@@ -889,9 +936,24 @@ def publish(notices) -> None:
         law_notify.publish(notices)
 
 
+def _seize_step(db: Session, raid_id: int, now: datetime, params=None) -> bool:
+    """FEAT-216: the confiscation of a won customs / patrol fight (its own transaction on ``db``, ``seized_done``
+    claim inside; postponed while an economy run is running). True when the caravan was seized now."""
+    if customs_crud.raid_to_seize(db, raid_id) is None:
+        return False
+    params = params or _params(db)
+    db.rollback()
+    return customs_crud.confiscate_raid_in(db, raid_id, now, params).status == customs_crud.CHECK_SEIZED
+
+
 def finish_raid(db: Session, raid_id: int, now: Optional[datetime] = None, params=None) -> None:
     """Everything after the settlement for one raid (each step best effort): law + publish, bales, guards."""
     now = now or now_utc()
+    try:
+        _seize_step(db, raid_id, now, params)
+    except Exception:
+        db.rollback()
+        logger.exception("caravan raid %s: confiscation failed, retried by the caravan pass", raid_id)
     try:
         outcome = law_step(db, raid_id, now, params)
         if outcome is not None:
@@ -1044,8 +1106,18 @@ def raid_followups(factory: SessionFactory, now: datetime, params) -> int:
     """Step 3: won raids without the law step / without the faction points (FEAT-212), undelivered bales (of raids
     finished > 1 min ago — fresh ones are the callback's), finished raids with guards still spawned."""
     done = 0
+    # FEAT-216: won customs / patrol fights are confiscated first (the law step of those waits for ``seized_done``)
+    for raid_id in _select_ids(factory, "SELECT id FROM econ_caravan_raids WHERE status = :s AND seized_done = 0 "
+                                        "AND kind IN (:k1, :k2) ORDER BY id LIMIT :n",
+                               {"s": STATUS_WON, "k1": customs_core.KIND_CUSTOMS, "k2": customs_core.KIND_PATROL}):
+        try:
+            if customs_crud.confiscate_raid(factory, raid_id, now, params).status == customs_crud.CHECK_SEIZED:
+                done += 1
+        except Exception:
+            logger.exception("caravan pass: confiscation of raid %s failed", raid_id)
     for raid_id in _select_ids(factory, "SELECT id FROM econ_caravan_raids WHERE status = :s AND law_done = 0 "
-                                        "ORDER BY id LIMIT :n", {"s": STATUS_WON}):
+                                        "AND (kind = :raid OR seized_done = 1) ORDER BY id LIMIT :n",
+                               {"s": STATUS_WON, "raid": customs_core.KIND_RAID}):
         db = factory()
         try:
             outcome = law_step(db, raid_id, now, params)
@@ -1058,7 +1130,8 @@ def raid_followups(factory: SessionFactory, now: datetime, params) -> int:
         finally:
             db.close()
     for raid_id in _select_ids(factory, "SELECT id FROM econ_caravan_raids WHERE status = :s AND faction_done = 0 "
-                                        "ORDER BY id LIMIT :n", {"s": STATUS_WON}):
+                                        "AND kind = :raid ORDER BY id LIMIT :n",
+                               {"s": STATUS_WON, "raid": customs_core.KIND_RAID}):
         db = factory()
         try:
             done += raid_faction_points(db, raid_id, now)

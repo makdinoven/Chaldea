@@ -2119,6 +2119,21 @@ ECON_SIM_PARAM_BOUNDS: Dict[str, tuple] = {
     "caravan_sea_wait_hours": (1, 168),
     "caravan_sea_loss_pct": (0.0, 100.0),
     "caravan_no_path_abstract": (0, 1),
+    # FEAT-216 customs & smuggling
+    "customs_enabled": (0, 1),
+    "customs_inspection_minutes": (0, 240),
+    "customs_contraband_share": (0.0, 1.0),
+    "customs_contraband_markup_pct": (0.0, 500.0),
+    "customs_caravan_stealth": (0, 200),
+    "customs_detect_base_pct": (0.0, 100.0),
+    "customs_detect_min_pct": (0.0, 100.0),
+    "customs_detect_max_pct": (0.0, 100.0),
+    "customs_patrol_detect_pct": (0.0, 100.0),
+    "customs_alert_minutes": (1, 60),
+    "customs_officer_share": (0.0, 1.0),
+    "customs_seizure_fame": (0, 1_000),
+    "customs_smuggler_fee_share": (0.0, 0.5),
+    "customs_smuggling_wanted_points": (0, 1_000),
     # FEAT-193 guild orders
     "guild_enabled": (0, 1),
     "guild_markup_pct": (0.0, 200.0),
@@ -2168,6 +2183,8 @@ ECON_SIM_INT_PARAMS = frozenset({
     "caravan_guard_count_base", "caravan_guard_value_per_extra", "caravan_guard_count_max",
     "caravan_departure_minutes", "caravan_escort_seats", "caravan_escort_defense_fame",
     "caravan_sea_wait_hours", "caravan_no_path_abstract",
+    "customs_enabled", "customs_inspection_minutes", "customs_caravan_stealth", "customs_alert_minutes",
+    "customs_seizure_fame", "customs_smuggling_wanted_points",
     "guild_enabled", "guild_min_order_value", "guild_xp_daily_cap",
     "classes_enabled",
 })
@@ -2591,6 +2608,20 @@ class EconSimParamsIn(BaseModel):
     caravan_sea_wait_hours: Optional[int] = None
     caravan_sea_loss_pct: Optional[float] = None
     caravan_no_path_abstract: Optional[int] = None
+    customs_enabled: Optional[int] = None
+    customs_inspection_minutes: Optional[int] = None
+    customs_contraband_share: Optional[float] = None
+    customs_contraband_markup_pct: Optional[float] = None
+    customs_caravan_stealth: Optional[int] = None
+    customs_detect_base_pct: Optional[float] = None
+    customs_detect_min_pct: Optional[float] = None
+    customs_detect_max_pct: Optional[float] = None
+    customs_patrol_detect_pct: Optional[float] = None
+    customs_alert_minutes: Optional[int] = None
+    customs_officer_share: Optional[float] = None
+    customs_seizure_fame: Optional[int] = None
+    customs_smuggler_fee_share: Optional[float] = None
+    customs_smuggling_wanted_points: Optional[int] = None
     guild_enabled: Optional[int] = None
     guild_markup_pct: Optional[float] = None
     guild_open_threshold_pct: Optional[float] = None
@@ -3321,6 +3352,21 @@ class CaravanParamsOut(BaseModel):
     caravan_sea_wait_hours: int
     caravan_sea_loss_pct: float
     caravan_no_path_abstract: int
+    # FEAT-216 customs & smuggling
+    customs_enabled: int
+    customs_inspection_minutes: int
+    customs_contraband_share: float
+    customs_contraband_markup_pct: float
+    customs_caravan_stealth: int
+    customs_detect_base_pct: float
+    customs_detect_min_pct: float
+    customs_detect_max_pct: float
+    customs_patrol_detect_pct: float
+    customs_alert_minutes: int
+    customs_officer_share: float
+    customs_seizure_fame: int
+    customs_smuggler_fee_share: float
+    customs_smuggling_wanted_points: int
 
 
 class CaravanEscrowOut(BaseModel):
@@ -3381,7 +3427,7 @@ class CaravanOut(BaseModel):
     runs_left: int
     dispatch_run_id: int
     finished_run_id: Optional[int]
-    cancel_reason: Optional[str]                 # destination_left | destination_deleted | sea_wait_expired | sea_route_lost
+    cancel_reason: Optional[str]                 # destination_left | destination_deleted | sea_wait_expired | sea_route_lost | seized_customs | seized_patrol
     goods_returned: Optional[bool]
     created_at: datetime
     finished_at: Optional[datetime]
@@ -3415,6 +3461,20 @@ class CaravanOut(BaseModel):
     freight: int = 0                             # reserved freight (part of paid_purse + paid_treasury)
     freight_paid: int = 0                        # charged at unloading: 0 or freight
     sunk_units: float = 0                        # units lost to sea monsters
+    # FEAT-216 customs & smuggling (A3, admin only)
+    is_contraband: bool = False
+    markup_pct: Optional[float] = None           # contraband price markup, %
+    customs_state: Optional[str] = None          # null (no post) | pending | inspecting | cleared
+    customs_index: Optional[int] = None          # route index of the post
+    customs_location_id: Optional[int] = None
+    customs_location_name: Optional[str] = None
+    customs_until: Optional[datetime] = None     # end of the inspection at the post
+    duty_paid: int = 0                           # duty paid at the post (meaningful once inspecting / cleared)
+    customs_alert_until: Optional[datetime] = None  # an officer's detection alert holds the caravan until then
+    seized_region_id: Optional[int] = None
+    seized_region_name: Optional[str] = None
+    seized_country_id: Optional[int] = None
+    seized_country_name: Optional[str] = None
 
 
 class CaravanListOut(BaseModel):
@@ -3426,7 +3486,7 @@ class CaravanListOut(BaseModel):
 # FEAT-211 physical caravans — admin (contract 3.13 A4–A9; app/caravan_api.py)
 # ===========================================================================
 
-CARAVAN_KIND_RE = r"^(all|physical|abstract|sea)$"   # FEAT-215: sea
+CARAVAN_KIND_RE = r"^(all|physical|abstract|sea|contraband)$"   # FEAT-215: sea; FEAT-216: contraband
 CARAVAN_GUARD_POOL_MAX = 20
 
 
@@ -3463,6 +3523,8 @@ class CaravanRaidAdminOut(BaseModel):
     created_at: datetime
     finished_at: Optional[datetime]
     escort_ids: List[int] = []                   # FEAT-212: player escorts placed on the guard team
+    kind: str = "raid"                           # FEAT-216: raid | customs | patrol
+    officer_paid: int = 0                        # FEAT-216: customs officers' share of the seizure
 
 
 class CaravanEscortAdminOut(BaseModel):
@@ -3487,7 +3549,7 @@ class CaravanSeaLossOut(BaseModel):
 
 class CaravanDetailOut(CaravanOut):
     route: List[CaravanRoutePointOut] = []
-    held_by: Optional[str] = None                # post | raid | null
+    held_by: Optional[str] = None                # post | raid | customs (FEAT-216 detection alert) | null
     raid: Optional[CaravanRaidAdminOut] = None
     escorts: List[CaravanEscortAdminOut] = []    # FEAT-212
     sea_losses: List[CaravanSeaLossOut] = []     # FEAT-215
@@ -3572,11 +3634,13 @@ class CaravanHereOut(BaseModel):
     group_code: str
     group_name: Optional[str]
     guard_count: int
-    state: str                                   # on_road | held | under_attack | raided
-    departs_in_sec: Optional[int]                # null while waiting for a ship / in a hold (FEAT-215)
+    state: str                                   # on_road | held | under_attack | raided | inspection (FEAT-216)
+    departs_in_sec: Optional[int]                # null while waiting for a ship / in a hold (FEAT-215); inspection: until it ends
     can_attack: bool
     reason: Optional[str]
     sea_stage: Optional[str] = None              # FEAT-215: to_port | waiting | aboard | landed | stranded
+    can_inspect: bool = False                    # FEAT-216 C6: true only for the alerted customs officer (alert open)
+    inspect_in_sec: Optional[int] = None         # FEAT-216 C6: seconds left of the alert (when can_inspect)
 
 
 class CaravansHereOut(BaseModel):

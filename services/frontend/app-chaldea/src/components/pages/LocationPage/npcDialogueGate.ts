@@ -16,6 +16,14 @@ export const NPC_DIALOGUE_HINT_GUILD =
 export const NPC_DIALOGUE_HINT_CAPTAIN =
   'Напишите в локации пост с намерением «Диалог с НПС», указав капитана, и откройте окно снова.';
 
+/** FEAT-216: enlisting with the customs needs the dialogue post with the «Таможенник». */
+export const NPC_DIALOGUE_HINT_CUSTOMS =
+  'Напишите в локации пост с намерением «Диалог с НПС», указав таможенника, и откройте окно снова.';
+
+/** FEAT-216: the smuggler hire list needs the dialogue post with the fence. */
+export const NPC_DIALOGUE_HINT_FENCE =
+  'Напишите в локации пост с намерением «Диалог с НПС», указав скупщика, и откройте окно снова.';
+
 const HTTP_FORBIDDEN = 403;
 const GATE_MARKER = 'Диалог с НПС';
 

@@ -6,6 +6,7 @@ export const ESCORT_STATE_LABEL: Record<string, string> = {
   held: 'Караван стоит',
   under_attack: 'На караван напали!',
   arrived: 'Караван прибыл — ждёт расчёта',
+  inspection: 'Караван на досмотре у таможни',
 };
 
 export const ESCORT_STATE_CLS: Record<string, string> = {
@@ -14,6 +15,7 @@ export const ESCORT_STATE_CLS: Record<string, string> = {
   held: 'text-white/70',
   under_attack: 'text-site-red',
   arrived: 'text-stat-energy',
+  inspection: 'text-gold/90',
 };
 
 export const ESCORT_RAID_LABEL: Record<string, string> = {

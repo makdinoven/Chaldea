@@ -779,6 +779,37 @@ battle-service только проводит бой и сообщает итог
   команда 1 → 400 «Против морских монстров можно встать только на сторону экипажа». Команда 0 — обычный поток с
   одобрением модератора.
 
+## Бой таможни и патруля (FEAT-216)
+
+Контрабанду, досмотр, конфискат и строку боя (`econ_caravan_raids.kind = customs | patrol`) ведёт character-service.
+battle-service только проводит бой — **без миграции**: метка `battles.caravan_raid_id`, колбэк
+`_notify_caravan_battle_end`, `GET /battles/internal/{id}/result` и запрет вступления в бой (400 «К налёту на караван
+нельзя присоединиться») переиспользуются как есть. Команда 0 — сторона закона, команда 1 — караван (как у налёта).
+
+* **`POST /battles/internal/customs-fight`** (X-Internal-Token) `CustomsFightCreate {caravan_raid_id, caravan_id,
+  location_id, leader_character_id | null, group, enforcer_npc_ids (≤ 5), guard_character_ids (0..5),
+  escort_character_ids (≤ 4)}` → 201 `CaravanRaidBattleCreated {battle_id, participants, next_actor, deadline_at,
+  attacker_character_ids, escort_character_ids}`.
+  * Ровно один режим: `leader_character_id` **или** непустой `enforcer_npc_ids`, иначе 400 «Нужен либо таможенник,
+    либо стража». Мобы каравана + охранники > `BATTLE_MAX_TEAM_SIZE` → 400; один и тот же id в стражниках и мобах → 400.
+  * **Режим таможенника** (`leader_character_id`): проверки лидера как у налёта (лидер среди охранников → 409 с
+    нейтральным текстом блокировки; 404 «Персонаж не найден»; не в `location_id` → 400 «Каравана нет в вашей
+    локации»; 409 «Персонаж уже в бою»; `_ensure_not_activity_locked`). `group=true` → `_free_squadmates`, охранники
+    из команды 0 убираются. **Гейт поста не тратится** (законное действие).
+  * **Режим патруля** (`enforcer_npc_ids`): стражники проверяются `_ensure_caravan_guards(..., message="Стража
+    недоступна")` (409). Ни одного охранника не удалось поставить → 409 «Защитников каравана нет» (character-service
+    конфискует груз без боя).
+  * Мобы каравана (если переданы) — `_ensure_caravan_guards` (409 «Охрана каравана недоступна»). Охранники молча
+    пропускаются по `_escort_available` и получают флаг `autobattle_forbidden`. Команда 1 пуста → 409 «Защитников
+    каравана нет». Бой `pve`.
+  * **NPC в команде 0 ходят сами:** `_assemble_battle` регистрирует в автобое (`/internal/register`) каждого участника
+    с `characters.is_npc = 1` независимо от команды, а стратегия autobattle-service выбирает целью любого живого
+    участника другой команды — стражники-NPC в команде 0 ведутся движком так же, как мобы в команде 1. Если первым
+    ходит NPC, регистрация сразу запускает его ход.
+* Конец боя: обычный колбэк каравана (`winner_team`: 0 — закон, 1 — караван) и обычный конец PvE (награды за
+  побеждённых NPC, последствия для павших — без особых случаев).
+* character-service: `battle_client.create_customs_battle(...)`.
+
 ## FEAT-188: пассивки подклассов
 
 **Загрузка.** `build_participant_info` (общая для всех 4 мест сборки боя: `_assemble_battle`,

@@ -2986,6 +2986,18 @@ inventory-service (`POST /inventory/internal/characters/{id}/items`, отмет�
 `house_room_id = NULL`, `character_logs` `caravan_escort`, уведомление WS `caravan_escort` после коммита.
 «Собирается» = физический, `in_transit`, не прибыл, `route_index = 0`, налёта не было.
 
+**Контрабандисты у Скупщика (FEAT-216, C7/C8).** Контрабандный караван (`is_contraband = 1`) караванщик не показывает
+и не нанимает (404 «Караван не найден»). `GET /characters/caravans/fence/{npc_id}?character_id=` — список охраны
+контрабанды у НПС с ролью `fence` (те же гейты 1–5, 404 «Скупщик не найден», 400 «Вы не у скупщика»): контрабандные
+караваны края скупщика, собирающиеся у торговых ворот (`from_region_id` = край скупщика, `route_index = 0`, налёта не
+было), формат элемента как у C1 (без пометки «контрабанда») + `gate_location_id`, `gate_location_name`;
+`pay_estimate` от `customs_smuggler_fee_share`. Найм — тот же C2 с `npc_id` скупщика (скупщик может стоять где угодно
+в крае): караван должен быть контрабандным из края скупщика; без проверок розыска и репутации; активный таможенник →
+403 «Вы служите на таможне — скупщик не станет с вами связываться»; `hire_location_id` = локация скупщика (маска
+FEAT-212), персонаж сразу переносится к каравану (сырая запись, как `move_escorts`), лог «Нанялся в охрану каравана у
+скупщика». Плата: пул `customs_smuggler_fee_share` вместо `caravan_escort_fee_share` (бонус за отбитый налёт тот же);
+награды за ходку контрабанды — только плата (без репутации, славы защиты и очков фракций; `rewards_done` ставится).
+
 ### В пути, доставка, награды
 
 - **Шаг** (`caravan_pass.step_caravan`, та же транзакция): после сдвига каравана активные охранники (строки asc id →
@@ -3393,3 +3405,185 @@ characters (asc, ОДИН отсортированный вызов на тра�
 - Корабли: `cargo_capacity` в create / update / out, `cargo_aboard` (только чтение); удаление корабля высаживает груз
   (`stranded`), при налёте на караван в трюме → 409 «На корабле идёт налёт на караван — удалите корабль позже».
 - Палуба S5: `cargo: [{caravan_id, group_name, alight_port_name}]`; `passengers_count` без охраны каравана.
+
+## Таможня и контрабанда — фундамент (FEAT-216, задача 2)
+
+Схема, константы, параметры и денежные формулы. Маршруты через пост, досмотр, обнаружение, бой и конфискация —
+следующие задачи FEAT-216. Модули: `customs_core.py` (чистый: виды боя `raid | customs | patrol`, состояния
+`pending | inspecting | cleared`, причины `seized_customs | seized_patrol`, роль НПС `customs`, `detection_chance`,
+`patrol_chance`, `caravan_stealth`, `illegal_in`, `is_banned`, `officer_split`, `officer_pool`, `normalize_ban_codes`).
+
+### Миграция `055_customs_smuggling` (revises `054_sea_caravans`; без ENUM/FK, шаги защищены information_schema)
+
+- `econ_caravans` + `is_contraband`, `markup_pct`, `customs_index` / `customs_location_id` (пост на маршруте),
+  `customs_state`, `customs_until`, `duty_paid` (пошлина, уплаченная на посту), `duty_op_id`,
+  `customs_alert_officer_id`, `customs_alert_until`, `seized_region_id`, `seized_country_id`;
+  индекс `ix_econ_caravans_contraband (is_contraband, status)`.
+- `econ_caravan_raids` + `kind` (`raid` по умолчанию | `customs` | `patrol`), `officer_paid`, `seized_done`;
+  UNIQUE `uq_econ_caravan_raids_caravan` остаётся — один бой на караван любого вида.
+- `econ_country_bans (country_id, group_code)` — запрещённые к ввозу группы товаров; `econ_customs_officers`
+  (PK `character_id`, `country_id`, `npc_id`, `location_id`, `status active | resigned`, `seizures`, `earned`).
+- Сиды: действие репутации `customs_seizure` «Конфискация контрабанды» (+20, порядок 57); вес роли `customs` −300 в
+  `reputation_npc_role_weights` (только если таблица уже заполнена). Константы: `law_core.CRIME_SMUGGLING =
+  "smuggling"`, `shadow_core.SOURCE_CUSTOMS_SEIZURE = "customs_seizure"`, `reputation_core.ACTION_CUSTOMS_SEIZURE`
+  (+ роль `customs` в `DEFAULT_NPC_ROLE_WEIGHTS`; копия LS идентична).
+- Откат: `alembic downgrade 054_sea_caravans` (удаляет таблицы, колонки, индекс и сиды).
+
+### Деньги
+
+- Новые операции `caravan_duty` (эскроу → казна страны назначения, пошлина на посту) и `caravan_seizure` (эскроу →
+  казна страны конфискации + доля таможенников) в `CARAVAN_OP_TYPES` всех 4 копий `econ_core.py` (и в
+  `econ_contract_cases.py`).
+- Под-инвариант эскроу: `escrow == Σ(paid_purse + paid_treasury − raid_paid − freight_paid − duty_paid)` по
+  `in_transit` (`escrow_expected`).
+- `econ_caravan.settled_duty(customs_state, duty_paid)` — пошлина считается уплаченной только в состояниях
+  `inspecting` / `cleared`, иначе `None`. `remaining_payout(..., duty_paid=None)`: `None` — как раньше; число →
+  продавцу `paid − freight − raid_paid − duty_paid`, пошлина при доставке 0. `refund_split(..., duty_paid=0)` и
+  `raid_marks_cap(..., duty_paid=0)` вычитают уплаченную пошлину (возврата и добычи с неё нет). Вызовы:
+  `deliver_physical`, `_cancel_legs`, `caravan_raid_crud._pay_out`, `caravan_escort_crud._seller_part`.
+
+### Параметры (JSON `econ_sim_settings.params`, `CUSTOMS_PARAM_KEYS` → та же карточка караванов)
+
+`customs_enabled` 0..1 (1), `customs_inspection_minutes` 0..240 (30), `customs_contraband_share` 0..1 (0.3),
+`customs_contraband_markup_pct` 0..500 (50), `customs_caravan_stealth` 0..200 (20), `customs_detect_base_pct` 0..100
+(35), `customs_detect_min_pct` / `customs_detect_max_pct` 0..100 (5 / 90; min ≤ max, иначе 400),
+`customs_patrol_detect_pct` 0..100 (5), `customs_alert_minutes` 1..60 (10), `customs_officer_share` 0..1 (0.2),
+`customs_seizure_fame` 0..1000 (30), `customs_smuggler_fee_share` 0..0.5 (0.10), `customs_smuggling_wanted_points`
+0..1000 (40).
+
+## Таможня: планирование и маршруты (FEAT-216, задача 3)
+
+- Загрузка (`economy_caravan_crud`): `load_bans` → `{страна: frozenset(групп)}` (нет таблицы → `{}`), лежит в
+  `Snapshot.bans`; `load_customs_posts` → посты `Locations.is_customs` по странам (страна поста —
+  `econ_ledger.resolve_location`) + таможенные порты (`is_customs AND is_port`); нет колонки (рассинхрон деплоя,
+  фикстуры) → постов нет. `region_gates` дополнительно отдаёт `country_id` края.
+- `RoutePlanner` (посты грузятся только при `customs_enabled = 1`): `legal_route(A, B) → (route, customs_index,
+  reason)` — иностранный законный караван в страну с постами идёт через пост P этой страны с минимальной суммой
+  `leg(ворота A, P) + leg(P, ворота B)` (ничья — по id), не длиннее `caravan_route_max_steps`; пост недостижим →
+  сухопутного пути нет (дальше море, дальше `caravan_no_path_abstract`). Внутренние караваны пост не посещают.
+  `sea_route` — вторая сухопутная часть проходит порт высадки, если он пост страны назначения, иначе лучший
+  `leg(высадка, P) + leg(P, ворота)`; `SeaRoute.customs_index`. Контрабанда: `contraband_route` /
+  `contraband_sea_route` обходят все посты всех стран, ворота покупателя и порт высадки не могут быть постом (ворота
+  продавца и порт посадки — могут); `contraband_reach` — суша, иначе море, иначе нет (физических караванов нет → нет
+  контрабанды; абстрактной контрабанды не бывает). `route()` — прежняя дорога без правила постов (админ «Дороги»).
+  Таможня выключена или постов нет → маршруты как раньше.
+- `econ_caravan.plan_caravans(..., bans, contraband_reach)`: иностранная сделка законна, если пара открыта и группа не
+  запрещена в стране покупателя; заблокированная (закрытая пара или запрет) уходит контрабандистам, если
+  `customs_enabled`, `customs_contraband_share > 0` и `contraband_reach` вернул путь: `caravan_travel_foreign`,
+  пошлина 0, цена `contraband_price(цена, customs_contraband_markup_pct)`, объём ≤ `share × min(нужда, излишек)`.
+  Законные кандидаты идут раньше контрабандных; любой контрабандный план (суша или море) занимает физический слот
+  (`sea_slots`). `bans=None` и `contraband_reach=None` → план как до FEAT-216. Открытая пара без законного пути
+  (например, пост недостижим) контрабандой не становится.
+- `econ_tick._caravan_pass`: с таможней передаёт `bans` и `contraband_reach` (у слепого предплана — «всегда суша»,
+  чтобы ранний выход не терял контрабанду).
+- `dispatch`: законный план пропускается, если группу успели запретить; физический законный караван с постом на
+  пути получает `customs_index`, `customs_location_id`, `customs_state = 'pending'`. Контрабандный план
+  перепроверяется (таможня и физические караваны включены, пара иностранная и всё ещё заблокирована, есть путь в
+  обход постов того же вида, есть свободный слот), всегда физический (без `choose_physical`), пишет
+  `is_contraband = 1`, `markup_pct`; в метаданных операции отправки (только для админа) — `contraband`.
+
+## Таможня: досмотр на посту (FEAT-216, задача 4)
+
+- `customs_crud.start_inspection(db, row, now, params)` — караван дошёл до `route[customs_index]` в состоянии
+  `pending`: `charge_duty` (операция `caravan_duty`, эскроу → казна страны назначения / мира, без налога, ключ
+  `caravan:c<id>:duty`, сумма = `remaining_payout(..., duty_paid=None)` — после набега до поста пропорционально
+  меньше; пошлина 0 → без операции), `duty_paid`, `duty_op_id`, `customs_state = 'inspecting'`,
+  `customs_until = now + customs_inspection_minutes`, `next_move_at = customs_until`. При 0 минут — пошлина без
+  остановки (`cleared` сразу).
+- `caravan_pass.step_caravan`: шаг на индекс поста запускает досмотр вместо прибытия/дальнейшего хода (исход
+  `inspecting`, счётчик в статистике прохода); первый срочный шаг после `customs_until` переводит в `cleared` и дальше
+  как обычно (пост — конечный узел → прибытие и доставка). Пост в воротах продавца (`customs_index = 0`) — досмотр на
+  первом срочном шаге. Доставка после поста платит продавцу `paid − freight − raid_paid − duty_paid`, второй пошлины
+  нет; отмена после поста возвращает покупателю всё, кроме уже уплаченной пошлины.
+- `sea_cargo`: высадка в таможенном порту (`customs_index == sea_split_index + 1`) не прибывает и не планирует шаг —
+  после фрахта в той же транзакции `start_inspection` (счета последними).
+- Набег во время досмотра разрешён; `settle_raid` ставит `next_move_at = max(now + шаг, customs_until)`.
+- `held_by` → `"customs"` при открытой тревоге таможенника (`customs_alert_officer_id` + `customs_alert_until > now`,
+  выставит задача 7); такая задержка не трогает `hold_started_at` (окно поста RP).
+- `GET /caravans/here`: состояние `inspection` (`departs_in_sec` — до конца досмотра), поля `can_inspect` (только у
+  встревоженного таможенника при открытой тревоге) и `inspect_in_sec`. `GET /caravans/escort`: состояние
+  `inspection` (`next_move_in_sec` до конца досмотра) и `is_contraband` (только своя работа охранника).
+- Админка караванов: `is_contraband`, `markup_pct`, `customs_state`, `customs_index`, `customs_location_id/name`,
+  `customs_until`, `duty_paid`, `customs_alert_until`, `seized_region_id/name`, `seized_country_id/name`; у налёта
+  `kind`, `officer_paid`; `held_by` может быть `customs`; фильтр списка `kind=contraband`.
+
+## Таможня: служба таможенника и запреты стран (FEAT-216, задача 5)
+
+Модули: `customs_crud.py` (служба + админка запретов; разделы для досмотра/конфискации добавят задачи 4 и 7),
+`customs_api.py` (роутер подключён в `main.py` ПЕРВЫМ — `/admin/economy/caravans/customs` должен победить
+`/admin/economy/caravans/{caravan_id}` из `caravan_api`), `customs_schemas.py`. Роль НПС «Таможенник» —
+`npc_role = "customs"` (`customs_core.CUSTOMS_ROLE`). Блокировки: `econ_customs_officers(row) → characters(row)`;
+`econ_country_bans` не блокируется (замена = DELETE + INSERT в одной транзакции).
+
+| Метод | Путь | Доступ | Ответ |
+|-------|------|--------|-------|
+| GET | `/characters/customs/officer/{npc_id}?character_id=` | JWT + владелец, гейт «Диалог с НПС», тир НПС | `{npc_id, country_id, country_name, location_id, job, can_enlist, reason, params{officer_share, alert_minutes}}` |
+| POST | `/characters/customs/officer/{npc_id}/enlist` `{character_id}` | то же | 201 `{job}` |
+| POST | `/characters/customs/resign` `{character_id}` | JWT + владелец | `{ok: true}`; 409 «Вы не служите на таможне» |
+| GET | `/characters/customs/job?character_id=` | JWT + владелец | `{job}` (`null`, если не служит) |
+| GET | `/characters/admin/economy/caravans/customs` | `economy:read` | `{countries[{country_id, name, banned_groups[], posts[{location_id, name, is_port}]}], groups[{code, name}]}` |
+| PUT | `/characters/admin/economy/caravans/customs/{country_id}` `{banned_groups[]}` | `economy:settings` | элемент страны; 404 страна, 400 неизвестная группа / больше 64 |
+
+`job` = `{country_id, country_name, status: "active", enlisted_at, seizures, earned}` — только действующая служба.
+Порядок проверок найма: владелец/игрок → НПС с ролью `customs` жив (404) → та же локация (400) → локация НПС в
+регионе со страной (404) → гейт «Диалог с НПС» по HTTP без открытой транзакции (403 / 503) → тир НПС (403) → уже
+служит (409) → блокировка активности / бой (409) → розыск в регионе НПС (403) → репутация ≥ «Скиталец» (403).
+Уволиться можно всегда и откуда угодно; повторный найм переиспользует строку (счётчики `seizures` / `earned`
+сохраняются). Посты читаются из `Locations.is_customs` с откатом на «постов нет», если колонки ещё нет.
+
+## Таможня: обнаружение, бои, конфискация, последствия (FEAT-216, задача 7)
+
+**Проверка на шаге** (`caravan_pass._customs_checks`, шаг 4a — после шагов, до доставки). Только контрабандные
+караваны, которые на этом проходе *сдвинулись* (исход `moved`, не конечный узел); при `customs_enabled = 0` или
+идущем прогоне экономики (`econ_tick_runs.status = 'running'`) шаг пропускается целиком. Караван незаконен в стране
+локации, если это страна назначения или группа товаров там запрещена (`customs_core.illegal_in`).
+`customs_crud.check_caravan`: 1) таможенники на вахте в этой локации (`econ_customs_officers` активные этой страны,
+игрок, без блокировки активности, не в бою, не в розыске в регионе локации; по возрастанию id) — бросок каждого
+`detection_chance(customs_detect_base_pct, внимательность, скрытность каравана, min, max)`, где внимательность =
+`stealth_reduction_pct` эффективной скрытности таможенника, скрытность каравана = `customs_caravan_stealth` + лучшая
+эффективная скрытность активных охранников; первый успех → тревога (`customs_alert_officer_id`,
+`customs_alert_until = now + customs_alert_minutes`; `held_by = "customs"`), CharacterLog и уведомление только ему
+(WS `customs_alert`, категория `system`, `data{character_id, caravan_id, location_id, inspect_in_sec}`);
+2) иначе один бросок стражи в локации (`law_crud.guards_at`, не в бою, ≤ 5) с шансом
+`patrol_chance(customs_patrol_detect_pct, скрытность, customs_detect_max_pct)`: нет активных охранников-игроков →
+конфискация без боя; есть → автоматический бой «стража против охраны» (`battle_client.create_customs_battle` с
+`enforcer_npc_ids`, через `asyncio.run`, без мобов каравана); BS 409 «Защитников каравана нет» → строка боя удаляется,
+конфискация без боя; другая ошибка → строка удаляется, караван идёт дальше. Сид RNG — `customs_crud.rng()`.
+
+**Досмотр таможенником (C5).** `POST /characters/caravans/{caravan_id}/inspect` `{character_id, group=false}` (JWT +
+владелец; nginx-лимит `caravan_raid_limit`) → 201 `{raid_id, battle_id}`. `customs_crud.begin_inspection`: персонаж —
+действующий таможенник; блокировка активности / бой → 409 со своим текстом; всё остальное (не контрабанда, не
+в пути, тревога не его или истекла, он не в локации каравана, бой уже был) — один и тот же 404 «Здесь нечего
+досматривать». Строка `econ_caravan_raids` `kind = 'customs'`, тревога снимается сразу (при сбое не возвращается);
+дальше как налёт: `spawn_guards` (мобы каравана + активные охранники) → BS `customs-fight` (лидер = таможенник,
+`group` = его свободный отряд) → `mark_fighting`; ошибки BS 4xx пробрасываются, 5xx/транспорт → 503, нет пула охраны →
+409 «Досмотр сейчас невозможен».
+
+**Итог боя** (`settle_raid`, тот же колбэк / опрос). Для `customs` / `patrol` деньги в Tx 1 не двигаются: `won` →
+караван замораживается (`next_move_at = NULL`), охранники в бою выбывают (`fallen`), атакующим-игрокам «Контрабанда
+задержана»; `repelled` → караван идёт дальше, «Контрабандисты отбились», выжившим охранникам «Досмотр отбит!»
+(надбавка за отбитый бой — как у налёта). Тюков, долей налёта, очков фракций нет; окно победы
+(`/caravans/raids/by-battle`) отдаёт `raid = false`.
+
+**Конфискация** (`customs_crud.confiscate`, операция `caravan_seizure`, ключ `caravan:c<id>:seize`, без налога; в
+отдельной транзакции; откладывается, пока идёт прогон экономики). Блокировки: `econ_regions (изъятие, откуда, куда)
+→ econ_region_goods → econ_caravans → econ_caravan_raids → econ_caravan_escorts → econ_customs_officers →
+characters (один отсортированный вызов) → econ_accounts`. `R = paid_total − raid_paid − freight_paid − duty_paid`;
+`customs`: `floor(R × customs_officer_share)` делится поровну между игроками-атакующими (остаток — стране),
+`patrol` — всё стране изъятия (регион/страна локации боя; на палубе — регион порта отправления; без страны — мир).
+Покупателю ничего не возвращается. Товар `units − stolen − sunk` → склад региона изъятия (если он участвует в
+экономике), иначе обратно в регион продавца, иначе списывается. Караван `cancelled`, `cancel_reason =
+seized_customs | seized_patrol`, `seized_region_id / seized_country_id`, `finish_op_id`; активные охранники
+`cancelled` без оплаты («Караван конфискован — оплаты не будет»); у налёта `seized_done = 1`, `officer_paid`;
+у таможенников `seizures + 1`, `earned + доля`. Выигранный бой, чей караван уже исчез, просто закрывается
+(`seized_done = 1`).
+
+**Последствия** (law step после конфискации — для этих видов `law_done` ставится только при `seized_done = 1`):
+`customs_crud.consequences` — преступление `smuggling` (reported, `customs_smuggling_wanted_points`, ключ
+`law:smuggling:r<raid>:<cid>`) в регионе изъятия каждому охраннику каравана со статусом `fallen` / `cancelled`;
+для `customs` — слава `customs_seizure_fame` (источник `customs_seizure`, ключ `fame:customs:r<raid>:<cid>`) и
+действие репутации `customs_seizure` (с эхом) в регионе изъятия каждому игроку-атакующему. Конфискация без боя
+(патруль) — без преступлений и наград.
+
+**Маскировка.** Признак контрабанды не попадает в `caravans_here` (у всех, кроме встревоженного таможенника,
+`can_inspect = false`), в тексты налётчиков и в ответы инспекта (один 404).

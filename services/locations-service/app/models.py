@@ -149,12 +149,15 @@ class Location(Base):
         ForeignKey('Locations.id', ondelete='SET NULL', name='fk_locations_port_sea_zone'),
         nullable=True,
     )
+    # FEAT-216: a customs post («Таможня») — caravans crossing into this country stop here.
+    is_customs = Column(Boolean, nullable=False, default=False, server_default="0")
 
     __table_args__ = (
         Index('ix_locations_is_starting', 'is_starting'),
         Index('ix_locations_is_port', 'is_port'),
         Index('ix_locations_is_sea_zone', 'is_sea_zone'),
         Index('ix_locations_port_sea_zone', 'port_sea_zone_id'),
+        Index('ix_locations_is_customs', 'is_customs'),
     )
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:

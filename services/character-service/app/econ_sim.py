@@ -185,6 +185,21 @@ class SimParams:
     caravan_sea_wait_hours: int = 24          # max wait for a ship at the boarding port, then the deal is cancelled
     caravan_sea_loss_pct: float = 25.0        # share of the cargo lost when every defender group lost to sea monsters
     caravan_no_path_abstract: int = 1         # 1 = a pair with neither a road nor a sea route trades abstractly; 0 = no deal
+    # FEAT-216 customs & smuggling (3.5). Not in a seed either.
+    customs_enabled: int = 1                  # master switch: posts route / inspect, contraband planned, detection runs
+    customs_inspection_minutes: int = 30      # stop at the post (0 = the duty without a stop)
+    customs_contraband_share: float = 0.3     # share of a blocked deal (banned group / closed pair) left to smugglers
+    customs_contraband_markup_pct: float = 50.0  # contraband price markup
+    customs_caravan_stealth: int = 20         # base stealth of a contraband caravan
+    customs_detect_base_pct: float = 35.0     # officer base chance
+    customs_detect_min_pct: float = 5.0       # officer chance clamp (min <= max)
+    customs_detect_max_pct: float = 90.0
+    customs_patrol_detect_pct: float = 5.0    # guards' chance (before the caravan's stealth)
+    customs_alert_minutes: int = 10           # a detected caravan waits this long for the officer's «Досмотреть»
+    customs_officer_share: float = 0.2        # officers' share of the fine
+    customs_seizure_fame: int = 30            # fame per seizure (source customs_seizure)
+    customs_smuggler_fee_share: float = 0.10  # smuggler escort pay pool (vs caravan_escort_fee_share for legal ones)
+    customs_smuggling_wanted_points: int = 40  # wanted points of the smuggling crime
     # FEAT-193 guild orders (3.4). Not in a seed either.
     guild_enabled: int = 1                    # 0 = no orders (open ones close on the next recount)
     guild_markup_pct: float = 20.0            # markup over the local price

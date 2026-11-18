@@ -133,25 +133,50 @@ const CaravanEscortModal = ({ characterId, onClose }: CaravanEscortModalProps) =
         <div className="flex flex-col gap-4 min-w-0">
           {/* Caravan, direction, state */}
           <div className="flex flex-col gap-1 min-w-0">
-            <span className="text-white text-base sm:text-lg font-medium break-words">
-              Караван: {job.group_name ?? job.group_code}
-            </span>
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <span className="text-white text-base sm:text-lg font-medium break-words">
+                Караван: {job.group_name ?? job.group_code}
+              </span>
+              {/* FEAT-216: only the smuggler himself ever learns that the cargo is contraband */}
+              {job.is_contraband && (
+                <span
+                  className="rounded-full border border-site-red/40 bg-site-red/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-site-red/90"
+                  title="Груз запрещён в стране назначения: таможенники и стража могут его конфисковать"
+                >
+                  тайный груз
+                </span>
+              )}
+            </div>
             <span className="text-white/70 text-sm break-words">
               {job.from_region_name ?? '—'} <span className="text-gold/70">→</span> {job.to_region_name ?? '—'}
             </span>
             <span className={`text-sm font-medium ${ESCORT_STATE_CLS[job.state] ?? 'text-white/80'}`}>
               {stateLabel(job.state)}
-              {nextMoveAt && !seaPaused && (job.state === 'preparing' || job.state === 'on_road') && (
-                <span className="text-white/70 font-normal">
-                  {' — '}
-                  <RemainingText
-                    until={nextMoveAt}
-                    prefix={job.state === 'preparing' ? 'отправится через' : 'следующий переход через'}
-                    doneText="вот-вот тронется"
-                  />
-                </span>
-              )}
+              {nextMoveAt &&
+                !seaPaused &&
+                (job.state === 'preparing' || job.state === 'on_road' || job.state === 'inspection') && (
+                  <span className="text-white/70 font-normal">
+                    {' — '}
+                    <RemainingText
+                      until={nextMoveAt}
+                      prefix={
+                        job.state === 'preparing'
+                          ? 'отправится через'
+                          : job.state === 'inspection'
+                            ? 'досмотр закончится через'
+                            : 'следующий переход через'
+                      }
+                      doneText="вот-вот тронется"
+                    />
+                  </span>
+                )}
             </span>
+            {job.is_contraband && (
+              <span className="text-white/50 text-xs">
+                Караван обходит таможенные посты. Заметят таможенники или стража — придётся отбиваться; проиграете — груз
+                конфискуют, а вам запишут преступление «Контрабанда».
+              </span>
+            )}
             {seaLine && <span className="text-site-blue text-sm break-words">⚓ {seaLine}</span>}
             {seaStage === 'aboard' && (
               <span className="text-white/50 text-xs">

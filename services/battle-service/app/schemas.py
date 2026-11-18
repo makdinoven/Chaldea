@@ -48,6 +48,22 @@ class CaravanRaidBattleCreated(BattleCreated):
     escort_character_ids: List[int] = Field(default_factory=list)
 
 
+class CustomsFightCreate(BaseModel):
+    """FEAT-216 B1: internal create used by character-service only (customs / patrol fight on a
+    contraband caravan). Exactly one enforcer mode: `leader_character_id` (a customs officer,
+    optionally with his free squad when `group`) OR a non-empty `enforcer_npc_ids` (law guards).
+    Team 0 = the enforcers, team 1 = the caravan mobs (`guard_character_ids`, may be empty for a
+    patrol) + the hired player escorts that are actually available."""
+    caravan_raid_id: int
+    caravan_id: int
+    location_id: int
+    leader_character_id: Optional[int] = None
+    group: bool = False
+    enforcer_npc_ids: List[int] = Field(default_factory=list, max_items=5)
+    guard_character_ids: List[int] = Field(default_factory=list, max_items=5)
+    escort_character_ids: List[int] = Field(default_factory=list, max_items=4)
+
+
 class SeaRaidBattleCreate(BaseModel):
     """FEAT-214: internal create used by character-service only (sea monsters on a ship deck).
     Team 0 = the deck players (unavailable ones are silently skipped), team 1 = the monsters."""

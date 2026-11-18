@@ -930,6 +930,8 @@ def update_sim(db: Session, *, tick_enabled: bool, params_in: dict, user_id: Opt
         raise EconomyApiError(400, "Нижняя граница отклика производства на цену должна быть меньше верхней")
     if not merged["class_share_min"] < merged["class_share_max"]:
         raise EconomyApiError(400, "Нижняя граница доли класса должна быть меньше верхней")
+    if not merged["customs_detect_min_pct"] <= merged["customs_detect_max_pct"]:
+        raise EconomyApiError(400, "Минимальный шанс таможенника заметить контрабанду не может быть больше максимального")
     params = econ_sim.SimParams.from_mapping(merged).to_dict()
     row = db.get(models.EconSimSettings, 1)
     if row is None:

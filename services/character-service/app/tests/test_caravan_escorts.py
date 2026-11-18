@@ -161,7 +161,8 @@ def test_hire_refused_when_hiring_is_off(esc, rw):
 def test_dead_caravaneer_or_wrong_role_is_404(esc, rw):
     _exec(rw, "UPDATE characters SET npc_status = 'dead' WHERE id = :n", n=NPC)
     _refused(esc, rw, 404, escorts.MSG_CARAVANEER_NOT_FOUND)
-    _exec(rw, "UPDATE characters SET npc_status = 'alive', npc_role = 'fence' WHERE id = :n", n=NPC)
+    # FEAT-216: a fence is a hiring NPC now (smugglers) — any other role is still «Караванщик не найден»
+    _exec(rw, "UPDATE characters SET npc_status = 'alive', npc_role = 'banker' WHERE id = :n", n=NPC)
     _refused(esc, rw, 404, escorts.MSG_CARAVANEER_NOT_FOUND)
     rw.gate.assert_not_called()                                     # refused before the HTTP gate
 

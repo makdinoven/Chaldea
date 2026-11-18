@@ -310,7 +310,7 @@ def test_migration_054_metadata():
     assert callable(mod.upgrade) and callable(mod.downgrade)
 
 
-def test_migration_054_is_the_single_head():
+def test_migration_054_is_followed_by_055_single_head():
     revs, downs = set(), set()
     for fn in os.listdir(_VERSIONS):
         if fn.endswith(".py") and not fn.startswith("__"):
@@ -318,4 +318,6 @@ def test_migration_054_is_the_single_head():
             revs.add(mod.revision)
             d = getattr(mod, "down_revision", None)
             downs.update(r for r in (d if isinstance(d, (tuple, list)) else (d,)) if r)
-    assert revs - downs == {"054_sea_caravans"}
+    # FEAT-216: 055_customs_smuggling follows 054 and is now the single head
+    assert "054_sea_caravans" in downs
+    assert revs - downs == {"055_customs_smuggling"}

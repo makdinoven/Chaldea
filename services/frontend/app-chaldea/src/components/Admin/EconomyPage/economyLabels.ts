@@ -47,6 +47,8 @@ export const OP_TYPE_LABELS: Record<string, string> = {
   caravan_cancel: 'Караван: возврат',
   caravan_raid: 'Караван: налёт',
   caravan_freight: 'Фрахт каравана',
+  caravan_duty: 'Пошлина каравана',
+  caravan_seizure: 'Конфискация каравана',
   sea_fare: 'Морской билет',
   sea_refund: 'Возврат за морской билет',
   guild_order: 'Заказ гильдии',
@@ -59,14 +61,30 @@ export const OP_TYPE_LABELS: Record<string, string> = {
 
 export const opTypeLabel = (opType: string): string => OP_TYPE_LABELS[opType] ?? opType;
 
-/** Russian labels of `econ_caravans.cancel_reason` (FEAT-192 / FEAT-215). */
+/** Russian labels of `econ_caravans.cancel_reason` (FEAT-192 / FEAT-215 / FEAT-216). */
 export const CARAVAN_CANCEL_REASON_LABELS: Record<string, string> = {
   destination_left: 'регион назначения вышел из пересчёта',
   destination_deleted: 'регион назначения удалён',
   sea_wait_expired: 'не дождался корабля',
   sea_route_lost: 'корабль потерян',
   no_path: 'нет ни дороги, ни морского пути',
+  seized_customs: 'конфисковано таможней',
+  seized_patrol: 'конфисковано стражей',
 };
+
+/** FEAT-216: a caravan cancelled by a confiscation (no refund, goods go to the seizure region). */
+export const isSeizureReason = (reason: string | null | undefined): boolean =>
+  reason === 'seized_customs' || reason === 'seized_patrol';
+
+/** FEAT-216 (3.1): customs stage of a legal caravan whose route passes a post. */
+export const CARAVAN_CUSTOMS_STATE_LABELS: Record<string, string> = {
+  pending: 'ожидает досмотра',
+  inspecting: 'на досмотре',
+  cleared: 'досмотрен',
+};
+
+export const caravanCustomsStateLabel = (state: string | null | undefined): string | null =>
+  state ? CARAVAN_CUSTOMS_STATE_LABELS[state] ?? state : null;
 
 export const caravanCancelReasonLabel = (reason: string | null | undefined): string =>
   (reason && CARAVAN_CANCEL_REASON_LABELS[reason]) || reason || 'причина неизвестна';

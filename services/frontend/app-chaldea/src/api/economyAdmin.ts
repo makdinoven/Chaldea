@@ -51,6 +51,8 @@ import type {
   CaravanOverview,
   CaravanDetail,
   CaravanGuards,
+  CustomsAdmin,
+  CustomsCountry,
   CaravanRoadRegion,
   CaravanRoads,
   TradePair,
@@ -365,5 +367,19 @@ export const fetchCaravanGuards = async (): Promise<CaravanGuards> => {
 /** Replaces the guard pool, ≤ 20 unique templates (`economy:settings`, A9). */
 export const putCaravanGuards = async (mobTemplateIds: number[]): Promise<CaravanGuards> => {
   const { data } = await axios.put<CaravanGuards>(`${CARAVANS}/guards`, { mob_template_ids: mobTemplateIds });
+  return data;
+};
+
+/* ---------------------------------------------------------------- FEAT-216 customs (feature file 3.7 A1/A2) */
+
+/** Every country with its banned goods groups and customs posts, plus all goods groups (`economy:read`, A1). */
+export const fetchCustomsAdmin = async (): Promise<CustomsAdmin> => {
+  const { data } = await axios.get<CustomsAdmin>(`${CARAVANS}/customs`);
+  return data;
+};
+
+/** Replaces a country's banned groups, empty = no bans (`economy:settings`, A2); 404 unknown country, 400 unknown code. */
+export const putCustomsBans = async (countryId: number, bannedGroups: string[]): Promise<CustomsCountry> => {
+  const { data } = await axios.put<CustomsCountry>(`${CARAVANS}/customs/${countryId}`, { banned_groups: bannedGroups });
   return data;
 };

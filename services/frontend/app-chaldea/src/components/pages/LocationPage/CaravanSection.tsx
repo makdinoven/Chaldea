@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { motion } from 'motion/react';
 import { fetchCaravansHere, startCaravanRaid } from '../../../api/caravans';
+import { inspectCaravan } from '../../../api/customs';
 import { apiErrorMessage } from '../../../api/errors';
 import { getMyParty, type Party } from '../../../api/squads';
 import type { CaravanHere, CaravanHereState } from '../../../types/caravans';
@@ -42,6 +43,9 @@ const STATE_LINE: Partial<Record<CaravanHereState, { text: string; cls: string }
   raided: { text: 'Уже ограблен', cls: 'text-white/50' },
 };
 
+/** FEAT-216: a legal caravan standing at the customs post (pays the duty and waits). */
+const INSPECTION_CLS = 'text-gold/90';
+
 /** FEAT-215: a caravan waiting for a ship / in a ship's hold has no road countdown. */
 const SEA_LINE: Record<string, { text: string; cls: string }> = {
   waiting: { text: 'Ждёт корабль', cls: 'text-site-blue' },
@@ -74,6 +78,20 @@ const departText = (sec: number | null, fetchedAt: number, now: number): string 
   return `Уйдёт примерно через ${Math.ceil(left / SECONDS_PER_MINUTE)} мин`;
 };
 
+/** Seconds left of a server countdown given at `fetchedAt`; null when the server sent none. */
+const secondsLeft = (sec: number | null | undefined, fetchedAt: number, now: number): number | null => {
+  if (sec === null || sec === undefined) return null;
+  return Math.max(0, sec - Math.floor((now - fetchedAt) / 1000));
+};
+
+/** «На досмотре · ещё ~N мин» — the legal caravan's stop at the customs post. */
+const inspectionText = (sec: number | null, fetchedAt: number, now: number): string => {
+  const left = secondsLeft(sec, fetchedAt, now);
+  if (left === null) return 'На досмотре';
+  if (left <= SECONDS_PER_MINUTE) return 'На досмотре — вот-вот отпустят';
+  return `На досмотре — ещё ~${Math.ceil(left / SECONDS_PER_MINUTE)} мин`;
+};
+
 const CaravanSection = ({
   locationId,
   characterId,
@@ -91,6 +109,9 @@ const CaravanSection = ({
   const [party, setParty] = useState<Party | null>(null);
   const [attackingId, setAttackingId] = useState<number | null>(null);
   const [choosingId, setChoosingId] = useState<number | null>(null);
+  /** FEAT-216: «Досмотреть» solo / with the group. */
+  const [inspectChoosingId, setInspectChoosingId] = useState<number | null>(null);
+  const [inspectingId, setInspectingId] = useState<number | null>(null);
   /** Toast only on the first load failure; the inline message stays after that. */
   const toastedRef = useRef(false);
   const reportRef = useRef(onCaravansChange);
@@ -174,7 +195,80 @@ const CaravanSection = ({
     }
   };
 
+  const inspect = async (caravan: CaravanHere, group: boolean) => {
+    if (!characterId) {
+      toast.error('Выберите персонажа, чтобы досмотреть караван');
+      return;
+    }
+    setInspectChoosingId(null);
+    setInspectingId(caravan.id);
+    try {
+      const res = await inspectCaravan(caravan.id, { character_id: characterId, group });
+      toast.success(group ? 'Досмотр группой начинается!' : 'Досмотр начинается!');
+      navigate(battlePath(locationId, res.battle_id));
+    } catch (err) {
+      toast.error(apiErrorMessage(err, 'Не удалось начать досмотр каравана'));
+      void load();
+    } finally {
+      setInspectingId(null);
+    }
+  };
+
   if (!characterId || (caravans.length === 0 && !error)) return null;
+
+  /** FEAT-216 C5: only the alerted customs officer sees this, while his alert window is open. */
+  const renderInspect = (c: CaravanHere) => {
+    const left = secondsLeft(c.inspect_in_sec, fetchedAt, now);
+    if (!c.can_inspect || (left !== null && left <= 0)) return null;
+    const busy = inspectingId === c.id;
+    const timer =
+      left !== null ? (
+        <span className="text-gold/80 text-[11px]">
+          {left <= SECONDS_PER_MINUTE
+            ? 'Караван вот-вот уйдёт'
+            : `Ещё ~${Math.ceil(left / SECONDS_PER_MINUTE)} мин, чтобы досмотреть`}
+        </span>
+      ) : null;
+    if (inspectChoosingId === c.id && !busy) {
+      return (
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button type="button" onClick={() => void inspect(c, true)} className="btn-blue !text-xs !px-4 !py-2">
+              Досмотреть с группой
+            </button>
+            <button
+              type="button"
+              onClick={() => void inspect(c, false)}
+              className="px-4 py-2 rounded-[9px] border border-white/20 text-white/70 text-xs hover:bg-white/5 transition-colors duration-200"
+            >
+              Досмотреть одному
+            </button>
+            <button
+              type="button"
+              onClick={() => setInspectChoosingId(null)}
+              className="px-3 py-2 text-white/50 text-xs hover:text-white transition-colors duration-200"
+            >
+              Отмена
+            </button>
+          </div>
+          {timer}
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={() => (canGroup ? setInspectChoosingId(c.id) : void inspect(c, false))}
+          disabled={busy || inspectingId !== null || attackingId !== null}
+          className="w-full sm:w-auto min-w-[140px] px-5 py-2 rounded-[9px] border border-gold/60 bg-gold/10 text-gold text-xs font-medium uppercase tracking-[0.04em] hover:bg-gold/20 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+        >
+          {busy ? <Spinner /> : 'Досмотреть'}
+        </button>
+        {timer}
+      </div>
+    );
+  };
 
   const renderActions = (c: CaravanHere) => {
     if (!c.can_attack) {
@@ -265,6 +359,7 @@ const CaravanSection = ({
             const stateLine = STATE_LINE[c.state];
             const seaLine = c.sea_stage ? SEA_LINE[c.sea_stage] : undefined;
             const depart = c.state === 'on_road' && !seaLine ? departText(c.departs_in_sec, fetchedAt, now) : null;
+            const inspectAction = renderInspect(c);
             return (
               <motion.li
                 key={c.id}
@@ -277,9 +372,15 @@ const CaravanSection = ({
                   </span>
                   {seaLine && <span className={`text-xs ${seaLine.cls}`}>{seaLine.text}</span>}
                   {stateLine && <span className={`text-xs ${stateLine.cls}`}>{stateLine.text}</span>}
+                  {c.state === 'inspection' && (
+                    <span className={`text-xs ${INSPECTION_CLS}`}>{inspectionText(c.departs_in_sec, fetchedAt, now)}</span>
+                  )}
                   {depart && <span className="text-white/50 text-xs">{depart}</span>}
                 </div>
-                <div className="shrink-0">{renderActions(c)}</div>
+                <div className="shrink-0 flex flex-col gap-2">
+                  {inspectAction}
+                  {renderActions(c)}
+                </div>
               </motion.li>
             );
           })}
